@@ -17,10 +17,12 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PackageDir = Split-Path -Parent $ScriptDir
 
-# Detect if running from pip install (no frontend/ dir in studio)
+# Detect if running from pip install.
+# A pip/uv install lands inside site-packages; a source/editable checkout does not.
+# Fall back to the original heuristic (frontend/ dir absent) for exotic layouts.
 $FrontendDir = Join-Path $ScriptDir "frontend"
 $OxcValidatorDir = Join-Path $ScriptDir "backend\core\data_recipe\oxc-validator"
-$IsPipInstall = -not (Test-Path $FrontendDir)
+$IsPipInstall = ($ScriptDir -like "*\site-packages\*") -or (-not (Test-Path $FrontendDir))
 
 # ─────────────────────────────────────────────
 # Helper functions
@@ -855,7 +857,6 @@ if ($IsPipInstall) {
         Write-Host "[INFO] Frontend source changed since last build -- rebuilding..." -ForegroundColor Yellow
     }
 }
-$NeedFrontendBuild = $true
 if ($NeedFrontendBuild -and -not $IsPipInstall) {
     Write-Host ""
     Write-Host "Building frontend..." -ForegroundColor Cyan
