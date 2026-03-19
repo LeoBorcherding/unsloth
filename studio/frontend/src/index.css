@@ -11,6 +11,13 @@
 @import "tw-shimmer";
 @plugin "@toolwind/corner-shape";
 @source "../node_modules/streamdown/dist/*.js";
+/* Explicit source globs: Tailwind v4's Rust-based oxide auto-scanner can
+   fail to resolve files on Windows paths with drive-letter prefixes (e.g.
+   M:\). Without these, only files discovered through Vite's initial HMR
+   graph are scanned, leaving most utility classes absent from the output. */
+@source "./**/*.{tsx,ts,jsx,js,html}";
+@source "../node_modules/@radix-ui/**/*.js";
+@source "../node_modules/lucide-react/dist/**/*.js";
 
 @font-face {
   font-family: "Hellix";

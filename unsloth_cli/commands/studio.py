@@ -112,7 +112,19 @@ def studio_default(
             if sys.platform == "win32":
                 import subprocess as _sp
 
-                proc = _sp.Popen(args)
+                # When Unsloth is installed via uv, uv sets PYTHONHOME in the
+                # process environment pointing at its own managed CPython build
+                # (e.g. cpython-3.13-windows-x86_64-none).  The studio venv
+                # may use a different Python version/build; if it inherits
+                # PYTHONHOME it loads its stdlib from the wrong directory and
+                # crashes immediately with:
+                #   AssertionError: SRE module mismatch
+                # Strip Python-environment vars so the child boots cleanly.
+                child_env = os.environ.copy()
+                for _var in ("PYTHONHOME", "PYTHONPATH", "UV_PYTHON", "VIRTUAL_ENV"):
+                    child_env.pop(_var, None)
+
+                proc = _sp.Popen(args, env=child_env)
                 try:
                     rc = proc.wait()
                 except KeyboardInterrupt:
@@ -120,6 +132,9 @@ def studio_default(
                     rc = proc.wait()
                 raise typer.Exit(rc)
             else:
+                # Same issue on Linux/macOS with uv. Clear vars before exec.
+                for _var in ("PYTHONHOME", "PYTHONPATH", "UV_PYTHON", "VIRTUAL_ENV"):
+                    os.environ.pop(_var, None)
                 os.execvp(str(studio_python), args)
         else:
             typer.echo("Studio not set up. Run 'unsloth studio setup' first.")

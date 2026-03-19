@@ -305,6 +305,22 @@ def setup_frontend(app: FastAPI, build_path: Path):
     if not build_path.exists():
         return False
 
+    # Windows does not register every web MIME type in its registry and
+    # Python's mimetypes module falls back to the registry.  As a result
+    # .woff2 resolves to (None, None) and .mjs to text/plain on many
+    # Windows machines, causing browsers to refuse web fonts and JS modules
+    # — producing a broken / unstyled UI.  Force-register canonical types
+    # so FileResponse and StaticFiles always send the correct Content-Type.
+    import mimetypes as _mimetypes
+    _mimetypes.add_type("text/css", ".css")
+    _mimetypes.add_type("application/javascript", ".js")
+    _mimetypes.add_type("application/javascript", ".mjs")
+    _mimetypes.add_type("font/woff2", ".woff2")
+    _mimetypes.add_type("font/woff", ".woff")
+    _mimetypes.add_type("application/wasm", ".wasm")
+    _mimetypes.add_type("image/svg+xml", ".svg")
+    _mimetypes.add_type("application/json", ".json")
+
     # Mount assets
     assets_dir = build_path / "assets"
     if assets_dir.exists():
