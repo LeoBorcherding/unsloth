@@ -326,5 +326,18 @@ from unsloth_zoo.rl_environments import (
     launch_openenv,
 )
 
+# Activation capture for neuron visualization
+from .activation_capture import (
+    ActivationCaptureConfig,
+    ActivationCapture,
+    ActivationCaptureCallback,
+)
+
+# Real-time neuron tracer for Studio integration
+from .realtime_visualizer import (
+    NeuronTracerServer,
+    RealtimeActivationCallback,
+)
+
 # Patch TRL trainers for backwards compatibility
 _patch_trl_trainer()
