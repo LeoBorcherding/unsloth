@@ -156,11 +156,32 @@ def run(args):
     )
 
     # Initialize trainer
+    callbacks = []
+    if args.neuron_tracer:
+        from unsloth.activation_capture import ActivationCaptureConfig, ActivationCapture
+        from unsloth.realtime_visualizer import RealtimeActivationCallback
+        capture_cfg = ActivationCaptureConfig(
+            output_dir        = args.capture_output_dir,
+            capture_interval  = args.capture_interval,
+            max_channels      = args.capture_max_channels,
+            capture_gradients = True,
+            capture_lora_norms= True,
+        )
+        capture  = ActivationCapture(model, capture_cfg)
+        callbacks.append(
+            RealtimeActivationCallback(
+                capture,
+                port      = args.tracer_port,
+                auto_open = not args.tracer_no_browser,
+            )
+        )
+
     trainer = SFTTrainer(
         model = model,
         processing_class = tokenizer,
         train_dataset = dataset,
         args = training_args,
+        callbacks = callbacks if callbacks else None,
     )
 
     trainer.train()
@@ -467,6 +488,42 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--stride", type = int, default = 512, help = "Overlap between chunks"
+    )
+
+    tracer_group = parser.add_argument_group("🧠 Neuron Tracer (real-time activation visualizer)")
+    tracer_group.add_argument(
+        "--neuron_tracer",
+        action = "store_true",
+        help = "Enable real-time neuron activation dashboard during training.",
+    )
+    tracer_group.add_argument(
+        "--tracer_port",
+        type = int,
+        default = 7863,
+        help = "Local port for the neuron tracer dashboard (default: 7863).",
+    )
+    tracer_group.add_argument(
+        "--tracer_no_browser",
+        action = "store_true",
+        help = "Don't open the browser automatically when the tracer starts.",
+    )
+    tracer_group.add_argument(
+        "--capture_output_dir",
+        type = str,
+        default = "activation_logs",
+        help = "Directory to write activation_log.jsonl + metadata.json (default: activation_logs).",
+    )
+    tracer_group.add_argument(
+        "--capture_interval",
+        type = int,
+        default = 10,
+        help = "Record activations every N optimizer steps (default: 10).",
+    )
+    tracer_group.add_argument(
+        "--capture_max_channels",
+        type = int,
+        default = 64,
+        help = "Number of hidden-state channels tracked per layer (default: 64).",
     )
 
     args = parser.parse_args()
