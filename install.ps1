@@ -199,6 +199,61 @@ function Install-UnslothStudio {
         }
     }
 
+    # Remove a venv directory robustly on Windows.
+    # On access-denied (locked files), kills Python processes whose executable
+    # lives inside the target directory, then retries with a short back-off.
+    # Falls back to cmd.exe rmdir /s /q as a last resort.
+    # Returns $true on success, throws on final failure so the caller can decide.
+    function Remove-VenvDirectory {
+        param(
+            [Parameter(Mandatory = $true)][string]$Path,
+            [int]$MaxRetries = 3,
+            [int]$RetryDelaySeconds = 3
+        )
+
+        for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+            try {
+                Remove-Item $Path -Recurse -Force -ErrorAction Stop
+                return $true
+            } catch {
+                $errMsg = $_.Exception.Message
+                if ($attempt -lt $MaxRetries) {
+                    substep "Removal attempt $attempt/$MaxRetries failed -- trying to free locked files..." "Yellow"
+                    # Kill any Python / unsloth processes whose executable is inside the venv
+                    try {
+                        $absPath = (Resolve-Path $Path -ErrorAction SilentlyContinue)?.Path
+                        if (-not $absPath) { $absPath = $Path }
+                        $absPathLower = $absPath.ToLower().TrimEnd('\', '/')
+                        Get-Process -ErrorAction SilentlyContinue |
+                            Where-Object {
+                                try {
+                                    $exePath = $_.MainModule.FileName
+                                    $exePath -and $exePath.ToLower().StartsWith($absPathLower)
+                                } catch { $false }
+                            } |
+                            ForEach-Object {
+                                try {
+                                    substep "  stopping process: $($_.Name) (pid $($_.Id))" "Yellow"
+                                    $_.Kill()
+                                } catch {}
+                            }
+                    } catch {}
+                    Start-Sleep -Seconds $RetryDelaySeconds
+                } else {
+                    # Final Remove-Item attempt failed; try cmd.exe rmdir as last resort.
+                    try {
+                        & cmd.exe /c rmdir /s /q "$Path" 2>$null
+                        if ($LASTEXITCODE -eq 0 -or -not (Test-Path $Path)) { return $true }
+                    } catch {}
+                    Write-Host "   [ERROR] Could not remove environment: $errMsg" -ForegroundColor Red
+                    Write-Host "           Close any running Studio/Python processes and re-run the installer." -ForegroundColor Red
+                    throw
+                }
+            }
+        }
+        return $false
+    }
+
     function New-StudioShortcuts {
         param(
             [Parameter(Mandatory = $true)][string]$UnslothExePath
@@ -677,7 +732,7 @@ shell.Run cmd, 0, False
     if (Test-Path $VenvPython) {
         # New layout already exists -- nuke for fresh install
         substep "removing existing environment for fresh install..."
-        Remove-Item -Recurse -Force $VenvDir
+        Remove-VenvDirectory -Path $VenvDir | Out-Null
     } elseif (Test-Path (Join-Path $StudioHome ".venv\Scripts\python.exe")) {
         # Old layout (~/.unsloth/studio/.venv) exists -- validate before migrating
         $OldVenv = Join-Path $StudioHome ".venv"

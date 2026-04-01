@@ -434,6 +434,78 @@ function substep {
     }
 }
 
+# Robustly removes a venv directory on Windows.
+#
+# On Windows, python.exe (and any DLLs it loaded) can remain locked briefly
+# after a child process exits, causing Remove-Item to fail with "Access to
+# the path 'python.exe' is denied."  This is especially common when Python
+# is installed via Scoop (shim-based launcher) or when Windows Defender
+# scans a newly-created executable.
+#
+# Strategy:
+#   1. Fast path: Remove-Item -Recurse -Force.
+#   2. On failure, stop Python processes whose executable is inside the venv,
+#      wait for OS handle release, then retry Remove-Item up to 3 times.
+#   3. Fall back to `cmd /c rmdir /s /q` which bypasses PowerShell's
+#      object-model locks and handles more edge-cases.
+#
+# Returns $true on success, $false on failure (prints user-facing error).
+function Remove-VenvDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Description = "virtual environment"
+    )
+
+    if (-not (Test-Path $Path)) { return $true }
+
+    # Kill any Python processes whose executable lives inside this venv so
+    # Windows releases the file locks before we attempt deletion.
+    try {
+        $VenvExeDir = (Join-Path $Path "Scripts").ToLowerInvariant()
+        Get-Process -Name "python","python3","pythonw" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -and $_.Path.ToLowerInvariant().StartsWith($VenvExeDir) } |
+            ForEach-Object {
+                try {
+                    substep "  stopping process: $($_.Name) (pid $($_.Id))" "Yellow"
+                    $_.Kill(); $_.WaitForExit(3000)
+                } catch {}
+            }
+    } catch {}
+
+    # Brief pause so the OS can release file handles after process termination.
+    Start-Sleep -Milliseconds 500
+
+    # Attempt Remove-Item up to 3 times with an increasing back-off.
+    $removed = $false
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item $Path -Recurse -Force -ErrorAction Stop
+            $removed = $true
+            break
+        } catch {
+            if ($attempt -lt 3) {
+                substep "Removal attempt $attempt/3 failed -- retrying in 2 s..." "Yellow"
+                Start-Sleep -Seconds 2
+            }
+        }
+    }
+
+    # Fall back to cmd.exe rmdir which can bypass locks that PowerShell cannot.
+    if (-not $removed) {
+        try {
+            & cmd.exe /c rmdir /s /q "$Path" 2>$null
+            if ($LASTEXITCODE -eq 0 -or -not (Test-Path $Path)) { $removed = $true }
+        } catch {}
+    }
+
+    if (-not $removed -and (Test-Path $Path)) {
+        Write-Host "   [ERROR] Could not remove $Description at '$Path'." -ForegroundColor Red
+        Write-Host "           Close any running Studio/Python processes and re-run setup." -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
 # ─────────────────────────────────────────────
 # Banner
 # ─────────────────────────────────────────────
@@ -1343,11 +1415,7 @@ if (Test-Path $VenvDir -PathType Container) {
     if ($shouldRebuild) {
         $reason = if ($installedTorchTag) { "torch $installedTorchTag != required $expectedTorchTag" } else { "torch could not be imported" }
         substep "Stale venv detected ($reason) -- rebuilding..." "Yellow"
-        try {
-            Remove-Item $VenvDir -Recurse -Force -ErrorAction Stop
-        } catch {
-            Write-Host "   [ERROR] Could not remove stale venv: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "           Close any running Studio/Python processes and re-run setup." -ForegroundColor Red
+        if (-not (Remove-VenvDirectory -Path $VenvDir)) {
             exit 1
         }
     }
