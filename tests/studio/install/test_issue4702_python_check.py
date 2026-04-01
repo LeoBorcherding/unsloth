@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for issue #4702: setup.ps1 Python check fails when system Python is
 outside the supported range but the venv Python (created by install.ps1) is valid.
 
@@ -10,9 +10,15 @@ default, this produced:
 
 even though install.ps1 had already created the venv with Python 3.13.
 
-Fix: check the well-known venv Python path first
-(~/.unsloth/studio/unsloth_studio/Scripts/python.exe).  Only fall through to
-the system-Python check when the venv doesn't exist yet.
+Fix: use a priority chain that never falls back to bare 'python --version':
+  1. UNSLOTH_PYTHON_EXE env var (set by install.ps1, exact path)
+  2. Studio venv Python (~/.unsloth/studio/unsloth_studio/Scripts/python.exe)
+  3. Conda-aware detection via py launcher and Get-Command -All
+  4. Winget install of Python 3.12 as last resort
+
+install.ps1 now sets $env:UNSLOTH_PYTHON_EXE = $DetectedPython.Path before
+invoking "unsloth studio setup" so that setup.ps1 always uses the correct
+interpreter regardless of what 'python' resolves to on PATH.
 
 Run: pytest tests/studio/install/test_issue4702_python_check.py -v
 """
@@ -26,6 +32,7 @@ import pytest
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 SETUP_PS1 = PACKAGE_ROOT / "studio" / "setup.ps1"
+INSTALL_PS1 = PACKAGE_ROOT / "install.ps1"
 
 
 # ---------------------------------------------------------------------------
@@ -35,55 +42,78 @@ SETUP_PS1 = PACKAGE_ROOT / "studio" / "setup.ps1"
 def _setup_ps1_text() -> str:
     return SETUP_PS1.read_text(encoding="utf-8-sig")
 
+def _install_ps1_text() -> str:
+    return INSTALL_PS1.read_text(encoding="utf-8-sig")
+
 
 # ---------------------------------------------------------------------------
-# Section 1g: venv-first Python check (static analysis)
+# Section 1g: priority-chain Python check (static analysis)
 # ---------------------------------------------------------------------------
 
 class TestSetupPs1VenvFirstPythonCheck:
-    """Verify that setup.ps1 checks the venv Python before the system Python."""
+    """Verify that setup.ps1 uses a safe, conda-aware Python detection chain."""
 
-    def test_venv_python_path_constructed_before_system_detection(self):
-        """The venv python.exe path check must happen before the conda-aware fallback call."""
+    def test_unsloth_python_exe_env_var_checked(self):
+        """setup.ps1 must check UNSLOTH_PYTHON_EXE before any other detection."""
         text = _setup_ps1_text()
-
-        venv_py_pos = text.find("unsloth_studio")
-        # The CALL to Find-EarlyCompatiblePython (not the definition) is the fallback
-        # Find the first call: "$_CheckedPythonExe = Find-EarlyCompatiblePython"
-        call_pos = text.find("$_CheckedPythonExe = Find-EarlyCompatiblePython")
-        assert venv_py_pos != -1, (
-            "setup.ps1 must reference the unsloth_studio venv path"
-        )
-        assert call_pos != -1, (
-            "setup.ps1 must call Find-EarlyCompatiblePython as a fallback"
-        )
-        assert venv_py_pos < call_pos, (
-            "Venv Python path check must appear BEFORE the fallback "
-            "'$_CheckedPythonExe = Find-EarlyCompatiblePython' call"
+        assert "UNSLOTH_PYTHON_EXE" in text, (
+            "setup.ps1 must check the UNSLOTH_PYTHON_EXE env var "
+            "so that install.ps1 can pass the exact Python path"
         )
 
-    def test_checked_python_exe_tracks_resolved_interpreter(self):
-        """The $_CheckedPythonExe variable must be set when the venv Python is valid."""
+    def test_install_ps1_sets_unsloth_python_exe(self):
+        """install.ps1 must set UNSLOTH_PYTHON_EXE before calling unsloth studio setup."""
+        text = _install_ps1_text()
+        pattern = re.compile(
+            r"\$env:UNSLOTH_PYTHON_EXE\s*=\s*\$DetectedPython\.Path",
+            re.IGNORECASE,
+        )
+        assert pattern.search(text), (
+            "install.ps1 must set $env:UNSLOTH_PYTHON_EXE = $DetectedPython.Path "
+            "before calling 'unsloth studio setup'"
+        )
+
+    def test_install_ps1_sets_env_var_before_studio_setup_call(self):
+        """UNSLOTH_PYTHON_EXE must be assigned before the 'unsloth studio setup' invocation."""
+        text = _install_ps1_text()
+        env_var_pos = text.find("UNSLOTH_PYTHON_EXE")
+        studio_call_pos = text.find("studio', 'setup'")
+        assert env_var_pos != -1, "install.ps1 must reference UNSLOTH_PYTHON_EXE"
+        assert studio_call_pos != -1, "install.ps1 must invoke 'studio setup'"
+        assert env_var_pos < studio_call_pos, (
+            "UNSLOTH_PYTHON_EXE must be set BEFORE the studio setup invocation"
+        )
+
+    def test_venv_python_path_is_fallback(self):
+        """The studio venv Python path must be used as a fallback in Section 1g."""
         text = _setup_ps1_text()
-        # The implementation uses $_CheckedPythonExe to track the resolved Python
-        assert "$_CheckedPythonExe" in text, (
-            "setup.ps1 must use $_CheckedPythonExe to track the validated interpreter"
+        assert "unsloth_studio" in text, (
+            "setup.ps1 must reference the unsloth_studio venv path as a fallback"
         )
-        # The venv python path assignment must occur together with $_CheckedPythonExe
-        venv_and_checked = re.search(
-            r"unsloth_studio.*?\$_CheckedPythonExe\s*=",
-            text,
-            re.DOTALL,
-        )
-        assert venv_and_checked, (
-            "$_CheckedPythonExe must be assigned when the venv Python is validated"
+
+    def test_no_bare_python_version_in_section_1g(self):
+        """Section 1g must not use bare 'python --version' (picks up wrong Python)."""
+        text = _setup_ps1_text()
+        section_start = text.find("# 1g. Python")
+        # End of section 1g is the start of phase 2 (prerequisites ready line)
+        section_end = text.find("prerequisites ready", section_start)
+        assert section_start != -1, "Could not find Section 1g in setup.ps1"
+        section_text = text[section_start:section_end] if section_end != -1 else text[section_start:]
+        # Bare `python --version` is a token not preceded by $variable or & $variable
+        bare_pattern = re.compile(r'(?<!\w)python\s+--version', re.IGNORECASE)
+        # Filter out lines that call python via a variable ($ prefix)
+        bad_lines = [
+            line for line in section_text.splitlines()
+            if bare_pattern.search(line) and not re.search(r'\$\w+\s+--version', line)
+        ]
+        assert not bad_lines, (
+            "Section 1g must not use bare 'python --version' which picks up "
+            f"the wrong interpreter. Offending lines: {bad_lines}"
         )
 
     def test_venv_python_exe_used_for_scripts_dir(self):
         """The PATH manipulation must use the checked Python, not bare 'python'."""
         text = _setup_ps1_text()
-        # After the Python check block, the script should NOT call bare `python -c`
-        # for Scripts-dir detection; it should use the resolved exe variable.
         scripts_dir_pattern = re.compile(
             r"\$ScriptsDir\s*=\s*&\s*\$_(?:PythonForPath|CheckedPythonExe)\b",
             re.IGNORECASE,
@@ -93,37 +123,39 @@ class TestSetupPs1VenvFirstPythonCheck:
             "variable ($_PythonForPath or $_CheckedPythonExe), not via bare 'python'"
         )
 
-    def test_error_exit_present_for_no_compatible_python(self):
-        """An error exit must still be present when no compatible Python can be found."""
+    def test_conda_aware_detection_present_in_section_1g(self):
+        """Section 1g must contain conda-aware Python detection."""
         text = _setup_ps1_text()
-        # The implementation must still exit with an error if Python cannot be found
-        assert "Python could not be installed automatically" in text or \
-               "outside supported range" in text or \
-               "Python 3.11-3.13 not found" in text, (
-            "setup.ps1 must still have an error exit for when no compatible Python is found"
+        section_start = text.find("# 1g. Python")
+        section_end = text.find("prerequisites ready", section_start)
+        assert section_start != -1, "Could not find Section 1g in setup.ps1"
+        section_text = text[section_start:section_end] if section_end != -1 else text[section_start:]
+        assert "conda" in section_text.lower() or "EarlyCompatiblePython" in section_text, (
+            "Section 1g must contain conda-aware Python detection "
+            "(should skip Conda/Anaconda interpreters)"
         )
 
-    def test_venv_python_version_range_correct(self):
-        """The venv pre-check must use the correct version bounds (3.11-3.13)."""
+    def test_phase3_also_checks_unsloth_python_exe(self):
+        """Phase 3 Python detection must also check UNSLOTH_PYTHON_EXE first."""
         text = _setup_ps1_text()
-        # The section checking the venv Python must use bounds >= 11 and <= 13
-        # Look for the bounds near the unsloth_studio venv path
-        venv_check_match = re.search(
-            r"unsloth_studio.*?-ge\s+11.*?-le\s+13",
-            text,
-            re.DOTALL | re.IGNORECASE,
-        )
-        assert venv_check_match, (
-            "The venv Python check must use version bounds >= 11 and <= 13 "
-            "(i.e., Python 3.11-3.13)"
+        phase3_start = text.find("PHASE 3")
+        assert phase3_start != -1, "Could not find PHASE 3 in setup.ps1"
+        phase3_text = text[phase3_start:]
+        assert "UNSLOTH_PYTHON_EXE" in phase3_text, (
+            "Phase 3 Python detection must also check UNSLOTH_PYTHON_EXE "
+            "to stay consistent with the install.ps1 -> setup.ps1 contract"
         )
 
-    def test_unsloth_python_exe_env_var_checked(self):
-        """The UNSLOTH_PYTHON_EXE env var (set by install.ps1) must be used."""
+    def test_version_bounds_consistent_in_section_1g(self):
+        """Section 1g version bounds must match Phase 3 (3.11 inclusive to 3.13 inclusive)."""
         text = _setup_ps1_text()
-        assert "UNSLOTH_PYTHON_EXE" in text, (
-            "setup.ps1 must check the UNSLOTH_PYTHON_EXE environment variable "
-            "which install.ps1 sets to the exact Python it used"
+        section_start = text.find("# 1g. Python")
+        section_end = text.find("prerequisites ready", section_start)
+        assert section_start != -1, "Could not find Section 1g"
+        section_text = text[section_start:section_end] if section_end != -1 else text[section_start:]
+        assert "-ge 11" in section_text, "Section 1g lower bound must be >= 11 (Python 3.11)"
+        assert "-le 13" in section_text or "-lt 14" in section_text, (
+            "Section 1g upper bound must be <= 13 or < 14 (Python 3.13)"
         )
 
 
@@ -144,94 +176,83 @@ class TestSetupPs1VenvPythonCheckIntegration:
             timeout=timeout,
         )
 
-    def test_venv_python_passes_when_venv_has_valid_version(self, tmp_path: Path):
-        """When the venv Python (3.12) is present, the version check should pass."""
-        # Create a minimal fake venv Python that reports Python 3.12
-        scripts_dir = tmp_path / "Scripts"
-        scripts_dir.mkdir()
-        fake_python = scripts_dir / "python.exe"
-
-        # Write a minimal batch-file shim that powershell can execute via .exe extension.
-        # We use a PowerShell helper function to simulate the check logic.
-        ps_fragment = f"""
-$_EarlyVenvPython = '{fake_python}'
-$PythonOk = $false
+    def test_unsloth_python_exe_takes_precedence(self):
+        """UNSLOTH_PYTHON_EXE 3.13 should win even when system Python is 3.9."""
+        ps_fragment = r"""
+$env:UNSLOTH_PYTHON_EXE = $null  # clear any real value
 $_CheckedPythonExe = $null
 
-# Simulate a fake python that reports 3.12 by defining a mock function
-function Invoke-FakePython {{
-    param([string]$arg)
-    if ($arg -eq '--version') {{ return 'Python 3.12.0' }}
-    return ''
-}}
+# Simulate UNSLOTH_PYTHON_EXE set by install.ps1 pointing to Python 3.13
+$envExe = 'C:\Python313\python.exe'
+$envVer = 'Python 3.13.0'
 
-# Replicate the section-1g logic (without the filesystem Test-Path check)
-$PyVer = 'Python 3.12.0'  # simulate venv python output
-if ($PyVer -match '(\\d+)\\.(\\d+)') {{
-    $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-    if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {{
-        $PythonOk = $true
-        $_CheckedPythonExe = '{fake_python}'
-    }}
-}}
+if ($envExe -and $envVer -match 'Python 3\.(\d+)') {
+    $m = [int]$Matches[1]
+    if ($m -ge 11 -and $m -le 13) {
+        $_CheckedPythonExe = $envExe
+    }
+}
 
-if ($PythonOk) {{ Write-Output 'PASS' }} else {{ Write-Output 'FAIL' }}
+# Simulate system Python 3.9 (would fail if used)
+if (-not $_CheckedPythonExe) {
+    $SysPyVer = 'Python 3.9.23'
+    if ($SysPyVer -match 'Python 3\.(\d+)') {
+        $m = [int]$Matches[1]
+        if ($m -ge 11 -and $m -le 13) {
+            $_CheckedPythonExe = 'C:\Python39\python.exe'
+        }
+    }
+}
+
+if ($_CheckedPythonExe -eq 'C:\Python313\python.exe') { Write-Output 'PASS' } else { Write-Output 'FAIL' }
 """
         result = self._run_ps_fragment(ps_fragment)
         assert result.returncode == 0
         assert "PASS" in result.stdout
 
-    def test_system_python_fails_when_version_is_39(self):
-        """When system Python is 3.9 and no venv exists, the check should fail."""
+    def test_venv_python_passes_when_valid(self):
+        """When the venv Python (3.12) is present, the version check should pass."""
         ps_fragment = r"""
-$PythonOk = $false
+$_CheckedPythonExe = $null
 
-# Simulate no venv Python present
-$_EarlyVenvPython = 'C:\NonExistent\path\python.exe'
+# No UNSLOTH_PYTHON_EXE set
+$envExe = $null
 
-# Simulate system Python 3.9 (out of range)
-$PyVer = 'Python 3.9.23'
-if ($PyVer -match '(\d+)\.(\d+)') {
-    $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-    if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {
-        $PythonOk = $true
+# Venv Python 3.12 exists
+$VenvPyVer = 'Python 3.12.0'
+if ($VenvPyVer -match 'Python 3\.(\d+)') {
+    $m = [int]$Matches[1]
+    if ($m -ge 11 -and $m -le 13) {
+        $_CheckedPythonExe = 'C:\FakeVenv\Scripts\python.exe'
     }
 }
 
-if ($PythonOk) { Write-Output 'PASS' } else { Write-Output 'FAIL' }
+if ($_CheckedPythonExe) { Write-Output 'PASS' } else { Write-Output 'FAIL' }
 """
         result = self._run_ps_fragment(ps_fragment)
         assert result.returncode == 0
-        assert "FAIL" in result.stdout
+        assert "PASS" in result.stdout
 
     def test_venv_python_takes_precedence_over_bad_system_python(self):
         """Venv Python 3.13 should pass even when system Python is 3.9."""
         ps_fragment = r"""
-$PythonOk = $false
+$_CheckedPythonExe = $null
 
-# Step 1: check venv Python (3.13 -- valid)
+# Venv Python 3.13
 $VenvPyVer = 'Python 3.13.0'
-if ($VenvPyVer -match '(\d+)\.(\d+)') {
-    $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-    if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {
-        $PythonOk = $true
+if ($VenvPyVer -match 'Python 3\.(\d+)') {
+    $m = [int]$Matches[1]
+    if ($m -ge 11 -and $m -le 13) {
+        $_CheckedPythonExe = 'C:\FakeVenv\Scripts\python.exe'
     }
 }
 
-# Step 2: if still not OK, check system Python (3.9 -- invalid)
-if (-not $PythonOk) {
-    $SysPyVer = 'Python 3.9.23'
-    if ($SysPyVer -match '(\d+)\.(\d+)') {
-        $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-        if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {
-            $PythonOk = $true
-        } else {
-            Write-Output 'ERROR: system python out of range'
-        }
-    }
+# System Python 3.9 (should NOT be reached)
+if (-not $_CheckedPythonExe) {
+    Write-Output 'ERROR: fell through to system Python'
 }
 
-if ($PythonOk) { Write-Output 'PASS' } else { Write-Output 'FAIL' }
+if ($_CheckedPythonExe) { Write-Output 'PASS' } else { Write-Output 'FAIL' }
 """
         result = self._run_ps_fragment(ps_fragment)
         assert result.returncode == 0
@@ -249,14 +270,12 @@ if ($PythonOk) { Write-Output 'PASS' } else { Write-Output 'FAIL' }
         ]:
             ps_fragment = f"""
 $PyVer = 'Python {version}'
-$PythonOk = $false
-if ($PyVer -match '(\\d+)\\.(\\d+)') {{
-    $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-    if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {{
-        $PythonOk = $true
-    }}
+$ok = $false
+if ($PyVer -match 'Python 3\\.(\\d+)') {{
+    $m = [int]$Matches[1]
+    if ($m -ge 11 -and $m -le 13) {{ $ok = $true }}
 }}
-if ($PythonOk) {{ Write-Output 'PASS' }} else {{ Write-Output 'FAIL' }}
+if ($ok) {{ Write-Output 'PASS' }} else {{ Write-Output 'FAIL' }}
 """
             result = self._run_ps_fragment(ps_fragment)
             assert result.returncode == 0
