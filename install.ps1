@@ -923,6 +923,10 @@ shell.Run cmd, 0, False
     $env:SKIP_STUDIO_BASE = "1"
     $env:STUDIO_PACKAGE_NAME = $PackageName
     $env:UNSLOTH_NO_TORCH = if ($SkipTorch) { "true" } else { "false" }
+    # Pass the exact Python executable we detected/installed so that setup.ps1
+    # uses the same interpreter instead of resolving 'python' from PATH (which
+    # could point to a Conda or other incompatible Python on some systems).
+    $env:UNSLOTH_PYTHON_EXE = $DetectedPython.Path
     # Always set STUDIO_LOCAL_INSTALL explicitly to avoid stale values from
     # a previous --local run in the same PowerShell session.
     if ($StudioLocalInstall) {

@@ -981,42 +981,126 @@ if ($IsPipInstall) {
 # ============================================
 # 1g. Python (>= 3.11 and < 3.14, matching setup.sh)
 # ============================================
-$HasPython = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
-$PythonOk = $false
+# Do NOT use bare 'python' here: on systems where Conda or another
+# distribution is the default 'python', the interpreter may be outside
+# the supported range and would cause a false failure.
+#
+# Priority order:
+#   1. UNSLOTH_PYTHON_EXE -- exact path passed by install.ps1 (no ambiguity)
+#   2. Studio venv Python  -- already validated by install.ps1
+#   3. Conda-aware detection via py launcher and Get-Command -All
+#   4. Winget install of Python 3.12 as a last resort
 
-if ($HasPython) {
-    $PyVer = python --version 2>&1
-    if ($PyVer -match "(\d+)\.(\d+)") {
-        $PyMajor = [int]$Matches[1]; $PyMinor = [int]$Matches[2]
-        if ($PyMajor -eq 3 -and $PyMinor -ge 11 -and $PyMinor -lt 14) {
-            substep "Python $PyVer"
-            $PythonOk = $true
-        } else {
-            Write-Host "[ERROR] Python $PyVer is outside supported range (need >= 3.11 and < 3.14)." -ForegroundColor Red
-            Write-Host "        Install Python 3.12 from https://python.org/downloads/" -ForegroundColor Yellow
-            exit 1
+$_EarlyCondaPattern = '(?i)(conda|miniconda|anaconda|miniforge|mambaforge)'
+
+function Test-IsCondaEarlyPy {
+    param([string]$Exe)
+    if ($Exe -match $_EarlyCondaPattern) { return $true }
+    try {
+        $bp = (& $Exe -c "import sys; print(sys.base_prefix)" 2>$null | Out-String).Trim()
+        return $bp -match $_EarlyCondaPattern
+    } catch { return $false }
+}
+
+function Find-EarlyCompatiblePython {
+    # 1. Python Launcher (py.exe) -- most reliable on Windows
+    $pyLa = Get-Command py -CommandType Application -ErrorAction SilentlyContinue
+    if ($pyLa -and $pyLa.Source -notmatch $_EarlyCondaPattern) {
+        foreach ($minor in @("3.13", "3.12", "3.11")) {
+            try {
+                $out = & $pyLa.Source "-$minor" --version 2>&1 | Out-String
+                if ($out -match 'Python 3\.(\d+)') {
+                    $m = [int]$Matches[1]
+                    if ($m -ge 11 -and $m -le 13) {
+                        $r = (& $pyLa.Source "-$minor" -c "import sys; print(sys.executable)" 2>$null | Out-String).Trim()
+                        if ($r -and (Test-Path $r) -and -not (Test-IsCondaEarlyPy $r)) { return $r }
+                    }
+                }
+            } catch {}
         }
     }
-} else {
-    # No Python at all -- install 3.12
-    Write-Host "Python not found -- installing Python 3.12 via winget..." -ForegroundColor Yellow
+    # 2. Scan python3.x / python3 / python on PATH, skipping WindowsApps stubs and conda
+    foreach ($cand in @("python3.13", "python3.12", "python3.11", "python3", "python")) {
+        foreach ($ci in @(Get-Command $cand -All -ErrorAction SilentlyContinue)) {
+            if (-not $ci.Source) { continue }
+            if ($ci.Source -like "*\WindowsApps\*") { continue }
+            if (Test-IsCondaEarlyPy $ci.Source) { continue }
+            try {
+                $v = & $ci.Source --version 2>&1 | Out-String
+                if ($v -match 'Python 3\.(\d+)') {
+                    $m = [int]$Matches[1]
+                    if ($m -ge 11 -and $m -le 13) { return $ci.Source }
+                }
+            } catch {}
+        }
+    }
+    return $null
+}
+
+$_CheckedPythonExe = $null  # the exe that passed the version check
+
+# Priority 1: exact path passed by install.ps1 via UNSLOTH_PYTHON_EXE
+if ($env:UNSLOTH_PYTHON_EXE -and (Test-Path $env:UNSLOTH_PYTHON_EXE)) {
+    try {
+        $PyVer = & $env:UNSLOTH_PYTHON_EXE --version 2>&1 | Out-String
+        if ($PyVer -match 'Python 3\.(\d+)') {
+            $PyMinor = [int]$Matches[1]
+            if ($PyMinor -ge 11 -and $PyMinor -le 13) {
+                substep "Python $($PyVer.Trim())"
+                $_CheckedPythonExe = $env:UNSLOTH_PYTHON_EXE
+            }
+        }
+    } catch {}
+}
+
+# Priority 2: studio venv Python (already validated by install.ps1)
+if (-not $_CheckedPythonExe) {
+    $_EarlyVenvDir = Join-Path $env:USERPROFILE ".unsloth\studio\unsloth_studio"
+    $_EarlyVenvPython = Join-Path $_EarlyVenvDir "Scripts\python.exe"
+    if (Test-Path $_EarlyVenvPython) {
+        try {
+            $PyVer = & $_EarlyVenvPython --version 2>&1 | Out-String
+            if ($PyVer -match 'Python 3\.(\d+)') {
+                $PyMinor = [int]$Matches[1]
+                if ($PyMinor -ge 11 -and $PyMinor -le 13) {
+                    substep "Python $($PyVer.Trim()) (venv)"
+                    $_CheckedPythonExe = $_EarlyVenvPython
+                }
+            }
+        } catch {}
+    }
+}
+
+# Priority 3: conda-aware detection (skips conda/WindowsApps stubs)
+if (-not $_CheckedPythonExe) {
+    $_CheckedPythonExe = Find-EarlyCompatiblePython
+    if ($_CheckedPythonExe) {
+        $PyVer = & $_CheckedPythonExe --version 2>&1 | Out-String
+        substep "Python $($PyVer.Trim())"
+    }
+}
+
+# Priority 4: install Python 3.12 via winget as last resort
+if (-not $_CheckedPythonExe) {
+    Write-Host "Python 3.11-3.13 not found -- installing Python 3.12 via winget..." -ForegroundColor Yellow
     $HasWinget = $null -ne (Get-Command winget -ErrorAction SilentlyContinue)
     if ($HasWinget) {
         winget install -e --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements
         Refresh-Environment
     }
-    $HasPython = $null -ne (Get-Command python -ErrorAction SilentlyContinue)
-    if (-not $HasPython) {
+    $_CheckedPythonExe = Find-EarlyCompatiblePython
+    if (-not $_CheckedPythonExe) {
         Write-Host "[ERROR] Python could not be installed automatically." -ForegroundColor Red
         Write-Host "        Install Python 3.12 from https://python.org/downloads/" -ForegroundColor Yellow
         exit 1
     }
-    step "python" "$(python --version 2>&1)"
-    $PythonOk = $true
+    step "python" "$(& $_CheckedPythonExe --version 2>&1)"
 }
 
-# Ensure Python Scripts dir is on PATH (so 'unsloth' command works in new terminals)
-$ScriptsDir = python -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user') if __import__('os').path.exists(sysconfig.get_path('scripts', 'nt_user')) else sysconfig.get_path('scripts'))"
+# Ensure Python Scripts dir is on PATH (so 'unsloth' command works in new terminals).
+# Use the Python that passed the version check (venv preferred over system Python).
+$_PythonForPath = if ($_CheckedPythonExe) { $_CheckedPythonExe } else { "python" }
+$ScriptsDir = & $_PythonForPath -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user') if __import__('os').path.exists(sysconfig.get_path('scripts', 'nt_user')) else sysconfig.get_path('scripts'))"
 if ($LASTEXITCODE -eq 0 -and $ScriptsDir -and (Test-Path $ScriptsDir)) {
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $UserPathEntries = if ($UserPath) { $UserPath.Split(';') } else { @() }
@@ -1231,8 +1315,22 @@ function Test-IsConda {
     return $false
 }
 
+# 0. Prefer the exact path passed by install.ps1 -- avoids any PATH ambiguity.
+if ($env:UNSLOTH_PYTHON_EXE -and (Test-Path $env:UNSLOTH_PYTHON_EXE) -and -not (Test-IsConda $env:UNSLOTH_PYTHON_EXE)) {
+    try {
+        $out = & $env:UNSLOTH_PYTHON_EXE --version 2>&1 | Out-String
+        if ($out -match 'Python 3\.(\d+)') {
+            $pm = [int]$Matches[1]
+            if ($pm -ge 11 -and $pm -le 13) {
+                $PythonCmd = $env:UNSLOTH_PYTHON_EXE
+            }
+        }
+    } catch {}
+}
+
 # 1. Try the Python Launcher (py.exe) first -- most reliable on Windows.
 #    py.exe is installed by python.org and resolves to standalone CPython.
+if (-not $PythonCmd) {
 $pyLauncher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue
 if ($pyLauncher -and $pyLauncher.Source -notmatch $CondaSkipPattern) {
     foreach ($minor in @("3.13", "3.12", "3.11")) {
@@ -1252,6 +1350,7 @@ if ($pyLauncher -and $pyLauncher.Source -notmatch $CondaSkipPattern) {
             }
         } catch { }
     }
+}
 }
 
 # 2. Fall back to scanning python3.x / python3 / python on PATH.
