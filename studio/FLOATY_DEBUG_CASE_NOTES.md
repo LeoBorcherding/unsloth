@@ -65,32 +65,97 @@ The initial loss difference (9.874 vs 2.79) is **3.5x higher** than expected, in
 
 ## Debugging Resources Created
 
-### 1. Colab Notebook
+### 1. Colab Notebook (UPDATED)
 **Location:** `studio/GPT_OSS_20B_Training_Debug_Floaty.ipynb`
 
 **Features:**
-- Complete training script matching floaty's configuration
-- Enhanced diagnostic logging for every step
-- Initial loss tracking and alerts
-- Token looping detection
-- Environment version checks
-- Gradient norm monitoring
-- Debugging checklist
+- ✅ **Toggleable test configurations** - Switch between floaty_original, floaty_current, leo_working, official_notebook
+- ✅ **Environment variable controls** - Force attention implementation, disable flex attention
+- ✅ **Enhanced loss monitoring** - Automatic detection of high initial loss (>5.0) and rapid collapse
+- ✅ **Token loop detection** - Calculates repetition ratio in generated text
+- ✅ **Side-by-side comparison** - Expected vs problem behavior checklist
+- ✅ **Comprehensive diagnostics** - Flash Attention, Xformers, CUDA versions, GPU memory
+
+**Test Configurations Available:**
+1. **floaty_original** - His first script (train_on_responses_only=True, reasoning_effort=True) ❌ Wrong
+2. **floaty_current** - Corrected config (both False) but still broken on his hardware
+3. **leo_working** - Leo's Colab config that works correctly
+4. **official_notebook** - Official Unsloth notebook reference
+5. **custom** - Manual configuration for specific tests
+
+**Configuration Toggles:**
+- `USE_TRAIN_ON_RESPONSES_ONLY` - Test with/without masking
+- `USE_REASONING_EFFORT` - Test with/without reasoning_effort parameter
+- `USE_EVAL_DATASET` - Enable/disable evaluation
+- `FORCE_ATTN_IMPLEMENTATION` - Force specific attention (None, "sdpa", "flash_attention_2", "eager")
+- `DISABLE_FLEX_ATTENTION` - Toggle flex attention on/off
+- `LEARNING_RATE` - Test different LRs (2e-4, 2e-5, 1e-4)
+- `MAX_STEPS` - Quick tests (100, 300) or full epoch (None)
 
 **Key Diagnostic Cells:**
-- Cell 1: Environment and version diagnostics
-- Cell 2: Model loading with config inspection
+- Cell 0: **🔧 Configuration toggles** - Easy switching between test modes
+- Cell 1: Environment and version diagnostics with FA2/Xformers detection
+- Cell 2: Model loading with forced attention implementation support
 - Cell 3: LoRA parameter counting
-- Cell 4-5: Dataset processing with sample output
-- Cell 6: Trainer setup with configuration display
-- Cell 7: **Enhanced training loop with initial loss alerts**
-- Cell 8: Inference testing with loop detection
+- Cell 4-5: Dataset processing with reasoning_effort toggle
+- Cell 6: Trainer setup with train_on_responses_only toggle
+- Cell 7: **🚀 Enhanced training loop** - Detects initial loss >5.0 and rapid collapse
+- Cell 8: **🧪 Inference testing** - Quantifies token looping with repetition ratio
 - Cell 9: Model saving
+
+**How to Use:**
+1. Set `TEST_MODE` at top of notebook to desired configuration
+2. Optionally adjust individual toggles for custom tests
+3. Run all cells
+4. Check diagnostic output for:
+   - Initial loss (should be ~2.79, NOT 9.87)
+   - Flash Attention warnings
+   - Loss progression (gradual vs collapse)
+   - Token looping in inference (repetition ratio < 30% = problem)
 
 ### 2. Branch
 **Name:** `support/discord-floaty-gpt-oss-training-debug`
 
 ## Next Steps for Investigation
+
+### Systematic Testing Plan:
+
+**Phase 1: Reproduce Issue**
+1. Run notebook with `TEST_MODE = "floaty_current"` on Colab
+2. Verify it works (initial loss ~2.79)
+3. Compare with floaty's local output
+
+**Phase 2: Test Hypotheses**
+Once we can reproduce (or confirm we can't), test:
+
+1. **Test Attention Implementations:**
+   ```python
+   FORCE_ATTN_IMPLEMENTATION = "sdpa"      # Force PyTorch SDPA
+   FORCE_ATTN_IMPLEMENTATION = "eager"     # Force slow but stable
+   DISABLE_FLEX_ATTENTION = True           # Disable flex attention
+   ```
+
+2. **Test Wrong Configurations (should break):**
+   ```python
+   TEST_MODE = "floaty_original"  # Has wrong config - should fail
+   ```
+
+3. **Test Learning Rate Impact:**
+   ```python
+   LEARNING_RATE = 1e-4   # Even lower
+   LEARNING_RATE = 2e-5   # floaty tried this
+   ```
+
+4. **Test Context Length Impact:**
+   ```python
+   MAX_SEQ_LENGTH = 2048  # Reduce from 3072
+   MAX_SEQ_LENGTH = 4096  # Increase (if memory allows)
+   ```
+
+5. **Test Eval Dataset Impact:**
+   ```python
+   USE_EVAL_DATASET = False  # Disable eval (uses more VRAM)
+   ```
 
 ### Immediate Actions:
 1. **Have floaty run the debug notebook** and share full output
