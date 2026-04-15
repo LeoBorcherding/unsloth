@@ -945,15 +945,36 @@ shell.Run cmd, 0, False
 
     New-StudioShortcuts -UnslothExePath $UnslothExe
 
-    # ── Add venv Scripts dir to User PATH so `unsloth studio` works from any terminal ──
-    $ScriptsDir = Join-Path $VenvDir "Scripts"
+    # ── Add a lightweight shim dir to User PATH so `unsloth` works from any terminal ──
+    # We intentionally do NOT add the full venv Scripts dir to PATH, because
+    # it contains 100+ executables (hf, httpx, litellm, etc.) that would
+    # shadow the user's globally installed CLI tools.  Instead we create a
+    # dedicated shim directory containing only an `unsloth.cmd` forwarder.
+    $ShimDir = Join-Path $env:USERPROFILE ".unsloth\bin"
+    if (-not (Test-Path $ShimDir)) {
+        New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+    }
+    $ShimCmd = Join-Path $ShimDir "unsloth.cmd"
+    $VenvUnslothExe = Join-Path $VenvDir "Scripts\unsloth.exe"
+    Set-Content -Path $ShimCmd -Value "@`"$VenvUnslothExe`" %*" -Encoding ASCII
+
+    # Clean up legacy PATH entry: older installers added the full venv
+    # Scripts dir which caused collateral shadowing (issue #5040).
+    $OldScriptsDir = Join-Path $VenvDir "Scripts"
     $UserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    if (-not $UserPath -or $UserPath -notlike "*$ScriptsDir*") {
-        if ($UserPath) {
-            [System.Environment]::SetEnvironmentVariable("Path", "$ScriptsDir;$UserPath", "User")
-        } else {
-            [System.Environment]::SetEnvironmentVariable("Path", "$ScriptsDir", "User")
-        }
+    if ($UserPath -and $UserPath -like "*$OldScriptsDir*") {
+        $CleanedEntries = ($UserPath -split ";") | Where-Object { $_.TrimEnd("\") -ne $OldScriptsDir.TrimEnd("\") }
+        $CleanedPath = ($CleanedEntries -join ";").TrimEnd(";")
+        [System.Environment]::SetEnvironmentVariable("Path", $CleanedPath, "User")
+        substep "Removed legacy venv Scripts dir from PATH (fixes #5040)"
+    }
+
+    # Add shim dir to User PATH if not already present
+    $UserPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $UserPathEntries = if ($UserPath) { $UserPath.Split(';') } else { @() }
+    if (-not ($UserPathEntries | Where-Object { $_.TrimEnd('\') -eq $ShimDir.TrimEnd('\') })) {
+        $newUserPath = if ($UserPath) { "$ShimDir;$UserPath" } else { $ShimDir }
+        [System.Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
         Refresh-SessionPath
         step "path" "added unsloth to PATH"
     }

@@ -1061,22 +1061,39 @@ if ($HasPython) {
     $PythonOk = $true
 }
 
-# Ensure Python Scripts dir is on PATH (so 'unsloth' command works in new terminals)
-$ScriptsDir = python -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user') if __import__('os').path.exists(sysconfig.get_path('scripts', 'nt_user')) else sysconfig.get_path('scripts'))"
-if ($LASTEXITCODE -eq 0 -and $ScriptsDir -and (Test-Path $ScriptsDir)) {
-    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $UserPathEntries = if ($UserPath) { $UserPath.Split(';') } else { @() }
-    if (-not ($UserPathEntries | Where-Object { $_.TrimEnd('\') -eq $ScriptsDir })) {
-        $newUserPath = if ($UserPath) { "$ScriptsDir;$UserPath" } else { $ScriptsDir }
-        [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+# Ensure unsloth shim dir is on PATH (so 'unsloth' command works in new terminals).
+# We use a dedicated shim directory (~/.unsloth/bin/) containing only an
+# unsloth.cmd forwarder, instead of adding the full venv Scripts dir which
+# would shadow the user's globally installed CLI tools (issue #5040).
+$ShimDir = Join-Path $env:USERPROFILE ".unsloth\bin"
+if (-not (Test-Path $ShimDir)) {
+    New-Item -ItemType Directory -Path $ShimDir -Force | Out-Null
+}
 
-        # Also add to current process so it's available immediately
-        $ProcessPathEntries = $env:PATH.Split(';')
-        if (-not ($ProcessPathEntries | Where-Object { $_.TrimEnd('\') -eq $ScriptsDir })) {
-            $env:PATH = "$ScriptsDir;$env:PATH"
-        }
-        substep "Persisted Python Scripts dir to user PATH: $ScriptsDir"
+# Clean up legacy PATH entry: older installers added the full venv Scripts
+# dir which caused collateral shadowing of global tools like hf, httpx, etc.
+$LegacyScriptsDir = Join-Path $env:USERPROFILE ".unsloth\studio\unsloth_studio\Scripts"
+$UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($UserPath -and $UserPath -like "*$LegacyScriptsDir*") {
+    $CleanedEntries = ($UserPath -split ";") | Where-Object { $_.TrimEnd("\") -ne $LegacyScriptsDir.TrimEnd("\") }
+    $CleanedPath = ($CleanedEntries -join ";").TrimEnd(";")
+    [Environment]::SetEnvironmentVariable('Path', $CleanedPath, 'User')
+    $UserPath = $CleanedPath
+    substep "Removed legacy venv Scripts dir from PATH (fixes #5040)"
+}
+
+# Add shim dir to User PATH if not already present
+$UserPathEntries = if ($UserPath) { $UserPath.Split(';') } else { @() }
+if (-not ($UserPathEntries | Where-Object { $_.TrimEnd('\') -eq $ShimDir.TrimEnd('\') })) {
+    $newUserPath = if ($UserPath) { "$ShimDir;$UserPath" } else { $ShimDir }
+    [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+
+    # Also add to current process so it's available immediately
+    $ProcessPathEntries = $env:PATH.Split(';')
+    if (-not ($ProcessPathEntries | Where-Object { $_.TrimEnd('\') -eq $ShimDir.TrimEnd('\') })) {
+        $env:PATH = "$ShimDir;$env:PATH"
     }
+    substep "Persisted unsloth shim dir to user PATH: $ShimDir"
 }
 
 Write-Host ""
