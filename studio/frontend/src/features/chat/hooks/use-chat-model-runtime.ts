@@ -490,6 +490,7 @@ export function useChatModelRuntime() {
             const reasoningAlwaysOn = loadResponse.reasoning_always_on ?? false;
             const ggufMaxContextLength = reportedMaxCtx;
             useChatRuntimeStore.setState({
+              activeGgufVariant: ggufVariant ?? null,
               ggufContextLength: nativeCtx,
               ggufMaxContextLength,
               ggufNativeContextLength: reportedNativeCtx,
