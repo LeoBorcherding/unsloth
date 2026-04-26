@@ -363,6 +363,21 @@ async def load_model(
         backend = get_inference_backend()
         llama_backend = get_llama_cpp_backend()
 
+        # ── External server: skip local model loading entirely ──
+        if request.external_url:
+            if llama_backend.is_active and llama_backend._external_url == request.external_url:
+                logger.info(f"Already connected to external server: {request.external_url}")
+            else:
+                llama_backend.connect_external(request.external_url)
+            inference_config = load_inference_config("default")
+            return LoadResponse(
+                status = "loaded",
+                model = request.external_url,
+                display_name = request.model_path or request.external_url,
+                is_gguf = True,
+                inference = inference_config,
+            )
+
         if request.gguf_variant:
             if (
                 llama_backend.is_loaded

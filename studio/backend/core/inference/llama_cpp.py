@@ -230,6 +230,7 @@ class LlamaCppBackend:
         self._stdout_thread: Optional[threading.Thread] = None
         self._cancel_event = threading.Event()
         self._api_key: Optional[str] = None
+        self._external_url: Optional[str] = None
 
         self._kill_orphaned_servers()
         atexit.register(self._cleanup)
@@ -238,16 +239,37 @@ class LlamaCppBackend:
 
     @property
     def is_loaded(self) -> bool:
+        if self._external_url:
+            return True
         return self._process is not None and self._healthy
 
     @property
     def is_active(self) -> bool:
         """True if a llama-server process exists (loading or loaded)."""
+        if self._external_url:
+            return True
         return self._process is not None
 
     @property
     def base_url(self) -> str:
+        if self._external_url:
+            return self._external_url.rstrip("/")
         return f"http://127.0.0.1:{self._port}"
+
+    def connect_external(self, url: str) -> None:
+        """Point the backend at an external OpenAI-compatible server instead of a local process."""
+        if self._process is not None:
+            self.unload_model()
+        self._external_url = url.rstrip("/")
+        self._model_identifier = url
+        self._healthy = True
+        logger.info(f"Connected to external server: {url}")
+
+    def disconnect_external(self) -> None:
+        """Clear the external server connection."""
+        self._external_url = None
+        self._model_identifier = None
+        self._healthy = False
 
     @property
     def model_identifier(self) -> Optional[str]:
@@ -1964,6 +1986,7 @@ class LlamaCppBackend:
         """Terminate the llama-server subprocess and cancel any in-flight download."""
         self._cancel_event.set()
         with self._lock:
+            self._external_url = None
             self._kill_process()
             logger.info(f"Unloaded GGUF model: {self._model_identifier}")
             self._model_identifier = None

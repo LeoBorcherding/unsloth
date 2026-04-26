@@ -52,6 +52,10 @@ class LoadRequest(BaseModel):
         None,
         description = "Speculative decoding mode for GGUF models (e.g. 'ngram-simple', 'ngram-mod'). Ignored for non-GGUF and vision models.",
     )
+    external_url: Optional[str] = Field(
+        None,
+        description = "External OpenAI-compatible server URL (e.g. 'http://192.168.1.50:8080'). When set, Studio proxies to this server instead of loading a local model.",
+    )
 
 
 class UnloadRequest(BaseModel):
