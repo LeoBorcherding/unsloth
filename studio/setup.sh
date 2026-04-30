@@ -175,11 +175,16 @@ rm -rf "$REPO_ROOT/unsloth_compiled_cache"
 rm -rf "$SCRIPT_DIR/backend/unsloth_compiled_cache"
 rm -rf "$SCRIPT_DIR/tmp/unsloth_compiled_cache"
 
-# ── Detect Colab ──
+# ── Detect Colab / AMD Dev Cloud ──
 IS_COLAB=false
+IS_AMD_CLOUD=false
 keynames=$'\n'$(printenv | cut -d= -f1)
 if [[ "$keynames" == *$'\nCOLAB_'* ]]; then
     IS_COLAB=true
+fi
+# AMD Dev Cloud runs on JupyterHub — detect via JUPYTERHUB_ env vars
+if [[ "$keynames" == *$'\nJUPYTERHUB_'* ]]; then
+    IS_AMD_CLOUD=true
 fi
 
 if [ "$_LLAMA_ONLY" != "1" ]; then
@@ -413,23 +418,27 @@ VENV_T5_550_DIR="$STUDIO_HOME/.venv_t5_550"
 
 _COLAB_NO_VENV=false
 if [ ! -x "$VENV_DIR/bin/python" ]; then
-    if [ "$IS_COLAB" = true ]; then
-        # On Colab there is no Studio venv -- install backend deps into system Python.
-        # Strip all version constraints so pip keeps Colab's pre-installed
+    if [ "$IS_COLAB" = true ] || [ "$IS_AMD_CLOUD" = true ]; then
+        # On Colab / AMD Dev Cloud there is no Studio venv -- install backend deps
+        # into system Python. Strip all version constraints so pip keeps pre-installed
         # packages (huggingface-hub, datasets, transformers) and only pulls
         # in genuinely missing ones (structlog, fastapi, etc.).
-        substep "Colab detected, installing Studio backend dependencies..."
+        if [ "$IS_AMD_CLOUD" = true ]; then
+            substep "AMD Dev Cloud detected, installing Studio backend dependencies..."
+        else
+            substep "Colab detected, installing Studio backend dependencies..."
+        fi
         _COLAB_REQS_TMP="$(mktemp)"
         sed 's/[><=!~;].*//' "$SCRIPT_DIR/backend/requirements/studio.txt" \
             | grep -v '^#' | grep -v '^$' > "$_COLAB_REQS_TMP"
         if [ -s "$_COLAB_REQS_TMP" ]; then
-            if ! run_quiet_no_exit "install Colab backend deps" pip install -q -r "$_COLAB_REQS_TMP"; then
+            if ! run_quiet_no_exit "install backend deps" pip install -q -r "$_COLAB_REQS_TMP"; then
                 rm -f "$_COLAB_REQS_TMP"
-                step "python" "Colab backend dependency install failed" "$C_ERR"
+                step "python" "backend dependency install failed" "$C_ERR"
                 exit 1
             fi
         else
-            step "python" "no Colab backend dependencies resolved from requirements file" "$C_WARN"
+            step "python" "no backend dependencies resolved from requirements file" "$C_WARN"
         fi
         rm -f "$_COLAB_REQS_TMP"
         _COLAB_NO_VENV=true
@@ -1049,6 +1058,17 @@ if [ "$_LLAMA_ONLY" = "1" ]; then
         printf "  ${C_TITLE}%s${C_RST}\n" "llama.cpp update finished"
     fi
     printf "  ${C_DIM}%s${C_RST}\n" "$RULE"
+elif [ "$IS_AMD_CLOUD" = true ]; then
+    echo ""
+    printf "  ${C_DIM}%s${C_RST}\n" "$RULE"
+    if [ "$_LLAMA_CPP_DEGRADED" = true ]; then
+        printf "  ${C_WARN}%s${C_RST}\n" "Unsloth Studio Setup Complete (limited: llama.cpp unavailable)"
+    else
+        printf "  ${C_TITLE}%s${C_RST}\n" "Unsloth Studio Setup Complete"
+    fi
+    printf "  ${C_DIM}%s${C_RST}\n" "$RULE"
+    substep "from colab import start_amd_cloud"
+    substep "start_amd_cloud()"
 elif [ "$IS_COLAB" = true ]; then
     echo ""
     printf "  ${C_DIM}%s${C_RST}\n" "$RULE"
