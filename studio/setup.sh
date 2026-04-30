@@ -182,8 +182,11 @@ keynames=$'\n'$(printenv | cut -d= -f1)
 if [[ "$keynames" == *$'\nCOLAB_'* ]]; then
     IS_COLAB=true
 fi
-# AMD Dev Cloud runs on JupyterHub — detect via JUPYTERHUB_ env vars
-if [[ "$keynames" == *$'\nJUPYTERHUB_'* ]]; then
+# AMD Dev Cloud: detect via JUPYTERHUB_ env vars OR ROCm toolchain presence
+if [[ "$keynames" == *$'\nJUPYTERHUB_'* ]] \
+    || command -v hipcc &>/dev/null \
+    || command -v rocm-smi &>/dev/null \
+    || [ -d /opt/rocm ]; then
     IS_AMD_CLOUD=true
 fi
 
