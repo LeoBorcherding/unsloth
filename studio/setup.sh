@@ -482,11 +482,12 @@ fast_install() {
 
 cd "$SCRIPT_DIR"
 
-# On Colab without a venv, skip venv-dependent Python deps sections but
-# continue to llama.cpp install so GGUF inference is available.
+# On Colab/AMD Dev Cloud without a venv, skip venv-dependent Python deps
+# sections but continue to llama.cpp install so GGUF inference is available.
 if [ "$_COLAB_NO_VENV" = true ]; then
     step "python" "backend deps installed into system Python"
     substep "continuing to llama.cpp install for GGUF inference support"
+    _SKIP_PYTHON_DEPS=true
 fi
 
 # ── Check if Python deps need updating ──

@@ -171,6 +171,17 @@ def start_amd_cloud(port: int = _AMD_CLOUD_DEFAULT_PORT):
         from colab import start_amd_cloud
         start_amd_cloud()
     """
+    import subprocess as _sp
+
+    # Guarantee backend deps are installed regardless of whether setup.sh's
+    # pip install ran successfully (e.g. if install_python_stack exited early).
+    try:
+        import structlog  # noqa: F401
+    except ImportError:
+        print("Installing Studio backend dependencies...")
+        req_file = Path(__file__).parent / "requirements" / "studio.txt"
+        _sp.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)])
+
     logger.info("🦥 Starting Unsloth Studio on AMD Dev Cloud...")
     logger.info("   Loading backend...")
     from run import run_server
