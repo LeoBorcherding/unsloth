@@ -17,6 +17,16 @@ if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 import _platform_compat  # noqa: F401
 
+# Ensure backend deps (structlog, fastapi, etc.) are installed before importing
+# loggers, which pulls in structlog at module level. On AMD Dev Cloud setup.sh
+# may exit before completing the pip install, so we guarantee it here.
+try:
+    import structlog  # noqa: F401
+except ImportError:
+    import subprocess as _sp
+    _req_file = Path(__file__).parent / "requirements" / "studio.txt"
+    print("Installing Studio backend dependencies...")
+    _sp.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", str(_req_file)])
 
 from loggers import get_logger
 
@@ -171,17 +181,6 @@ def start_amd_cloud(port: int = _AMD_CLOUD_DEFAULT_PORT):
         from colab import start_amd_cloud
         start_amd_cloud()
     """
-    import subprocess as _sp
-
-    # Guarantee backend deps are installed regardless of whether setup.sh's
-    # pip install ran successfully (e.g. if install_python_stack exited early).
-    try:
-        import structlog  # noqa: F401
-    except ImportError:
-        print("Installing Studio backend dependencies...")
-        req_file = Path(__file__).parent / "requirements" / "studio.txt"
-        _sp.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_file)])
-
     logger.info("🦥 Starting Unsloth Studio on AMD Dev Cloud...")
     logger.info("   Loading backend...")
     from run import run_server
