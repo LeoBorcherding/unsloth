@@ -12,6 +12,74 @@ from pathlib import Path as _Path
 # Suppress annoying C-level dependency warnings globally
 os.environ["PYTHONWARNINGS"] = "ignore"
 
+# ── Windows AMD ROCm DLL injection ──────────────────────────────────────────
+# Python 3.8+ ignores PATH for extension modules; register ROCm bin dirs with
+# os.add_dll_directory() so amdhip64.dll etc. are found before any torch import.
+if sys.platform == "win32":
+
+    def _add_rocm_dll_dirs() -> None:
+        candidates = []
+        # 1. HIP_PATH / ROCM_PATH -- set by the AMD HIP SDK installer
+        for _var in ("HIP_PATH", "ROCM_PATH"):
+            _val = os.environ.get(_var)
+            if _val:
+                candidates.append(os.path.join(_val, "bin"))
+        # 2. Standard AMD installer location: C:\Program Files\AMD\ROCm\<ver>\bin
+        #    Scan all installed versions, newest first.
+        _default_root = os.path.join(
+            os.environ.get("ProgramFiles", r"C:\Program Files"), "AMD", "ROCm"
+        )
+        try:
+            if os.path.isdir(_default_root):
+                for _ver in sorted(os.listdir(_default_root), reverse = True):
+                    _bin = os.path.join(_default_root, _ver, "bin")
+                    if os.path.isdir(_bin):
+                        candidates.append(_bin)
+        except OSError:
+            pass
+        for _d in candidates:
+            if os.path.isdir(_d):
+                try:
+                    os.add_dll_directory(_d)
+                except (OSError, AttributeError):
+                    pass
+
+    _add_rocm_dll_dirs()
+    del _add_rocm_dll_dirs
+
+    # ── Windows AMD ROCm: set BNB_ROCM_VERSION before any bitsandbytes import ─
+    # bitsandbytes on Windows ROCm tries to load libbitsandbytes_rocm<ver>.dll
+    # where <ver> comes from torch.version.hip (e.g. "7.13..." → "713").
+    # The installed BNB wheel ships rocm72.dll (not rocm713.dll), so without
+    # this the server process crashes with "Configured ROCm binary not found".
+    # Detect the available DLL, fall back to "72", and set BNB_ROCM_VERSION
+    # before any import that pulls in bitsandbytes (mirrors worker.py logic).
+    # Guard: only set on ROCm hosts (HIP_PATH/ROCM_PATH present) -- setting
+    # BNB_ROCM_VERSION on a Windows CUDA machine makes bitsandbytes look for a
+    # ROCm DLL that doesn't exist and fail to initialise the CUDA backend.
+    _is_rocm_host = bool(os.environ.get("HIP_PATH") or os.environ.get("ROCM_PATH"))
+    if _is_rocm_host and "BNB_ROCM_VERSION" not in os.environ:
+        import glob as _glob
+
+        _bnb_rocm_ver = None
+        try:
+            import importlib.util as _ilu
+
+            _bnb_spec = _ilu.find_spec("bitsandbytes")
+            if _bnb_spec and _bnb_spec.origin:
+                _pkg_dir = os.path.dirname(_bnb_spec.origin)
+                _dlls = _glob.glob(os.path.join(_pkg_dir, "libbitsandbytes_rocm*.dll"))
+                import re as _re_bnb
+
+                for _dll in sorted(_dlls):
+                    _m = _re_bnb.search(r"libbitsandbytes_rocm(\d+)\.dll", _dll)
+                    if _m:
+                        _bnb_rocm_ver = _m.group(1)
+                        break
+        except Exception:
+            pass
+        os.environ["BNB_ROCM_VERSION"] = _bnb_rocm_ver or "72"
+
 # Ensure backend dir is on sys.path so _platform_compat is importable when
 # main.py is launched directly (e.g. `uvicorn main:app`).
 _backend_dir = str(_Path(__file__).parent)
