@@ -508,6 +508,67 @@ def _read_apple_gpu_stats() -> Dict[str, Any]:
     }
 
 
+def _rocm_linux_sysfs_vram_gb() -> tuple[Optional[float], Optional[float]]:
+    """Query system-wide AMD GPU VRAM via Linux DRM sysfs.
+
+    Reads /sys/class/drm/card*/device/mem_info_vram_* which the kernel
+    updates in real-time across all processes. No tools required.
+    Returns (used_gb, total_gb) or (None, None) on failure.
+    """
+    import glob as _glob
+
+    if platform.system() != "Linux":
+        return None, None
+    try:
+        used_files = _glob.glob("/sys/class/drm/card*/device/mem_info_vram_used")
+        total_files = _glob.glob("/sys/class/drm/card*/device/mem_info_vram_total")
+        if not used_files or not total_files:
+            return None, None
+        used_bytes = sum(int(open(f).read().strip()) for f in used_files)
+        total_bytes = sum(int(open(f).read().strip()) for f in total_files)
+        if total_bytes == 0:
+            return None, None
+        return round(used_bytes / (1024**3), 2), round(total_bytes / (1024**3), 2)
+    except Exception:
+        return None, None
+
+
+def _rocm_windows_perf_counter_vram_gb() -> tuple[Optional[float], Optional[float]]:
+    """Query system-wide dedicated GPU VRAM via Windows Performance Counters.
+
+    Uses the same data source as Task Manager so it reflects cross-process
+    usage accurately. Works for any GPU vendor without amd-smi or nvidia-smi.
+    Returns (used_gb, total_gb) or (None, None) on failure.
+    """
+    import subprocess as _sp
+
+    if platform.system() != "Windows":
+        return None, None
+    try:
+        ps = (
+            "$s=(Get-Counter '\\GPU Adapter Memory(*)\\Dedicated Usage'"
+            " -ErrorAction SilentlyContinue).CounterSamples;"
+            "if($s){($s|Measure-Object CookedValue -Sum).Sum}else{-1}"
+        )
+        r = _sp.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output = True,
+            text = True,
+            timeout = 5,
+        )
+        if r.returncode != 0 or not r.stdout.strip():
+            return None, None
+        used_bytes = float(r.stdout.strip())
+        if used_bytes < 0:
+            return None, None
+        import torch as _torch
+
+        total_bytes = _torch.cuda.get_device_properties(0).total_memory
+        return round(used_bytes / (1024**3), 2), round(total_bytes / (1024**3), 2)
+    except Exception:
+        return None, None
+
+
 def get_gpu_utilization() -> Dict[str, Any]:
     """Return a live snapshot of device utilization information."""
     device = get_device()
@@ -522,6 +583,68 @@ def get_gpu_utilization() -> Dict[str, Any]:
                     result, _get_parent_visible_gpu_spec()
                 )
             return result
+        # SMI tool unavailable or returned no usable data. On Windows, query
+        # the Performance Counter API (same source as Task Manager) for
+        # system-wide dedicated VRAM — covers cross-process usage that
+        # torch.cuda.mem_get_info cannot see from the Studio server process.
+        if IS_ROCM and platform.system() == "Windows":
+            _win_used, _win_total = _rocm_windows_perf_counter_vram_gb()
+            if _win_used is not None and _win_total is not None:
+                return {
+                    "available": True,
+                    "backend": _backend_label(device),
+                    "gpu_utilization_pct": None,
+                    "temperature_c": None,
+                    "vram_used_gb": _win_used,
+                    "vram_total_gb": _win_total,
+                    "vram_utilization_pct": round((_win_used / _win_total) * 100, 1)
+                    if _win_total > 0
+                    else None,
+                    "power_draw_w": None,
+                    "power_limit_w": None,
+                    "power_utilization_pct": None,
+                }
+        # Linux: DRM sysfs gives system-wide VRAM across all processes, no tools needed.
+        if IS_ROCM and platform.system() == "Linux":
+            _linux_used, _linux_total = _rocm_linux_sysfs_vram_gb()
+            if _linux_used is not None and _linux_total is not None:
+                return {
+                    "available": True,
+                    "backend": _backend_label(device),
+                    "gpu_utilization_pct": None,
+                    "temperature_c": None,
+                    "vram_used_gb": _linux_used,
+                    "vram_total_gb": _linux_total,
+                    "vram_utilization_pct": round((_linux_used / _linux_total) * 100, 1)
+                    if _linux_total > 0
+                    else None,
+                    "power_draw_w": None,
+                    "power_limit_w": None,
+                    "power_utilization_pct": None,
+                }
+        # Last resort: torch mem_get_info (process-local).
+        _visible_spec = _get_parent_visible_gpu_spec()
+        _numeric_ids = _visible_spec.get("numeric_ids") or [0]
+        _primary_idx = [_numeric_ids[0]] if _numeric_ids else [0]
+        _torch_devices = _torch_get_per_device_info(_primary_idx)
+        if _torch_devices:
+            _td = _torch_devices[0]
+            _total = _td["total_gb"]
+            _used = _td["used_gb"]
+            return {
+                "available": True,
+                "backend": _backend_label(device),
+                "gpu_utilization_pct": None,
+                "temperature_c": None,
+                "vram_used_gb": _used,
+                "vram_total_gb": _total,
+                "vram_utilization_pct": round((_used / _total) * 100, 1)
+                if _total > 0
+                else None,
+                "power_draw_w": None,
+                "power_limit_w": None,
+                "power_utilization_pct": None,
+            }
 
     # MLX path: single _read_apple_gpu_stats() call carries both VRAM-used
     # bytes and GPU utilization %. psutil for unified-memory total is cheap.
@@ -771,8 +894,13 @@ def _get_parent_visible_gpu_spec() -> Dict[str, Any]:
     # Use explicit None checks (not `or`) so empty string "" is honoured
     # as "no visible GPUs" rather than falling through to CUDA_VISIBLE_DEVICES.
     cuda_visible = None
+    # Prefer ROCm masks only on a ROCm host, or when no CUDA mask is set, so a
+    # stale HIP_VISIBLE_DEVICES on an NVIDIA host can't override CUDA_VISIBLE_DEVICES.
     _is_rocm_spec = IS_ROCM or (
-        "HIP_VISIBLE_DEVICES" in os.environ or "ROCR_VISIBLE_DEVICES" in os.environ
+        "CUDA_VISIBLE_DEVICES" not in os.environ
+        and (
+            "HIP_VISIBLE_DEVICES" in os.environ or "ROCR_VISIBLE_DEVICES" in os.environ
+        )
     )
     if _is_rocm_spec:
         hip_vis = os.environ.get("HIP_VISIBLE_DEVICES")
