@@ -5,7 +5,7 @@
 Core inference backend - streamlined
 """
 
-from unsloth import FastLanguageModel, FastVisionModel
+from unsloth import FastLanguageModel, FastVisionModel, is_bfloat16_supported
 from unsloth.chat_templates import get_chat_template
 from transformers import TextStreamer
 from peft import PeftModel, PeftModelForCausalLM
@@ -256,6 +256,20 @@ class InferenceBackend:
         # GGUF uses max_seq_length=0 as "model default"; Unsloth crashes on it.
         if max_seq_length <= 0:
             max_seq_length = 2048
+
+        # On RDNA2 (gfx103x, e.g. RX 6600) is_bfloat16_supported() incorrectly
+        # returns True, so dtype=None causes unsloth to pick bf16 and the first
+        # bf16 kernel dispatch during generation triggers:
+        #   LLVM ERROR: Cannot select: intrinsic %llvm.amdgcn.fdot2.bf16.bf16
+        # Mirror the same guard used in trainer.py: resolve to float16 only when
+        # running on ROCm hardware that actually lacks bf16 support.
+        if dtype is None:
+            _is_rocm = (
+                bool(getattr(torch.version, "hip", None))
+                or "rocm" in torch.__version__.lower()
+            )
+            if _is_rocm and not is_bfloat16_supported():
+                dtype = torch.float16
 
         try:
             model_name = config.identifier
@@ -2260,7 +2274,7 @@ class InferenceBackend:
             return self.load_model(
                 config = config,
                 max_seq_length = max_seq_length,
-                dtype = None,  # Auto-detect
+                dtype = None,  # resolved to float16 on RDNA2 inside load_model()
                 load_in_4bit = load_in_4bit,
                 hf_token = hf_token,
             )
