@@ -5,7 +5,7 @@
 Core inference backend - streamlined
 """
 
-from unsloth import FastLanguageModel, FastVisionModel
+from unsloth import FastLanguageModel, FastVisionModel, is_bfloat16_supported
 from unsloth.chat_templates import get_chat_template
 from transformers import TextStreamer
 from peft import PeftModel, PeftModelForCausalLM
@@ -460,13 +460,26 @@ class InferenceBackend:
             logger.info(f"Loading {model_type} model{adapter_info}: {model_name}")
             log_gpu_memory(f"Before loading {model_name}")
 
+            # AMD ROCm hardware without native bfloat16 (e.g. RDNA2 / gfx103x) crashes
+            # with an LLVM error at the first bf16 kernel dispatch when dtype=None lets
+            # unsloth auto-pick bf16. Force float16 there. NVIDIA keeps dtype=None so
+            # unsloth's own bf16/fp16/float32 auto-detection is honored.
+            _is_rocm = (
+                bool(getattr(torch.version, "hip", None))
+                or "rocm" in torch.__version__.lower()
+            )
+            _auto_dtype = (
+                torch.float16 if (_is_rocm and not is_bfloat16_supported()) else None
+            )
+            _effective_dtype = dtype if dtype is not None else _auto_dtype
+
             # Load model - same approach for base models and LoRA adapters
             if config.is_vision:
                 # Vision model (or vision LoRA adapter)
                 model, processor = FastVisionModel.from_pretrained(
                     model_name = config.path,  # Can be base model OR LoRA adapter path
                     max_seq_length = max_seq_length,
-                    dtype = dtype,
+                    dtype = _effective_dtype,
                     load_in_4bit = load_in_4bit,
                     device_map = device_map,
                     token = hf_token if hf_token and hf_token.strip() else None,
@@ -523,7 +536,7 @@ class InferenceBackend:
                 model, tokenizer = FastLanguageModel.from_pretrained(
                     model_name = config.path,  # Can be base model OR LoRA adapter path
                     max_seq_length = max_seq_length,
-                    dtype = dtype,
+                    dtype = _effective_dtype,
                     load_in_4bit = load_in_4bit,
                     device_map = device_map,
                     token = hf_token if hf_token and hf_token.strip() else None,
