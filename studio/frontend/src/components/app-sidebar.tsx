@@ -61,6 +61,7 @@ import {
   Logout05Icon,
   MoreVerticalIcon,
   Search01Icon,
+  SparklesIcon,
   PowerIcon,
   PencilEdit02Icon,
   LayoutAlignLeftIcon,
@@ -887,6 +888,18 @@ export function AppSidebar() {
                 active={pathname === "/hub" || pathname.startsWith("/hub/")}
                 onClick={() => {
                   navigate({ to: "/hub" });
+                  closeMobileIfOpen();
+                }}
+              />
+              <NavItem
+                icon={SparklesIcon}
+                label="Claude Agents"
+                active={
+                  pathname === "/claude-agents" ||
+                  pathname.startsWith("/claude-agents/")
+                }
+                onClick={() => {
+                  navigate({ to: "/claude-agents" });
                   closeMobileIfOpen();
                 }}
               />
