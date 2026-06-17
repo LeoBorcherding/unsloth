@@ -210,6 +210,18 @@ class FastDiffusionModel:
         # Mark before any early return so get_peft_model/for_* route to the slow path.
         model._unsloth_slow_diffusion = True
 
+        # DiffusionGemmaGenerationConfig does not expose the standard tokenizer fields
+        # (bos_token_id, eos_token_id, pad_token_id) that TRL/SFTTrainer assumes on any
+        # generation_config.  Patch them in now so trainer setup doesn't raise AttributeError.
+        if hasattr(model, "generation_config"):
+            gc = model.generation_config
+            for _attr in ("bos_token_id", "eos_token_id", "pad_token_id"):
+                if not hasattr(gc, _attr):
+                    try:
+                        setattr(gc, _attr, None)
+                    except (AttributeError, TypeError):
+                        pass
+
         if not return_tokenizer:
             return model, None
 
