@@ -2904,6 +2904,22 @@ class FastLlamaModel:
         ensure_weight_tying = False,
         **kwargs,
     ):
+        # Route text-diffusion models (FastDiffusionModel slow path) before any llama-specific
+        # logic, since they lack _saved_temp_tokenizer and other llama-only attributes.
+        if getattr(model, "_unsloth_slow_diffusion", False):
+            from .diffusion import FastDiffusionModel
+            return FastDiffusionModel.get_peft_model(
+                model,
+                r = r,
+                target_modules = target_modules,
+                lora_alpha = lora_alpha,
+                lora_dropout = lora_dropout,
+                bias = bias,
+                use_gradient_checkpointing = use_gradient_checkpointing,
+                random_state = random_state,
+                **kwargs,
+            )
+
         if os.environ.get("UNSLOTH_USE_NEW_MODEL", "0") == "1":
             # Check for other PEFT args in kwargs
             for peft_arg, flag in (
