@@ -363,7 +363,14 @@ class FastDiffusionModel:
                 r".*model\.decoder\.layers\.\d+\.(self_attn\.[qkvo]_proj|mlp\.(gate|up|down)_proj)"
             )
             lora_config = LoraConfig(**lora_kwargs)
-        if use_gradient_checkpointing:
+        is_quantized = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+        if is_quantized:
+            from peft import prepare_model_for_kbit_training
+            model = prepare_model_for_kbit_training(
+                model,
+                use_gradient_checkpointing = use_gradient_checkpointing,
+            )
+        elif use_gradient_checkpointing:
             model.gradient_checkpointing_enable()
             if hasattr(model, "enable_input_require_grads"):
                 model.enable_input_require_grads()
