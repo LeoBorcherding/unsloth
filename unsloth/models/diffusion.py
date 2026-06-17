@@ -22,7 +22,10 @@ bit-identical to transformers), keeping only the safe conveniences: 4bit/8bit lo
 
 import os
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from ._utils import is_bfloat16_supported
 from .llama import logger
@@ -115,6 +118,82 @@ def _load_diffusion_config(model_name, token, trust_remote_code, revision, local
         from transformers import DiffusionGemma4Config
 
         return DiffusionGemma4Config.from_dict(cd)
+
+
+class DiffusionGemmaSFTWrapper(nn.Module):
+    """Wraps a DiffusionGemma (PEFT) model so SFTTrainer sees a standard CausalLM interface.
+
+    DiffusionGemma is an encoder-decoder block-diffusion model whose forward() does not
+    accept `labels` or compute a loss. This wrapper implements the correct discrete-diffusion
+    training objective: corrupt the target canvas with uniform random-token noise at a sampled
+    rate t ~ U(0.05, 0.95), feed the clean prompt to the encoder and the noisy canvas to the
+    decoder, then compute cross-entropy against the original labels on all non-ignored positions.
+
+    Using random-token noise (not a mask token) matches DiffusionGemma's inference renoising
+    strategy, where non-accepted canvas tokens are replaced with torch.randint(0, vocab_size).
+    """
+
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        # Forward routing flags so for_inference / for_training still work
+        self._unsloth_slow_diffusion = True
+
+    def forward(
+        self,
+        input_ids = None,
+        attention_mask = None,
+        labels = None,
+        **kwargs,
+    ):
+        vocab_size = self.model.config.text_config.vocab_size
+        device = input_ids.device if input_ids is not None else next(self.model.parameters()).device
+
+        # --- build noisy canvas from the target tokens ---
+        # Labels use -100 for positions we don't train on (prompt tokens).
+        # We treat valid label positions as the response canvas and apply noise there.
+        target = labels if labels is not None else input_ids
+        B, L = target.shape
+
+        # Sample a per-batch noise rate t ~ U(0.05, 0.95) — keeps the task non-trivial
+        # but always leaves some signal to learn from.
+        t = 0.05 + 0.90 * torch.rand(1, device=device).item()
+
+        # Random-token noise: replace each token with probability t.
+        # Positions where labels==-100 (prompt) are excluded from loss but still noised
+        # so the decoder sees a realistic canvas during training.
+        noise_mask = torch.rand(B, L, device=device) < t
+        random_tokens = torch.randint(0, vocab_size, (B, L), device=device)
+        canvas = torch.where(noise_mask, random_tokens, target.clone().clamp(min=0))
+
+        # --- forward ---
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            decoder_input_ids=canvas,
+        )
+
+        # --- loss: cross-entropy on all canvas positions, -100 ignored ---
+        loss = None
+        if labels is not None:
+            loss = F.cross_entropy(
+                outputs.logits.reshape(-1, vocab_size),
+                labels.reshape(-1),
+                ignore_index=-100,
+            )
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=outputs.logits,
+            past_key_values=getattr(outputs, "past_key_values", None),
+        )
+
+    # Delegate everything else (save, named_parameters, etc.) to the wrapped model
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.model, name)
 
 
 class FastDiffusionModel:
@@ -295,6 +374,9 @@ class FastDiffusionModel:
             model.print_trainable_parameters()
         except Exception:
             pass
+
+        # Wrap in the SFT-compatible interface so TRL/SFTTrainer receives a loss.
+        model = DiffusionGemmaSFTWrapper(model)
         return model
 
     @staticmethod
