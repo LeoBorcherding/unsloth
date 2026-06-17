@@ -32,10 +32,12 @@ sys.modules.setdefault("loggers", _loggers_stub)
 from utils.transformers_version import (
     _resolve_base_model,
     _check_tokenizer_config_needs_v5,
+    _check_config_needs_511,
     _check_config_needs_510,
     _check_config_needs_550,
     _config_json_cache,
     _tokenizer_class_cache,
+    _config_needs_511_cache,
     _config_needs_510_cache,
     _config_needs_550_cache,
     needs_transformers_5,
@@ -283,6 +285,78 @@ class TestCheckConfigNeeds550:
 
 
 # ---------------------------------------------------------------------------
+# _check_config_needs_511 — config.json architecture/model_type check
+# ---------------------------------------------------------------------------
+
+
+class TestCheckConfigNeeds511:
+    """Tests for _check_config_needs_511() local config.json checks (DiffusionGemma)."""
+
+    def setup_method(self):
+        _config_json_cache.clear()
+        _config_needs_511_cache.clear()
+
+    def test_diffusion_gemma4_architecture(self, tmp_path: Path):
+        """config.json with DiffusionGemma4ModelForBlockDiffusion should return True."""
+        cfg = {
+            "architectures": ["DiffusionGemma4ModelForBlockDiffusion"],
+            "model_type": "diffusion_gemma4",
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert _check_config_needs_511(str(tmp_path)) is True
+
+    def test_diffusion_gemma_legacy_architecture(self, tmp_path: Path):
+        """Legacy DiffusionGemmaForBlockDiffusion architecture should return True."""
+        cfg = {
+            "architectures": ["DiffusionGemmaForBlockDiffusion"],
+            "model_type": "diffusion_gemma",
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert _check_config_needs_511(str(tmp_path)) is True
+
+    def test_diffusion_gemma4_model_type_only(self, tmp_path: Path):
+        """config.json with model_type=diffusion_gemma4 (no architectures) should return True."""
+        cfg = {"model_type": "diffusion_gemma4"}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert _check_config_needs_511(str(tmp_path)) is True
+
+    def test_llama_architecture_returns_false(self, tmp_path: Path):
+        """Standard LlamaForCausalLM should return False."""
+        cfg = {"architectures": ["LlamaForCausalLM"], "model_type": "llama"}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert _check_config_needs_511(str(tmp_path)) is False
+
+    def test_no_config_json(self, tmp_path: Path):
+        """Missing config.json should return False (fail-open)."""
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.side_effect = Exception("no network")
+            assert _check_config_needs_511(str(tmp_path)) is False
+
+    def test_result_is_cached(self, tmp_path: Path):
+        """Subsequent calls should use the cache."""
+        cfg = {"architectures": ["DiffusionGemma4ModelForBlockDiffusion"]}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        key = str(tmp_path)
+        _check_config_needs_511(key)
+        assert key in _config_needs_511_cache
+        assert _config_needs_511_cache[key] is True
+
+    def test_local_file_skips_network(self, tmp_path: Path):
+        """When local config.json exists, no network request should be made."""
+        cfg = {"architectures": ["LlamaForCausalLM"]}
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            _check_config_needs_511(str(tmp_path))
+            mock_urlopen.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _check_config_needs_510 — config.json architecture/model_type check
 # ---------------------------------------------------------------------------
 
@@ -393,6 +467,7 @@ class TestGetTransformersTier:
     def setup_method(self):
         _tokenizer_class_cache.clear()
         _config_json_cache.clear()
+        _config_needs_511_cache.clear()
         _config_needs_510_cache.clear()
         _config_needs_550_cache.clear()
 
@@ -523,6 +598,32 @@ class TestGetTransformersTier:
             ),
         ):
             assert get_transformers_tier("meta-llama/Llama-3-8B") == "default"
+
+    def test_diffusiongemma_substring_returns_511(self):
+        assert get_transformers_tier("unsloth/diffusiongemma-26B-A4B-it") == "511"
+
+    def test_diffusiongemma_hf_org_returns_511(self):
+        assert get_transformers_tier("google/diffusiongemma-26B-A4B-it") == "511"
+
+    def test_diffusiongemma_config_json_model_type_returns_511(self, tmp_path: Path):
+        """Local checkpoint with diffusion_gemma4 model_type → 511."""
+        cfg = {
+            "architectures": ["DiffusionGemma4ModelForBlockDiffusion"],
+            "model_type": "diffusion_gemma4",
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert get_transformers_tier(str(tmp_path)) == "511"
+
+    def test_diffusiongemma_legacy_model_type_returns_511(self, tmp_path: Path):
+        """Legacy diffusion_gemma model_type (without '4') → 511."""
+        cfg = {
+            "architectures": ["DiffusionGemmaForBlockDiffusion"],
+            "model_type": "diffusion_gemma",
+        }
+        (tmp_path / "config.json").write_text(json.dumps(cfg))
+
+        assert get_transformers_tier(str(tmp_path)) == "511"
 
     def test_550_checked_before_530(self):
         """5.5.0 is checked before 5.3.0 - a model matching both gets 550."""

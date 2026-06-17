@@ -2488,13 +2488,14 @@ if ($stackExit -ne 0) {
     $ErrorActionPreference = $prevEAP
 }
 
-# ── Pre-install transformers 5.x into .venv_t5_530/, .venv_t5_550/, and .venv_t5_510/ ──
+# ── Pre-install transformers 5.x into .venv_t5_530/, .venv_t5_550/, .venv_t5_510/, and .venv_t5_511/ ──
 # Runs outside the deps fast-path gate so that upgrades from the legacy
 # single .venv_t5 are always migrated to the tiered layout.
 # T5 sidecar venvs live under the resolved $StudioHome so custom installs are self-contained.
 $VenvT5_530Dir = Join-Path $StudioHome ".venv_t5_530"
 $VenvT5_550Dir = Join-Path $StudioHome ".venv_t5_550"
 $VenvT5_510Dir = Join-Path $StudioHome ".venv_t5_510"
+$VenvT5_511Dir = Join-Path $StudioHome ".venv_t5_511"
 $VenvT5Legacy = Join-Path $StudioHome ".venv_t5"
 
 function Test-TargetPackageVersion {
@@ -2526,9 +2527,11 @@ if (Test-Path -LiteralPath $VenvT5Legacy) {
 if (-not (Test-Path -LiteralPath $VenvT5_530Dir)) { $_NeedT5Install = $true }
 if (-not (Test-Path -LiteralPath $VenvT5_550Dir)) { $_NeedT5Install = $true }
 if (-not (Test-Path -LiteralPath $VenvT5_510Dir)) { $_NeedT5Install = $true }
+if (-not (Test-Path -LiteralPath $VenvT5_511Dir)) { $_NeedT5Install = $true }
 if (-not (Test-TargetPackageVersion -TargetDir $VenvT5_530Dir -PackageName "transformers" -ExpectedVersion "5.3.0")) { $_NeedT5Install = $true }
 if (-not (Test-TargetPackageVersion -TargetDir $VenvT5_550Dir -PackageName "transformers" -ExpectedVersion "5.5.0")) { $_NeedT5Install = $true }
 if (-not (Test-TargetPackageVersion -TargetDir $VenvT5_510Dir -PackageName "transformers" -ExpectedVersion "5.10.2")) { $_NeedT5Install = $true }
+if (-not (Test-TargetPackageVersion -TargetDir $VenvT5_511Dir -PackageName "transformers" -ExpectedVersion "5.11.0")) { $_NeedT5Install = $true }
 # Also reinstall when python deps were updated
 if (-not $SkipPythonDeps) { $_NeedT5Install = $true }
 
@@ -2641,8 +2644,43 @@ if ($script:UnslothVerbose) {
 if ($tiktokenInstallExit -ne 0) {
     substep "Could not install tiktoken into .venv_t5_510/ -- Qwen tokenizers may fail" "Yellow"
 }
-$ErrorActionPreference = $prevEAP_t5
 step "transformers" "5.10.2 pre-installed"
+
+# --- .venv_t5_511 (transformers 5.11.0) ---
+substep "pre-installing transformers 5.11.0 for DiffusionGemma support..."
+Assert-StudioOwnedOrAbsent -Path $VenvT5_511Dir -Label "transformers 5.11 sidecar venv"
+if (Test-Path -LiteralPath $VenvT5_511Dir) { Remove-Item -LiteralPath $VenvT5_511Dir -Recurse -Force }
+[System.IO.Directory]::CreateDirectory($VenvT5_511Dir) | Out-Null
+Mark-StudioOwned -Path $VenvT5_511Dir
+foreach ($pkg in @("transformers==5.11.0", "huggingface_hub==1.8.0", "hf_xet==1.4.2")) {
+    if ($script:UnslothVerbose) {
+        Fast-Install --target $VenvT5_511Dir --no-deps $pkg
+        $t5PkgExit = $LASTEXITCODE
+        $output = ""
+    } else {
+        $output = Fast-Install --target $VenvT5_511Dir --no-deps $pkg | Out-String
+        $t5PkgExit = $LASTEXITCODE
+    }
+    if ($t5PkgExit -ne 0) {
+        Write-Host "[FAIL] Could not install $pkg into .venv_t5_511/" -ForegroundColor Red
+        Write-Host $output -ForegroundColor Red
+        $ErrorActionPreference = $prevEAP_t5
+        exit 1
+    }
+}
+if ($script:UnslothVerbose) {
+    Fast-Install --target $VenvT5_511Dir tiktoken
+    $tiktokenInstallExit = $LASTEXITCODE
+    $output = ""
+} else {
+    $output = Fast-Install --target $VenvT5_511Dir tiktoken | Out-String
+    $tiktokenInstallExit = $LASTEXITCODE
+}
+if ($tiktokenInstallExit -ne 0) {
+    substep "Could not install tiktoken into .venv_t5_511/ -- Qwen tokenizers may fail" "Yellow"
+}
+$ErrorActionPreference = $prevEAP_t5
+step "transformers" "5.11.0 pre-installed"
 
 } # end $_NeedT5Install
 

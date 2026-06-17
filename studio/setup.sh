@@ -423,6 +423,7 @@ VENV_DIR="$STUDIO_HOME/unsloth_studio"
 VENV_T5_530_DIR="$STUDIO_HOME/.venv_t5_530"
 VENV_T5_550_DIR="$STUDIO_HOME/.venv_t5_550"
 VENV_T5_510_DIR="$STUDIO_HOME/.venv_t5_510"
+VENV_T5_511_DIR="$STUDIO_HOME/.venv_t5_511"
 
 _STUDIO_OWNED_MARKER=".unsloth-studio-owned"
 _LEGACY_STUDIO_HOME="$HOME/.unsloth/studio"
@@ -796,9 +797,9 @@ else
     verbose_substep "python deps check: installed=$_PKG_NAME@${INSTALLED_VER:-unknown} latest=${LATEST_VER:-unknown}"
 fi
 
-# ── 6b. Pre-install transformers 5.x into .venv_t5_530/, .venv_t5_550/, and .venv_t5_510/ ──
+# ── 6b. Pre-install transformers 5.x into .venv_t5_530/, .venv_t5_550/, .venv_t5_510/, and .venv_t5_511/ ──
 # Models like GLM-4.7-Flash, Qwen3 MoE need transformers>=5.3.0.
-# Gemma 4 models need transformers>=5.5.0; Gemma 4 Unified needs 5.10.x.
+# Gemma 4 models need transformers>=5.5.0; Gemma 4 Unified needs 5.10.x; DiffusionGemma needs 5.11.0.
 # Pre-install into separate directories to avoid runtime pip overhead.
 # The training subprocess prepends the appropriate dir to sys.path.
 _target_has_pkg_version() {
@@ -826,9 +827,11 @@ fi
 [ ! -d "$VENV_T5_530_DIR" ] && _NEED_T5_INSTALL=true
 [ ! -d "$VENV_T5_550_DIR" ] && _NEED_T5_INSTALL=true
 [ ! -d "$VENV_T5_510_DIR" ] && _NEED_T5_INSTALL=true
+[ ! -d "$VENV_T5_511_DIR" ] && _NEED_T5_INSTALL=true
 _target_has_pkg_version "$VENV_T5_530_DIR" "transformers" "5.3.0" || _NEED_T5_INSTALL=true
 _target_has_pkg_version "$VENV_T5_550_DIR" "transformers" "5.5.0" || _NEED_T5_INSTALL=true
 _target_has_pkg_version "$VENV_T5_510_DIR" "transformers" "5.10.2" || _NEED_T5_INSTALL=true
+_target_has_pkg_version "$VENV_T5_511_DIR" "transformers" "5.11.0" || _NEED_T5_INSTALL=true
 # Also reinstall when python deps were updated (packages may need rebuild)
 [ "$_SKIP_PYTHON_DEPS" = false ] && _NEED_T5_INSTALL=true
 
@@ -862,6 +865,16 @@ if [ "$_NEED_T5_INSTALL" = true ]; then
     run_quiet "install hf_xet for t5_510" fast_install --target "$VENV_T5_510_DIR" --no-deps "hf_xet==1.4.2"
     run_quiet "install tiktoken for t5_510" fast_install --target "$VENV_T5_510_DIR" "tiktoken"
     step "transformers" "5.10.2 pre-installed"
+
+    _assert_studio_owned_or_absent "$VENV_T5_511_DIR" "transformers 5.11 sidecar venv"
+    [ -d "$VENV_T5_511_DIR" ] && rm -rf "$VENV_T5_511_DIR"
+    mkdir -p "$VENV_T5_511_DIR"
+    : > "$VENV_T5_511_DIR/$_STUDIO_OWNED_MARKER" 2>/dev/null || true
+    run_quiet "install transformers 5.11.0" fast_install --target "$VENV_T5_511_DIR" --no-deps "transformers==5.11.0"
+    run_quiet "install huggingface_hub for t5_511" fast_install --target "$VENV_T5_511_DIR" --no-deps "huggingface_hub==1.8.0"
+    run_quiet "install hf_xet for t5_511" fast_install --target "$VENV_T5_511_DIR" --no-deps "hf_xet==1.4.2"
+    run_quiet "install tiktoken for t5_511" fast_install --target "$VENV_T5_511_DIR" "tiktoken"
+    step "transformers" "5.11.0 pre-installed"
 fi
 fi
 
