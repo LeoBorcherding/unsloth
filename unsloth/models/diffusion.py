@@ -188,6 +188,13 @@ class DiffusionGemmaSFTWrapper(nn.Module):
             past_key_values=getattr(outputs, "past_key_values", None),
         )
 
+    def save_pretrained(self, *args, **kwargs):
+        # DiffusionGemma encoder and decoder share weight tensors (weight-tied).
+        # safetensors refuses to serialize shared tensors by default, so we fall
+        # back to pickle-based serialization for the adapter save.
+        kwargs.setdefault("safe_serialization", False)
+        return self.model.save_pretrained(*args, **kwargs)
+
     # Delegate everything else (save, named_parameters, etc.) to the wrapped model
     def __getattr__(self, name):
         try:
