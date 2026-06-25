@@ -114,38 +114,30 @@ def _is_studio_healthy(port: int, timeout: float = 2.0) -> bool:
 
 
 def _show_and_embed(port: int):
-    """Embed the Studio inline for *port* with a branded header bar.
+    """Show the "Open Unsloth Studio" banner, then embed the Studio inline.
 
-    Fetches the proxy URL once (registering the port), then renders header bar +
-    iframe. Falls back to serve_kernel_port_as_iframe if IPython HTML is unavailable.
+    Fetches the proxy URL once (registering the port), renders the clickable
+    banner card via show_link(), then the responsive iframe below it. The
+    banner is the primary entry point now that Colab's proxy works again; the
+    iframe stays as an inline fallback for when the link is blocked. Falls back
+    to serve_kernel_port_as_iframe if IPython HTML is unavailable.
     """
     url = get_colab_url(port)
     logger.info(f"🌐 Unsloth Studio URL: {url}")
+
+    # Prominent banner with the "Open Unsloth Studio" button. Reuses the
+    # already-fetched URL so we don't call eval_js a second time.
+    show_link(port, _url = url)
 
     try:
         from IPython.display import HTML, display
 
         iframe_id = f"unsloth-studio-{port}"
 
-        # Truncated header URL — best-effort, falls back to full URL.
-        try:
-            port_prefix = f"{port}-"
-            idx = url.index(port_prefix)
-            next_dash = url.index("-", idx + len(port_prefix))
-            short_url = url[: next_dash + 1] + "..."
-        except (ValueError, IndexError):
-            short_url = url
-
         display(
             HTML(f"""
 <div style="font-family:system-ui,-apple-system,sans-serif;margin:8px 0;
             border-radius:12px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.18);">
-  <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;background:#000;">
-    <img src="https://github.com/unslothai/unsloth/raw/main/studio/frontend/public/unsloth-gem.png"
-         height="26" style="display:block;">
-    <span style="color:#fff;font-weight:700;font-size:15px;letter-spacing:-0.2px;">Unsloth Studio</span>
-    <span style="margin-left:auto;color:#666;font-size:11px;font-family:monospace;">{short_url}</span>
-  </div>
   <iframe
     id="{iframe_id}"
     src="{url}"
