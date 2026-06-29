@@ -470,12 +470,15 @@ def _run_update(install_dir: Path, repo: str, asset: Optional[str], script: Path
         watchdog.daemon = True
         watchdog.start()
         tail_lines: list[str] = []
+        fallback_reason_line: str | None = None
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
                 tail_lines.append(line)
                 if len(tail_lines) > 80:
                     del tail_lines[0]
+                if "prebuilt fallback reason:" in line:
+                    fallback_reason_line = line.strip()
                 m = _PROGRESS_LINE_RE.search(line)
                 if m is None:
                     continue
@@ -489,6 +492,8 @@ def _run_update(install_dir: Path, repo: str, asset: Optional[str], script: Path
             raise RuntimeError(f"installer timed out after {_INSTALL_TIMEOUT_SECONDS}s")
         if returncode != 0:
             tail = "".join(tail_lines).strip()[-1500:]
+            if fallback_reason_line and fallback_reason_line not in tail:
+                tail = f"{fallback_reason_line}\n{tail}"
             raise RuntimeError(f"installer exited {returncode}: {tail or 'no output'}")
 
         # Drop stale caches so the banner re-checks the swapped marker.
