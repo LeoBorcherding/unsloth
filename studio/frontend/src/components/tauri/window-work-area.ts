@@ -3,6 +3,10 @@
 
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 
+// Set only while a maximize below has forced resizing on, so the matching restore
+// can hand the flag back exactly as it found it. One main window, one value.
+let resizableBeforeFill: boolean | null = null;
+
 export async function isFillingWorkArea(appWindow: TauriWindow): Promise<boolean> {
   return appWindow.isMaximized();
 }
@@ -16,14 +20,22 @@ export async function isFillingWorkArea(appWindow: TauriWindow): Promise<boolean
  * work area by hand does not: Windows reports an outer rect that includes the
  * invisible resize border, so the visible window ends up inset a few pixels.
  *
- * Resizing goes back off on restore, so the custom handles stay the only way to
- * resize a floating window. */
+ * Restore puts back only a flag this forced on. The window otherwise owns it, and
+ * clearing it would leave the titlebar's own resize handles inert: they bail out
+ * when the window reports itself non-resizable. */
 export async function toggleWorkAreaFill(appWindow: TauriWindow): Promise<void> {
   if (await appWindow.isMaximized()) {
+    const restoreResizable = resizableBeforeFill;
+    resizableBeforeFill = null;
     await appWindow.toggleMaximize();
-    await appWindow.setResizable(false);
+    if (restoreResizable === false) {
+      await appWindow.setResizable(false);
+    }
     return;
   }
-  await appWindow.setResizable(true);
+  resizableBeforeFill = await appWindow.isResizable();
+  if (!resizableBeforeFill) {
+    await appWindow.setResizable(true);
+  }
   await appWindow.toggleMaximize();
 }
