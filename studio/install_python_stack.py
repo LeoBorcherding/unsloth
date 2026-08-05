@@ -633,11 +633,56 @@ def _detect_rocm_version() -> tuple[int, int] | None:
     return None
 
 
+# Integrated (APU) gfx arches whose host board also commonly carries a discrete
+# Radeon. HIP enumerates the APU first on most such boards, so an index-0 pick
+# installs wheels for the iGPU and the dGPU is never used (issue #7776: a
+# gfx1036 Raphael iGPU shadowing a gfx1200 RX 9060 XT). Deliberately excludes
+# the Strix arches (gfx1150/1151/1152): those are first-class unified-memory
+# training targets, so their selection must stay untouched.
+_SHADOWING_INTEGRATED_GFX: "frozenset[str]" = frozenset(
+    {
+        "gfx90c",  # Renoir / Cezanne
+        "gfx1013",  # Van Gogh
+        "gfx1035",  # Rembrandt
+        "gfx1036",  # Raphael / Mendocino
+        "gfx1037",  # Raphael-H
+        "gfx1103",  # Phoenix / Hawk Point
+    }
+)
+
+
+def _visible_devices_pinned() -> bool:
+    """True when the user pinned a GPU via HIP_VISIBLE_DEVICES /
+    ROCR_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES.
+
+    Any explicit selection (other than the "no mask" spellings "" and "-1") must
+    be honoured verbatim, so the iGPU-shadowing preference below never overrides
+    a device the user named on purpose. CUDA_VISIBLE_DEVICES counts as a pin
+    because the HIP runtime honours it with the same semantics -- the ROCm
+    target picker in install_llama_prebuilt.py (`_pick_rocm_gfx_target`) already
+    resolves all three masks identically, so a host that exposed only its iGPU
+    that way must keep getting the iGPU's wheels."""
+    for _env in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+        _val = os.environ.get(_env)
+        if _val is None:
+            continue
+        _val = _val.strip()
+        if _val and _val != "-1":
+            return True
+    return False
+
+
 def _pick_visible_index(num_tokens: int) -> int:
-    """Resolve HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES to an index into a
-    list of length num_tokens. Returns 0 (first GPU) for unset, empty, '-1',
-    UUID-style, or out-of-range values."""
-    for _env in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"):
+    """Resolve HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES / CUDA_VISIBLE_DEVICES
+    to an index into a list of length num_tokens. Returns 0 (first GPU) for
+    unset, empty, '-1', UUID-style, or out-of-range values.
+
+    The three masks must match `_visible_devices_pinned()` exactly. Reading one
+    fewer here means a CUDA_VISIBLE_DEVICES=1 host counts as pinned -- so the
+    shadowing skip is suppressed -- while the index still resolves to GPU 0, and
+    the probes that enumerate every GPU regardless of the masks (amd-smi, WMI)
+    then install the leading iGPU's wheels for a device the user masked away."""
+    for _env in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
         _val = os.environ.get(_env)
         if _val is None:
             continue
@@ -664,8 +709,10 @@ def _detect_windows_gfx_arch() -> str | None:
     return early and `studio update` cannot repair a CPU-only venv.
 
     On multi-GPU hosts, detected gfx tokens are deduplicated (preserving
-    enumeration order) and HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES picks
-    which to install for. The first GPU is used when no env var is set.
+    enumeration order) and HIP_VISIBLE_DEVICES / ROCR_VISIBLE_DEVICES /
+    CUDA_VISIBLE_DEVICES picks which to install for. Without a mask, the
+    first GPU is used -- except when it is a shadowing iGPU leading the
+    enumeration, in which case the discrete GPU is preferred (issue #7776).
     """
     # 1. Explicit override (matches PowerShell installer's env-var path).
     _override = os.environ.get("UNSLOTH_ROCM_GFX_ARCH")
@@ -677,7 +724,41 @@ def _detect_windows_gfx_arch() -> str | None:
             return None
         # Index into the full ordered list so HIP_VISIBLE_DEVICES addresses
         # GPU N on mixed-arch hosts, then return that arch.
-        return tokens[_pick_visible_index(len(tokens))]
+        _pick = tokens[_pick_visible_index(len(tokens))]
+        _distinct = list(dict.fromkeys(tokens))
+        if len(_distinct) < 2 or _visible_devices_pinned():
+            return _pick
+        # Unpinned mixed-arch host. Skip a leading shadowing iGPU so the
+        # discrete card decides the wheel family (issue #7776), and say so --
+        # enumeration order is the only thing that put the APU first, and the
+        # user may still want a different device.
+        if _pick in _SHADOWING_INTEGRATED_GFX:
+            _pick_has_wheels = _windows_rocm_index_url(_pick) is not None
+            for _other in tokens:
+                if _other in _SHADOWING_INTEGRATED_GFX:
+                    continue
+                # Deposing a supported APU for a discrete card AMD ships no
+                # Windows wheels for (e.g. gfx1036 + an older gfx1010) resolves
+                # to no index at all and drops the host to CPU -- strictly worse
+                # than the shadowing this preference exists to undo.
+                if _pick_has_wheels and _windows_rocm_index_url(_other) is None:
+                    continue
+                print(
+                    f"   multiple AMD GPUs detected ({', '.join(_distinct)}); "
+                    f"installing for the discrete {_other} instead of the "
+                    f"integrated {_pick}."
+                )
+                print(
+                    f"   Set HIP_VISIBLE_DEVICES to the GPU index you want "
+                    f"(then rerun) to install for a different device."
+                )
+                return _other
+        print(
+            f"   multiple AMD GPUs detected ({', '.join(_distinct)}); "
+            f"installing for {_pick}. Set HIP_VISIBLE_DEVICES to the GPU index "
+            f"you want (then rerun) to install for a different device."
+        )
+        return _pick
 
     # 2. hipinfo via PATH, then HIP_PATH\bin / ROCM_PATH\bin.
     hipinfo = shutil.which("hipinfo")
