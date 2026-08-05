@@ -2962,6 +2962,171 @@ class TestDetectWindowsGfxArch:
                 result = stack_mod._detect_windows_gfx_arch()
         assert result == "gfx1200"
 
+    def test_mixed_igpu_dgpu_prefers_discrete(self, monkeypatch):
+        # Issue #7776: HIP enumerates the Raphael iGPU (gfx1036) before the
+        # discrete RX 9060 XT (gfx1200), so an index-0 pick installed
+        # gfx103X-all wheels and the dGPU was never loaded into.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1200"
+
+    def test_mixed_igpu_dgpu_reports_the_override_env_var(self, monkeypatch, capsys):
+        # The maintainer ask on #7776: say a second GPU is there and how to pick it.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                stack_mod._detect_windows_gfx_arch()
+        out = capsys.readouterr().out
+        assert "HIP_VISIBLE_DEVICES" in out
+        assert "gfx1036" in out and "gfx1200" in out
+
+    def test_explicit_visible_devices_still_wins_over_igpu_preference(self, monkeypatch):
+        # A user who pinned the iGPU on purpose must keep getting the iGPU.
+        monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1036"
+
+    def test_strix_igpu_selection_is_unchanged(self, monkeypatch):
+        # gfx1151 is a supported unified-memory training target, not a shadowing
+        # APU: a Strix host must keep resolving to its own arch-specific wheels.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1151\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1151"
+
+    def test_single_igpu_host_is_unchanged(self, monkeypatch):
+        # Nothing to prefer: an APU-only box still installs for the APU.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1036"
+
+    def test_unsupported_discrete_does_not_depose_a_supported_igpu(self, monkeypatch):
+        # A supported APU next to a discrete card AMD ships no Windows wheels
+        # for (gfx1010 is absent from _GFX_TO_AMD_INDEX_ARCH). Preferring the
+        # dGPU purely for being discrete resolves to no index and falls back to
+        # CPU, which is worse than the shadowing this preference undoes.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        assert stack_mod._windows_rocm_index_url("gfx1010") is None
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1010\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1036"
+        assert stack_mod._windows_rocm_index_url(result) is not None
+
+    def test_unsupported_igpu_still_yields_to_the_discrete_card(self, monkeypatch):
+        # Mirror case: when neither pick has wheels the swap costs nothing, so
+        # the discrete card still wins and the guard is not over-tightened.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
+        assert stack_mod._windows_rocm_index_url("gfx1013") is None
+        assert stack_mod._windows_rocm_index_url("gfx1010") is None
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1013\ngcnArchName : gfx1010\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1010"
+
+    def test_cuda_visible_devices_also_pins_the_igpu(self, monkeypatch):
+        # HIP honours CUDA_VISIBLE_DEVICES with the same semantics as its own
+        # masks (cf. _pick_rocm_gfx_target in studio/install_llama_prebuilt.py),
+        # so a host that exposed only GPU 0 that way keeps getting the iGPU.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1036"
+
+    def test_cuda_visible_devices_indexes_the_enumeration(self, monkeypatch):
+        # The pin check and the index resolver must read the same three masks.
+        # When they disagree, CUDA_VISIBLE_DEVICES=1 suppresses the shadowing skip
+        # (it counts as a pin) while the index still lands on GPU 0, so the user
+        # gets the iGPU's wheels for the very device they masked away.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1200"
+
+    def test_cuda_visible_devices_index_matches_the_other_masks(self, monkeypatch):
+        # _pick_visible_index must treat all three spellings identically, including
+        # the comma-list and out-of-range fallbacks.
+        for _var in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+            monkeypatch.delenv(_var, raising = False)
+        for _value, _expected in (
+            ("1", 1),
+            ("1,0", 1),
+            ("7", 0),
+            ("-1", 0),
+            ("", 0),
+            ("GPU-abc", 0),
+        ):
+            monkeypatch.setenv("CUDA_VISIBLE_DEVICES", _value)
+            assert stack_mod._pick_visible_index(2) == _expected, _value
+
+    def test_empty_cuda_visible_devices_is_not_a_pin(self, monkeypatch):
+        # "" and "-1" mean "no mask", not "the user chose GPU 0", so the
+        # shadowing-iGPU skip must still apply.
+        monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+        monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"gcnArchName : gfx1036\ngcnArchName : gfx1200\n"
+        with patch("shutil.which", return_value = "/usr/bin/hipinfo"):
+            with patch("subprocess.run", return_value = mock_result):
+                result = stack_mod._detect_windows_gfx_arch()
+        assert result == "gfx1200"
+
     def test_returns_none_on_nonzero_returncode_without_gcnarchname(self):
         # Non-zero exit without gcnArchName must return None (fall through to amd-smi/WMI).
         mock_result = MagicMock()
@@ -3096,6 +3261,64 @@ class TestGfxArchNameFallback:
         amd_path = PACKAGE_ROOT / "studio" / "backend" / "utils" / "hardware" / "amd.py"
         source = amd_path.read_text(encoding = "utf-8")
         assert 'shutil.which("amd-smi") is None' in source
+
+
+class TestSetupPs1ShadowingParity:
+    """setup.ps1 resolves the arch and builds $ROCmIndexUrl itself, before the Python
+    stack installer ever runs, so both halves of the #7776 preference have to exist in
+    the PowerShell mirror too or a fresh Windows install still picks the iGPU."""
+
+    @staticmethod
+    def _setup_ps1() -> str:
+        return (PACKAGE_ROOT / "studio" / "setup.ps1").read_text(encoding = "utf-8")
+
+    def test_repick_is_wheel_aware(self):
+        # Mirrors _dedup_pick()'s guard: deposing a supported APU for a discrete card
+        # with no AMD Windows wheels resolves to no index and drops the host to CPU,
+        # which is worse than the shadowing the preference exists to undo.
+        source = self._setup_ps1()
+        body = source[source.index("function Resolve-ShadowingGfxPick") :]
+        body = body[: body.index("\n}\n")]
+        assert "archFamilyMap" in body, "repick must consult the wheel index map"
+        assert "pickedHasWheels" in body
+
+    def test_arch_family_map_precedes_the_repick(self):
+        # The map is consumed during detection now, not just at install time, so it
+        # has to be defined before the function that reads it.
+        source = self._setup_ps1()
+        assert source.index("$archFamilyMap = @{") < source.index(
+            "function Resolve-ShadowingGfxPick"
+        )
+
+    def test_wmi_fallback_keeps_every_amd_adapter(self):
+        # WMI orders controllers however the driver stack enumerated them, so taking
+        # the first AMD match reintroduced #7776 on Adrenalin-only hosts (a 780M
+        # ahead of an RX 9060 XT inferred gfx1103 and installed gfx110X-all wheels).
+        source = self._setup_ps1()
+        block = source[source.index("$wmiGpus = @(Get-WmiObject Win32_VideoController") :]
+        block = block[: block.index("$ROCmGpuLabel = $script:ROCmGpuLabels[0]")]
+        assert "Select-Object -First 1" not in block
+
+    def test_index_picks_read_the_same_masks_as_the_pin_check(self):
+        # Resolve-ShadowingGfxPick honours CUDA_VISIBLE_DEVICES as a pin, so both
+        # sites that turn a mask into an index have to read it too -- otherwise the
+        # skip is suppressed while the index still resolves to GPU 0.
+        source = self._setup_ps1()
+        assert "$_hipVisIdx = if (" in source
+        hip_idx = source[source.index("$_hipVisIdx = if (") :]
+        hip_idx = hip_idx[: hip_idx.index("\n")]
+        assert "CUDA_VISIBLE_DEVICES" in hip_idx
+        smi_idx = source[source.index("$visGpu = if (") :]
+        smi_idx = smi_idx[: smi_idx.index("$gpuIdx = 0")]
+        assert "CUDA_VISIBLE_DEVICES" in smi_idx
+
+    def test_name_inference_runs_the_shadowing_pick(self):
+        # Every AMD adapter name gets an arch, then the same preference chooses.
+        source = self._setup_ps1()
+        assert "Get-GfxArchFromGpuName" in source
+        infer = source[source.index("$nameArches = @()") :]
+        infer = infer[: infer.index("Tip: set UNSLOTH_ROCM_GFX_ARCH")]
+        assert "Resolve-ShadowingGfxPick" in infer
 
 
 # TEST: install_python_stack.py -- _install_bnb_windows_rocm
@@ -4847,8 +5070,8 @@ class TestApplyHostOverrides:
         assert out.rocm_gfx_target == "gfx1200"
 
     def test_forwarded_gfx_does_not_clobber_probed_arch(self, monkeypatch):
-        # setup.ps1's pick is not fully visible-device aware (ignores CUDA_VISIBLE_DEVICES,
-        # amd-smi branch drops comma masks), so when it resolved the host's OTHER physical
+        # setup.ps1's pick is not fully visible-device aware (its amd-smi branch drops
+        # comma masks), so when it resolved the host's OTHER physical
         # GPU it must not replace the arch detect_host() picked for the visible one.
         monkeypatch.delenv("UNSLOTH_ROCM_GFX_ARCH", raising = False)
         host = rocm_host(rocm_gfx_target = "gfx1010", rocm_gfx_targets = ["gfx1100", "gfx1010"])
