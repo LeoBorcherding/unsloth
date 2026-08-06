@@ -417,7 +417,7 @@ def test_collapsed_tauri_keeps_history_arrows_and_adds_new_chat_by_model_picker(
     assert '"--studio-collapsed-chat-controls-inset": "188px"' in APP_PROVIDER.read_text(
         encoding = "utf-8"
     )
-    assert 'className="!size-[33px] rounded-[10px] text-muted-foreground"' in chat_page
+    assert 'className="!size-[30px] rounded-[10px] text-muted-foreground"' in chat_page
     assert 'aria-label="New chat"' in chat_page
     new_chat_click = chat_page.index("onClick={handleDesktopNewChat}")
     assert new_chat_click < chat_page.index("<ModelSelector", new_chat_click)
