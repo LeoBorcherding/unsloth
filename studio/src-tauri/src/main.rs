@@ -528,6 +528,7 @@ fn main() {
             native_intents::drain_native_intents,
             native_intents::register_native_model_path,
             native_intents::register_native_attachment_path,
+            native_intents::read_native_attachment_file,
             native_intents::pick_native_model,
             native_intents::pick_hugging_face_cache_dir,
             native_intents::consume_native_path_token,
