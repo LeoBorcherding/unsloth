@@ -47,19 +47,24 @@ pub fn classify_native_model_path(path: &Path) -> Result<ClassifiedPath, String>
 /// Document types the RAG ingest accepts; keep in sync with `config.UPLOAD_EXTS`.
 pub const ATTACHMENT_EXTS: &[&str] = &["pdf", "txt", "md", "markdown", "docx", "html", "htm"];
 
+/// Vision chat image attachments; keep in sync with `drop-paths.ts` `CHAT_IMAGE_DROP_ACCEPT`.
+pub const IMAGE_ATTACHMENT_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif"];
+
 pub fn classify_native_attachment_path(path: &Path) -> Result<ClassifiedPath, String> {
     let classified = classify_existing_path(path)?;
     if classified.path_type != NativePathType::File {
         return Err("Only files can be attached to a chat.".to_string());
     }
-    if !ATTACHMENT_EXTS
+    let supported = ATTACHMENT_EXTS
         .iter()
-        .any(|ext| has_extension(&classified.canonical_path, ext))
-    {
+        .chain(IMAGE_ATTACHMENT_EXTS.iter())
+        .any(|ext| has_extension(&classified.canonical_path, ext));
+    if !supported {
         return Err(format!(
             "Unsupported attachment type. Supported: {}",
             ATTACHMENT_EXTS
                 .iter()
+                .chain(IMAGE_ATTACHMENT_EXTS.iter())
                 .map(|ext| format!(".{ext}"))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -329,6 +334,18 @@ mod tests {
         assert!(!classified
             .allowed_operations
             .contains(&NativePathOperation::LoadModel));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn image_allows_attach_and_reveal_only() {
+        let path = temp_path("photo").with_extension("png");
+        fs::write(&path, b"\x89PNG\r\n").unwrap();
+        let classified = classify_native_attachment_path(&path).unwrap();
+        assert_eq!(classified.path_kind, NativePathKind::Attachment);
+        assert!(classified
+            .allowed_operations
+            .contains(&NativePathOperation::Attach));
         let _ = fs::remove_file(path);
     }
 
