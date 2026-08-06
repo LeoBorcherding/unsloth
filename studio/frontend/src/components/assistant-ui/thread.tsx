@@ -2127,6 +2127,8 @@ const Composer: FC<{
     Boolean(s.pendingAudioName),
   );
   const nativeAttachmentTargetKey = useNativeAttachmentTargetKey();
+  const nativeAttachmentTargetKeyRef = useRef(nativeAttachmentTargetKey);
+  nativeAttachmentTargetKeyRef.current = nativeAttachmentTargetKey;
   const hasPendingImageAttachments = useNativeIntentStore((s) =>
     Boolean(
       nativeAttachmentTargetKey &&
@@ -2137,16 +2139,24 @@ const Composer: FC<{
     if (!hasPendingImageAttachments || !nativeAttachmentTargetKey) {
       return;
     }
+    const targetKey = nativeAttachmentTargetKey;
     const intents = useNativeIntentStore
       .getState()
-      .takeImageAttachments(nativeAttachmentTargetKey);
+      .takeImageAttachments(targetKey);
     if (intents.length === 0) return;
-    void Promise.all(
-      intents.map(async (intent) => {
+    void (async () => {
+      for (let index = 0; index < intents.length; index += 1) {
+        const intent = intents[index]!;
         const file = await nativeAttachmentIntentToFile(intent);
+        if (nativeAttachmentTargetKeyRef.current !== targetKey) {
+          useNativeIntentStore
+            .getState()
+            .addImageAttachments(targetKey, intents.slice(index));
+          return;
+        }
         await aui.composer().addAttachment(file);
-      }),
-    ).catch((error) => {
+      }
+    })().catch((error) => {
       toast.error("Could not attach dropped images", {
         description: error instanceof Error ? error.message : String(error),
       });
