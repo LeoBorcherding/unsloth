@@ -2141,8 +2141,15 @@ const Composer: FC<{
         (s.pendingImageAttachments[nativeAttachmentTargetKey]?.length ?? 0) > 0,
     ),
   );
+  const registeringImageDrops = useNativeIntentStore(
+    (s) => s.registeringImageDrops > 0,
+  );
   const [materializingDroppedImages, setMaterializingDroppedImages] =
     useState(false);
+  // A send parked behind indexing must not fire on a drop that failed: the user
+  // is owed the toast and their text, not a send of the text alone. Assigned
+  // below, once the callback it forwards to exists.
+  const cancelQueuedSendRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!nativeAttachmentTargetKey) {
       return;
@@ -2181,6 +2188,7 @@ const Composer: FC<{
                 description:
                   error instanceof Error ? error.message : String(error),
               });
+              cancelQueuedSendRef.current?.();
               const remaining = intents.slice(index + 1);
               if (remaining.length > 0) {
                 useNativeIntentStore
@@ -2210,6 +2218,7 @@ const Composer: FC<{
                 description:
                   error instanceof Error ? error.message : String(error),
               });
+              cancelQueuedSendRef.current?.();
               return;
             }
           }
@@ -2249,7 +2258,9 @@ const Composer: FC<{
     };
   }, [nativeAttachmentTargetKey, aui]);
   const hasMaterializingImageAttachments =
-    hasPendingImageAttachments || materializingDroppedImages;
+    registeringImageDrops ||
+    hasPendingImageAttachments ||
+    materializingDroppedImages;
   const threadIsRunning = useAuiState(({ thread }) => thread.isRunning);
   const threadListItemId = useAuiState(
     ({ threadListItem }) => threadListItem.id,
@@ -2765,6 +2776,7 @@ const Composer: FC<{
     setPendingSend(false);
     dismissWaitToast();
   }, [dismissWaitToast]);
+  cancelQueuedSendRef.current = cancelQueuedSend;
 
   const enqueueSend = useCallback(() => {
     if (pendingSendRef.current) return;
