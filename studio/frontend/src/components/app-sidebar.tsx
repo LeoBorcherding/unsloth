@@ -132,6 +132,8 @@ import {
   usePinnedProjectsStore,
   useChatPreferencesStore,
   usePromptQueueUI,
+  CONVERSATION_MARKDOWN_FORMAT,
+  CONVERSATION_MARKDOWN_LABEL,
   type ProjectRecord,
   type SidebarItem,
 } from "@/features/chat";
@@ -234,7 +236,11 @@ type NavRowDef = {
   children?: ReactNode;
 };
 
-type ConversationExportFormat = "raw-jsonl" | "csv" | "sharegpt-jsonl";
+type ConversationExportFormat =
+  | "raw-jsonl"
+  | "csv"
+  | "sharegpt-jsonl"
+  | typeof CONVERSATION_MARKDOWN_FORMAT;
 
 // A pinned project shows this many recent chats before "Show more".
 const PINNED_PROJECT_CHAT_LIMIT = 4;
@@ -246,6 +252,7 @@ const CHAT_EXPORT_OPTIONS: Array<{
   { label: "Raw JSONL", format: "raw-jsonl" },
   { label: "CSV", format: "csv" },
   { label: "ShareGPT JSONL", format: "sharegpt-jsonl" },
+  { label: CONVERSATION_MARKDOWN_LABEL, format: CONVERSATION_MARKDOWN_FORMAT },
 ];
 
 async function exportConversationByFormat(
@@ -262,6 +269,8 @@ async function exportConversationByFormat(
       return exports.exportConversationCsv(threadId);
     case "sharegpt-jsonl":
       return exports.exportConversationShareGPT(threadId);
+    case CONVERSATION_MARKDOWN_FORMAT:
+      return exports.exportConversationMarkdown(threadId);
   }
 }
 

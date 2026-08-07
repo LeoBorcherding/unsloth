@@ -75,6 +75,7 @@ import {
   exportConversationShareGPT,
   exportConversationRawJsonl,
   exportConversationCsv,
+  exportConversationMarkdown,
 } from "@/features/chat/prompt-storage/prompt-storage-dialog";
 import {
   listPromptEntries,
@@ -112,6 +113,7 @@ import { useChatRuntimeStore } from "@/features/chat/stores/chat-runtime-store";
 import { useExternalProvidersStore } from "@/features/chat/stores/external-providers-store";
 import {
   PLUS_MENU_ORDER,
+  CONVERSATION_MARKDOWN_LABEL,
   PROMPT_QUEUE_RUN_FAILED_EVENT,
   PROMPT_QUEUE_STOP_EVENT,
   addQueuedChatRunSettingsThreadIds,
@@ -4247,6 +4249,16 @@ const ComposerToolsMenu: FC<{
             }}
           >
             ShareGPT JSONL
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => {
+              if (!activeThreadId) return;
+              exportConversationMarkdown(activeThreadId).catch((error) => {
+                if (!isDownloadCancelled(error)) toast.error("Export failed.");
+              });
+            }}
+          >
+            {CONVERSATION_MARKDOWN_LABEL}
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
