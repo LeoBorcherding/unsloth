@@ -8,11 +8,15 @@ use crate::native_path_policy::{
 };
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 const TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 // How long after the OS reports a drop the renderer may still register those paths.
@@ -518,6 +522,66 @@ pub fn open_path_token(
     ensure_main_window(&window)?;
     let entry = state.path_for_operation(&token, NativePathOperation::Open)?;
     open::that_detached(entry.canonical_path).map_err(|e| format!("Failed to open path: {e}"))
+}
+
+const MAX_NATIVE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAttachmentFile {
+    name: String,
+    mime_type: String,
+    base64: String,
+}
+
+fn attachment_mime_type(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "png" => Some("image/png"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub fn read_native_attachment_file(
+    window: WebviewWindow,
+    state: tauri::State<'_, NativeIntakeState>,
+    token: String,
+) -> Result<NativeAttachmentFile, String> {
+    ensure_main_window(&window)?;
+    let entry = state.path_for_operation(&token, NativePathOperation::Attach)?;
+    let path = &entry.canonical_path;
+    let mime_type = attachment_mime_type(path).ok_or_else(|| {
+        "Only chat image attachments can be read for vision input.".to_string()
+    })?;
+    let file = fs::File::open(path).map_err(|e| format!("Path is no longer available: {e}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|e| format!("Path is no longer available: {e}"))?;
+    if !metadata.is_file() || metadata.len() > MAX_NATIVE_ATTACHMENT_BYTES {
+        return Err("Image attachment is unavailable or too large.".to_string());
+    }
+    // The file can still grow between the stat and the read, so cap the reader
+    // itself rather than trusting the size we just measured.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_NATIVE_ATTACHMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Could not read image attachment: {e}"))?;
+    if bytes.len() as u64 > MAX_NATIVE_ATTACHMENT_BYTES {
+        return Err("Image attachment is unavailable or too large.".to_string());
+    }
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| entry.display_label.clone());
+    Ok(NativeAttachmentFile {
+        name,
+        mime_type: mime_type.to_string(),
+        base64: BASE64.encode(bytes),
+    })
 }
 
 #[cfg(test)]
