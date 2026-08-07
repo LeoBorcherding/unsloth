@@ -2217,8 +2217,9 @@ const Composer: FC<{
         }
       } finally {
         draining = false;
+        // A drain for a target the composer has already left must not touch the
+        // flag: cleanup cleared it, and the live target may have set it again.
         if (disposed) {
-          setMaterializingDroppedImages(false);
           return;
         }
         const pending =
@@ -2904,7 +2905,7 @@ const Composer: FC<{
   // a pending send when the composer changes under it after the press.
   const dictationBlocked = dictationSendBlocked({
     composerDisabled: Boolean(disabled),
-    uploading: hasPendingAttachments,
+    uploading: hasPendingAttachments || hasMaterializingImageAttachments,
     researchActive: isResearchActive,
     runActive: threadIsRunning || promptQueueActive,
     queueDisabled: Boolean(disableQueue),
