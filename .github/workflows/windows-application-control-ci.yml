@@ -54,7 +54,7 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/windows-application-control-ci.yml'
   push:
-    branches: [main]
+    branches: [main, ci/issue-8490-applocker-regression]
   workflow_dispatch:
 
 concurrency:
