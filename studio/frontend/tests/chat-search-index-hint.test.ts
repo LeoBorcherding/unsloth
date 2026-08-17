@@ -1,0 +1,325 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+// The wiring, as opposed to the two leaf helpers: chatSearchIndexHasRows has to answer for a
+// history whose index has not been built yet, which is the first open of every page load.
+
+import assert from "node:assert/strict";
+import { register } from "node:module";
+import test from "node:test";
+
+import { installLocalStorageFake } from "./helpers/kit.ts";
+
+register("./chat-search-index-resolver.mjs", import.meta.url);
+const { store } = installLocalStorageFake();
+
+// The shared fake's addEventListener is a no-op, so the module-level listeners would
+// register into nothing. Swap in one that keeps them, before the import below registers
+// them. dispatchEvent is real enough to route by type, since the storage listener re-raises
+// the same-document history event through it.
+type Listener = (event: { key?: string | null; type?: string }) => void;
+const listeners = new Map<string, Set<Listener>>();
+Object.assign(globalThis.window as object, {
+  addEventListener: (type: string, fn: Listener) => {
+    const forType = listeners.get(type) ?? new Set<Listener>();
+    forType.add(fn);
+    listeners.set(type, forType);
+  },
+  removeEventListener: (type: string, fn: Listener) => {
+    listeners.get(type)?.delete(fn);
+  },
+  dispatchEvent: (event: { type: string }) => {
+    for (const fn of listeners.get(event.type) ?? []) fn(event);
+    return true;
+  },
+});
+const fire = (type: string, event: { key?: string | null } = {}) => {
+  for (const fn of listeners.get(type) ?? []) fn({ type, ...event });
+};
+const fireStorage = (key: string | null) => fire("storage", { key });
+
+const { chatSearchIndexHasRows, writeCachedIndex } = await import(
+  "../src/features/chat/hooks/use-chat-search-index.ts"
+);
+const { CHAT_HISTORY_REVISION_KEY, CHAT_HISTORY_UPDATED_EVENT } = await import(
+  "./helpers/store-stubs/chat-search-history.ts"
+);
+const { rememberChatSearchHasRows } = await import(
+  "../src/features/chat/utils/chat-search-history-hint.ts"
+);
+const {
+  AUTH_SESSION_CLEARED_EVENT,
+  AUTH_SESSION_MARK_KEY,
+  AUTH_TOKEN_KEY,
+  setAuthSessionEpochForTest,
+} = await import("./helpers/store-stubs/chat-search-auth.ts");
+
+const row = {
+  type: "single" as const,
+  id: "t1",
+  title: "Acme roadmap",
+  userSearchText: "acme roadmap",
+  searchText: "acme roadmap",
+  createdAt: 1,
+};
+
+test("an unbuilt index falls back to the last completed build's hint", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex(null);
+  // Nothing ever built, so the history is unknown rather than known-empty.
+  assert.equal(chatSearchIndexHasRows(), null);
+
+  // A completed build with rows, then the page reloads: the module cache is gone.
+  writeCachedIndex([row]);
+  assert.equal(chatSearchIndexHasRows(), true);
+  writeCachedIndex(null);
+  assert.equal(
+    chatSearchIndexHasRows(),
+    true,
+    "150 stored chats must not read as an empty history on the next page load",
+  );
+});
+
+test("an invalidated cache keeps a rows answer and drops an empty one", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+
+  // Invalidation says stale, not empty.
+  writeCachedIndex(null);
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  // A completed build that found nothing is the one thing that means "no chats".
+  writeCachedIndex([]);
+  assert.equal(chatSearchIndexHasRows(), false);
+  // ...but the next change may be that history's first chat, so it goes back to unknown.
+  writeCachedIndex(null);
+  assert.equal(chatSearchIndexHasRows(), null);
+});
+
+test("a session change inside one page load drops the previous account's hint", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  setAuthSessionEpochForTest(1);
+  assert.equal(
+    chatSearchIndexHasRows(),
+    null,
+    "the next account must not be sized by the previous one's history",
+  );
+});
+
+test("an unbuilt index with no hint reads as unknown, not as empty", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex(null);
+  // A profile that has never built the index, and one upgrading from before the hint
+  // existed, both land here. Reading this as "empty" is what sized a populated dialog
+  // compact and then grew it mid-open.
+  assert.equal(chatSearchIndexHasRows(), null);
+});
+
+test("a completed empty build is remembered as empty, not as unknown", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([]);
+  writeCachedIndex(null);
+  assert.equal(
+    chatSearchIndexHasRows(),
+    null,
+    "a history that just changed is unknown again, not still empty",
+  );
+  writeCachedIndex([]);
+  assert.equal(chatSearchIndexHasRows(), false);
+});
+
+test("another tab's history change drops the cached rows", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  // Force the hint to disagree with the cache, so the two are distinguishable: while the
+  // rows are cached they answer, and only once they are dropped does the hint show through.
+  rememberChatSearchHasRows(false);
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  fireStorage(CHAT_HISTORY_REVISION_KEY);
+  // Rows gone, so the next open rebuilds instead of offering a chat another tab deleted,
+  // and the stale empty hint goes with them. Without the listener this still reads true.
+  assert.equal(chatSearchIndexHasRows(), null);
+});
+
+test("another tab's history change reaches an open dialog's rebuild", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+
+  // What an open dialog subscribes to. Dropping the cache alone would leave it showing the
+  // rows it built before the change, with nothing scheduled to replace them.
+  let rebuilds = 0;
+  const onHistory = () => {
+    rebuilds += 1;
+  };
+  (globalThis.window as Window).addEventListener(
+    CHAT_HISTORY_UPDATED_EVENT,
+    onHistory,
+  );
+  try {
+    fireStorage(CHAT_HISTORY_REVISION_KEY);
+    assert.equal(
+      rebuilds,
+      1,
+      "the cross-tab change has to re-raise as a local one",
+    );
+  } finally {
+    (globalThis.window as Window).removeEventListener(
+      CHAT_HISTORY_UPDATED_EVENT,
+      onHistory,
+    );
+  }
+});
+
+test("another tab's account switch drops this tab's rows and hint", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  // The epoch lives in this document's memory and its events are same-document, so a sign-in
+  // performed elsewhere arrives as a storage write and nothing else. The epoch still matches,
+  // which is exactly why the cache would otherwise answer for the previous account.
+  let rebuilds = 0;
+  const onHistory = () => {
+    rebuilds += 1;
+  };
+  // Mirrors the module-private event name. An open dialog listens for this one to retire a
+  // build already in flight for the previous account, which the epoch check cannot do: the
+  // epoch is this document's, and this document never signed out.
+  let sessionChanges = 0;
+  const onSession = () => {
+    sessionChanges += 1;
+  };
+  const win = globalThis.window as Window;
+  win.addEventListener(CHAT_HISTORY_UPDATED_EVENT, onHistory);
+  win.addEventListener("unsloth-chat-search-session-changed", onSession);
+  try {
+    fireStorage(AUTH_SESSION_MARK_KEY);
+    assert.equal(
+      chatSearchIndexHasRows(),
+      null,
+      "the previous account's titles must not survive the switch",
+    );
+    assert.equal(rebuilds, 1, "everything showing that account has to refresh");
+    assert.equal(
+      sessionChanges,
+      1,
+      "a build in flight for the previous account has to be retired",
+    );
+  } finally {
+    win.removeEventListener(CHAT_HISTORY_UPDATED_EVENT, onHistory);
+    win.removeEventListener("unsloth-chat-search-session-changed", onSession);
+  }
+});
+
+test("a token refresh in another tab costs nothing", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+
+  // refreshSession rewrites the token hourly without the session changing. Reading that as
+  // an account switch would throw away a warm cache, and empty an open dialog, for nothing.
+  let sessionChanges = 0;
+  const onSession = () => {
+    sessionChanges += 1;
+  };
+  const win = globalThis.window as Window;
+  win.addEventListener("unsloth-chat-search-session-changed", onSession);
+  try {
+    fireStorage(AUTH_TOKEN_KEY);
+    assert.equal(
+      chatSearchIndexHasRows(),
+      true,
+      "the cache survives a rotation",
+    );
+    assert.equal(sessionChanges, 0);
+  } finally {
+    win.removeEventListener("unsloth-chat-search-session-changed", onSession);
+  }
+});
+
+test("a history change in another tab is not treated as a session change", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+
+  // A delete elsewhere must not tear the rendered rows out from under an open dialog: that
+  // path schedules a rebuild and lets the current rows stand until it lands.
+  let sessionChanges = 0;
+  const onSession = () => {
+    sessionChanges += 1;
+  };
+  const win = globalThis.window as Window;
+  win.addEventListener("unsloth-chat-search-session-changed", onSession);
+  try {
+    fireStorage(CHAT_HISTORY_REVISION_KEY);
+    assert.equal(sessionChanges, 0);
+  } finally {
+    win.removeEventListener("unsloth-chat-search-session-changed", onSession);
+  }
+});
+
+test("a logout takes the persisted hint with it", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  writeCachedIndex(null);
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  // The hint outlives the page, so a reload on the login screen would otherwise hand this
+  // account's history to whoever signs in next.
+  fire(AUTH_SESSION_CLEARED_EVENT);
+  assert.equal(
+    chatSearchIndexHasRows(),
+    null,
+    "the next account's first open must not be sized by the previous one",
+  );
+});
+
+test("an unrelated storage key leaves the cache alone", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  fireStorage("unsloth_theme");
+  assert.equal(chatSearchIndexHasRows(), true);
+});
+
+test("an index too large to hold is rebuilt rather than cached", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  const heavy = Array.from({ length: 40 }, (_, i) => ({
+    ...row,
+    id: `t${i}`,
+    // A tool-heavy thread: 200k characters of conversation text apiece.
+    searchText: "x".repeat(200_000),
+  }));
+  writeCachedIndex(heavy);
+  // The hint still answers, so the dialog sizes correctly without holding 8M characters.
+  assert.equal(chatSearchIndexHasRows(), true);
+
+  rememberChatSearchHasRows(false);
+  assert.equal(
+    chatSearchIndexHasRows(),
+    false,
+    "the rows were not retained, so the hint is what answers",
+  );
+});
+
+test("an index within the budget is still cached", () => {
+  store.clear();
+  setAuthSessionEpochForTest(0);
+  writeCachedIndex([row]);
+  rememberChatSearchHasRows(false);
+  assert.equal(chatSearchIndexHasRows(), true, "the cached rows still answer");
+});
