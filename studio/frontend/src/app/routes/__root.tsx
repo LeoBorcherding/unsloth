@@ -38,6 +38,7 @@ import { useLowDiskNotice } from "@/features/settings/hooks/use-low-disk-notice"
 import { useTrainingUnloadGuard } from "@/features/training";
 import { TransformersUpgradeDialog } from "@/features/transformers-upgrade";
 import { useIsMobileShell } from "@/hooks/use-mobile";
+import { useBenchmarkRuntimeLifecycle } from "@/features/benchmark";
 import { useSidebarPin } from "@/hooks/use-sidebar-pin";
 import { type TranslationKey, useT } from "@/i18n";
 import {
@@ -410,6 +411,8 @@ function RootLayout() {
   // Global export driver: streams worker logs and tracks status from any route
   // so an export keeps running and stays visible while training / chatting.
   useExportRuntimeLifecycle();
+  // Global benchmark driver: same pattern for benchmark runs.
+  useBenchmarkRuntimeLifecycle();
 
   const matchedTitle = useMatches({
     select: (matches) => {

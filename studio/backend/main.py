@@ -328,6 +328,7 @@ from datetime import datetime
 
 from routes import (
     auth_router,
+    benchmark_router,
     chat_history_router,
     data_recipe_router,
     datasets_router,
@@ -1633,6 +1634,7 @@ app.include_router(datasets_router, prefix = "/api/datasets", tags = ["datasets"
 app.include_router(data_recipe_router, prefix = "/api/data-recipe", tags = ["data-recipe"])
 app.include_router(llama_router, prefix = "/api/llama", tags = ["llama"])
 app.include_router(whisper_router, prefix = "/api/whisper", tags = ["whisper"])
+app.include_router(benchmark_router, prefix = "/api/benchmark", tags = ["benchmark"])
 app.include_router(export_router, prefix = "/api/export", tags = ["export"])
 app.include_router(rag_router, prefix = "/api/rag", tags = ["rag"])
 app.include_router(training_history_router, prefix = "/api/train", tags = ["training-history"])

@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+import re
+import time
+from typing import Optional
+
+
+# lm_eval mixes real metrics with bookkeeping keys in the per-task results dict.
+# These are not scores and must never surface in the metrics list.
+_NON_METRIC_KEYS = frozenset({
+    "alias",
+    "name",
+    "sample_len",       # token/sample count, not a score
+    "num_samples",
+    "n_samples",
+    "effective_samples",
+    "bootstrap_iters",
+})
+_NON_METRIC_KEYS_LOWER = frozenset(k.lower() for k in _NON_METRIC_KEYS)
+
+# Priority list for selecting the default metric from lm_eval results.
+# First match wins.
+_DEFAULT_METRIC_PRIORITY = (
+    "acc_norm,none",
+    "acc_norm",
+    "exact_match,strict-match",
+    "exact_match,flexible-extract",
+    "exact_match",
+    "pass@1",
+    "mc2",
+    "f1,none",
+    "f1",
+    "acc,none",
+    "acc",
+)
+
+
+def parse_run_summary(dir_name: str, data: dict) -> Optional[dict]:
+    """Extract a summary dict from a parsed results.json."""
+    results = data.get("results", {})
+    configs = data.get("configs", {})
+    n_shot_map = data.get("n-shot", {})
+    n_samples_map = data.get("n-samples", {})
+
+    if not results:
+        return None
+
+    task_name = next(iter(results))
+    task_results = results[task_name]
+    task_config = configs.get(task_name, {})
+    metadata = task_config.get("metadata", {}) if isinstance(task_config, dict) else {}
+
+    model = metadata.get("model", "unknown") if isinstance(metadata, dict) else "unknown"
+
+    created_at = dir_name
+    ts_match = re.search(r"_(\d{8}_\d{6})$", dir_name)
+    if ts_match:
+        try:
+            dt = time.strptime(ts_match.group(1), "%Y%m%d_%H%M%S")
+            created_at = time.strftime("%Y-%m-%dT%H:%M:%S", dt)
+        except ValueError:
+            created_at = dir_name
+
+    metric_keys = set()
+    metrics = []
+    for key, val in task_results.items():
+        if key.endswith(",none") or key.lower() in _NON_METRIC_KEYS_LOWER:
+            continue
+        if isinstance(val, (int, float)):
+            stderr_key = key + "_stderr,none"
+            stderr_val = str(task_results.get(stderr_key, "")) if stderr_key in task_results else None
+            metrics.append({
+                "name": key,
+                "score": round(float(val), 4),
+                "stderr": stderr_val,
+            })
+            metric_keys.add(key)
+        elif isinstance(val, str):
+            try:
+                fv = float(val)
+                metrics.append({
+                    "name": key,
+                    "score": round(fv, 4),
+                    "stderr": None,
+                })
+                metric_keys.add(key)
+            except (ValueError, TypeError):
+                pass
+
+    default_metric = ""
+    for candidate in _DEFAULT_METRIC_PRIORITY:
+        if candidate in metric_keys:
+            default_metric = candidate
+            break
+
+    n_shot = None
+    n_shot_raw = n_shot_map.get(task_name) if isinstance(n_shot_map, dict) else None
+    if n_shot_raw is not None:
+        n_shot = int(n_shot_raw) if isinstance(n_shot_raw, (int, float)) else None
+
+    n_samples = 0
+    ns_raw = n_samples_map.get(task_name) if isinstance(n_samples_map, dict) else None
+    if isinstance(ns_raw, dict):
+        n_samples = int(ns_raw.get("effective", ns_raw.get("original", 0)))
+    elif isinstance(ns_raw, (int, float)):
+        n_samples = int(ns_raw)
+
+    return {
+        "id": dir_name,
+        "task": task_name,
+        "model": model,
+        "metrics": metrics,
+        "default_metric": default_metric,
+        "n_samples": n_samples,
+        "num_fewshot": n_shot,
+        "created_at": created_at,
+    }
+
+
+# lm_eval writes per-sample metric values under version-dependent keys:
+# older releases use the bare metric name ("exact_match"), newer ones append
+# the filter group ("exact_match,strict-match"). Prefer the strict-match EM so
+# per-sample correctness stays consistent with the headline metric.
+
+
+def _sample_correct(s: dict) -> bool:
+    """Derive per-sample correctness from the task's primary scoring metric.
+
+    Reuses the same priority ordering used to pick the headline metric in
+    ``parse_run_summary`` so per-sample correctness stays consistent with the
+    score shown in the UI. Every metric in ``_DEFAULT_METRIC_PRIORITY`` is
+    normalized to 0–1, where 1.0 means fully correct (this covers both
+    log_likelihood tasks that score with ``acc``/``acc_norm`` and generation
+    tasks that score with ``exact_match``/``pass@1``/``f1``).
+    """
+    for candidate in _DEFAULT_METRIC_PRIORITY:
+        val = s.get(candidate)
+        if isinstance(val, (int, float)):
+            return val >= 1.0
+    # Fallback: any exact_match/acc-style key present on the sample.
+    for key, val in s.items():
+        if key.endswith("_stderr,none") or key.endswith("_stderr"):
+            continue
+        if key.startswith(("exact_match", "acc", "mc2", "pass")) and isinstance(val, (int, float)):
+            return val >= 1.0
+    return False
+
+
+def extract_samples(data: dict, task_name: str) -> list[dict]:
+    """Extract per-sample results from lm_eval output."""
+    samples = []
+    raw_samples = data.get("samples", {})
+    task_samples = raw_samples.get(task_name, []) if isinstance(raw_samples, dict) else []
+
+    for s in task_samples:
+        doc = s.get("doc", {})
+        question = doc.get("question", "") if isinstance(doc, dict) else ""
+        target = s.get("target", "")
+        filtered = s.get("filtered_resps", [])
+        response = filtered[0] if filtered else None
+        raw_resp = s.get("resps", [])
+        raw_response = raw_resp[0][0] if raw_resp and raw_resp[0] else None
+
+        correct = _sample_correct(s)
+
+        samples.append({
+            "doc_id": s.get("doc_id", 0),
+            "question": question,
+            "target": target,
+            "response": response,
+            "raw_response": raw_response,
+            "correct": correct,
+        })
+    return samples

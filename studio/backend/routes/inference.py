@@ -30273,6 +30273,90 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
         # streaming branch: unregistered, a non-forced /unload counts zero generations and kills
         # llama-server mid-request, and force_cancel_active has no event. Unpooled client so a
         # cancel-close hits this call only.
+
+        _prompt_value = body.get("prompt")
+        if isinstance(_prompt_value, list):
+            if not _prompt_value:
+                raise HTTPException(status_code = 400, detail = "'prompt' array must not be empty")
+            _cancel_event = threading.Event()
+            _client = nonstreaming_client()
+            _tracker = _TrackedCancel(_cancel_event, model = monitor_model, kind = "completions")
+            _tracker.__enter__()
+            _cancel_watcher = asyncio.create_task(
+                _await_cancel_or_disconnect_then_close_client(
+                    cancel_event = _cancel_event,
+                    request = request,
+                    client = _client,
+                )
+            )
+            try:
+                try:
+                    async def _call_llama(prompt: str) -> dict:
+                        if _cancel_event.is_set():
+                            raise asyncio.CancelledError()
+                        _single_body = dict(body, prompt = prompt)
+                        _resp = await _client.post(
+                            target_url,
+                            json = _single_body,
+                            timeout = _llama_non_streaming_generation_timeout(),
+                        )
+                        if _cancel_event.is_set():
+                            raise asyncio.CancelledError()
+                        if _resp.status_code != 200:
+                            raise _openai_passthrough_error(_resp.status_code, _resp.text)
+                        return _resp.json()
+
+                    _responses = await asyncio.gather(
+                        *[_call_llama(p) for p in _prompt_value],
+                        return_exceptions = True,
+                    )
+                    if _cancel_event.is_set():
+                        raise asyncio.CancelledError()
+
+                    _all_choices = []
+                    _combined_usage: dict = {}
+                    _first_data = None
+                    for _data in _responses:
+                        if isinstance(_data, Exception):
+                            raise _data
+                        if _first_data is None:
+                            _first_data = _data
+                        for _c in _data.get("choices", []):
+                            _c["index"] = len(_all_choices)
+                            _all_choices.append(_c)
+                        _usage = _data.get("usage", {}) or {}
+                        for _k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                            _v = _usage.get(_k)
+                            if _v is not None:
+                                _combined_usage[_k] = _combined_usage.get(_k, 0) + _v
+                except httpx.RequestError:
+                    if _cancel_event.is_set():
+                        raise asyncio.CancelledError()
+                    raise
+                if _cancel_event.is_set():
+                    raise asyncio.CancelledError()
+            except asyncio.CancelledError:
+                api_monitor.finish(monitor_id, "cancelled")
+                raise
+            except Exception as e:
+                api_monitor.fail(monitor_id, _friendly_error(e))
+                raise
+            finally:
+                try:
+                    await _stop_local_disconnect_cancel_watcher(_cancel_watcher)
+                finally:
+                    _tracker.__exit__(None, None, None)
+
+            _first_data["choices"] = _all_choices
+            if _combined_usage:
+                _first_data["usage"] = _combined_usage
+            api_monitor.finish(monitor_id)
+            return Response(
+                content = _rewrite_cmpl_id(json.dumps(_first_data).encode("utf-8")),
+                status_code = 200,
+                media_type = "application/json",
+            )
+
         _cancel_event = threading.Event()
         _client = _cancelable_nonstreaming_client()
         _tracker = _TrackedCancel(_cancel_event, model = monitor_model, kind = "completions")
