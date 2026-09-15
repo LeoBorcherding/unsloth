@@ -180,6 +180,11 @@ install_torchao_int_mm_patch()
 # pipeline (full diffusers repo)
 _MODEL_KINDS = frozenset({"gguf", "single_file", "pipeline"})
 
+# Which sd-cli build the H3 native load settled on per device backend, once it had to fall back. The installer
+# reinstalls on an accelerator mismatch, so without this every load on such a host would fetch the ROCm build,
+# watch it fail the device probe, and fetch the Vulkan (or CPU) one again.
+_H3_NATIVE_ACCELERATOR: dict[str, str] = {}
+
 # Vendor base repos allowed to load as full (non-GGUF) artifacts. Exact-match, lowercased, safetensors-only, no remote
 # code.
 _TRUSTED_NON_GGUF_VIDEO_REPOS = frozenset(
@@ -1749,10 +1754,8 @@ class VideoBackend:
         # on disk (managed or user-supplied) is still discovered and used; when there is none, the ensure returns None
         # and the refusal below names it, which is the honest answer for a load that was told not to fetch anything.
         allow_install = _install_allowed() and not local_files_only
-        binary = ensure_h3_sd_cpp_binary(
-            allow_install = allow_install,
-            accelerator = _install_accelerator_for(target.backend),
-        )
+        accelerator = _H3_NATIVE_ACCELERATOR.get(target.backend) or _install_accelerator_for(target.backend)
+        binary = ensure_h3_sd_cpp_binary(allow_install = allow_install, accelerator = accelerator)
         native_device = target.device
         # What the accelerator decision below was made on, or None when it was never asked (a CPU or MPS target never
         # consults it). Re-checked under the reader claim, so a replacement that arrives mid-load cannot silently change
@@ -1766,6 +1769,15 @@ class VideoBackend:
             from .sd_cpp_backend import _tree_reader as _claim_tree
             with _claim_tree(binary, cancel_event, VIDEO_CANCELLED_MSG):
                 listed_accelerator = sd_cpp_lists_accelerator_device(binary)
+        if accelerator == "rocm" and not listed_accelerator:
+            # No ROCm build, or one that does not see the card (unsloth#8814: a 7900 XTX on CachyOS, where the
+            # upstream ROCm binary dies within a second). The Vulkan build drives the same card through the Mesa
+            # driver, so it goes before the CPU build does.
+            binary = ensure_h3_sd_cpp_binary(allow_install = allow_install, accelerator = "vulkan")
+            with _claim_tree(binary, cancel_event, VIDEO_CANCELLED_MSG):
+                listed_accelerator = sd_cpp_lists_accelerator_device(binary)
+            if listed_accelerator:
+                _H3_NATIVE_ACCELERATOR[target.backend] = "vulkan"
         if target.backend not in ("cpu", "mps") and not listed_accelerator:
             # Upstream currently publishes no Linux CUDA archive. Keep the picker functional with the CPU prebuilt when
             # the user has not supplied a locally compiled CUDA binary through the normal sd.cpp discovery path. The
@@ -1774,8 +1786,11 @@ class VideoBackend:
             # therefore skipped the fallback from the second load on, left native_device on the GPU, and applied GPU
             # offload policy and held the VIDEO claim while sd-cli ran wholly on the CPU -- so the next chat/image
             # acquire evicted a model to make room for one that was never there.
-            binary = ensure_h3_sd_cpp_binary(allow_install = allow_install, accelerator = "cpu")
+            if accelerator != "cpu":
+                binary = ensure_h3_sd_cpp_binary(allow_install = allow_install, accelerator = "cpu")
             native_device = "cpu"
+            if target.backend == "rocm":
+                _H3_NATIVE_ACCELERATOR[target.backend] = "cpu"
             # The baseline this branch is compared against is the DECISION, not a fresh probe of what came back. An
             # install can replace the returned CPU binary with a GPU build between that ensure and this line, and
             # probing here would record ITS answer -- after which the re-check under the claim below compares the

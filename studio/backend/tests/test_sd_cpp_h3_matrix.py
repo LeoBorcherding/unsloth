@@ -95,6 +95,7 @@ def h3_host(monkeypatch, tmp_path):
         monkeypatch.setattr(sd_cpp_backend, "_install_allowed", lambda: True)
         monkeypatch.setattr(sd_cpp_backend, "is_managed_binary", lambda _b: managed)
         monkeypatch.setattr(sd_cpp_engine, "SdCppEngine", _Engine)
+        monkeypatch.setattr(video_mod, "_H3_NATIVE_ACCELERATOR", {})
 
         binary = None if help_text is None else "/opt/sd/sd-cli"
         monkeypatch.setattr(sd_cpp_backend, "ensure_sd_cpp_binary", lambda **_kwargs: binary)
@@ -214,6 +215,70 @@ def test_h3_gpu_host_falls_back_to_the_cpu_build(h3_host, platform, hw_label, ba
     assert len(host.downloads) == 4
     assert backend_obj._state is not None
     assert backend_obj._state.device == "cpu"
+
+
+def _per_accelerator_builds(monkeypatch, listing: dict[str, str]) -> list[str]:
+    """One sd-cli per accelerator asked for; each answers --list-devices with its ``listing`` row."""
+    from core.inference import sd_cpp_backend
+
+    asked: list[str] = []
+
+    def _ensure(*, allow_install, accelerator):
+        asked.append(accelerator)
+        return f"/opt/sd/sd-cli-{accelerator}"
+
+    def _probe(binary, *args):
+        if args == ("--list-devices",):
+            return listing[binary.rsplit("-", 1)[1]] + "CPU\tAMD Ryzen 9\n"
+        return _H3_HELP
+
+    monkeypatch.setattr(sd_cpp_backend, "ensure_sd_cpp_binary", _ensure)
+    monkeypatch.setattr(sd_cpp_backend, "_sd_cpp_probe_output", _probe)
+    return asked
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_h3_rocm_host_takes_the_vulkan_build_before_the_cpu_one(h3_host, platform, monkeypatch):
+    """A ROCm build that lists no GPU (unsloth#8814) used to send the load straight to the CPU
+    build. The Vulkan build drives the same card, so it is tried first and the load stays on the
+    GPU. The next load asks for Vulkan outright instead of reinstalling ROCm to watch it fail."""
+    host = h3_host(platform = platform, backend = "rocm", device = "cuda", help_text = _H3_HELP)
+    asked = _per_accelerator_builds(
+        monkeypatch, {"rocm": "", "vulkan": "Vulkan0\tAMD Radeon RX 7900 XTX\n", "cpu": ""}
+    )
+    backend_obj = host.run()
+    assert asked == ["rocm", "vulkan"]
+    assert backend_obj._state.device == "cuda"
+    assert len(host.downloads) == 4
+
+    asked.clear()
+    host.run()
+    assert asked == ["vulkan"]
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_h3_rocm_host_still_reaches_the_cpu_build_when_vulkan_sees_no_gpu(
+    h3_host, platform, monkeypatch
+):
+    host = h3_host(platform = platform, backend = "rocm", device = "cuda", help_text = _H3_HELP)
+    asked = _per_accelerator_builds(monkeypatch, {"rocm": "", "vulkan": "", "cpu": ""})
+    backend_obj = host.run()
+    assert asked == ["rocm", "vulkan", "cpu"]
+    assert backend_obj._state.device == "cpu"
+
+    asked.clear()
+    host.run()
+    assert asked == ["cpu"]
+
+
+@pytest.mark.parametrize("hw_label,backend,device", [h for h in HARDWARE if h[1] != "rocm"])
+def test_h3_non_rocm_hosts_never_ask_for_the_vulkan_build(
+    h3_host, hw_label, backend, device, monkeypatch
+):
+    host = h3_host(platform = "linux", backend = backend, device = device, help_text = _H3_HELP)
+    asked = _per_accelerator_builds(monkeypatch, {"cuda": "", "vulkan": "", "cpu": ""})
+    host.run()
+    assert "vulkan" not in asked
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)
