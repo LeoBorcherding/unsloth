@@ -257,6 +257,7 @@ export {
 export {
   deleteStoredChatThreads,
   ensureStoredChatThread,
+  getStoredChatProject,
   getStoredChatThread,
   isThreadIncognito,
   listStoredChatMessages,
@@ -344,6 +345,7 @@ export {
   deleteChatProject,
   moveChatItemToProject,
   renameChatProject,
+  setChatProjectWorkspace,
   updateChatProjectInstructions,
   useChatProjects,
 } from "./hooks/use-chat-projects";
