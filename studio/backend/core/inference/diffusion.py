@@ -1052,10 +1052,42 @@ def _estimate_eta(total_steps: int, step: int, first_step_at: float, now: float)
 def _resolve_diffusion_compute_dtype(fam: Optional[DiffusionFamily], dtype: Any) -> Any:
     """Promote float16 -> float32 for fp16-incompatible families (e.g. Z-Image), whose activations
     overflow float16's finite range and render a black image. Every other dtype/family passes
-    through unchanged."""
+    through unchanged.
+
+    Two env-gated probes, both no-ops when unset, for reproducing the black-frame reports on a card
+    that HAS bf16 (an A100 never takes the fp16 branch, so the bug cannot be seen there otherwise):
+
+      UNSLOTH_FORCE_FP16=1    take the fp16 branch whatever the card reports
+      UNSLOTH_FP16_PROMOTE=1  promote fp16 -> fp32 for EVERY family, not just the five flagged ones
+
+    Set the first alone to reproduce, both together to test the candidate fix, neither for today's
+    behaviour. Drop this block before the change ships.
+    """
+    import torch
+
+    forced = os.environ.get("UNSLOTH_FORCE_FP16", "").strip().lower() in ("1", "true", "yes", "on")
+    promote_all = os.environ.get("UNSLOTH_FP16_PROMOTE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if forced and dtype in (torch.bfloat16, torch.float32):
+        logger.warning(
+            "diffusion.dtype_forced: UNSLOTH_FORCE_FP16 set, %s -> float16 (family=%s)",
+            dtype,
+            getattr(fam, "name", None),
+        )
+        dtype = torch.float16
+    if promote_all and dtype == torch.float16:
+        logger.warning(
+            "diffusion.dtype_promoted_all: UNSLOTH_FP16_PROMOTE set, float16 -> float32 (family=%s)",
+            getattr(fam, "name", None),
+        )
+        return torch.float32
+
     if fam is None or not getattr(fam, "fp16_incompatible", False):
         return dtype
-    import torch
 
     return torch.float32 if dtype == torch.float16 else dtype
 
