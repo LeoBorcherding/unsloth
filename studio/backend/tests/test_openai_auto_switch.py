@@ -7147,6 +7147,26 @@ def test_model_override_load_kwargs_gates_gpu_placement_on_gguf():
     LoadRequest(model_path = "unsloth/B-GGUF", **gguf)
 
 
+@pytest.mark.parametrize("engine", ["vllm", "sglang"])
+@pytest.mark.parametrize("mode", ["tensor", "pipeline", "data"])
+def test_optional_engine_override_preserves_precision_and_gpu_order(engine, mode):
+    kwargs = settings.model_override_load_kwargs(
+        {
+            "engine": engine,
+            "engine_precision": "int4",
+            "engine_parallelism": mode,
+            "gpu_ids": [1, 0],
+        },
+        is_gguf = False,
+    )
+    request = LoadRequest(model_path = "unsloth/Qwen2.5-0.5B-Instruct", **kwargs)
+    assert request.engine == engine
+    assert request.engine_precision == "int4"
+    assert request.engine_parallelism == mode
+    assert request.gpu_ids == [1, 0]
+    assert request.load_in_4bit is False
+
+
 def test_a_carried_ctx_flag_cannot_outrank_a_freshly_saved_context(monkeypatch):
     # The settings page has no control for pass-through flags, so a save carries over the
     # ones already stored while writing the field the user just edited, leaving one entry
@@ -7245,6 +7265,19 @@ def test_a_saved_ctx_flag_sets_only_the_context_fields_sent(
         key: entry[key] for key in ("max_seq_length", "custom_context_length") if key in entry
     }
     assert stored == expected
+
+
+@pytest.mark.parametrize("engine", ["vllm", "sglang"])
+def test_context_save_preserves_managed_engine_settings(monkeypatch, engine):
+    _mock_override_store(monkeypatch)
+    model = "unsloth/model"
+    _put(model, engine = engine, engine_parallelism = "pipeline", engine_precision = "fp8")
+    saved = _put(model, llama_extra_args = ["-c", "65536"], custom_context_length = 4096)
+    entry = saved.overrides[model]
+    assert entry["custom_context_length"] == 65536
+    assert entry["engine"] == engine
+    assert entry["engine_parallelism"] == "pipeline"
+    assert entry["engine_precision"] == "fp8"
 
 
 def test_a_fill_keeps_the_sent_context_when_it_does_not_store_the_flag(monkeypatch):

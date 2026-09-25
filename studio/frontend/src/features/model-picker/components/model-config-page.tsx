@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { InferenceEnginePicker } from "./inference-engines";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -2898,6 +2899,7 @@ export function ModelConfigPage({
       ? "Reload model"
       : "Load model";
 
+  const [engineReady, setEngineReady] = useState(true);
   const handleRun = () => {
     if (budgetSettling) {
       return;
@@ -3129,6 +3131,9 @@ export function ModelConfigPage({
       )}
 
       <div className="space-y-5">
+        {!target.isGguf && !targetIsMlx && !classifiedIsDiffusion && !target.meta.isLora && !target.meta.audioType && (
+          <InferenceEnginePicker parallelism={config.engineParallelism ?? "tensor"} onParallelismChange={engineParallelism => update({ engineParallelism })} precision={config.enginePrecision ?? "auto"} onPrecisionChange={enginePrecision => update({ enginePrecision })} value={config.engine ?? "auto"} onChange={engine => update({ engine })} onReadyChange={setEngineReady} onUse={handleRun} gpuIds={config.selectedGpuIds} onGpuChange={ids => update({ selectedGpuIds: ids, selectedGpuIndexKind: "physical" })} />
+        )}
         {target.isGguf && (
           <>
             {/* Above Context Length on purpose: that is the control moving this number most, and a readout
@@ -3331,6 +3336,7 @@ export function ModelConfigPage({
             size="sm"
             className={FOOTER_BUTTON_CLASS}
             disabled={
+              ((config.engine ?? "auto") !== "auto" && !engineReady) ||
               stagedMetadataPending ||
               budgetSettling ||
               (!extraArgsLoadable && !sharedExtraArgsCleared) ||

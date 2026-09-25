@@ -44,6 +44,9 @@ export interface ListLorasResponse {
 }
 
 export interface LoadModelRequest {
+  engine_parallelism?: "tensor" | "pipeline" | "data";
+  engine_precision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
+  engine?: "auto" | "vllm" | "sglang";
   model_path: string;
   /** Opaque client attempt ID used to cancel only this in-flight load. */
   load_request_id?: string | null;
@@ -211,6 +214,9 @@ export function isMultimodalResponse(
 }
 
 export interface LoadModelResponse {
+  engine_parallelism?: "tensor" | "pipeline" | "data";
+  engine_precision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
+  engine?: "auto" | "vllm" | "sglang";
   is_mlx?: boolean;
   status: string;
   model: string;
@@ -326,6 +332,9 @@ export interface UnloadModelRequest {
 }
 
 export interface InferenceStatusResponse {
+  engine_parallelism?: "tensor" | "pipeline" | "data";
+  engine_precision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
+  engine?: "auto" | "vllm" | "sglang";
   is_mlx?: boolean;
   active_model: string | null;
   model_identifier?: string | null;
