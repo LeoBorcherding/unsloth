@@ -5416,6 +5416,60 @@ def rocm_gpu_ids_without_torch_kernels() -> set[int]:
         return set()
 
 
+def _torch_kernel_arch_tokens() -> list[str]:
+    try:
+        import torch
+        return sorted(
+            {
+                str(arch).split(":")[0].strip().lower()
+                for arch in (torch.cuda.get_arch_list() or ())
+                if str(arch).strip()
+            }
+        )
+    except Exception:
+        return []
+
+
+def _describe_rocm_gpus(gpu_ids) -> list[str]:
+    """Best-effort labels keyed by PHYSICAL id, for an error message only; never a gate."""
+    wanted = {int(gpu_id) for gpu_id in gpu_ids}
+    labels: Dict[int, str] = {}
+    try:
+        import torch
+
+        count = torch.cuda.device_count()
+        physical_ids = _get_parent_visible_gpu_spec()["numeric_ids"]
+        if physical_ids is None or count > len(physical_ids):
+            physical_ids = list(range(count))
+        for ordinal, physical in enumerate(physical_ids[:count]):
+            if physical not in wanted:
+                continue
+            props = torch.cuda.get_device_properties(ordinal)
+            arch = str(getattr(props, "gcnArchName", "") or "").split(":")[0].strip()
+            detail = ", ".join(
+                part for part in (str(getattr(props, "name", "") or ""), arch) if part
+            )
+            labels[physical] = f"GPU {physical} ({detail})" if detail else f"GPU {physical}"
+    except Exception as e:
+        logger.debug("Could not describe GPUs %s: %s", sorted(wanted), e)
+    return [labels.get(gpu_id, f"GPU {gpu_id}") for gpu_id in sorted(wanted)]
+
+
+def reject_gpu_ids_without_torch_kernels(gpu_ids) -> None:
+    """Explicit picks bypass the #8792 auto-select skip; without this the worker dies with hipErrorInvalidImage."""
+    uncovered = sorted(
+        set(int(gpu_id) for gpu_id in gpu_ids) & rocm_gpu_ids_without_torch_kernels()
+    )
+    if not uncovered:
+        return
+    built_for = ", ".join(_torch_kernel_arch_tokens()) or "other GPU architectures"
+    raise ValueError(
+        f"{', '.join(_describe_rocm_gpus(uncovered))} cannot run the PyTorch build this Unsloth Studio installed, "
+        f"which has kernels for {built_for} only. Pick another GPU, or reinstall Unsloth "
+        f"Studio for that card."
+    )
+
+
 def auto_select_gpu_ids(
     model_name: str,
     *,
@@ -5605,6 +5659,7 @@ def prepare_gpu_selection(
 
     if gpu_ids:
         resolved = resolve_requested_gpu_ids(gpu_ids)
+        reject_gpu_ids_without_torch_kernels(resolved)
         metadata = {
             "selection_mode": "explicit",
             "selected_gpu_ids": resolved,
