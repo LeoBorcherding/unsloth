@@ -42,6 +42,7 @@ import type { BenchmarkTaskConfig, BenchmarkTaskInfo, ModelCheckpoints } from ".
 import { fetchBenchmarkTaskConfig, fetchBenchmarkTasks, fetchCheckpoints } from "./api/benchmark-api";
 import { BenchmarkRunPanel } from "./components/benchmark-run-panel";
 import { BenchmarkHistoryPanel } from "./components/benchmark-history-panel";
+import { EvalScoreboard } from "./components/eval-scoreboard";
 import {
   isBenchmarkPanelActive,
   useBenchmarkRuntimeStore,
@@ -631,6 +632,7 @@ export function BenchmarkPage() {
               <div ref={panelEndRef} aria-hidden="true" className="h-px w-full" />
             </section>
           )}
+          <EvalScoreboard />
           <section className={cn(BENCH_CARD, "p-4 sm:p-5")}>
             <BenchmarkHistoryPanel />
           </section>
