@@ -835,7 +835,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS benchmark_runs (
+        CREATE TABLE IF NOT EXISTS eval_runs (
             id TEXT NOT NULL PRIMARY KEY,
             task TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -850,8 +850,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS benchmark_samples (
-            run_id TEXT NOT NULL REFERENCES benchmark_runs(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS eval_samples (
+            run_id TEXT NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
             doc_id INTEGER NOT NULL,
             question TEXT NOT NULL,
             target TEXT NOT NULL,
@@ -863,7 +863,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_benchmark_runs_created_at ON benchmark_runs(created_at)"
+        "CREATE INDEX IF NOT EXISTS idx_eval_runs_created_at ON eval_runs(created_at)"
     )
     conn.execute(
         """
@@ -5045,7 +5045,7 @@ def insert_benchmark_run(
     try:
         conn.execute(
             """
-            INSERT INTO benchmark_runs (id, task, model, metrics_json, n_samples, num_fewshot, created_at, output_path, duration_seconds)
+            INSERT INTO eval_runs (id, task, model, metrics_json, n_samples, num_fewshot, created_at, output_path, duration_seconds)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -5073,7 +5073,7 @@ def insert_benchmark_samples(run_id: str, samples: list[dict]) -> None:
     try:
         conn.executemany(
             """
-            INSERT OR IGNORE INTO benchmark_samples (run_id, doc_id, question, target, response, raw_response, correct)
+            INSERT OR IGNORE INTO eval_samples (run_id, doc_id, question, target, response, raw_response, correct)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
@@ -5105,7 +5105,7 @@ def list_benchmark_runs() -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM benchmark_runs ORDER BY created_at DESC"
+            "SELECT * FROM eval_runs ORDER BY created_at DESC"
         ).fetchall()
         return [_benchmark_run_from_row(r) for r in rows]
     finally:
@@ -5117,7 +5117,7 @@ def get_benchmark_run(run_id: str) -> Optional[dict]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT * FROM benchmark_runs WHERE id = ?", (run_id,)
+            "SELECT * FROM eval_runs WHERE id = ?", (run_id,)
         ).fetchone()
         if row is None:
             return None
@@ -5131,7 +5131,7 @@ def get_benchmark_samples(run_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM benchmark_samples WHERE run_id = ? ORDER BY doc_id",
+            "SELECT * FROM eval_samples WHERE run_id = ? ORDER BY doc_id",
             (run_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -5156,7 +5156,7 @@ def delete_benchmark_run(run_id: str) -> None:
     """Delete a benchmark run and its samples (CASCADE)."""
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM benchmark_runs WHERE id = ?", (run_id,))
+        conn.execute("DELETE FROM eval_runs WHERE id = ?", (run_id,))
         conn.commit()
     finally:
         conn.close()

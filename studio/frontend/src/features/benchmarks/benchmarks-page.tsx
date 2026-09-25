@@ -12,6 +12,7 @@ import {
   getInferenceStatus,
 } from "@/features/chat";
 import { authFetch } from "@/features/auth";
+import { BenchmarkPage } from "@/features/benchmark";
 import { gpuMemoryDisplay } from "@/hooks/gpu-memory-display";
 import { gpuMemoryTotalsGb, resolveGpuVramUsedGb } from "@/hooks/gpu-vram";
 import { useSystemInfo } from "@/hooks/use-system";
@@ -216,7 +217,7 @@ function ShownRunNote({
   );
 }
 
-type BenchTab = "benchmark" | "history";
+type BenchTab = "benchmark" | "quality" | "history";
 
 /** Train's sub-nav: underlined text tabs on the header rule. */
 function BenchSubNav({
@@ -232,6 +233,7 @@ function BenchSubNav({
     disabled: boolean;
   }> = [
     { value: "benchmark", label: "Benchmark", disabled: false },
+    { value: "quality", label: "Quality", disabled: false },
     {
       value: "history",
       label: (
@@ -396,7 +398,13 @@ export function BenchmarksPage(): ReactElement {
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border/60">
               <BenchSubNav value={tab} runCount={runs.length} />
-              <div className="ml-auto min-w-0 max-w-full pb-1.5 sm:max-w-[60%]">
+              {/* Quality picks its own model. */}
+              <div
+                className={cn(
+                  "ml-auto min-w-0 max-w-full pb-1.5 sm:max-w-[60%]",
+                  tab === "quality" && "invisible",
+                )}
+              >
                 <BenchModelPicker status={status} locked={Boolean(live)} />
               </div>
             </div>
@@ -474,6 +482,10 @@ export function BenchmarksPage(): ReactElement {
                 </div>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="quality" className="mt-0">
+            <BenchmarkPage embedded={true} />
           </TabsContent>
 
           <TabsContent value="history" className="mt-0">

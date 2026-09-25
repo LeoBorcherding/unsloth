@@ -11,3 +11,4 @@ export type {
   BenchmarkRuntimeStore,
 } from "./stores/benchmark-runtime-store";
 export { useBenchmarkRuntimeLifecycle } from "./hooks/use-benchmark-runtime-lifecycle";
+export { BenchmarkPage } from "./benchmark-page";

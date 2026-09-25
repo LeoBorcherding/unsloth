@@ -122,7 +122,7 @@ export function BenchmarkRunPanel({
       {isActive && (
         <Progress
           value={progress}
-          className="h-2 bg-foreground/[0.05]"
+          className="h-2 bg-[color-mix(in_oklab,var(--foreground)_calc(5%*var(--contrast-wash-gain,1)),transparent)]"
           indicatorClassName={undefined}
         />
       )}

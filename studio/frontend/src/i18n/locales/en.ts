@@ -104,6 +104,7 @@ export const en = {
     modelLabel: "Model",
     loadingCheckpoints: "Loading checkpoints…",
     scanningLocalModels: "Scanning local models...",
+    failedToLoadLocalModels: "Failed to load local models",
     loadingModel: "Loading model…",
     downloadingModel: "Downloading model…",
     hfCache: "HF cache",

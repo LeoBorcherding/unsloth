@@ -27,8 +27,8 @@ import { prepareHfTokenForUse } from "@/features/hf-auth";
 import {
   type LocalModelInfo,
   listLocalModels,
-  useTrainingConfigStore,
 } from "@/features/training";
+import { useHfTokenStore } from "@/features/hub";
 import {
   DOWNLOAD_KIND,
   downloadManager,
@@ -49,9 +49,10 @@ import {
 } from "./stores/benchmark-runtime-store";
 import { useChatRuntimeStore, useChatModelRuntime } from "@/features/chat";
 
-export function BenchmarkPage() {
+/** `embedded` drops the page shell and title, for a tab inside Benchmarks. */
+export function BenchmarkPage({ embedded = false }: { embedded?: boolean } = {}) {
   const t = useT();
-  const hfToken = useTrainingConfigStore((s) => s.hfToken);
+  const hfToken = useHfTokenStore((s) => s.token);
 
   const [trainingModels, setTrainingModels] = useState<ModelCheckpoints[]>([]);
   const [loadingCheckpoints, setLoadingCheckpoints] = useState(true);
@@ -166,7 +167,7 @@ export function BenchmarkPage() {
         setLocalModelsError(
           error instanceof Error
             ? error.message
-            : t("studio.model.failedToLoadLocalModels"),
+            : t("benchmark.failedToLoadLocalModels"),
         );
       })
       .finally(() => {
@@ -414,9 +415,9 @@ export function BenchmarkPage() {
   }, [showPanel]);
 
   return (
-    <div className="min-h-[calc(100dvh-var(--studio-titlebar-height,0px))] bg-background">
-      <main className="mx-auto max-w-7xl px-5 py-8 sm:px-9">
-        <div className="mb-8 flex flex-col gap-0.5">
+    <div className={embedded ? undefined : "min-h-[calc(100dvh-var(--studio-titlebar-height,0px))] bg-background"}>
+      <main className={embedded ? undefined : "mx-auto max-w-7xl px-5 py-8 sm:px-9"}>
+        <div className={embedded ? "hidden" : "mb-8 flex flex-col gap-0.5"}>
           <h1 className="text-[30px] font-semibold leading-[1.04] tracking-[-0.028em] text-foreground sm:text-[34px]">
             {t("benchmark.pageTitle")}
           </h1>

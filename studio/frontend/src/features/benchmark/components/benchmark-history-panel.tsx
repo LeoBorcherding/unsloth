@@ -146,6 +146,12 @@ function sortRuns(
   }
 }
 
+function scoreColor(score: number): string {
+  if (score >= 0.75) return "text-emerald-600 dark:text-emerald-400";
+  if (score >= 0.5) return "text-amber-600 dark:text-amber-400";
+  return "text-red-600 dark:text-red-400";
+}
+
 function filterRuns(
   runs: BenchmarkRunSummary[],
   query: string,
@@ -429,7 +435,7 @@ function RunDetailView({
                 ? (detail.correct_count / detail.total_count) * 100
                 : 0
             }
-            className="h-2 bg-foreground/[0.05]"
+            className="h-2 bg-[color-mix(in_oklab,var(--foreground)_calc(5%*var(--contrast-wash-gain,1)),transparent)]"
             indicatorClassName={
               detail.correct_count / Math.max(detail.total_count, 1) >= 0.8
                 ? "bg-green-400"
@@ -445,7 +451,7 @@ function RunDetailView({
                 count: detail.samples.length,
               })}
             </h3>
-            <div className="max-h-[500px] overflow-y-auto rounded-lg border border-border/40">
+            <div className="max-h-[calc(500px*var(--ui-space-scale,1))] overflow-y-auto rounded-lg border border-border/40">
               {detail.samples.length === 0 ? (
                 <div className="flex items-center justify-center py-8 text-xs text-muted-foreground/60">
                   {t("benchmark.history.noSampleData")}
@@ -471,7 +477,7 @@ function CompareColumn({ detail }: { detail: BenchmarkRunDetail }) {
       : null;
 
   return (
-    <div className="flex min-w-[640px] flex-1 flex-col gap-4 rounded-lg border border-border/60 bg-card p-4">
+    <div className="flex min-w-[calc(640px*var(--ui-space-scale,1))] flex-1 flex-col gap-4 rounded-lg border border-border/60 bg-card p-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-lg border border-border/60 bg-card p-3">
           <div className="text-[10px] font-medium text-muted-foreground/60">
@@ -540,7 +546,7 @@ function CompareColumn({ detail }: { detail: BenchmarkRunDetail }) {
             ? (detail.correct_count / detail.total_count) * 100
             : 0
         }
-        className="h-2 bg-foreground/[0.05]"
+        className="h-2 bg-[color-mix(in_oklab,var(--foreground)_calc(5%*var(--contrast-wash-gain,1)),transparent)]"
         indicatorClassName={
           detail.correct_count / Math.max(detail.total_count, 1) >= 0.8
             ? "bg-green-400"
@@ -556,7 +562,7 @@ function CompareColumn({ detail }: { detail: BenchmarkRunDetail }) {
             count: detail.samples.length,
           })}
         </h3>
-        <div className="max-h-[500px] overflow-y-auto rounded-lg border border-border/40">
+        <div className="max-h-[calc(500px*var(--ui-space-scale,1))] overflow-y-auto rounded-lg border border-border/40">
           {detail.samples.length === 0 ? (
             <div className="flex items-center justify-center py-8 text-xs text-muted-foreground/60">
               {t("benchmark.history.noSampleData")}
