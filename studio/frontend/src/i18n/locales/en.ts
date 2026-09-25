@@ -289,7 +289,6 @@ export const en = {
       // Rendered uppercase in a pill beside a recently shipped tab.
       newBadge: "New",
       export: "Export",
-      benchmark: "Benchmark",
       recents: "Recents",
       noChatsYet: "No chats yet",
       // Shown under an empty project folder in the sidebar.
