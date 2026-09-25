@@ -72,10 +72,22 @@ function scoreRun(run: BenchRunSummary): {
       isBase: label === run.config.baseline,
     }))
     .sort((a, b) => b.tps - a.tps);
-  const base = rows.find((r) => r.isBase) ?? null;
-  const best = rows.find((r) => !r.isBase) ?? base;
+  // Only a row that ran every rep can win the card or set the speedup; one that errored or was
+  // cancelled after a measured rep keeps its samples in `rows` for the chart but is not ranked.
+  const done = new Set(
+    run.outcomes.filter((o) => o.state === "done").map((o) => o.label),
+  );
+  const ranked = rows.filter((r) => done.has(r.label));
+  const base = ranked.find((r) => r.isBase) ?? null;
+  const challenger = ranked.find((r) => !r.isBase) ?? null;
+  // Fastest row overall wins the card, which can be the baseline (an offload sweep's Studio fit).
+  const best =
+    base && (!challenger || base.tps >= challenger.tps)
+      ? base
+      : (challenger ?? base);
+  // The best challenger measured against the baseline, below 1× when nothing beat it.
   const speedup =
-    best && base && best !== base && base.tps > 0 ? best.tps / base.tps : null;
+    challenger && base && base.tps > 0 ? challenger.tps / base.tps : null;
   return { rows, best, base, speedup };
 }
 

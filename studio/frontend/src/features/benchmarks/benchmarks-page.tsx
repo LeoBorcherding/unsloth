@@ -23,7 +23,13 @@ import {
   GpuIcon,
   RamMemoryIcon,
 } from "@hugeicons/core-free-icons";
-import { type ReactElement, type ReactNode, useEffect, useState } from "react";
+import {
+  type ReactElement,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 import { HistoryGrid } from "./components/history-grid";
 import { RunResults } from "./components/results-panel";
 import { RunPreviewCard } from "./components/run-preview";
@@ -278,39 +284,81 @@ function BenchSubNav({
   );
 }
 
-/** Layer counts for the offload sweep: the loaded model's from status, a picked one's from
- * its GGUF header. */
+/** Layer counts (offload sweep) and context window (context sweep): the loaded model's from
+ * status, a picked one's from its GGUF header. */
 function useModelShape(
   status: InferenceStatusResponse | null,
   model: string | null,
   variant: string | null,
-): ModelShape | null {
+): {
+  shape: ModelShape | null;
+  contextLength: number | null;
+  pending: boolean;
+  error: string | null;
+  retry: () => void;
+} {
   const [picked, setPicked] = useState<{
     key: string;
     shape: ModelShape;
+    contextLength: number | null;
   } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((a) => a + 1), []);
   const key = model ? `${model}\u0000${variant ?? ""}` : null;
   useEffect(() => {
     if (!model || !key) return;
     let cancelled = false;
+    setError(null);
     void fetchGgufStagedMetadata({ model_path: model, gguf_variant: variant })
       .then((m) => {
         if (!cancelled)
           setPicked({
             key,
             shape: { layers: m.layerCount, moeLayers: m.moeLayerCount },
+            contextLength: m.contextLength,
           });
       })
-      .catch(() => undefined);
+      // A rejected header would otherwise leave the rows pending forever and Run stuck
+      // disabled; record it so the preview can surface it and offer a retry.
+      .catch((err) =>
+        cancelled
+          ? undefined
+          : setError(err instanceof Error ? err.message : String(err)),
+      );
     return () => {
       cancelled = true;
     };
-  }, [model, variant, key]);
-  if (key) return picked?.key === key ? picked.shape : null;
-  if (!status?.active_model) return null;
+  }, [model, variant, key, attempt]);
+  if (key) {
+    const p = picked?.key === key ? picked : null;
+    return {
+      shape: p?.shape ?? null,
+      contextLength: p?.contextLength ?? null,
+      // Keep Run blocked while the header is missing so the sweep can't build on the wrong
+      // shape; an error stops the wait so the retry control shows instead of a dead spinner.
+      pending: !p && !error,
+      error: p ? null : error,
+      retry,
+    };
+  }
+  if (!status?.active_model)
+    return {
+      shape: null,
+      contextLength: null,
+      pending: false,
+      error: null,
+      retry,
+    };
   return {
-    layers: status.n_layers ?? null,
-    moeLayers: status.n_moe_layers ?? null,
+    shape: {
+      layers: status.n_layers ?? null,
+      moeLayers: status.n_moe_layers ?? null,
+    },
+    contextLength: null,
+    pending: false,
+    error: null,
+    retry,
   };
 }
 
@@ -326,15 +374,25 @@ export function BenchmarksPage(): ReactElement {
   const cancel = useBenchmarksStore((s) => s.cancel);
   const error = useBenchmarksStore((s) => s.error);
   const status = useLoadedModel(Boolean(live));
-  const maxContext =
-    status?.max_context_length ?? status?.native_context_length ?? null;
   const config = useBenchmarksStore((s) => s.config);
   const choosePreset = useBenchmarksStore((s) => s.choosePreset);
-  const shape = useModelShape(
+  const {
+    shape,
+    contextLength: pickedContext,
+    pending: pickedPending,
+    error: shapeError,
+    retry: retryShape,
+  } = useModelShape(
     status,
     config.tuneModel ?? null,
     config.tuneVariant ?? null,
   );
+  // A picked model sweeps its own context window; while its header loads, fall back to chat's.
+  const residentContext =
+    status?.max_context_length ?? status?.native_context_length ?? null;
+  const maxContext = config.tuneModel
+    ? (pickedContext ?? residentContext)
+    : residentContext;
   // The offload rows are scaled to the model, so a new model or a late shape rebuilds them.
   const shapeKey = shape ? `${shape.layers}/${shape.moeLayers}` : "";
   const offloadSweep = config.sweep === "offload";
@@ -343,6 +401,13 @@ export function BenchmarksPage(): ReactElement {
       choosePreset("offload", maxContext, shape);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the shape's value
   }, [offloadSweep, shapeKey]);
+  // Context rows are scaled to the model's window, so a new model or a late header rebuilds them.
+  const contextSweep = config.sweep === "context";
+  useEffect(() => {
+    if (contextSweep && !live && maxContext)
+      choosePreset("context", maxContext, shape);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the resolved window
+  }, [contextSweep, maxContext]);
   const [tab, setTab] = useState<BenchTab>("benchmark");
 
   useEffect(() => {
@@ -367,9 +432,30 @@ export function BenchmarksPage(): ReactElement {
           ? nextModel
           : null;
 
+  // Offload and context rows are scaled to the picked model; block Run until its header
+  // resolves so the sweep can't start on the resident model's shape or window.
+  const rowsPending = pickedPending && (offloadSweep || contextSweep);
+  // A picked model whose header resolved without a context window would otherwise fall back
+  // to the resident model's window (maxContext above), building the context rows for the
+  // wrong model. Block Run and offer a retry instead.
+  const pickedContextMissing =
+    Boolean(config.tuneModel) &&
+    contextSweep &&
+    !pickedPending &&
+    !shapeError &&
+    pickedContext === null;
+  const rowsError =
+    shapeError && (offloadSweep || contextSweep)
+      ? shapeError
+      : pickedContextMissing
+        ? "Couldn't read this model's context window. Retry, or pick another model."
+        : null;
   const preview = (
     <RunPreviewCard
       status={status}
+      metadataPending={rowsPending}
+      metadataError={rowsError}
+      onRetryMetadata={retryShape}
       onRun={() => void start()}
       onViewRun={() => setTab("benchmark")}
     />
