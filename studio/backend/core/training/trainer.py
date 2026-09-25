@@ -1526,17 +1526,46 @@ class UnslothTrainer:
 
             # Test branch only: block swap has no UI field yet, so it's read from the environment.
             _bs_layers = int(os.environ.get("UNSLOTH_BLOCK_SWAP_LAYERS", "0") or 0)
+            _bs_status = {"requested_layers": _bs_layers, "installed": False}
             if _bs_layers > 0:
                 from unsloth.models._utils import install_block_swap
 
                 _bs = install_block_swap(self.model, _bs_layers)
-                logger.info(
-                    f"Block swap: {len(_bs.blocks)} decoder layers in host RAM "
-                    f"({_bs.host_bytes() / 2**20:.0f} MiB), device pool "
-                    f"{_bs.pool_bytes() / 2**20:.0f} MiB\n"
+                _bs_status.update(
+                    installed = True,
+                    blocks = len(_bs.blocks),
+                    host_MiB = round(_bs.host_bytes() / 2**20, 1),
+                    pool_MiB = round(_bs.pool_bytes() / 2**20, 1),
                 )
-            else:
-                logger.info("Block swap: off (UNSLOTH_BLOCK_SWAP_LAYERS unset)\n")
+            import json as _json, sys as _sys, torch as _torch
+
+            if _torch.cuda.is_available():
+                _bs_status["alloc_after_install_MiB"] = round(_torch.cuda.memory_allocated() / 2**20, 1)
+            _bs_line = "Block swap: " + _json.dumps(_bs_status)
+            logger.info(_bs_line + "\n")
+            print(_bs_line, file = _sys.stderr, flush = True)
+            try:
+                _bs_path = os.path.expanduser("~/.unsloth/studio/block_swap_status.jsonl")
+                with open(_bs_path, "a") as _f:
+                    _f.write(_json.dumps(_bs_status) + "\n")
+            except OSError:
+                pass
+            self._bs_status = _bs_status
+            if _torch.cuda.is_available():
+                _torch.cuda.reset_peak_memory_stats()
+                import atexit as _atexit
+
+                def _bs_peak():
+                    rec = dict(_bs_status, event = "exit",
+                               peak_alloc_MiB = round(_torch.cuda.max_memory_allocated() / 2**20, 1),
+                               peak_reserved_MiB = round(_torch.cuda.max_memory_reserved() / 2**20, 1))
+                    try:
+                        with open(os.path.expanduser("~/.unsloth/studio/block_swap_status.jsonl"), "a") as f:
+                            f.write(_json.dumps(rec) + "\n")
+                    except OSError:
+                        pass
+
+                _atexit.register(_bs_peak)
 
             if self.should_stop:
                 logger.info("Stopped during LoRA configuration\n")
