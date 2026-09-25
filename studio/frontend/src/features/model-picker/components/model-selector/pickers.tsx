@@ -66,6 +66,8 @@ import {
   scanFolderStatusCopy,
   useDownloadManagerStore,
   useHfTokenStore,
+  HubFailureHint,
+  useHubAvailability,
   useOnlineStatus,
   pendingDrafterPresentation,
 } from "@/features/hub";
@@ -203,6 +205,7 @@ import {
   matchesFormatFilter,
   orderRecommendedRows,
   paramsFromId,
+  recommendedEmptyState,
   searchRowFitsDevice,
   searchableRecommendedIds,
   type CuratedBudget,
@@ -2811,6 +2814,7 @@ export function HubModelPicker({
   const debouncedQuery = useDebouncedValue(query);
   // Shared Hub search stack so the picker and Hub run one implementation. Scoped to unsloth like the old listing.
   const online = useOnlineStatus();
+  const { phase: hubPhase } = useHubAvailability();
   // Sanitize to anonymous on a malformed token, matching the Hub page.
   const accessToken = hfApiToken(hfToken);
   // Recommended section: a live unsloth listing sorted by the dropdown, the same sort that drives search results.
@@ -2823,6 +2827,8 @@ export function HubModelPicker({
     fetchMore,
     scannedCount,
     hasMore,
+    error: searchError,
+    retry: retrySearch,
   } = useHubModelSearch(debouncedQuery, {
     ownerScope: "unsloth",
     sortBy: recommendedSort,
@@ -5340,6 +5346,16 @@ export function HubModelPicker({
   const showDownloaded = section === "downloaded";
   const showCustom = section === "downloaded";
   const showRecommendedSection = !showHfSection && section === "recommended";
+  const recommendedEmpty = recommendedEmptyState({
+    isLoading: recommendedSearch.isLoading,
+    error: recommendedSearch.error,
+    hubPhase,
+  });
+  const searchEmpty = recommendedEmptyState({
+    isLoading,
+    error: searchError,
+    hubPhase,
+  });
   const downloadedEmpty =
     pinnedRows.length === 0 &&
     visibleCachedGguf.length === 0 &&
@@ -7243,14 +7259,20 @@ export function HubModelPicker({
 
                 {showRecommendedSection ? (
                   <>
-                    {recommendedSearch.isLoading &&
-                    recommendedRows.length === 0 ? (
+                    {recommendedRows.length === 0 &&
+                    recommendedEmpty === "loading" ? (
                       <div className="flex items-center gap-2 px-5 py-3">
                         <Spinner className="size-3 text-muted-foreground" />
                         <span className="text-xs text-muted-foreground">
                           Loading models…
                         </span>
                       </div>
+                    ) : recommendedRows.length === 0 &&
+                      recommendedEmpty === "failed" ? (
+                      <HubFailureHint
+                        message={recommendedSearch.error}
+                        onRetry={recommendedSearch.retry}
+                      />
                     ) : recommendedRows.length === 0 ? (
                       <div className="px-2.5 py-2 text-xs text-muted-foreground">
                         No models found.
@@ -7486,13 +7508,15 @@ export function HubModelPicker({
                 {showHfSection && section === "recommended" ? (
                   <>
                     {searchRowIds.length === 0 && !isLoading ? (
-                      filteredRecommendedIds.length === 0 ? (
+                      filteredRecommendedIds.length > 0 ? null : searchEmpty === "failed" ? (
+                        <HubFailureHint message={searchError} onRetry={retrySearch} />
+                      ) : (
                         <div className="px-2.5 py-2 text-xs text-muted-foreground">
                           {communityDiscoveryEnabled
                             ? "No matching models."
                             : "No matching Unsloth models."}
                         </div>
-                      ) : null
+                      )
                     ) : (
                       searchRowIds.map((id) => {
                         const vram = vramMap.get(id);
