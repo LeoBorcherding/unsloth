@@ -12,7 +12,7 @@ import {
   getInferenceStatus,
 } from "@/features/chat";
 import { authFetch } from "@/features/auth";
-import { BenchmarkPage } from "@/features/benchmark";
+import { BenchmarkPage } from "@/features/benchmark/benchmark-page";
 import { gpuMemoryDisplay } from "@/hooks/gpu-memory-display";
 import { gpuMemoryTotalsGb, resolveGpuVramUsedGb } from "@/hooks/gpu-vram";
 import { useSystemInfo } from "@/hooks/use-system";
@@ -571,7 +571,7 @@ export function BenchmarksPage(): ReactElement {
           </TabsContent>
 
           <TabsContent value="quality" className="mt-0">
-            <BenchmarkPage embedded={true} />
+            <BenchmarkPage />
           </TabsContent>
 
           <TabsContent value="history" className="mt-0">

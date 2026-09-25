@@ -82,7 +82,7 @@ export function StatPill({
 }
 
 /** Train's field: small-caps label with an info hint, then the control. */
-function Field({
+export function Field({
   label,
   hint,
   aside,
@@ -111,7 +111,7 @@ function Field({
 
 /** A number box that clamps when you leave it, not on every keystroke, so clearing it to
  * type a new value doesn't snap to the minimum. */
-function CountInput({
+export function CountInput({
   value,
   min,
   max,

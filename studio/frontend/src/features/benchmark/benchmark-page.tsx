@@ -7,10 +7,8 @@ import type {
   ModelOption,
   ModelSelectorChangeMeta,
 } from "@/features/model-picker/components/model-selector/types";
-import { SectionCard } from "@/components/section-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Combobox,
   ComboboxContent,
@@ -19,8 +17,6 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { Separator } from "@/components/ui/separator";
-import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Spinner } from "@/components/ui/spinner";
 import { prepareHfTokenForUse } from "@/features/hf-auth";
@@ -35,7 +31,10 @@ import {
   subscribeJobListeners,
 } from "@/features/hub/download-manager";
 import { useT } from "@/i18n";
-import { AlertCircleIcon, WorkHistoryIcon, PackageIcon } from "@hugeicons/core-free-icons";
+import { AlertCircleIcon, Rocket01Icon } from "@hugeicons/core-free-icons";
+import { cn } from "@/lib/utils";
+import { BENCH_CARD, RUN_BUTTON } from "@/features/benchmarks/components/bench-ui";
+import { CountInput, Field } from "@/features/benchmarks/components/setup-panel";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedValue } from "@/hooks";
@@ -49,8 +48,8 @@ import {
 } from "./stores/benchmark-runtime-store";
 import { useChatRuntimeStore, useChatModelRuntime } from "@/features/chat";
 
-/** `embedded` drops the page shell and title, for a tab inside Benchmarks. */
-export function BenchmarkPage({ embedded = false }: { embedded?: boolean } = {}) {
+/** The Evals tab of the Benchmarks page: lm-eval tasks on a picked model. */
+export function BenchmarkPage() {
   const t = useT();
   const hfToken = useHfTokenStore((s) => s.token);
 
@@ -415,34 +414,26 @@ export function BenchmarkPage({ embedded = false }: { embedded?: boolean } = {})
   }, [showPanel]);
 
   return (
-    <div className={embedded ? undefined : "min-h-[calc(100dvh-var(--studio-titlebar-height,0px))] bg-background"}>
-      <main className={embedded ? undefined : "mx-auto max-w-7xl px-5 py-8 sm:px-9"}>
-        <div className={embedded ? "hidden" : "mb-8 flex flex-col gap-0.5"}>
-          <h1 className="text-[30px] font-semibold leading-[1.04] tracking-[-0.028em] text-foreground sm:text-[34px]">
-            {t("benchmark.pageTitle")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {t("benchmark.pageDescription")}
-          </p>
-        </div>
-
-        <SectionCard
-          icon={<HugeiconsIcon icon={PackageIcon} className="size-5" />}
-          title={t("benchmark.configSectionTitle")}
-          description={t("benchmark.configSectionDescription")}
-          accent="emerald"
-          featured={true}
-          className="ring-0 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)] dark:shadow-none"
+    <div className="@container/evals">
+      <div className="grid grid-cols-1 items-start gap-6 @3xl/evals:grid-cols-[calc(264px*var(--ui-space-scale,1))_minmax(0,1fr)]">
+        <div
+          className={cn(
+            BENCH_CARD,
+            "flex min-w-0 flex-col gap-6 px-5 pb-5 pt-4 @3xl/evals:sticky @3xl/evals:top-6",
+          )}
         >
+          <span className="text-ui-11 font-medium tracking-nav text-muted-foreground">
+            Setup
+          </span>
+
           {loadingCheckpoints && (
-            <div className="flex items-center gap-2 py-6 justify-center text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 text-ui-12 text-muted-foreground">
               <Spinner className="size-4" />
               {t("benchmark.loadingCheckpoints")}
             </div>
           )}
-
           {checkpointError && (
-            <div className="flex items-center gap-2 py-6 justify-center text-sm text-destructive">
+            <div className="flex items-center gap-2 text-ui-12 text-destructive">
               <HugeiconsIcon icon={AlertCircleIcon} className="size-4" />
               {checkpointError}
             </div>
@@ -450,234 +441,201 @@ export function BenchmarkPage({ embedded = false }: { embedded?: boolean } = {})
 
           {!loadingCheckpoints && !checkpointError && (
             <>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.modelLabel")}
-                  </Label>
-                  <ModelSelector
-                    models={models}
-                    loraModels={loraModels}
-                    externalModels={[]}
-                    value={selectedModel ?? undefined}
-                    activeGgufVariant={activeGgufVariant}
-                    onValueChange={handleModelChange}
-                    variant="muted" className="bg-accent!"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.taskLabel")}
-                  </Label>
-                  {loadingTasks ? (
-                    <p className="text-xs text-muted-foreground">
-                      {t("benchmark.loadingTasks")}
-                    </p>
-                  ) : (
-                    <div ref={taskAnchorRef}>
-                      <Combobox
-                        items={taskItems}
-                        filteredItems={taskItems}
-                        filter={null}
-                        value={selectedTask}
-                        onValueChange={(next) => {
-                          if (next) setSelectedTask(next);
-                        }}
-                        onInputValueChange={(next) => {
-                          if (selectingTaskRef.current) {
-                            selectingTaskRef.current = false;
-                            return;
-                          }
-                          setTaskSearch(next);
-                        }}
-                        itemToStringValue={(item) => {
-                          const t = tasks.find((t) => t.id === item);
-                          return t ? t.name : item;
-                        }}
-                        autoHighlight={true}
-                      >
-                        <ComboboxInput
-                          placeholder={t("benchmark.searchTaskPlaceholder")}
-                          className="w-full"
-                          showClear={true}
-                        />
-                        <ComboboxContent anchor={taskAnchorRef}>
-                          <ComboboxEmpty>
-                            {t("benchmark.noTasksFound")}
-                          </ComboboxEmpty>
-                          <ComboboxList>
-                            {taskItems.map((id) => {
-                              const info = tasks.find((t) => t.id === id);
-                              const tl = info?.task_type;
-                              const typeLabel = !tl ? null
-                                : tl.includes("log") ? "log likelihood"
-                                  : tl === "greedy_until" ? "generation"
-                                    : tl;
-                              return (
-                                <ComboboxItem
-                                  key={id}
-                                  value={id}
-                                  onPointerDown={() => { selectingTaskRef.current = true; }}
-                                >
-                                  <span className="truncate font-medium">
-                                    {info?.name ?? id}
-                                  </span>
-                                  {typeLabel && (
-                                    <span className="text-muted-foreground shrink-0 text-xs ml-2">
-                                      {typeLabel}
-                                    </span>
-                                  )}
-                                </ComboboxItem>
-                              );
-                            })}
-                          </ComboboxList>
-                        </ComboboxContent>
-                      </Combobox>
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.batchSizeLabel")}
-                  </Label>
-                  <div className="flex h-9 items-center gap-3 px-3">
-                    <Slider
-                      value={[batchSize === 0 ? 0 : Math.round(Math.log2(batchSize)) + 1]}
-                      onValueChange={([v]) => setBatchSize(v === 0 ? 0 : Math.pow(2, v - 1))}
-                      min={0}
-                      max={8}
-                      step={1}
-                      className="flex-1"
-                    />
-                    <Input
-                      type="number"
-                      value={batchSize > 0 ? String(batchSize) : ""}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setBatchSize(v === "" ? 0 : Math.max(0, Number(v) || 0));
-                      }}
-                      placeholder="auto"
-                      min={0}
-                      max={512}
-                      step={1}
-                      className="w-14 text-right font-mono text-xs font-medium h-7 px-1.5 [&+span]:hidden"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.outputPathLabel")}
-                  </Label>
-                  <Input
-                    type="text"
-                    value={outputPath}
-                    onChange={(e) => setOutputPath(e.target.value)}
-                    placeholder={t("benchmark.outputPathPlaceholder")}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.numFewshotLabel")}
-                  </Label>
-                  {fewshotSupported ? (
-                    <div className="flex h-9 items-center gap-3 px-3">
-                      <Slider
-                        value={[numFewshot]}
-                        onValueChange={([v]) => setNumFewshot(v)}
-                        min={0}
-                        max={20}
-                        step={1}
-                        className="flex-1"
-                      />
-                      <Input
-                        type="number"
-                        value={numFewshot}
-                        onChange={(e) => setNumFewshot(Number(e.target.value))}
-                        min={0}
-                        max={20}
-                        step={1}
-                        className="w-12 text-right font-mono text-xs font-medium h-7 px-1.5 [&+span]:hidden"
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex h-9 items-center px-3 text-xs text-muted-foreground/50">
-                      {t("benchmark.fewshotNotSupported")}
-                    </div>
-                  )}
-                </div>
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2 h-9 mt-auto">
-                    <Checkbox
-                      id="log-samples"
-                      checked={logSamples}
-                      onCheckedChange={(checked) => setLogSamples(checked === true)}
-                      className="data-[state=checked]:bg-emerald-600 data-[state=checked]:border-emerald-600"
-                    />
-                    <Label htmlFor="log-samples" className="text-sm text-muted-foreground cursor-pointer select-none">
-                      {t("benchmark.logSamplesLabel")}
-                    </Label>
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs font-medium text-muted-foreground">
-                    {t("benchmark.maxTokensLabel")}
-                  </Label>
-                  <div className="flex h-9 items-center gap-3 px-3">
-                    <Slider
-                      value={[Math.round(Math.log2(maxTokens / 1024))]}
-                      onValueChange={([v]) => setMaxTokens(1024 * Math.pow(2, v))}
-                      min={0}
-                      max={8}
-                      step={1}
-                      className="flex-1"
-                    />
-                    <span className="text-xs font-mono text-muted-foreground w-14 text-right tabular-nums">{maxTokens.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-              {isLoadingLocalModels && (
-                <p className="text-[10px] text-muted-foreground">
-                  {t("benchmark.scanningLocalModels")}
-                </p>
-              )}
-              {localModelsError && (
-                <p className="text-xs text-destructive">
-                  {localModelsError}
-                </p>
-              )}
+              <Field label={t("benchmark.modelLabel")}>
+                <ModelSelector
+                  models={models}
+                  loraModels={loraModels}
+                  externalModels={[]}
+                  value={selectedModel ?? undefined}
+                  activeGgufVariant={activeGgufVariant}
+                  onValueChange={handleModelChange}
+                  variant="muted"
+                  className="w-full bg-accent!"
+                />
+                {isLoadingLocalModels && (
+                  <span className="text-ui-11 text-muted-foreground">
+                    {t("benchmark.scanningLocalModels")}
+                  </span>
+                )}
+                {localModelsError && (
+                  <span className="text-ui-11 text-destructive">
+                    {localModelsError}
+                  </span>
+                )}
+              </Field>
 
-              <Separator />
-              {showPanel && (
-                <BenchmarkRunPanel onClose={handleClosePanel} />
-              )}
-              {showPanel && (
-                <div ref={panelEndRef} aria-hidden="true" className="h-px w-full" />
-              )}
+              <Field label={t("benchmark.taskLabel")}>
+                {loadingTasks ? (
+                  <span className="flex h-9 items-center gap-2 text-ui-12 text-muted-foreground">
+                    <Spinner className="size-3.5" />
+                    {t("benchmark.loadingTasks")}
+                  </span>
+                ) : (
+                  <div ref={taskAnchorRef}>
+                    <Combobox
+                      items={taskItems}
+                      filteredItems={taskItems}
+                      filter={null}
+                      value={selectedTask}
+                      onValueChange={(next) => {
+                        if (next) setSelectedTask(next);
+                      }}
+                      onInputValueChange={(next) => {
+                        if (selectingTaskRef.current) {
+                          selectingTaskRef.current = false;
+                          return;
+                        }
+                        setTaskSearch(next);
+                      }}
+                      itemToStringValue={(item) => {
+                        const info = tasks.find((x) => x.id === item);
+                        return info ? info.name : item;
+                      }}
+                      autoHighlight={true}
+                    >
+                      <ComboboxInput
+                        placeholder={t("benchmark.searchTaskPlaceholder")}
+                        className="w-full"
+                        showClear={true}
+                      />
+                      <ComboboxContent anchor={taskAnchorRef}>
+                        <ComboboxEmpty>{t("benchmark.noTasksFound")}</ComboboxEmpty>
+                        <ComboboxList>
+                          {taskItems.map((id) => {
+                            const info = tasks.find((x) => x.id === id);
+                            const tl = info?.task_type;
+                            const typeLabel = !tl
+                              ? null
+                              : tl.includes("log")
+                                ? "log likelihood"
+                                : tl === "greedy_until"
+                                  ? "generation"
+                                  : tl;
+                            return (
+                              <ComboboxItem
+                                key={id}
+                                value={id}
+                                onPointerDown={() => {
+                                  selectingTaskRef.current = true;
+                                }}
+                              >
+                                <span className="truncate font-medium">
+                                  {info?.name ?? id}
+                                </span>
+                                {typeLabel && (
+                                  <span className="ml-2 shrink-0 text-xs text-muted-foreground">
+                                    {typeLabel}
+                                  </span>
+                                )}
+                              </ComboboxItem>
+                            );
+                          })}
+                        </ComboboxList>
+                      </ComboboxContent>
+                    </Combobox>
+                  </div>
+                )}
+              </Field>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Field label={t("benchmark.numFewshotLabel")}>
+                  {fewshotSupported ? (
+                    <CountInput
+                      value={numFewshot}
+                      min={0}
+                      max={20}
+                      step={1}
+                      onCommit={setNumFewshot}
+                    />
+                  ) : (
+                    <span className="flex h-9 items-center text-ui-11 text-muted-foreground/60">
+                      {t("benchmark.fewshotNotSupported")}
+                    </span>
+                  )}
+                </Field>
+                <Field label={t("benchmark.batchSizeLabel")}>
+                  <Input
+                    type="number"
+                    value={batchSize > 0 ? String(batchSize) : ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setBatchSize(v === "" ? 0 : Math.max(0, Number(v) || 0));
+                    }}
+                    placeholder="auto"
+                    min={0}
+                    max={512}
+                    step={1}
+                    className="text-center font-mono tabular-nums"
+                  />
+                </Field>
+              </div>
+
+              <Field label={t("benchmark.maxTokensLabel")}>
+                <CountInput
+                  value={maxTokens}
+                  min={1024}
+                  max={262144}
+                  step={1024}
+                  onCommit={setMaxTokens}
+                />
+              </Field>
+
+              <Field label={t("benchmark.outputPathLabel")}>
+                <Input
+                  type="text"
+                  value={outputPath}
+                  onChange={(e) => setOutputPath(e.target.value)}
+                  placeholder={t("benchmark.outputPathPlaceholder")}
+                />
+                <label className="flex items-center gap-2.5 text-ui-12p5 text-foreground">
+                  <Checkbox
+                    checked={logSamples}
+                    onCheckedChange={(checked) => setLogSamples(checked === true)}
+                  />
+                  {t("benchmark.logSamplesLabel")}
+                </label>
+              </Field>
+
               {!showPanel && (
-                <div className="flex items-center justify-end">
-                  <Button disabled={!selectedModel || modelLoading || !!loadingModel || downloadingForBenchmark} onClick={handleStartAndOpenPanel}>
-                    {loadingModel ? t("benchmark.loadingModel") : downloadingForBenchmark ? t("benchmark.downloadingModel") : t("benchmark.runButton")}
-                  </Button>
-                </div>
+                <Button
+                  size="lg"
+                  className={RUN_BUTTON}
+                  disabled={
+                    !selectedModel ||
+                    modelLoading ||
+                    !!loadingModel ||
+                    downloadingForBenchmark
+                  }
+                  onClick={handleStartAndOpenPanel}
+                >
+                  <HugeiconsIcon
+                    icon={Rocket01Icon}
+                    strokeWidth={1.75}
+                    className="size-4"
+                  />
+                  {loadingModel
+                    ? t("benchmark.loadingModel")
+                    : downloadingForBenchmark
+                      ? t("benchmark.downloadingModel")
+                      : t("benchmark.runButton")}
+                </Button>
               )}
             </>
           )}
-        </SectionCard>
+        </div>
 
-        <SectionCard
-          icon={<HugeiconsIcon icon={WorkHistoryIcon} className="size-5" />}
-          title={t("benchmark.historySectionTitle")}
-          description={t("benchmark.historySectionDescription")}
-          accent="emerald"
-          className="mt-6 ring-0 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)] dark:shadow-none"
-        >
-          <BenchmarkHistoryPanel />
-        </SectionCard>
-      </main>
+        <div className="flex min-w-0 flex-col gap-4">
+          {showPanel && (
+            <section className={cn(BENCH_CARD, "p-4 sm:p-5")}>
+              <BenchmarkRunPanel onClose={handleClosePanel} />
+              <div ref={panelEndRef} aria-hidden="true" className="h-px w-full" />
+            </section>
+          )}
+          <section className={cn(BENCH_CARD, "p-4 sm:p-5")}>
+            <BenchmarkHistoryPanel />
+          </section>
+        </div>
+      </div>
     </div>
   );
 }
