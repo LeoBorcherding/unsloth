@@ -1524,6 +1524,20 @@ class UnslothTrainer:
                     modules_to_save = modules_to_save,
                 )
 
+            # Test branch only: block swap has no UI field yet, so it's read from the environment.
+            _bs_layers = int(os.environ.get("UNSLOTH_BLOCK_SWAP_LAYERS", "0") or 0)
+            if _bs_layers > 0:
+                from unsloth.models._utils import install_block_swap
+
+                _bs = install_block_swap(self.model, _bs_layers)
+                logger.info(
+                    f"Block swap: {len(_bs.blocks)} decoder layers in host RAM "
+                    f"({_bs.host_bytes() / 2**20:.0f} MiB), device pool "
+                    f"{_bs.pool_bytes() / 2**20:.0f} MiB\n"
+                )
+            else:
+                logger.info("Block swap: off (UNSLOTH_BLOCK_SWAP_LAYERS unset)\n")
+
             if self.should_stop:
                 logger.info("Stopped during LoRA configuration\n")
                 return False
