@@ -112,7 +112,7 @@ async def resolve(request: Request, model: object) -> Optional[tuple[dict, str]]
     if not _may_use_linked(request):
         raise HTTPException(
             status_code = 403,
-            detail = "Linked instances can only be used by the installation owner with an API key or UI session.",
+            detail = "Linked instances need the owner's API key as Authorization: Bearer, or a UI session. Keyless callers can't use them.",
         )
     instance = await asyncio.to_thread(linked_instances_db.get_instance_by_name, name)
     if instance is None:
