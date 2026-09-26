@@ -2162,7 +2162,7 @@ export const fr = {
         infoModels: "Modèles",
         infoNoModels: "Aucun modèle sur cette instance pour l'instant.",
         infoTunnel: "Tunnel Cloudflare",
-        infoLoopback: "Cette machine",
+        infoLoopback: "Localhost",
         infoLan: "Réseau local",
         infoPublic: "URL publique",
         infoUnknown: "Non signalé",

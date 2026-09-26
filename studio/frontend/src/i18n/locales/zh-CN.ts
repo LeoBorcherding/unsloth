@@ -2067,7 +2067,7 @@ export const zhCN = {
         infoModels: "模型",
         infoNoModels: "此实例上还没有模型。",
         infoTunnel: "Cloudflare 隧道",
-        infoLoopback: "本机",
+        infoLoopback: "Localhost",
         infoLan: "局域网",
         infoPublic: "公共 URL",
         infoUnknown: "未报告",

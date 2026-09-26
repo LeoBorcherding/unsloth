@@ -2113,7 +2113,7 @@ export const en = {
         infoModels: "Models",
         infoNoModels: "No models on this instance yet.",
         infoTunnel: "Cloudflare tunnel",
-        infoLoopback: "This machine",
+        infoLoopback: "Localhost",
         infoLan: "Local network",
         infoPublic: "Public URL",
         infoUnknown: "Not reported",

@@ -2133,7 +2133,7 @@ export const ptBR = {
         infoModels: "Modelos",
         infoNoModels: "Ainda não há modelos nesta instância.",
         infoTunnel: "Túnel do Cloudflare",
-        infoLoopback: "Esta máquina",
+        infoLoopback: "Localhost",
         infoLan: "Rede local",
         infoPublic: "URL pública",
         infoUnknown: "Não informado",

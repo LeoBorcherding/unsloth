@@ -2130,7 +2130,7 @@ export const ru = {
         infoModels: "Модели",
         infoNoModels: "На этом экземпляре пока нет моделей.",
         infoTunnel: "Туннель Cloudflare",
-        infoLoopback: "Этот компьютер",
+        infoLoopback: "Localhost",
         infoLan: "Локальная сеть",
         infoPublic: "Публичный URL",
         infoUnknown: "Нет данных",

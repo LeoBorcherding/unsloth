@@ -2152,7 +2152,7 @@ export const es = {
         infoModels: "Modelos",
         infoNoModels: "Esta instancia aún no tiene modelos.",
         infoTunnel: "Túnel de Cloudflare",
-        infoLoopback: "Este equipo",
+        infoLoopback: "Localhost",
         infoLan: "Red local",
         infoPublic: "URL pública",
         infoUnknown: "No informado",

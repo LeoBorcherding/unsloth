@@ -2111,7 +2111,7 @@ export const ko = {
         infoModels: "모델",
         infoNoModels: "이 인스턴스에는 아직 모델이 없습니다.",
         infoTunnel: "Cloudflare 터널",
-        infoLoopback: "이 컴퓨터",
+        infoLoopback: "Localhost",
         infoLan: "로컬 네트워크",
         infoPublic: "공개 URL",
         infoUnknown: "보고되지 않음",

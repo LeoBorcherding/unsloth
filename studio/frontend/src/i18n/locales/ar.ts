@@ -2118,7 +2118,7 @@ export const ar = {
         infoModels: "النماذج",
         infoNoModels: "لا توجد نماذج على هذا المثيل بعد.",
         infoTunnel: "نفق Cloudflare",
-        infoLoopback: "هذا الجهاز",
+        infoLoopback: "Localhost",
         infoLan: "الشبكة المحلية",
         infoPublic: "عنوان URL عام",
         infoUnknown: "غير مُبلَّغ عنه",

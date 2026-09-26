@@ -2091,7 +2091,7 @@ export const ja = {
         infoModels: "モデル",
         infoNoModels: "このインスタンスにはまだモデルがありません。",
         infoTunnel: "Cloudflare トンネル",
-        infoLoopback: "このマシン",
+        infoLoopback: "Localhost",
         infoLan: "ローカルネットワーク",
         infoPublic: "公開 URL",
         infoUnknown: "報告なし",

@@ -2161,7 +2161,7 @@ export const de = {
         infoModels: "Modelle",
         infoNoModels: "Auf dieser Instanz gibt es noch keine Modelle.",
         infoTunnel: "Cloudflare-Tunnel",
-        infoLoopback: "Dieser Rechner",
+        infoLoopback: "Localhost",
         infoLan: "Lokales Netzwerk",
         infoPublic: "Öffentliche URL",
         infoUnknown: "Nicht gemeldet",

@@ -171,7 +171,7 @@ export function LinkedInstanceDetailsDialog({
 
   return (
     <Dialog open={instance !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="corner-squircle dialog-soft-surface sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 font-mono">
             <span

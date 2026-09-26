@@ -2124,7 +2124,7 @@ export const hi = {
         infoModels: "मॉडल",
         infoNoModels: "इस इंस्टेंस पर अभी कोई मॉडल नहीं है।",
         infoTunnel: "Cloudflare टनल",
-        infoLoopback: "यह मशीन",
+        infoLoopback: "Localhost",
         infoLan: "लोकल नेटवर्क",
         infoPublic: "सार्वजनिक URL",
         infoUnknown: "रिपोर्ट नहीं हुआ",

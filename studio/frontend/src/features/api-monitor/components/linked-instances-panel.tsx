@@ -28,7 +28,7 @@ import { useState } from "react";
 
 const CONNECTION = {
   tunnel: "Cloudflare",
-  loopback: "This machine",
+  loopback: "Localhost",
   lan: "LAN",
   public: "Public",
 } as const;
