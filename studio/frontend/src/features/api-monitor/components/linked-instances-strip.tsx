@@ -28,9 +28,9 @@ function summary(prefix: string, status: LinkedInstanceStatus | undefined) {
 export function LinkedInstancesStrip() {
   const isOwner = useIsAccountOwner();
   const [instances, setInstances] = useState<LinkedInstance[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, LinkedInstanceStatus>>(
-    {},
-  );
+  const [statuses, setStatuses] = useState<
+    Record<string, LinkedInstanceStatus>
+  >({});
 
   useEffect(() => {
     if (!isOwner) return;
@@ -60,10 +60,14 @@ export function LinkedInstancesStrip() {
   if (!isOwner || instances.length === 0) return null;
 
   return (
-    <section className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border border-border/60 bg-card px-4 py-3">
-      <div className="flex min-w-0 items-center gap-2.5">
+    <section className="flex items-start gap-6 rounded-xl border border-border/60 bg-card px-4 py-3">
+      <div className="flex shrink-0 items-center gap-2.5">
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/40">
-          <HugeiconsIcon icon={Link01Icon} strokeWidth={1.75} className="size-4" />
+          <HugeiconsIcon
+            icon={Link01Icon}
+            strokeWidth={1.75}
+            className="size-4"
+          />
         </span>
         <div className="flex min-w-0 flex-col">
           <span className="text-ui-10 font-medium uppercase tracking-wider text-muted-foreground">
@@ -80,44 +84,46 @@ export function LinkedInstancesStrip() {
           </button>
         </div>
       </div>
-      {instances.map((instance) => {
-        const status = statuses[instance.id];
-        const prefix = `@${instance.name}/`;
-        return (
-          <div key={instance.id} className="flex min-w-0 max-w-72 flex-col">
-            <span className="flex items-center gap-1.5 font-mono text-ui-12 text-foreground">
+      <div className="flex min-w-0 flex-1 flex-wrap gap-x-6 gap-y-3">
+        {instances.map((instance) => {
+          const status = statuses[instance.id];
+          const prefix = `@${instance.name}/`;
+          return (
+            <div key={instance.id} className="flex min-w-0 max-w-72 flex-col">
+              <span className="flex items-center gap-1.5 font-mono text-ui-12 text-foreground">
+                <span
+                  aria-hidden={true}
+                  className={cn(
+                    "size-2 shrink-0 rounded-full",
+                    !status
+                      ? "animate-pulse bg-muted-foreground/50"
+                      : status.online
+                        ? "bg-emerald-500"
+                        : "bg-red-500",
+                  )}
+                />
+                @{instance.name}
+                {status?.latency_ms != null ? (
+                  <span className="font-sans text-ui-11 tabular-nums text-muted-foreground">
+                    {status.latency_ms} ms
+                  </span>
+                ) : null}
+              </span>
               <span
-                aria-hidden={true}
                 className={cn(
-                  "size-2 shrink-0 rounded-full",
-                  !status
-                    ? "animate-pulse bg-muted-foreground/50"
-                    : status.online
-                      ? "bg-emerald-500"
-                      : "bg-red-500",
+                  "truncate text-ui-12",
+                  status && !status.online
+                    ? "text-destructive"
+                    : "text-muted-foreground",
                 )}
-              />
-              @{instance.name}
-              {status?.latency_ms != null ? (
-                <span className="font-sans text-ui-11 tabular-nums text-muted-foreground">
-                  {status.latency_ms} ms
-                </span>
-              ) : null}
-            </span>
-            <span
-              className={cn(
-                "truncate text-ui-12",
-                status && !status.online
-                  ? "text-destructive"
-                  : "text-muted-foreground",
-              )}
-              title={instance.base_url}
-            >
-              {summary(prefix, status)}
-            </span>
-          </div>
-        );
-      })}
+                title={instance.base_url}
+              >
+                {summary(prefix, status)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
