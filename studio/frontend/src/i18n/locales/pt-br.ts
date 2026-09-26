@@ -2105,6 +2105,10 @@ export const ptBR = {
         remove: "Remover",
         loadError: "Não foi possível carregar as instâncias vinculadas.",
         saveError: "Não foi possível vincular a instância.",
+        edit: "Editar",
+        apiKeyKeep: "Deixe em branco para manter",
+        removeTitle: "Remover @{name}?",
+        removeDescription: "As solicitações para @{name}/… deixarão de funcionar e a chave de API salva será excluída desta máquina. A outra instância não é afetada.",
       },
       title: "API",
       description:

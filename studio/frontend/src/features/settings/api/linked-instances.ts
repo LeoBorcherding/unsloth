@@ -74,3 +74,16 @@ export async function fetchLinkedInstancesStatus(): Promise<
   if (!res.ok) throw await detail(res, "Failed to load linked instances");
   return res.json();
 }
+
+export async function updateLinkedInstance(
+  id: string,
+  input: { name?: string; base_url?: string; api_key?: string },
+): Promise<LinkedInstance> {
+  const res = await authFetch(`/api/linked-instances/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await detail(res, "Failed to update linked instance");
+  return res.json();
+}

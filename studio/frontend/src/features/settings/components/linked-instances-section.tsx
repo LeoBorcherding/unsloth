@@ -3,6 +3,14 @@
 
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -18,6 +26,7 @@ import {
   Delete02Icon,
   Link01Icon,
   MoreHorizontalIcon,
+  PencilEdit02Icon,
   RefreshIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -29,6 +38,7 @@ import {
   deleteLinkedInstance,
   fetchLinkedInstances,
   testLinkedInstance,
+  updateLinkedInstance,
 } from "../api/linked-instances";
 
 const MODELS_SHOWN = 4;
@@ -56,11 +66,13 @@ function InstanceRow({
   instance,
   status,
   onCheck,
+  onEdit,
   onRemove,
 }: {
   instance: LinkedInstance;
   status: Status;
   onCheck: () => void;
+  onEdit: () => void;
   onRemove: () => void;
 }) {
   const t = useT();
@@ -155,6 +167,10 @@ function InstanceRow({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onEdit}>
+                <HugeiconsIcon icon={PencilEdit02Icon} className="mr-2 size-3.5" />
+                {t("settings.apiKeys.linkedInstances.edit")}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void copy(prefix)}>
                 <HugeiconsIcon icon={Copy01Icon} className="mr-2 size-3.5" />
                 {t("settings.apiKeys.linkedInstances.copyPrefix")}
@@ -202,20 +218,27 @@ function InstanceRow({
   );
 }
 
-function AddInstanceForm({
-  onLinked,
+function InstanceForm({
+  editing,
+  onSaved,
+  onCancel,
 }: {
-  onLinked: (instance: LinkedInstance) => void;
+  /** The instance being edited; omitted when adding. A blank key keeps the saved one. */
+  editing?: LinkedInstance;
+  onSaved: (instance: LinkedInstance) => void;
+  onCancel?: () => void;
 }) {
   const t = useT();
   const id = useId();
-  const [name, setName] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [name, setName] = useState(editing?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? "");
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canSubmit =
-    name.trim() !== "" && baseUrl.trim() !== "" && apiKey.trim() !== "";
+    name.trim() !== "" &&
+    baseUrl.trim() !== "" &&
+    (editing !== undefined || apiKey.trim() !== "");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -223,12 +246,18 @@ function AddInstanceForm({
     setSaving(true);
     setError(null);
     try {
-      onLinked(
-        await createLinkedInstance({
-          name: name.trim(),
-          base_url: baseUrl.trim(),
-          api_key: apiKey.trim(),
-        }),
+      onSaved(
+        editing
+          ? await updateLinkedInstance(editing.id, {
+              name: name.trim(),
+              base_url: baseUrl.trim(),
+              ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+            })
+          : await createLinkedInstance({
+              name: name.trim(),
+              base_url: baseUrl.trim(),
+              api_key: apiKey.trim(),
+            }),
       );
     } catch (err) {
       setError(
@@ -261,7 +290,10 @@ function AddInstanceForm({
   return (
     <form
       onSubmit={submit}
-      className="flex flex-col gap-3 border-t border-border/60 bg-muted/10 p-4"
+      className={cn(
+        "flex flex-col gap-3 bg-muted/10 p-4",
+        !editing && "border-t border-border/60",
+      )}
     >
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)_minmax(0,11rem)]">
         {field(
@@ -300,7 +332,11 @@ function AddInstanceForm({
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={t("settings.apiKeys.linkedInstances.apiKeyPlaceholder")}
+            placeholder={
+              editing
+                ? t("settings.apiKeys.linkedInstances.apiKeyKeep")
+                : t("settings.apiKeys.linkedInstances.apiKeyPlaceholder")
+            }
             autoComplete="off"
             className="h-8 font-mono text-xs"
           />,
@@ -316,11 +352,22 @@ function AddInstanceForm({
         >
           {error ?? t("settings.apiKeys.linkedInstances.formHint")}
         </p>
-        <Button type="submit" size="sm" disabled={!canSubmit || saving}>
-          {saving
-            ? t("settings.apiKeys.linkedInstances.linking")
-            : t("settings.apiKeys.linkedInstances.link")}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {onCancel ? (
+            <Button type="button" size="sm" variant="outline" onClick={onCancel}>
+              {t("common.cancel")}
+            </Button>
+          ) : null}
+          <Button type="submit" size="sm" disabled={!canSubmit || saving}>
+            {editing
+              ? saving
+                ? t("common.saving")
+                : t("common.save")
+              : saving
+                ? t("settings.apiKeys.linkedInstances.linking")
+                : t("settings.apiKeys.linkedInstances.link")}
+          </Button>
+        </div>
       </div>
     </form>
   );
@@ -333,6 +380,11 @@ export function LinkedInstancesSection() {
     Record<string, LinkedInstanceStatus | "checking">
   >({});
   const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<LinkedInstance | null>(
+    null,
+  );
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const check = useCallback(async (instanceId: string) => {
@@ -370,12 +422,17 @@ export function LinkedInstancesSection() {
     void load();
   }, [load]);
 
-  const remove = async (instanceId: string) => {
+  const confirmRemove = async () => {
+    if (!removeTarget) return;
+    setRemoving(true);
     try {
-      await deleteLinkedInstance(instanceId);
+      await deleteLinkedInstance(removeTarget.id);
+      setRemoveTarget(null);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : null);
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -438,15 +495,18 @@ export function LinkedInstancesSection() {
           size="sm"
           variant={adding ? "outline" : "default"}
           className="min-w-20 shrink-0"
-          onClick={() => setAdding((v) => !v)}
+          onClick={() => {
+            setEditingId(null);
+            setAdding((v) => !v);
+          }}
         >
           {adding ? t("common.cancel") : t("settings.apiKeys.linkedInstances.add")}
         </Button>
       </div>
 
       {adding ? (
-        <AddInstanceForm
-          onLinked={(instance) => {
+        <InstanceForm
+          onSaved={(instance) => {
             setAdding(false);
             setInstances((prev) => [...(prev ?? []), instance]);
             void check(instance.id);
@@ -462,17 +522,68 @@ export function LinkedInstancesSection() {
 
       {instances && instances.length > 0 ? (
         <div className="divide-y divide-border/60 border-t border-border/60">
-          {instances.map((instance) => (
-            <InstanceRow
-              key={instance.id}
-              instance={instance}
-              status={statuses[instance.id]}
-              onCheck={() => void check(instance.id)}
-              onRemove={() => void remove(instance.id)}
-            />
-          ))}
+          {instances.map((instance) =>
+            editingId === instance.id ? (
+              <InstanceForm
+                key={instance.id}
+                editing={instance}
+                onCancel={() => setEditingId(null)}
+                onSaved={(saved) => {
+                  setEditingId(null);
+                  setInstances((prev) =>
+                    (prev ?? []).map((i) => (i.id === saved.id ? saved : i)),
+                  );
+                  void check(saved.id);
+                }}
+              />
+            ) : (
+              <InstanceRow
+                key={instance.id}
+                instance={instance}
+                status={statuses[instance.id]}
+                onCheck={() => void check(instance.id)}
+                onEdit={() => {
+                  setAdding(false);
+                  setEditingId(instance.id);
+                }}
+                onRemove={() => setRemoveTarget(instance)}
+              />
+            ),
+          )}
         </div>
       ) : null}
+
+      <Dialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t("settings.apiKeys.linkedInstances.removeTitle", {
+                name: removeTarget?.name ?? "",
+              })}
+            </DialogTitle>
+            <DialogDescription>
+              {t("settings.apiKeys.linkedInstances.removeDescription", {
+                name: removeTarget?.name ?? "",
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemoveTarget(null)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              onClick={() => void confirmRemove()}
+              disabled={removing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {t("settings.apiKeys.linkedInstances.remove")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
