@@ -2059,6 +2059,7 @@ export const hi = {
         checking: "जाँच हो रही है…",
         offline: "ऑफ़लाइन",
         modelCount: "{count} मॉडल",
+        modelCountOne: "1 मॉडल",
         loadedCount: "{count} लोड",
         moreModels: "+{count} और",
         checkAgain: "फिर से जाँचें",

@@ -2060,6 +2060,7 @@ export const it = {
         checking: "Verifica…",
         offline: "Offline",
         modelCount: "{count} modelli",
+        modelCountOne: "1 modello",
         loadedCount: "{count} caricati",
         moreModels: "+{count} altri",
         checkAgain: "Verifica di nuovo",

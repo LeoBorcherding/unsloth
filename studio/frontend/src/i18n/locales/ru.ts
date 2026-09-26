@@ -2065,6 +2065,7 @@ export const ru = {
         checking: "Проверка…",
         offline: "Не в сети",
         modelCount: "Моделей: {count}",
+        modelCountOne: "1 модель",
         loadedCount: "Загружено: {count}",
         moreModels: "+ещё {count}",
         checkAgain: "Проверить снова",

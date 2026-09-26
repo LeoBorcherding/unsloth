@@ -2046,6 +2046,7 @@ export const ko = {
         checking: "확인 중…",
         offline: "오프라인",
         modelCount: "모델 {count}개",
+        modelCountOne: "모델 1개",
         loadedCount: "{count}개 로드됨",
         moreModels: "+{count}개 더",
         checkAgain: "다시 확인",

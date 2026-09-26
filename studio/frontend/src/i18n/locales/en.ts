@@ -2048,6 +2048,7 @@ export const en = {
         checking: "Checking…",
         offline: "Offline",
         modelCount: "{count} models",
+        modelCountOne: "1 model",
         loadedCount: "{count} loaded",
         moreModels: "+{count} more",
         checkAgain: "Check again",

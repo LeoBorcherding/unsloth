@@ -21,7 +21,7 @@ function summary(prefix: string, status: LinkedInstanceStatus | undefined) {
   if (!status.online) return status.error ?? "Offline";
   const loaded = status.loaded[0]?.slice(prefix.length);
   if (loaded) return loaded;
-  return `${status.models.length} models, none loaded`;
+  return `${status.models.length} ${status.models.length === 1 ? "model" : "models"}, none loaded`;
 }
 
 /** Linked instances served through this base URL, beside the endpoint card. */

@@ -2097,6 +2097,7 @@ export const fr = {
         checking: "Vérification…",
         offline: "Hors ligne",
         modelCount: "{count} modèles",
+        modelCountOne: "1 modèle",
         loadedCount: "{count} chargés",
         moreModels: "+{count} de plus",
         checkAgain: "Vérifier à nouveau",

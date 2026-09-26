@@ -2026,6 +2026,7 @@ export const ja = {
         checking: "確認中…",
         offline: "オフライン",
         modelCount: "{count} 個のモデル",
+        modelCountOne: "1 個のモデル",
         loadedCount: "{count} 個読み込み済み",
         moreModels: "他 {count} 件",
         checkAgain: "再確認",

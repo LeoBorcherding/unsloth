@@ -2068,6 +2068,7 @@ export const ptBR = {
         checking: "Verificando…",
         offline: "Offline",
         modelCount: "{count} modelos",
+        modelCountOne: "1 modelo",
         loadedCount: "{count} carregados",
         moreModels: "+{count} mais",
         checkAgain: "Verificar de novo",

@@ -2053,6 +2053,7 @@ export const ar = {
         checking: "جارٍ التحقق…",
         offline: "غير متصل",
         modelCount: "{count} نماذج",
+        modelCountOne: "نموذج واحد",
         loadedCount: "{count} محمّلة",
         moreModels: "+{count} أخرى",
         checkAgain: "تحقق مجددًا",

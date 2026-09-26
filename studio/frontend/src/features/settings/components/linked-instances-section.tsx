@@ -79,9 +79,11 @@ function InstanceRow({
     meta = t("settings.apiKeys.linkedInstances.checking");
   } else if (status.online) {
     meta = [
-      t("settings.apiKeys.linkedInstances.modelCount", {
-        count: String(models.length),
-      }),
+      models.length === 1
+        ? t("settings.apiKeys.linkedInstances.modelCountOne")
+        : t("settings.apiKeys.linkedInstances.modelCount", {
+            count: String(models.length),
+          }),
       loaded.size > 0
         ? t("settings.apiKeys.linkedInstances.loadedCount", {
             count: String(loaded.size),

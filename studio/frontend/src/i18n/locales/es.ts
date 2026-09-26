@@ -2087,6 +2087,7 @@ export const es = {
         checking: "Comprobando…",
         offline: "Sin conexión",
         modelCount: "{count} modelos",
+        modelCountOne: "1 modelo",
         loadedCount: "{count} cargados",
         moreModels: "+{count} más",
         checkAgain: "Comprobar de nuevo",

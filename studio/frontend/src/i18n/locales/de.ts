@@ -2096,6 +2096,7 @@ export const de = {
         checking: "Wird geprüft…",
         offline: "Offline",
         modelCount: "{count} Modelle",
+        modelCountOne: "1 Modell",
         loadedCount: "{count} geladen",
         moreModels: "+{count} weitere",
         checkAgain: "Erneut prüfen",

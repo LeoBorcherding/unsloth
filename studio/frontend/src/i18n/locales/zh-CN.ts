@@ -2002,6 +2002,7 @@ export const zhCN = {
         checking: "正在检查…",
         offline: "离线",
         modelCount: "{count} 个模型",
+        modelCountOne: "1 个模型",
         loadedCount: "已加载 {count} 个",
         moreModels: "另有 {count} 个",
         checkAgain: "重新检查",
