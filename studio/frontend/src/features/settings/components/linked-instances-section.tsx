@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import {
   Copy01Icon,
   Delete02Icon,
+  InformationCircleIcon,
   Link01Icon,
   MoreHorizontalIcon,
   PencilEdit02Icon,
@@ -33,13 +34,17 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useCallback, useEffect, useId, useState } from "react";
 import {
   type LinkedInstance,
+  type LinkedInstanceInfo,
   type LinkedInstanceStatus,
   createLinkedInstance,
   deleteLinkedInstance,
   fetchLinkedInstances,
+  fetchLinkedInstancesInfo,
   testLinkedInstance,
   updateLinkedInstance,
 } from "../api/linked-instances";
+import { LinkedInstanceDetailsDialog } from "./linked-instance-details-dialog";
+import { acceleratorLabel, formatGb } from "./linked-instance-format";
 
 const MODELS_SHOWN = 4;
 
@@ -62,16 +67,40 @@ function StatusDot({ status }: { status: Status }) {
   );
 }
 
+/** "Unsloth 2026.9.11 · NVIDIA L4 22.5 GB · CUDA 12.8" */
+function machineSummary(info: LinkedInstanceInfo | undefined): string | null {
+  if (!info?.online) return null;
+  const gpu = info.gpus[0];
+  return [
+    info.version ? `Unsloth ${info.version}` : null,
+    gpu
+      ? [
+          info.gpus.length > 1 ? `${info.gpus.length}× ${gpu.name}` : gpu.name,
+          formatGb(gpu.vram_total_gb),
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : null,
+    acceleratorLabel(info),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function InstanceRow({
   instance,
   status,
+  info,
   onCheck,
+  onDetails,
   onEdit,
   onRemove,
 }: {
   instance: LinkedInstance;
   status: Status;
+  info: LinkedInstanceInfo | undefined;
   onCheck: () => void;
+  onDetails: () => void;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -115,9 +144,13 @@ function InstanceRow({
         <StatusDot status={status} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 items-baseline justify-between gap-3">
-            <span className="truncate font-mono text-sm font-medium text-foreground">
+            <button
+              type="button"
+              onClick={onDetails}
+              className="truncate rounded-sm font-mono text-sm font-medium text-foreground hover:underline hover:decoration-border hover:underline-offset-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
               @{instance.name}
-            </span>
+            </button>
             <span
               className={cn(
                 "shrink-0 text-ui-11 tabular-nums",
@@ -135,6 +168,11 @@ function InstanceRow({
           >
             {instance.base_url}
           </span>
+          {machineSummary(info) ? (
+            <span className="truncate text-ui-11 text-muted-foreground">
+              {machineSummary(info)}
+            </span>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <Button
@@ -167,8 +205,18 @@ function InstanceRow({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onDetails}>
+                <HugeiconsIcon
+                  icon={InformationCircleIcon}
+                  className="mr-2 size-3.5"
+                />
+                {t("settings.apiKeys.linkedInstances.details")}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={onEdit}>
-                <HugeiconsIcon icon={PencilEdit02Icon} className="mr-2 size-3.5" />
+                <HugeiconsIcon
+                  icon={PencilEdit02Icon}
+                  className="mr-2 size-3.5"
+                />
                 {t("settings.apiKeys.linkedInstances.edit")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void copy(prefix)}>
@@ -354,7 +402,12 @@ function InstanceForm({
         </p>
         <div className="flex shrink-0 items-center gap-2">
           {onCancel ? (
-            <Button type="button" size="sm" variant="outline" onClick={onCancel}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={onCancel}
+            >
               {t("common.cancel")}
             </Button>
           ) : null}
@@ -381,11 +434,20 @@ export function LinkedInstancesSection() {
   >({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<LinkedInstance | null>(
-    null,
-  );
+  const [removeTarget, setRemoveTarget] = useState<LinkedInstance | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [infos, setInfos] = useState<Record<string, LinkedInstanceInfo>>({});
+  const [detailsId, setDetailsId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const loadInfo = useCallback(async () => {
+    try {
+      const rows = await fetchLinkedInstancesInfo();
+      setInfos(Object.fromEntries(rows.map((r) => [r.id, r])));
+    } catch {
+      // Details are extra; the status line already says whether it is reachable.
+    }
+  }, []);
 
   const check = useCallback(async (instanceId: string) => {
     setStatuses((prev) => ({ ...prev, [instanceId]: "checking" }));
@@ -413,10 +475,11 @@ export function LinkedInstancesSection() {
       setInstances(loaded);
       setError(null);
       for (const instance of loaded) void check(instance.id);
+      void loadInfo();
     } catch {
       setError(t("settings.apiKeys.linkedInstances.loadError"));
     }
-  }, [t, check]);
+  }, [t, check, loadInfo]);
 
   useEffect(() => {
     void load();
@@ -456,7 +519,10 @@ export function LinkedInstancesSection() {
       <div className="flex items-center justify-between gap-4 bg-muted/30 p-4">
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/40">
-            <HugeiconsIcon icon={Link01Icon} className="size-4 text-foreground" />
+            <HugeiconsIcon
+              icon={Link01Icon}
+              className="size-4 text-foreground"
+            />
           </div>
           <div className="flex min-w-0 flex-col gap-0.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -500,7 +566,9 @@ export function LinkedInstancesSection() {
             setAdding((v) => !v);
           }}
         >
-          {adding ? t("common.cancel") : t("settings.apiKeys.linkedInstances.add")}
+          {adding
+            ? t("common.cancel")
+            : t("settings.apiKeys.linkedInstances.add")}
         </Button>
       </div>
 
@@ -534,6 +602,7 @@ export function LinkedInstancesSection() {
                     (prev ?? []).map((i) => (i.id === saved.id ? saved : i)),
                   );
                   void check(saved.id);
+                  void loadInfo();
                 }}
               />
             ) : (
@@ -541,7 +610,12 @@ export function LinkedInstancesSection() {
                 key={instance.id}
                 instance={instance}
                 status={statuses[instance.id]}
-                onCheck={() => void check(instance.id)}
+                info={infos[instance.id]}
+                onCheck={() => {
+                  void check(instance.id);
+                  void loadInfo();
+                }}
+                onDetails={() => setDetailsId(instance.id)}
                 onEdit={() => {
                   setAdding(false);
                   setEditingId(instance.id);
@@ -552,6 +626,21 @@ export function LinkedInstancesSection() {
           )}
         </div>
       ) : null}
+
+      <LinkedInstanceDetailsDialog
+        instance={instances?.find((i) => i.id === detailsId) ?? null}
+        status={(() => {
+          const s = detailsId ? statuses[detailsId] : undefined;
+          return s === "checking" ? undefined : s;
+        })()}
+        info={detailsId ? infos[detailsId] : undefined}
+        onOpenChange={(open) => !open && setDetailsId(null)}
+        onRefresh={() => {
+          if (detailsId) void check(detailsId);
+          void loadInfo();
+        }}
+        refreshing={detailsId !== null && statuses[detailsId] === "checking"}
+      />
 
       <Dialog
         open={removeTarget !== null}

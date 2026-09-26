@@ -261,3 +261,32 @@ def test_a_remote_error_fails_the_monitor_row(monkeypatch):
     response = asyncio.run(run())
     assert response.status_code == 404
     assert ("fail", ("entry-1", "model not found"), {}) in monitor.calls
+
+
+def test_info_merges_the_remotes_system_endpoints(monkeypatch):
+    instance = linked_instances_db.create_instance("colab", "http://remote", REMOTE_KEY)
+
+    def handler(request: httpx.Request):
+        assert request.headers["authorization"] == f"Bearer {REMOTE_KEY}"
+        if request.url.path == "/api/system":
+            return httpx.Response(200, json = {
+                "platform": "Linux", "cpu_count": 12, "memory": {"total_gb": 53.0},
+                "gpu": {"devices": [{"name": "NVIDIA L4", "memory_total_gb": 22.5, "vram_used_gb": 11.7}]},
+            })
+        if request.url.path == "/api/system/hardware":
+            return httpx.Response(200, json = {"versions": {"unsloth": "2026.9.1", "cuda": "12.8"}, "llama_cpp": "b1"})
+        return httpx.Response(404)
+
+    _remote(handler, monkeypatch)
+    info = asyncio.run(linked_instances.fetch_info(instance))
+    assert info["online"] and info["version"] == "2026.9.1" and info["cuda"] == "12.8"
+    assert info["gpus"] == [{"name": "NVIDIA L4", "vram_total_gb": 22.5, "vram_used_gb": 11.7, "utilization_pct": None}]
+    assert info["cpu_count"] == 12 and info["install_source"] is None
+
+
+def test_info_reports_a_rejected_key(monkeypatch):
+    instance = linked_instances_db.create_instance("colab", "http://remote", REMOTE_KEY)
+    _remote(lambda request: httpx.Response(401), monkeypatch)
+    assert asyncio.run(linked_instances.fetch_info(instance)) == {
+        "online": False, "error": "The API key was rejected."
+    }

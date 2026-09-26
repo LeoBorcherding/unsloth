@@ -339,3 +339,96 @@ async def catalog_objects(request: Optional[Request]) -> list[dict]:
 
 def forget(instance_id: str) -> None:
     _catalog_cache.pop(instance_id, None)
+
+
+# Read-only endpoints every Unsloth Studio serves to an API key, old releases included.
+_INFO_PATHS = {
+    "system": "/api/system",
+    "hardware": "/api/system/hardware?include_details=true",
+    "install": "/api/studio/install-source",
+}
+
+
+def _text(value: object, limit: int = 200) -> Optional[str]:
+    return value[:limit] if isinstance(value, str) and value else None
+
+
+def _number(value: object) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+async def _get_json(instance: dict, headers: dict, path: str) -> dict:
+    response = await _client().get(f"{instance['base_url']}{path}", headers = headers, timeout = _PROBE_TIMEOUT)
+    response.raise_for_status()
+    return _dict(response.json())
+
+
+def _gpus(system: dict, hardware: dict) -> list[dict]:
+    devices = _dict(system.get("gpu")).get("devices")
+    if isinstance(devices, list) and devices:
+        return [
+            {
+                "name": _text(d.get("name")) or "GPU",
+                "vram_total_gb": _number(d.get("memory_total_gb")),
+                "vram_used_gb": _number(d.get("vram_used_gb")),
+                "utilization_pct": _number(d.get("vram_utilization_pct")),
+            }
+            for d in devices[:16]
+            if isinstance(d, dict)
+        ]
+    listed = hardware.get("gpus")
+    if isinstance(listed, list):
+        return [
+            {"name": _text(g.get("name")) or "GPU", "vram_total_gb": _number(g.get("vram_total_gb"))}
+            for g in listed[:16]
+            if isinstance(g, dict)
+        ]
+    return []
+
+
+async def fetch_info(instance: dict) -> dict:
+    """Version, runtime and hardware of a linked instance. Each source is optional."""
+    headers = await asyncio.to_thread(_auth_headers, instance)
+    keys = list(_INFO_PATHS)
+    results = await asyncio.gather(
+        *(_get_json(instance, headers, _INFO_PATHS[k]) for k in keys), return_exceptions = True
+    )
+    parts = {k: r for k, r in zip(keys, results) if isinstance(r, dict)}
+    if not parts:
+        first = results[0]
+        if isinstance(first, httpx.HTTPStatusError) and first.response.status_code in (401, 403):
+            error = "The API key was rejected."
+        else:
+            error = "Not reachable."
+        return {"online": False, "error": error}
+    system, hardware, install = parts.get("system", {}), parts.get("hardware", {}), parts.get("install", {})
+    versions = _dict(hardware.get("versions"))
+    packages = _dict(system.get("ml_packages"))
+    memory, disk = _dict(system.get("memory")), _dict(system.get("disk"))
+    return {
+        "online": True,
+        "error": None,
+        "version": _text(install.get("current_version")) or _text(versions.get("unsloth")),
+        "install_source": _text(install.get("install_source")),
+        "update_available": install.get("update_available") is True,
+        "latest_version": _text(install.get("latest_version")),
+        "platform": _text(system.get("platform")),
+        "python_version": _text(system.get("python_version")),
+        "device_backend": _text(system.get("device_backend")),
+        "torch": _text(versions.get("torch")) or _text(packages.get("torch")),
+        "transformers": _text(versions.get("transformers")) or _text(packages.get("transformers")),
+        "cuda": _text(versions.get("cuda")),
+        "rocm": _text(versions.get("rocm")),
+        "llama_cpp": _text(hardware.get("llama_cpp")),
+        "gpus": _gpus(system, hardware),
+        "cpu_count": _number(system.get("cpu_count")),
+        "memory_total_gb": _number(memory.get("total_gb")),
+        "memory_available_gb": _number(memory.get("available_gb")),
+        "disk_total_gb": _number(disk.get("total_gb")),
+        "disk_free_gb": _number(disk.get("free_gb")),
+        "uptime_seconds": _number(system.get("uptime_seconds")),
+    }

@@ -13,6 +13,7 @@ from hub.services.models import account_access
 from models.linked_instances import (
     LinkedInstance,
     LinkedInstanceCreate,
+    LinkedInstanceInfo,
     LinkedInstanceStatus,
     LinkedInstanceUpdate,
 )
@@ -61,6 +62,15 @@ async def list_linked_instances():
 async def linked_instances_status():
     instances = await asyncio.to_thread(linked_instances_db.list_instances)
     return await asyncio.gather(*(_status(i) for i in instances))
+
+
+@router.get(
+    "/info", response_model = list[LinkedInstanceInfo], dependencies = [Depends(_require_owner_ui)]
+)
+async def linked_instances_info():
+    instances = await asyncio.to_thread(linked_instances_db.list_instances)
+    results = await asyncio.gather(*(linked_instances.fetch_info(i) for i in instances))
+    return [LinkedInstanceInfo(id = i["id"], **r) for i, r in zip(instances, results)]
 
 
 @router.post("", response_model = LinkedInstance, dependencies = [Depends(_require_owner_ui)])

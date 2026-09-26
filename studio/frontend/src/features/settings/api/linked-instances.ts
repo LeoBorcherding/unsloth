@@ -87,3 +87,44 @@ export async function updateLinkedInstance(
   if (!res.ok) throw await detail(res, "Failed to update linked instance");
   return res.json();
 }
+
+export interface LinkedInstanceGpu {
+  name: string;
+  vram_total_gb: number | null;
+  vram_used_gb: number | null;
+  utilization_pct: number | null;
+}
+
+/** What a linked instance reports about itself; older releases leave fields null. */
+export interface LinkedInstanceInfo {
+  id: string;
+  online: boolean;
+  error: string | null;
+  version: string | null;
+  install_source: string | null;
+  update_available: boolean;
+  latest_version: string | null;
+  platform: string | null;
+  python_version: string | null;
+  device_backend: string | null;
+  torch: string | null;
+  transformers: string | null;
+  cuda: string | null;
+  rocm: string | null;
+  llama_cpp: string | null;
+  gpus: LinkedInstanceGpu[];
+  cpu_count: number | null;
+  memory_total_gb: number | null;
+  memory_available_gb: number | null;
+  disk_total_gb: number | null;
+  disk_free_gb: number | null;
+  uptime_seconds: number | null;
+}
+
+export async function fetchLinkedInstancesInfo(): Promise<
+  LinkedInstanceInfo[]
+> {
+  const res = await authFetch("/api/linked-instances/info");
+  if (!res.ok) throw await detail(res, "Failed to load linked instances");
+  return res.json();
+}
