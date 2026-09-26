@@ -45,12 +45,22 @@ async def _status(instance: dict) -> LinkedInstanceStatus:
         online = result["online"],
         error = result["error"],
         models = [prefix + m["id"] for m in result["models"]],
+        loaded = [prefix + m["id"] for m in result["models"] if m.get("loaded")],
+        latency_ms = result["latency_ms"],
     )
 
 
 @router.get("", response_model = list[LinkedInstance], dependencies = [Depends(_require_owner_ui)])
 async def list_linked_instances():
     return await asyncio.to_thread(linked_instances_db.list_instances)
+
+
+@router.get(
+    "/status", response_model = list[LinkedInstanceStatus], dependencies = [Depends(_require_owner_ui)]
+)
+async def linked_instances_status():
+    instances = await asyncio.to_thread(linked_instances_db.list_instances)
+    return await asyncio.gather(*(_status(i) for i in instances))
 
 
 @router.post("", response_model = LinkedInstance, dependencies = [Depends(_require_owner_ui)])

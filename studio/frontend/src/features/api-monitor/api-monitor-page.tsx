@@ -43,6 +43,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import { LinkedInstancesStrip } from "./components/linked-instances-strip";
 import { SavedModelSettingsPanel } from "./components/saved-model-settings";
 import { isLifecycleEntry, lifecycleLabel } from "./lifecycle";
 import { unloadResident } from "./unload-resident";
@@ -878,6 +879,8 @@ export function ApiMonitorPage(): ReactElement {
           </span>
         ) : null}
       </section>
+
+      <LinkedInstancesStrip />
 
       {error || unloadError ? (
         <div className="rounded-xl border border-red-500/40 bg-red-500/5 px-4 py-3 text-sm text-red-600 dark:text-red-400">

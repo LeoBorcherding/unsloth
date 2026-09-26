@@ -11,13 +11,18 @@ model id unwrapped, and the response (JSON or SSE) is passed back untouched.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
+import socket
 import time
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
+from core.inference.api_monitor import api_monitor
 from storage import linked_instances_db
 
 MODEL_PREFIX = "@"
@@ -40,13 +45,33 @@ def _client() -> httpx.AsyncClient:
     return _http_client
 
 
+def _is_private_host(host: str) -> bool:
+    if host.lower() == "localhost" or host.lower().endswith(".localhost"):
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    addresses = {ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos}
+    return bool(addresses) and all(a.is_private or a.is_loopback for a in addresses)
+
+
 def normalize_base_url(base_url: str) -> str:
-    """Validated origin without a trailing ``/`` or ``/v1``, so either form can be pasted."""
+    """Validated origin without a trailing ``/`` or ``/v1``, so either form can be pasted.
+
+    Plain http is accepted only for loopback and private LAN hosts: the remote's key rides on
+    every request, so a public URL must be https (a Cloudflare tunnel already is).
+    """
     from core.inference.providers import validate_provider_base_url
 
     url = validate_provider_base_url(base_url)
     if url.lower().endswith("/v1"):
         url = url[:-3].rstrip("/")
+    parts = urlsplit(url)
+    if parts.scheme == "http" and not _is_private_host(parts.hostname or ""):
+        raise ValueError(
+            "Use https for a public URL. Plain http is only allowed on this machine or your LAN."
+        )
     return url
 
 
@@ -95,10 +120,92 @@ async def resolve(request: Request, model: object) -> Optional[tuple[dict, str]]
     return instance, remote_model
 
 
-async def forward(request: Request, path: str, target: tuple[dict, str]) -> Response:
-    """POST the caller's JSON body to ``<instance>/v1/<path>`` with the model id unwrapped."""
+def _prompt_preview(body: dict) -> str:
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if isinstance(message, dict) and message.get("role") == "user":
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return " ".join(
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
+    for key in ("prompt", "input"):
+        if isinstance(body.get(key), str):
+            return body[key]
+    return ""
+
+
+def _record_usage(entry_id: str, usage: object) -> None:
+    if isinstance(usage, dict):
+        api_monitor.set_usage(
+            entry_id,
+            prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens")),
+            completion_tokens = usage.get("completion_tokens", usage.get("output_tokens")),
+        )
+
+
+def _record_json(entry_id: str, payload: object) -> None:
+    """Reply text and usage from an OpenAI or Anthropic response body."""
+    if not isinstance(payload, dict):
+        return
+    text = ""
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        text = (choices[0].get("message") or {}).get("content") or choices[0].get("text") or ""
+    elif isinstance(payload.get("content"), list):
+        text = "".join(b.get("text", "") for b in payload["content"] if isinstance(b, dict))
+    if isinstance(text, str):
+        api_monitor.append_reply(entry_id, text, stamp_first_token = False)
+    _record_usage(entry_id, payload.get("usage"))
+
+
+def _record_sse_line(entry_id: str, line: str) -> None:
+    if not line.startswith("data:"):
+        return
+    try:
+        event = json.loads(line[5:].strip())
+    except ValueError:
+        return
+    if not isinstance(event, dict):
+        return
+    text = ""
+    choices = event.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        text = (choices[0].get("delta") or {}).get("content") or choices[0].get("text") or ""
+    elif event.get("type") == "content_block_delta":
+        text = (event.get("delta") or {}).get("text") or ""
+    if isinstance(text, str):
+        api_monitor.append_reply(entry_id, text)
+    _record_usage(entry_id, event.get("usage") or (event.get("message") or {}).get("usage"))
+
+
+async def forward(
+    request: Request,
+    path: str,
+    target: tuple[dict, str],
+    *,
+    subject: Optional[str] = None,
+    via_api_key: bool = False,
+) -> Response:
+    """POST the caller's JSON body to ``<instance>/v1/<path>`` with the model id unwrapped.
+
+    Logged in the API monitor like local traffic, under the ``@instance/model`` id.
+    """
     instance, remote_model = target
     body = await request.json()
+    entry_id = api_monitor.start(
+        endpoint = request.url.path,
+        method = "POST",
+        model = body.get("model") or "",
+        prompt = _prompt_preview(body),
+        subject = subject,
+        via_api_key = via_api_key,
+    )
     body["model"] = remote_model
     stream = bool(body.get("stream"))
     headers = await asyncio.to_thread(_auth_headers, instance)
@@ -118,10 +225,9 @@ async def forward(request: Request, path: str, target: tuple[dict, str]) -> Resp
     try:
         upstream = await client.send(upstream_request, stream = True)
     except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code = 502,
-            detail = f"Linked instance '{instance['name']}' is unreachable ({type(exc).__name__}).",
-        ) from exc
+        message = f"Linked instance '{instance['name']}' is unreachable ({type(exc).__name__})."
+        api_monitor.fail(entry_id, message)
+        raise HTTPException(status_code = 502, detail = message) from exc
 
     media_type = upstream.headers.get("content-type", "application/json")
     if not stream or upstream.status_code >= 400:
@@ -129,12 +235,39 @@ async def forward(request: Request, path: str, target: tuple[dict, str]) -> Resp
             content = await upstream.aread()
         finally:
             await upstream.aclose()
+        try:
+            payload = json.loads(content)
+        except ValueError:
+            payload = None
+        if upstream.status_code >= 400:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            message = error.get("message") if isinstance(error, dict) else None
+            api_monitor.fail(
+                entry_id, message or f"HTTP {upstream.status_code} from '{instance['name']}'"
+            )
+        else:
+            _record_json(entry_id, payload)
+            api_monitor.finish(entry_id)
         return Response(content, status_code = upstream.status_code, media_type = media_type)
 
     async def relay():
+        pending = ""
         try:
             async for chunk in upstream.aiter_bytes():
                 yield chunk
+                pending += chunk.decode("utf-8", errors = "replace")
+                *lines, pending = pending.split("\n")
+                for line in lines:
+                    _record_sse_line(entry_id, line.strip())
+            api_monitor.finish(entry_id)
+        except asyncio.CancelledError:
+            api_monitor.finish(entry_id, "cancelled")
+            raise
+        except Exception as exc:
+            api_monitor.fail_open(
+                entry_id, f"{type(exc).__name__} while streaming from '{instance['name']}'"
+            )
+            raise
         finally:
             await upstream.aclose()
 
@@ -159,19 +292,21 @@ async def fetch_models(instance: dict) -> list[dict]:
 
 
 async def probe(instance: dict) -> dict:
+    started = time.monotonic()
     try:
         models = await fetch_models(instance)
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
-        error = "The API key was rejected." if code in (401, 403) else f"HTTP {code}"
-        return {"online": False, "error": error, "models": []}
-    except (httpx.HTTPError, ValueError) as exc:
-        return {"online": False, "error": type(exc).__name__, "models": []}
+        error = "The API key was rejected." if code in (401, 403) else f"The instance answered HTTP {code}."
+        return {"online": False, "error": error, "models": [], "latency_ms": None}
+    except (httpx.HTTPError, ValueError):
+        return {"online": False, "error": "Not reachable.", "models": [], "latency_ms": None}
     return {
         "online": True,
         "error": None,
         # A remote's own linked models are left out: no chains, no loops.
         "models": [m for m in models if not m["id"].startswith(MODEL_PREFIX)],
+        "latency_ms": round((time.monotonic() - started) * 1000),
     }
 
 

@@ -2,10 +2,26 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { useT } from "@/i18n";
+import { copyToClipboard } from "@/lib/copy-to-clipboard";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Copy01Icon,
+  Delete02Icon,
+  Link01Icon,
+  MoreHorizontalIcon,
+  RefreshIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useCallback, useEffect, useId, useState } from "react";
 import {
   type LinkedInstance,
   type LinkedInstanceStatus,
@@ -14,136 +30,204 @@ import {
   fetchLinkedInstances,
   testLinkedInstance,
 } from "../api/linked-instances";
-import { SettingsSection } from "./settings-section";
 
-const MODELS_SHOWN = 3;
+const MODELS_SHOWN = 4;
 
-function LinkedInstanceRow({
+type Status = LinkedInstanceStatus | "checking" | undefined;
+
+function StatusDot({ status }: { status: Status }) {
+  const checking = status === undefined || status === "checking";
+  return (
+    <span
+      aria-hidden={true}
+      className={cn(
+        "size-2 shrink-0 rounded-full",
+        checking
+          ? "animate-pulse bg-muted-foreground/50"
+          : status.online
+            ? "bg-emerald-500"
+            : "bg-red-500",
+      )}
+    />
+  );
+}
+
+function InstanceRow({
   instance,
   status,
-  onTest,
+  onCheck,
   onRemove,
 }: {
   instance: LinkedInstance;
-  status: LinkedInstanceStatus | "checking" | undefined;
-  onTest: () => void;
+  status: Status;
+  onCheck: () => void;
   onRemove: () => void;
 }) {
   const t = useT();
   const checking = status === undefined || status === "checking";
-  const online = !checking && status.online;
   const models = checking ? [] : status.models;
+  const loaded = new Set(checking ? [] : status.loaded);
+  const prefix = `@${instance.name}/`;
+  const copy = async (text: string) => {
+    if (await copyToClipboard(text)) {
+      toast.success(t("settings.apiKeys.copied"));
+    }
+  };
+
+  let meta: string;
+  if (checking) {
+    meta = t("settings.apiKeys.linkedInstances.checking");
+  } else if (status.online) {
+    meta = [
+      t("settings.apiKeys.linkedInstances.modelCount", {
+        count: String(models.length),
+      }),
+      loaded.size > 0
+        ? t("settings.apiKeys.linkedInstances.loadedCount", {
+            count: String(loaded.size),
+          })
+        : null,
+      status.latency_ms != null ? `${status.latency_ms} ms` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  } else {
+    meta = status.error ?? t("settings.apiKeys.linkedInstances.offline");
+  }
+
   return (
-    <div className="flex flex-col gap-1 border-b border-border/60 py-2.5 last:border-b-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
-          aria-hidden={true}
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            checking
-              ? "bg-muted-foreground/40"
-              : online
-                ? "bg-emerald-500"
-                : "bg-destructive",
-          )}
-        />
-        <span className="font-mono text-sm font-medium text-foreground">
-          @{instance.name}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {instance.base_url}
-        </span>
-        <span className="text-xs text-muted-foreground">
-          {checking
-            ? t("settings.apiKeys.linkedInstances.checking")
-            : online
-              ? t("settings.apiKeys.linkedInstances.modelCount", {
-                  count: String(models.length),
-                })
-              : (status.error ?? t("settings.apiKeys.linkedInstances.offline"))}
-        </span>
-        <Button variant="outline" size="sm" onClick={onTest} disabled={checking}>
-          {t("settings.apiKeys.linkedInstances.test")}
-        </Button>
-        <Button variant="outline" size="sm" onClick={onRemove}>
-          {t("settings.apiKeys.linkedInstances.remove")}
-        </Button>
+    <div className="group flex flex-col gap-2 px-4 py-3 transition-colors hover:bg-accent/30">
+      <div className="flex min-w-0 items-center gap-3">
+        <StatusDot status={status} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 items-baseline justify-between gap-3">
+            <span className="truncate font-mono text-sm font-medium text-foreground">
+              @{instance.name}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 text-ui-11 tabular-nums",
+                !checking && !status.online
+                  ? "text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              {meta}
+            </span>
+          </div>
+          <span
+            className="truncate font-mono text-ui-11 text-muted-foreground"
+            title={instance.base_url}
+          >
+            {instance.base_url}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="size-7 p-0 text-muted-foreground hover:text-foreground"
+            onClick={onCheck}
+            disabled={checking}
+            aria-label={t("settings.apiKeys.linkedInstances.checkAgain")}
+            title={t("settings.apiKeys.linkedInstances.checkAgain")}
+          >
+            <HugeiconsIcon
+              icon={RefreshIcon}
+              className={cn("size-3.5", checking && "animate-spin")}
+            />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild={true}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="size-7 p-0 text-muted-foreground hover:text-foreground"
+                aria-label={t("settings.apiKeys.linkedInstances.actions", {
+                  name: instance.name,
+                })}
+              >
+                <HugeiconsIcon icon={MoreHorizontalIcon} className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => void copy(prefix)}>
+                <HugeiconsIcon icon={Copy01Icon} className="mr-2 size-3.5" />
+                {t("settings.apiKeys.linkedInstances.copyPrefix")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={onRemove}
+                className="text-destructive focus:text-destructive"
+              >
+                <HugeiconsIcon icon={Delete02Icon} className="mr-2 size-3.5" />
+                {t("settings.apiKeys.linkedInstances.remove")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       {models.length > 0 ? (
-        <p className="truncate pl-4 font-mono text-ui-11 text-muted-foreground">
-          {models.slice(0, MODELS_SHOWN).join(", ")}
-          {models.length > MODELS_SHOWN
-            ? ` +${models.length - MODELS_SHOWN}`
-            : ""}
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5 pl-5">
+          {models.slice(0, MODELS_SHOWN).map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => void copy(id)}
+              title={t("settings.apiKeys.linkedInstances.copyId")}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-2 py-0.5 font-mono text-ui-11 text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {loaded.has(id) ? (
+                <span
+                  aria-hidden={true}
+                  className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+                />
+              ) : null}
+              <span className="truncate">{id.slice(prefix.length)}</span>
+            </button>
+          ))}
+          {models.length > MODELS_SHOWN ? (
+            <span className="text-ui-11 text-muted-foreground">
+              {t("settings.apiKeys.linkedInstances.moreModels", {
+                count: String(models.length - MODELS_SHOWN),
+              })}
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
 }
 
-export function LinkedInstancesSection() {
+function AddInstanceForm({
+  onLinked,
+}: {
+  onLinked: (instance: LinkedInstance) => void;
+}) {
   const t = useT();
-  const [instances, setInstances] = useState<LinkedInstance[]>([]);
-  const [statuses, setStatuses] = useState<
-    Record<string, LinkedInstanceStatus | "checking">
-  >({});
+  const id = useId();
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const test = useCallback(async (id: string) => {
-    setStatuses((prev) => ({ ...prev, [id]: "checking" }));
-    try {
-      const status = await testLinkedInstance(id);
-      setStatuses((prev) => ({ ...prev, [id]: status }));
-    } catch (e) {
-      setStatuses((prev) => ({
-        ...prev,
-        [id]: {
-          id,
-          online: false,
-          error: e instanceof Error ? e.message : null,
-          models: [],
-        },
-      }));
-    }
-  }, []);
-
-  const load = useCallback(async () => {
-    try {
-      const loaded = await fetchLinkedInstances();
-      setInstances(loaded);
-      setError(null);
-      for (const instance of loaded) void test(instance.id);
-    } catch {
-      setError(t("settings.apiKeys.linkedInstances.loadError"));
-    }
-  }, [t, test]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   const canSubmit =
     name.trim() !== "" && baseUrl.trim() !== "" && apiKey.trim() !== "";
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit || saving) return;
     setSaving(true);
     setError(null);
     try {
-      await createLinkedInstance({
-        name: name.trim(),
-        base_url: baseUrl.trim(),
-        api_key: apiKey.trim(),
-      });
-      setName("");
-      setBaseUrl("");
-      setApiKey("");
-      await load();
+      onLinked(
+        await createLinkedInstance({
+          name: name.trim(),
+          base_url: baseUrl.trim(),
+          api_key: apiKey.trim(),
+        }),
+      );
     } catch (err) {
       setError(
         err instanceof Error
@@ -155,72 +239,238 @@ export function LinkedInstancesSection() {
     }
   };
 
-  const remove = async (id: string) => {
+  const field = (
+    key: string,
+    label: string,
+    input: React.ReactNode,
+    className?: string,
+  ) => (
+    <div className={cn("flex min-w-0 flex-col gap-1", className)}>
+      <label
+        htmlFor={`${id}-${key}`}
+        className="text-ui-11 font-medium text-muted-foreground"
+      >
+        {label}
+      </label>
+      {input}
+    </div>
+  );
+
+  return (
+    <form
+      onSubmit={submit}
+      className="flex flex-col gap-3 border-t border-border/60 bg-muted/10 p-4"
+    >
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)_minmax(0,11rem)]">
+        {field(
+          "name",
+          t("settings.apiKeys.linkedInstances.name"),
+          <Input
+            id={`${id}-name`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t("settings.apiKeys.linkedInstances.namePlaceholder")}
+            autoComplete="off"
+            spellCheck={false}
+            className="h-8 font-mono text-xs"
+            autoFocus={true}
+          />,
+        )}
+        {field(
+          "url",
+          t("settings.apiKeys.linkedInstances.url"),
+          <Input
+            id={`${id}-url`}
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder={t("settings.apiKeys.linkedInstances.urlPlaceholder")}
+            autoComplete="off"
+            spellCheck={false}
+            inputMode="url"
+            className="h-8 font-mono text-xs"
+          />,
+        )}
+        {field(
+          "key",
+          t("settings.apiKeys.linkedInstances.apiKey"),
+          <Input
+            id={`${id}-key`}
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={t("settings.apiKeys.linkedInstances.apiKeyPlaceholder")}
+            autoComplete="off"
+            className="h-8 font-mono text-xs"
+          />,
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p
+          className={cn(
+            "min-w-0 flex-1 text-ui-11 leading-snug",
+            error ? "text-destructive" : "text-muted-foreground",
+          )}
+          role={error ? "alert" : undefined}
+        >
+          {error ?? t("settings.apiKeys.linkedInstances.formHint")}
+        </p>
+        <Button type="submit" size="sm" disabled={!canSubmit || saving}>
+          {saving
+            ? t("settings.apiKeys.linkedInstances.linking")
+            : t("settings.apiKeys.linkedInstances.link")}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+export function LinkedInstancesSection() {
+  const t = useT();
+  const [instances, setInstances] = useState<LinkedInstance[] | null>(null);
+  const [statuses, setStatuses] = useState<
+    Record<string, LinkedInstanceStatus | "checking">
+  >({});
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = useCallback(async (instanceId: string) => {
+    setStatuses((prev) => ({ ...prev, [instanceId]: "checking" }));
     try {
-      await deleteLinkedInstance(id);
+      const status = await testLinkedInstance(instanceId);
+      setStatuses((prev) => ({ ...prev, [instanceId]: status }));
+    } catch (e) {
+      setStatuses((prev) => ({
+        ...prev,
+        [instanceId]: {
+          id: instanceId,
+          online: false,
+          error: e instanceof Error ? e.message : null,
+          models: [],
+          loaded: [],
+          latency_ms: null,
+        },
+      }));
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const loaded = await fetchLinkedInstances();
+      setInstances(loaded);
+      setError(null);
+      for (const instance of loaded) void check(instance.id);
+    } catch {
+      setError(t("settings.apiKeys.linkedInstances.loadError"));
+    }
+  }, [t, check]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const remove = async (instanceId: string) => {
+    try {
+      await deleteLinkedInstance(instanceId);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : null);
     }
   };
 
+  const total = instances?.length ?? 0;
+  const online = (instances ?? []).filter((i) => {
+    const s = statuses[i.id];
+    return s !== undefined && s !== "checking" && s.online;
+  }).length;
+  const settled =
+    instances !== null &&
+    instances.every((i) => {
+      const s = statuses[i.id];
+      return s !== undefined && s !== "checking";
+    });
+
   return (
-    <SettingsSection
-      title={t("settings.apiKeys.linkedInstances.title")}
-      description={t("settings.apiKeys.linkedInstances.description")}
+    <section
+      data-settings-label={t("settings.apiKeys.linkedInstances.title")}
+      className="overflow-hidden rounded-lg border border-border/70"
     >
-      <form onSubmit={handleSubmit} className="flex flex-wrap gap-2 py-2">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("settings.apiKeys.linkedInstances.namePlaceholder")}
-          aria-label={t("settings.apiKeys.linkedInstances.name")}
-          className="h-9 w-[calc(120px*var(--ui-space-scale,1))] text-sm"
-        />
-        <Input
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder={t("settings.apiKeys.linkedInstances.urlPlaceholder")}
-          aria-label={t("settings.apiKeys.linkedInstances.url")}
-          className="h-9 min-w-[calc(200px*var(--ui-space-scale,1))] flex-1 text-sm"
-        />
-        <Input
-          type="password"
-          autoComplete="off"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={t("settings.apiKeys.linkedInstances.apiKeyPlaceholder")}
-          aria-label={t("settings.apiKeys.linkedInstances.apiKey")}
-          className="h-9 w-[calc(180px*var(--ui-space-scale,1))] text-sm"
-        />
-        <Button type="submit" size="sm" disabled={!canSubmit || saving}>
-          {saving
-            ? t("settings.apiKeys.linkedInstances.adding")
-            : t("settings.apiKeys.linkedInstances.add")}
-        </Button>
-      </form>
-      {error ? (
-        <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3 text-xs text-destructive">
-          {error}
+      <div className="flex items-center justify-between gap-4 bg-muted/30 p-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/40">
+            <HugeiconsIcon icon={Link01Icon} className="size-4 text-foreground" />
+          </div>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold font-heading text-foreground">
+                {t("settings.apiKeys.linkedInstances.title")}
+              </h2>
+              <output
+                className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                aria-live="polite"
+              >
+                <span
+                  className={cn(
+                    "size-2 rounded-full",
+                    total > 0 && settled && online === total
+                      ? "bg-emerald-500"
+                      : total > 0 && settled && online < total
+                        ? "bg-amber-500"
+                        : "bg-muted-foreground",
+                  )}
+                />
+                {total === 0
+                  ? t("settings.apiKeys.linkedInstances.statusNone")
+                  : t("settings.apiKeys.linkedInstances.statusOnline", {
+                      online: String(online),
+                      total: String(total),
+                    })}
+              </output>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {t("settings.apiKeys.linkedInstances.description")}
+            </p>
+          </div>
         </div>
+        <Button
+          type="button"
+          size="sm"
+          variant={adding ? "outline" : "default"}
+          className="min-w-20 shrink-0"
+          onClick={() => setAdding((v) => !v)}
+        >
+          {adding ? t("common.cancel") : t("settings.apiKeys.linkedInstances.add")}
+        </Button>
+      </div>
+
+      {adding ? (
+        <AddInstanceForm
+          onLinked={(instance) => {
+            setAdding(false);
+            setInstances((prev) => [...(prev ?? []), instance]);
+            void check(instance.id);
+          }}
+        />
       ) : null}
-      {instances.length === 0 ? (
-        <p className="py-4 text-center text-xs text-muted-foreground">
-          {t("settings.apiKeys.linkedInstances.empty")}
+
+      {error ? (
+        <p className="border-t border-border/60 px-4 py-2.5 text-xs text-destructive">
+          {error}
         </p>
-      ) : (
-        <div className="flex flex-col">
+      ) : null}
+
+      {instances && instances.length > 0 ? (
+        <div className="divide-y divide-border/60 border-t border-border/60">
           {instances.map((instance) => (
-            <LinkedInstanceRow
+            <InstanceRow
               key={instance.id}
               instance={instance}
               status={statuses[instance.id]}
-              onTest={() => void test(instance.id)}
+              onCheck={() => void check(instance.id)}
               onRemove={() => void remove(instance.id)}
             />
           ))}
         </div>
-      )}
-    </SettingsSection>
+      ) : null}
+    </section>
   );
 }

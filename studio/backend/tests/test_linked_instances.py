@@ -191,3 +191,73 @@ def test_unknown_instance_is_a_404_and_a_forwarded_request_never_forwards_again(
 
 def test_local_model_ids_are_not_routed():
     assert asyncio.run(linked_instances.resolve(_request({}), "unsloth/Qwen3-0.6B-GGUF")) is None
+
+
+@pytest.mark.parametrize(
+    "url, ok",
+    [
+        ("http://127.0.0.1:8895/v1", True),
+        ("http://localhost:8888", True),
+        ("http://192.168.1.20:8888", True),
+        ("https://abc.trycloudflare.com", True),
+        ("http://8.8.8.8:8888", False),
+    ],
+)
+def test_plain_http_only_on_private_hosts(url, ok):
+    if ok:
+        assert linked_instances.normalize_base_url(url).startswith(url.split("/v1")[0])
+    else:
+        with pytest.raises(ValueError, match = "https"):
+            linked_instances.normalize_base_url(url)
+
+
+class _Monitor:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self.calls.append((name, args, kwargs)) or "entry-1"
+
+
+def test_forwarded_requests_show_up_in_the_api_monitor(monkeypatch):
+    linked_instances_db.create_instance("wsl", "http://remote", REMOTE_KEY)
+    monitor = _Monitor()
+    monkeypatch.setattr(linked_instances, "api_monitor", monitor)
+    _remote(
+        lambda r: httpx.Response(
+            200,
+            json = {
+                "choices": [{"message": {"content": "pong"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+            },
+        ),
+        monkeypatch,
+    )
+    body = {"model": "@wsl/unsloth/a", "messages": [{"role": "user", "content": "ping"}]}
+    request = _request(body)
+
+    async def run():
+        target = await linked_instances.resolve(request, body["model"])
+        await linked_instances.forward(request, "chat/completions", target, subject = "u")
+
+    asyncio.run(run())
+    names = [c[0] for c in monitor.calls]
+    assert names[0] == "start" and names[-1] == "finish"
+    start = monitor.calls[0][2]
+    assert start["model"] == "@wsl/unsloth/a" and start["prompt"] == "ping"
+    assert ("append_reply", ("entry-1", "pong"), {"stamp_first_token": False}) in monitor.calls
+
+
+def test_a_remote_error_fails_the_monitor_row(monkeypatch):
+    linked_instances_db.create_instance("wsl", "http://remote", REMOTE_KEY)
+    monitor = _Monitor()
+    monkeypatch.setattr(linked_instances, "api_monitor", monitor)
+    _remote(lambda r: httpx.Response(404, json = {"error": {"message": "model not found"}}), monkeypatch)
+    request = _request({"model": "@wsl/x"})
+
+    async def run():
+        return await linked_instances.forward(request, "chat/completions", await linked_instances.resolve(request, "@wsl/x"))
+
+    response = asyncio.run(run())
+    assert response.status_code == 404
+    assert ("fail", ("entry-1", "model not found"), {}) in monitor.calls

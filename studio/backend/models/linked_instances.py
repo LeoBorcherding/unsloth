@@ -33,3 +33,5 @@ class LinkedInstanceStatus(BaseModel):
     online: bool
     error: Optional[str] = None
     models: list[str] = Field(default_factory = list, description = "Model ids as this server exposes them")
+    loaded: list[str] = Field(default_factory = list, description = "The subset currently loaded on the remote")
+    latency_ms: Optional[int] = None

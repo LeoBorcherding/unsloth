@@ -25315,6 +25315,13 @@ class _DroppedFrameKeepalive:
         return True
 
 
+
+async def _forward_linked(request: Request, path: str, linked: tuple, subject: str):
+    return await linked_instances.forward(
+        request, path, linked, subject = subject, via_api_key = _request_used_api_key(request)
+    )
+
+
 @router.post("/chat/completions")
 @account_access.gpu_busy_route
 async def openai_chat_completions(
@@ -25326,7 +25333,7 @@ async def openai_chat_completions(
     from auth.authentication import request_admitted_without_credential
 
     if linked := await linked_instances.resolve(request, payload.model):
-        return await linked_instances.forward(request, "chat/completions", linked)
+        return await _forward_linked(request, "chat/completions", linked, current_subject)
 
     if (payload.provider_id or payload.provider_type) and request_admitted_without_credential(
         request
@@ -30981,7 +30988,7 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
     except (ValueError, AttributeError):
         _linked_model = None
     if linked := await linked_instances.resolve(request, _linked_model):
-        return await linked_instances.forward(request, "completions", linked)
+        return await _forward_linked(request, "completions", linked, current_subject)
     llama_backend = get_llama_cpp_backend()
 
     # Reject a request with no prompt before any automatic load so an invalid request never
@@ -34051,7 +34058,7 @@ async def openai_responses(
     (output array, input_tokens/output_tokens, named SSE events for streaming).
     """
     if linked := await linked_instances.resolve(request, payload.model):
-        return await linked_instances.forward(request, "responses", linked)
+        return await _forward_linked(request, "responses", linked, current_subject)
     _admit_tool_access(payload)
     for history_param in ("previous_response_id", "conversation"):
         if getattr(payload, history_param, None) is not None:
@@ -35267,7 +35274,7 @@ async def anthropic_count_tokens(
     max_tokens is NOT required here.
     """
     if linked := await linked_instances.resolve(request, payload.model):
-        return await linked_instances.forward(request, "messages/count_tokens", linked)
+        return await _forward_linked(request, "messages/count_tokens", linked, current_subject)
     # Reject malformed tools before the switch, like /messages, so an invalid
     # count request can't evict the loaded model.
     _validate_anthropic_client_tools(payload.tools)
@@ -35497,7 +35504,7 @@ async def anthropic_messages(
     JSON).
     """
     if linked := await linked_instances.resolve(request, payload.model):
-        return await linked_instances.forward(request, "messages", linked)
+        return await _forward_linked(request, "messages", linked, current_subject)
     _admit_tool_access(payload)
     llama_backend = get_llama_cpp_backend()
 

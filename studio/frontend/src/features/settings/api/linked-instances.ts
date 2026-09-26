@@ -16,6 +16,8 @@ export interface LinkedInstanceStatus {
   online: boolean;
   error: string | null;
   models: string[];
+  loaded: string[];
+  latency_ms: number | null;
 }
 
 async function detail(res: Response, fallback: string): Promise<Error> {
@@ -62,5 +64,13 @@ export async function testLinkedInstance(
     method: "POST",
   });
   if (!res.ok) throw await detail(res, "Failed to reach linked instance");
+  return res.json();
+}
+
+export async function fetchLinkedInstancesStatus(): Promise<
+  LinkedInstanceStatus[]
+> {
+  const res = await authFetch("/api/linked-instances/status");
+  if (!res.ok) throw await detail(res, "Failed to load linked instances");
   return res.json();
 }
