@@ -2475,8 +2475,9 @@ exit 1
         # the same security software that blocks a type can be acting on the rest of
         # the run. Only the narrower claim is true, that the installer can continue.
         Write-StudioLine "[WARN] Could not load the native path resolver ($Reason)." -ForegroundColor Yellow
-        Write-StudioLine "       Continuing with the PowerShell resolver, which cannot recover a path's" -ForegroundColor Yellow
-        Write-StudioLine "       stored casing or expand an 8.3 name, so paths are compared as written." -ForegroundColor Yellow
+        Write-StudioLine "       Continuing with the Python resolver when an interpreter can answer, else the" -ForegroundColor Yellow
+        Write-StudioLine "       PowerShell one, which cannot recover a path's stored casing or expand an 8.3" -ForegroundColor Yellow
+        Write-StudioLine "       name, so it compares paths as written." -ForegroundColor Yellow
     }
 
     function Initialize-StudioFinalPathNativeType {
@@ -2753,6 +2754,204 @@ exit 1
         return $current
     }
 
+    # Runs before the install lock: find an existing Python only. Path.resolve matches what
+    # unsloth_cli/_studio_runtime_gate.py hashes, so both sides name the same lock.
+    $script:StudioEarlyPythonProbed = $false
+    $script:StudioEarlyPython = $null
+    $script:StudioEarlyPythonProbedWithoutVenv = $false
+
+    function Get-StudioEarlyPython {
+        # This optional pre-lock probe has no ACL/ownership validation for candidates.
+        # Elevated or uninspectable Windows tokens retain the old resolver ladder.
+        try {
+            $elevation = Get-ElevationState
+            if ($elevation -eq "true" -or
+                ($elevation -ne "false" -and
+                 [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT)) { return $null }
+        } catch { return $null }
+        # A miss taken before $VenvDir existed (--tauri) is re-probed once it does.
+        $venvDirValue = $null
+        try { $venvDirValue = Get-Variable -Name VenvDir -ValueOnly -ErrorAction SilentlyContinue } catch {}
+        $venvKnown = -not [string]::IsNullOrWhiteSpace($venvDirValue)
+        if ($script:StudioEarlyPythonProbed) {
+            if (-not ($script:StudioEarlyPythonProbedWithoutVenv -and $venvKnown -and
+                      [string]::IsNullOrWhiteSpace($script:StudioEarlyPython))) {
+                return $script:StudioEarlyPython
+            }
+        }
+        $script:StudioEarlyPythonProbed = $true
+        $script:StudioEarlyPythonProbedWithoutVenv = (-not $venvKnown)
+        if ("$($env:UNSLOTH_EARLY_PYTHON_PROBE)".Trim() -eq "0") { return $null }
+        $candidates = @()
+        if ($venvKnown) {
+            # A custom UNSLOTH_STUDIO_HOME can be a shared root, and the guard refusing a venv that is
+            # not Unsloth's runs later: only run one here that the guard would accept.
+            $venvOurs = $false
+            try {
+                $mode = Get-Variable -Name StudioRedirectMode -ValueOnly -ErrorAction Stop
+                $studioHomeValue = Get-Variable -Name StudioHome -ValueOnly -ErrorAction Stop
+                # The guard's own predicates; one not yet defined this early throws, which declines.
+                $venvOurs = ($mode -ne 'env') -or
+                    (Test-Path -LiteralPath (Join-Path $venvDirValue ".unsloth-studio-owned") -PathType Leaf) -or
+                    (Test-Path -LiteralPath (Join-Path $studioHomeValue "share\studio.conf") -PathType Leaf) -or
+                    (Test-Path -LiteralPath (Join-Path $studioHomeValue "bin\unsloth.exe") -PathType Leaf) -or
+                    (Test-StudioPlainFile -Path (Join-Path $studioHomeValue ".unsloth-studio-owned")) -or
+                    (Test-UnslothCmdShimFile (Join-Path $studioHomeValue "bin\unsloth.cmd"))
+            } catch { $venvOurs = $false }
+            if ($venvOurs) {
+                $candidates += (Join-Path $venvDirValue "Scripts\python.exe")
+                $candidates += (Join-Path $venvDirValue "bin/python3")
+            }
+        }
+        foreach ($name in @("python3", "python")) {
+            try {
+                foreach ($cmd in @(Get-Command $name -All -CommandType Application -ErrorAction SilentlyContinue)) {
+                    if ($cmd -and $cmd.Source) { $candidates += $cmd.Source }
+                }
+            } catch {}
+        }
+        foreach ($candidate in $candidates) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            # Test-Path throws on an unreadable dir under Stop: skip this candidate only.
+            $isFile = $false
+            try { $isFile = Test-Path -LiteralPath $candidate -PathType Leaf } catch {}
+            if (-not $isFile) { continue }
+            # Probe the interpreter's own directory: $PSScriptRoot is empty when the script runs from memory.
+            $probeDir = $null
+            try { $probeDir = [System.IO.Path]::GetDirectoryName($candidate) } catch {}
+            if ([string]::IsNullOrWhiteSpace($probeDir)) { continue }
+            $probe = Invoke-StudioEarlyPython -Exe $candidate -Path $probeDir
+            if (-not [string]::IsNullOrWhiteSpace($probe)) {
+                $script:StudioEarlyPython = $candidate
+                return $candidate
+            }
+        }
+        return $null
+    }
+
+    function Invoke-StudioEarlyPython {
+        param(
+            [Parameter(Mandatory = $true)][string]$Exe,
+            [Parameter(Mandatory = $true)][string]$Path,
+            [int]$TimeoutMs = 10000
+        )
+        # The gate's _resolved_windows_path, strict so loops/dangling links raise. <3.8 does not follow links.
+        $script = "import pathlib,sys" + [char]10 +
+                  "sys.exit(2) if sys.version_info < (3,8) else None" + [char]10 +
+                  "sys.stdout.buffer.write(str(pathlib.Path(sys.argv[1]).resolve(strict=True)).encode('utf-8'))"
+        # Any error, incl. from Test-Path, returns $null (lexical rung).
+        try {
+            # Verbatim: Trim() would drop a trailing U+00A0, which NTFS names keep.
+            $answer = "$(Invoke-StudioEarlyPythonScript -Exe $Exe -Script $script -ScriptArgs @($Path) -TimeoutMs $TimeoutMs)"
+            if ([string]::IsNullOrWhiteSpace($answer)) { return $null }
+            if (-not [System.IO.Path]::IsPathRooted($answer)) { return $null }
+            if (-not (Test-Path -LiteralPath $answer)) { return $null }
+            return $answer
+        } catch {
+            return $null
+        }
+    }
+
+    function Invoke-StudioEarlyPythonScript {
+        param(
+            [Parameter(Mandatory = $true)][string]$Exe,
+            [Parameter(Mandatory = $true)][string]$Script,
+            [string[]]$ScriptArgs = @(),
+            [int]$TimeoutMs = 10000
+        )
+        $proc = $null
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $Exe
+            # -S as well as -I: -I still imports site, so a sitecustomize could print or hang.
+            # ArgumentList is .NET Core only; Windows PowerShell 5.1 lacks it.
+            $argv = @("-I", "-S", "-c", $Script) + $ScriptArgs
+            if ($null -ne $psi.PSObject.Properties["ArgumentList"]) {
+                foreach ($a in $argv) { $null = $psi.ArgumentList.Add($a) }
+            } else {
+                # Quote for CommandLineToArgvW, doubling trailing backslashes so "C:\dir\" keeps its quote.
+                $psi.Arguments = (@($argv | ForEach-Object {
+                    '"' + ($_ -replace '(\\+)$', '$1$1') + '"'
+                }) -join ' ')
+            }
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            # Otherwise 5.1 decodes with the console codepage and corrupts non-ASCII paths.
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.CreateNoWindow = $true
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $stdout = $proc.StandardOutput.ReadToEndAsync()
+            $null = $proc.StandardError.ReadToEndAsync()
+            if (-not $proc.WaitForExit($TimeoutMs)) {
+                try { $proc.Kill() } catch {}
+                return $null
+            }
+            if ($proc.ExitCode -ne 0) { return $null }
+            # A leftover child can hold stdout open, so the deadline bounds the read too.
+            $left = [Math]::Max(0, $TimeoutMs - [int]$clock.ElapsedMilliseconds)
+            if (-not $stdout.Wait($left)) { return $null }
+            return "$($stdout.Result)"
+        } catch {
+            return $null
+        } finally {
+            if ($proc) { try { $proc.Dispose() } catch {} }
+        }
+    }
+
+    # One child per distinct path (misses cached too).
+    $script:StudioPythonFinalPathCache = $null
+
+    function Get-StudioPythonFinalPath {
+        param([Parameter(Mandatory = $true)][string]$Path)
+        if ($null -eq $script:StudioPythonFinalPathCache) { $script:StudioPythonFinalPathCache = @{} }
+        if ($script:StudioPythonFinalPathCache.ContainsKey($Path)) {
+            return $script:StudioPythonFinalPathCache[$Path]
+        }
+        $exe = $null
+        try { $exe = Get-StudioEarlyPython } catch {}
+        # Not cached: the re-probe once $VenvDir is known may still find an interpreter.
+        if (-not $exe) { return $null }
+        $answer = Invoke-StudioEarlyPython -Exe $exe -Path $Path
+        $script:StudioPythonFinalPathCache[$Path] = $answer
+        return $answer
+    }
+
+    # Shortcut icon refresh via a child interpreter when the type cannot be defined. Cosmetic: never throws.
+    function Invoke-StudioPythonShellIconRefresh {
+        param([string[]]$Paths = @(), [string]$Exe = "", [switch]$DestinationValidated)
+        if (-not ($env:OS -eq "Windows_NT")) { return $false }
+        # Elevated, a venv interpreter runs only after the destination guard; --shortcuts-only never reaches it.
+        if (-not $DestinationValidated) {
+            try { if ((Get-ElevationState) -ne "false") { return $false } } catch { return $false }
+        }
+        # Kill switch before $Exe too: it forbids any child on this host, however the path was found.
+        if ("$($env:UNSLOTH_EARLY_PYTHON_PROBE)".Trim() -eq "0") { return $false }
+        $exe = $Exe
+        if ([string]::IsNullOrWhiteSpace($exe)) {
+            try {
+                $exe = Get-StudioEarlyPython
+            } catch { return $false }
+        }
+        if (-not $exe) { return $false }
+        # Per-item SHCNE_UPDATEITEM is required: the global broadcast misses in-place .lnk rewrites.
+        # SHCNF_FLUSH (0x1000) because the child exits at once and a queued notification is lost.
+        $script = "import ctypes,sys" + [char]10 +
+            "from ctypes import wintypes" + [char]10 +
+            "s32=ctypes.WinDLL('shell32',use_last_error=True)" + [char]10 +
+            "s32.SHChangeNotify.restype=None" + [char]10 +
+            "s32.SHChangeNotify.argtypes=[wintypes.LONG,wintypes.UINT,wintypes.LPCWSTR,wintypes.LPCWSTR]" + [char]10 +
+            "for p in sys.argv[1:]:" + [char]10 +
+            "    s32.SHChangeNotify(0x00002000,0x1005,p,None)" + [char]10 +
+            "s32.SHChangeNotify(0x08000000,0x1000,None,None)" + [char]10 +
+            "sys.stdout.write('ok')"
+        try {
+            $answer = Invoke-StudioEarlyPythonScript -Exe $exe -Script $script -ScriptArgs $Paths -TimeoutMs 10000
+        } catch { return $false }
+        return ("$answer".Trim() -eq "ok")
+    }
+
     # Exact = $true means the native resolver answered, so the string is what it
     # always was. Callers keying a lock on it use that to judge an inequality.
     function Resolve-StudioFinalPathInfo {
@@ -2768,6 +2967,13 @@ exit 1
             $leaf = [System.IO.Path]::GetFileName($existingPath)
             $parent = [System.IO.Path]::GetDirectoryName($existingPath)
             if ([string]::IsNullOrEmpty($leaf) -or [string]::IsNullOrEmpty($parent)) {
+                return [pscustomobject]@{ Path = $fullPath; Exact = $false }
+            }
+            # A dangling link/loop reads as missing; a reparse point in the stripped tail must stay inexact.
+            $strippedAttributes = $null
+            try { $strippedAttributes = [System.IO.File]::GetAttributes($existingPath) } catch { }
+            if ($null -ne $strippedAttributes -and
+                ($strippedAttributes -band [System.IO.FileAttributes]::ReparsePoint)) {
                 return [pscustomobject]@{ Path = $fullPath; Exact = $false }
             }
             $missingSegments = @($leaf) + $missingSegments
@@ -2791,9 +2997,13 @@ exit 1
                 $resolved = $null
                 if (-not $script:StudioNativeResolveWarned) {
                     $script:StudioNativeResolveWarned = $true
-                    Write-StudioLine "[WARN] Could not resolve a path with the native helper; continuing with the PowerShell resolver." -ForegroundColor Yellow
+                    Write-StudioLine "[WARN] Could not resolve a path with the native helper; continuing with the fallback resolvers." -ForegroundColor Yellow
                 }
             }
+        }
+        if ([string]::IsNullOrEmpty($resolved)) {
+            $resolved = Get-StudioPythonFinalPath -Path $existingPath
+            if (-not [string]::IsNullOrWhiteSpace($resolved)) { $exact = $true }
         }
         if ([string]::IsNullOrEmpty($resolved)) {
             $resolved = Get-StudioLexicalPath -Path $existingPath
@@ -4992,7 +5202,8 @@ exit 1
 
     function New-StudioShortcuts {
         param(
-            [Parameter(Mandatory = $true)][string]$ManagedPythonPath
+            [Parameter(Mandatory = $true)][string]$ManagedPythonPath,
+            [switch]$DestinationValidated
         )
 
         if (-not (Test-Path -LiteralPath $ManagedPythonPath)) {
@@ -5542,7 +5753,13 @@ exit 0
                         }
                         # SHCNE_ASSOCCHANGED (0x08000000) global refresh (belt-and-suspenders)
                         [UnslothShellIconRefresh]::SHChangeNotify(0x08000000, 0, $null, [System.IntPtr]::Zero)
-                    } catch {}
+                    } catch {
+                        # WDAC Dynamic Code Security refused the type: same notifications via a child.
+                        try {
+                            $null = Invoke-StudioPythonShellIconRefresh `
+                                -Paths $createdShortcutPaths -Exe $ManagedPythonPath -DestinationValidated:$DestinationValidated
+                        } catch {}
+                    }
                     if ($firstInstall -or $iconChanged) {
                         try { & "$env:SystemRoot\System32\ie4uinit.exe" -ClearIconCache 2>$null } catch {}
                         try { & "$env:SystemRoot\System32\ie4uinit.exe" -show 2>$null } catch {}
@@ -6187,6 +6404,57 @@ exit 0
 
     $script:StudioProcessImageTable = $null
     $script:StudioProcessImageWarned = $false
+    # PID -> image path via ctypes in a child, so no type is defined in this script.
+    $script:StudioPythonProcessImageTable = $null
+    $script:StudioPythonProcessImageProbed = $false
+
+    function Get-StudioPythonProcessImageTable {
+        $exe = Get-StudioEarlyPython
+        if (-not $exe) { return $null }
+        if (-not ($env:OS -eq "Windows_NT")) { return $null }
+        $probe = "import ctypes,sys" + [char]10 +
+            "from ctypes import wintypes" + [char]10 +
+            "k32=ctypes.WinDLL('kernel32',use_last_error=True)" + [char]10 +
+            "psapi=ctypes.WinDLL('psapi',use_last_error=True)" + [char]10 +
+            "k32.OpenProcess.restype=wintypes.HANDLE" + [char]10 +
+            "k32.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]" + [char]10 +
+            "k32.CloseHandle.argtypes=[wintypes.HANDLE]" + [char]10 +
+            "k32.QueryFullProcessImageNameW.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.LPWSTR,ctypes.POINTER(wintypes.DWORD)]" + [char]10 +
+            "n=1024" + [char]10 +
+            "while True:" + [char]10 +
+            "    a=(wintypes.DWORD*n)();b=wintypes.DWORD()" + [char]10 +
+            "    if not psapi.EnumProcesses(ctypes.byref(a),ctypes.sizeof(a),ctypes.byref(b)): sys.exit(3)" + [char]10 +
+            "    if b.value < ctypes.sizeof(a): break" + [char]10 +
+            "    n*=2" + [char]10 +
+            "out=[]" + [char]10 +
+            "for pid in a[:b.value//ctypes.sizeof(wintypes.DWORD)]:" + [char]10 +
+            "    if not pid: continue" + [char]10 +
+            "    h=k32.OpenProcess(0x1000,False,pid)" + [char]10 +
+            "    if not h: continue" + [char]10 +
+            "    try:" + [char]10 +
+            "        buf=ctypes.create_unicode_buffer(32768);sz=wintypes.DWORD(32768)" + [char]10 +
+            "        if k32.QueryFullProcessImageNameW(h,0,buf,ctypes.byref(sz)): out.append(str(pid)+'|'+buf.value)" + [char]10 +
+            "    finally:" + [char]10 +
+            "        k32.CloseHandle(h)" + [char]10 +
+            "sys.stdout.buffer.write('\n'.join(out).encode('utf-8'))"
+        $raw = Invoke-StudioEarlyPythonScript -Exe $exe -Script $probe -TimeoutMs 20000
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        $table = @{}
+        foreach ($line in ($raw -split "`r?`n")) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $split = $line.IndexOf('|')
+            if ($split -lt 1) { continue }
+            $pidText = $line.Substring(0, $split)
+            $path = $line.Substring($split + 1)
+            $parsed = 0
+            if (-not [int]::TryParse($pidText, [ref]$parsed)) { continue }
+            if ($parsed -le 0) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($path)) { $table[$parsed] = $path }
+        }
+        if ($table.Count -eq 0) { return $null }
+        return $table
+    }
+
     function Get-StudioProcessImagePath {
         param([Parameter(Mandatory = $true)][int]$ProcessId)
         if (Initialize-StudioProcessImageNativeType) {
@@ -6207,6 +6475,19 @@ exit 0
                 if (-not [string]::IsNullOrWhiteSpace($process.Path)) { return $process.Path }
             } catch {}
         }
+        # PROCESS_QUERY_LIMITED_INFORMATION works where PROCESS_VM_READ does not; one child per run.
+        if (-not $script:StudioPythonProcessImageProbed) {
+            $script:StudioPythonProcessImageProbed = $true
+            # A failure falls through to the WMI rung, never past it.
+            try { $script:StudioPythonProcessImageTable = Get-StudioPythonProcessImageTable } catch {
+                $script:StudioPythonProcessImageTable = $null
+            }
+        }
+        if ($script:StudioPythonProcessImageTable -and
+            $script:StudioPythonProcessImageTable.ContainsKey($ProcessId)) {
+            return $script:StudioPythonProcessImageTable[$ProcessId]
+        }
+        # Per-run PID snapshots: a reused PID reads stale; accepted.
         # Queried once per run, not once per process: this is the slow rung.
         if ($null -eq $script:StudioProcessImageTable) {
             $script:StudioProcessImageTable = @{}
@@ -8512,6 +8793,27 @@ exit 0
         return ($LASTEXITCODE -eq 0 -and $out -match '(?m)^GPU\s+\d+:')
     }
 
+    # Interpreter for the shared inventory's Python rung, deliberately NOT part of the shared
+    # region: the two files find Python in different places. Here it is the early read-only
+    # ladder from the process-image rung, which never installs anything.
+    function Get-NvidiaProbePythonExe {
+        if ("$($env:UNSLOTH_EARLY_PYTHON_PROBE)".Trim() -eq "0") { return "" }
+        # The interpreter this run installed comes FIRST, and Get-StudioEarlyPython is the
+        # fallback rather than the source.
+        #
+        # That ladder memoises, including a miss: on a fresh host with no Python of its own it
+        # is first called by the install-lock path, finds nothing, and caches $null for the rest
+        # of the run. The inventory is not read until much later, by which point this install
+        # has created a managed interpreter and then a venv, so asking the cache would decline
+        # on exactly the fresh install where nvidia-smi is also most likely to be missing. The
+        # host would take CPU wheels while holding a working NVIDIA card.
+        foreach ($candidate in @($VenvPython, $ManagedPythonPath)) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+        try { return "$(Get-StudioEarlyPython)" } catch { return "" }
+    }
+
     # ── BEGIN SHARED WITH studio/setup.ps1 (Get-NvidiaLibraryInventory) ──
     # Full paths only: a bare name searches PATH, where ZLUDA's nvcuda.dll and nvml.dll pass for NVIDIA.
     function Get-NvidiaNvmlLibraryPath {
@@ -8564,72 +8866,311 @@ exit 0
         return ($name -as [type])
     }
 
+    # The same inventory with nothing emitted: CPython's ctypes makes the identical NVML and CUDA
+    # driver calls, and the interop leaves the scanned surface rather than moving within it.
+    # A second source BENEATH the emitted one, never ahead of it: "" whenever no interpreter is
+    # available or the probe itself says nothing.
+    # Get-NvidiaProbePythonExe is deliberately per-file. The installer has its early read-only
+    # interpreter ladder; setup.ps1 has the venv a previous run already built.
+    function Read-NvidiaLibraryRawViaPython {
+        param([int]$TimeoutMs = 10000, [switch]$SkipNvml)
+        # Set only when the child is killed at the deadline, so a caller can tell a hung driver from
+        # an empty answer. Reset first: every early return below is an answer, not a timeout.
+        $script:NvidiaPythonProbeTimedOut = $false
+        if ("$($env:UNSLOTH_NVIDIA_PYTHON_PROBE)".Trim() -eq "0") { return "" }
+        $exe = ""
+        try { $exe = "$(Get-NvidiaProbePythonExe)" } catch { return "" }
+        if (-not $exe) { return "" }
+        $windows = ($env:OS -eq "Windows_NT")
+        $nvmlHint = if ($windows) { Get-NvidiaNvmlLibraryPath } else { "libnvidia-ml.so.1" }
+        $cudaHint = if ($windows) { Join-Path (Get-NvidiaSystem32Dir) "nvcuda.dll" } else { "libcuda.so.1" }
+        # Kept byte-identical with studio/nvidia_probe.py's readers by
+        # tests/studio/test_nvidia_python_probe_parity.ps1. Column 0 on purpose: this is Python.
+        $probeSource = @'
+import ctypes, os, sys
+
+
+def _names(kind, hint):
+    if os.name == "nt":
+        # The driver's full path only: a bare name also finds a CUDA stand-in such as ZLUDA
+        # beside the interpreter, and that is not an NVIDIA GPU (#11736).
+        return [hint] if hint and os.path.isabs(hint) else []
+    if kind == "nvml":
+        return ["libnvidia-ml.so.1", "libnvidia-ml.so"]
+    return ["libcuda.so.1", "libcuda.so"]
+
+
+def _load(kind, hint):
+    for name in _names(kind, hint):
+        if not name:
+            continue
+        try:
+            return ctypes.CDLL(name)
+        except Exception:
+            continue
+    return None
+
+
+def _unpack(packed):
+    return "%d;%d" % (packed // 1000, (packed % 1000) // 10)
+
+
+def read_nvml(hint):
+    lib = _load("nvml", hint)
+    if lib is None:
+        return ""
+    try:
+        if lib.nvmlInit_v2() != 0:
+            return ""
+    except Exception:
+        return ""
+    try:
+        count = ctypes.c_uint(0)
+        if lib.nvmlDeviceGetCount_v2(ctypes.byref(count)) != 0 or count.value == 0:
+            return ""
+        packed = ctypes.c_int(0)
+        if lib.nvmlSystemGetCudaDriverVersion_v2(ctypes.byref(packed)) != 0 or packed.value < 1000:
+            return ""
+        # ctypes defaults every return and every pointer argument to a C int, which truncates a
+        # 64-bit nvmlDevice_t handle. Declare both before the first call, not after.
+        handle_of = lib.nvmlDeviceGetHandleByIndex_v2
+        handle_of.restype = ctypes.c_int
+        handle_of.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_void_p)]
+        cap_of = lib.nvmlDeviceGetCudaComputeCapability
+        cap_of.restype = ctypes.c_int
+        cap_of.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int)]
+        caps = []
+        for index in range(count.value):
+            device = ctypes.c_void_p()
+            # One unreadable GPU voids the source: a partial list misleads the pre-Turing cap.
+            if handle_of(index, ctypes.byref(device)) != 0:
+                return ""
+            major = ctypes.c_int(0)
+            minor = ctypes.c_int(0)
+            if cap_of(device, ctypes.byref(major), ctypes.byref(minor)) != 0:
+                return ""
+            caps.append("%d.%d" % (major.value, minor.value))
+        return "nvml;%s;%s" % (_unpack(packed.value), ",".join(caps))
+    finally:
+        try:
+            lib.nvmlShutdown()
+        except Exception:
+            pass
+
+
+def read_cuda(hint):
+    lib = _load("cuda", hint)
+    if lib is None:
+        return ""
+    # The driver API honours CUDA_VISIBLE_DEVICES; the inventory must be the physical one, so a
+    # hidden pre-Turing card still caps the family. cuInit reads the mask once.
+    saved = os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    try:
+        init = lib.cuInit(0)
+    except Exception:
+        return ""
+    finally:
+        if saved is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = saved
+    if init != 0:
+        return ""
+    count = ctypes.c_int(0)
+    if lib.cuDeviceGetCount(ctypes.byref(count)) != 0 or count.value == 0:
+        return ""
+    packed = ctypes.c_int(0)
+    if lib.cuDriverGetVersion(ctypes.byref(packed)) != 0 or packed.value < 1000:
+        return ""
+    caps = []
+    for index in range(count.value):
+        device = ctypes.c_int(0)
+        if lib.cuDeviceGet(ctypes.byref(device), index) != 0:
+            return ""
+        major = ctypes.c_int(0)
+        minor = ctypes.c_int(0)
+        # CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75, _MINOR = 76.
+        if lib.cuDeviceGetAttribute(ctypes.byref(major), 75, device) != 0:
+            return ""
+        if lib.cuDeviceGetAttribute(ctypes.byref(minor), 76, device) != 0:
+            return ""
+        caps.append("%d.%d" % (major.value, minor.value))
+    return "cuda;%s;%s" % (_unpack(packed.value), ",".join(caps))
+
+
+def main():
+    nvml_hint = os.environ.get("UNSLOTH_NVML_HINT", "")
+    cuda_hint = os.environ.get("UNSLOTH_CUDA_HINT", "")
+    answer = ""
+    # Set only for the CUDA-only retry that follows a child NVML held past its deadline.
+    if os.environ.get("UNSLOTH_NVIDIA_PROBE_SKIP_NVML", "") != "1":
+        try:
+            answer = read_nvml(nvml_hint)
+        except Exception:
+            answer = ""
+    if not answer:
+        try:
+            answer = read_cuda(cuda_hint)
+        except Exception:
+            answer = ""
+    sys.stdout.write(answer)
+
+
+main()
+'@
+        # Cmdlets only. Constrained Language Mode refuses New-Object ProcessStartInfo and
+        # [Process]::Start, and CLM is one of the two policies that make the emitted rung decline,
+        # so this launcher has to work on exactly the hosts that need it most.
+        $tempRoot = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { "/tmp" }
+        $stem = Join-Path $tempRoot ("unsloth-nvprobe-" + [guid]::NewGuid().ToString("N"))
+        $scriptFile = "$stem.py"
+        $outFile = "$stem.out"
+        $errFile = "$stem.err"
+        $raw = ""
+        try {
+            Set-Content -LiteralPath $scriptFile -Value $probeSource -Encoding UTF8 -ErrorAction Stop
+            # Whole seconds, rounded up, without [math]::Ceiling: CLM blocks it. PowerShell's / is
+            # floating point and [int] rounds to nearest, so 10000ms must not become 11s.
+            $seconds = ($TimeoutMs - ($TimeoutMs % 1000)) / 1000
+            if (($TimeoutMs % 1000) -ne 0) { $seconds = $seconds + 1 }
+            $seconds = [int]$seconds
+            if ($seconds -lt 1) { $seconds = 1 }
+            # Nothing with a space in it reaches the command line. Windows PowerShell 5.1 appends
+            # each native argument verbatim, so a script under "C:\Users\First Last\AppData\Local\
+            # Temp" or a hint under "C:\Program Files\NVIDIA Corporation\NVSMI" would split on its
+            # spaces and the child would run something else. The script arrives on stdin and the two
+            # library hints in the environment; the only arguments left are -I -S and a bare dash.
+            $savedNvml = $env:UNSLOTH_NVML_HINT
+            $savedCuda = $env:UNSLOTH_CUDA_HINT
+            $savedSkip = $env:UNSLOTH_NVIDIA_PROBE_SKIP_NVML
+            $env:UNSLOTH_NVML_HINT = $nvmlHint
+            $env:UNSLOTH_CUDA_HINT = $cudaHint
+            # The switch reaches this child only. An inherited value must not make a first child skip NVML.
+            if ($SkipNvml) { $env:UNSLOTH_NVIDIA_PROBE_SKIP_NVML = "1" }
+            else { Remove-Item Env:UNSLOTH_NVIDIA_PROBE_SKIP_NVML -ErrorAction SilentlyContinue }
+            try {
+                $proc = Start-Process -FilePath $exe -ArgumentList @("-I", "-S", "-") -NoNewWindow -PassThru `
+                    -RedirectStandardInput $scriptFile -RedirectStandardOutput $outFile -RedirectStandardError $errFile -ErrorAction Stop
+            } finally {
+                if ($null -eq $savedNvml) { Remove-Item Env:UNSLOTH_NVML_HINT -ErrorAction SilentlyContinue }
+                else { $env:UNSLOTH_NVML_HINT = $savedNvml }
+                if ($null -eq $savedCuda) { Remove-Item Env:UNSLOTH_CUDA_HINT -ErrorAction SilentlyContinue }
+                else { $env:UNSLOTH_CUDA_HINT = $savedCuda }
+                if ($null -eq $savedSkip) { Remove-Item Env:UNSLOTH_NVIDIA_PROBE_SKIP_NVML -ErrorAction SilentlyContinue }
+                else { $env:UNSLOTH_NVIDIA_PROBE_SKIP_NVML = $savedSkip }
+            }
+            if (-not $proc) { return "" }
+            # -InputObject and an error variable, never $proc.Id or $proc.HasExited. Constrained
+            # Language Mode permits property reads only on its allowed type list and
+            # System.Diagnostics.Process is not on it, so reading either one throws on exactly the
+            # hosts this rung exists for. Handing the object to a cmdlet keeps the access inside
+            # compiled code, where the language mode does not reach.
+            $waitError = $null
+            Wait-Process -InputObject $proc -Timeout $seconds -ErrorAction SilentlyContinue -ErrorVariable waitError
+            if ($waitError) {
+                $script:NvidiaPythonProbeTimedOut = $true
+                try { Stop-Process -InputObject $proc -Force -ErrorAction SilentlyContinue } catch { }
+                # Let the killed child release its redirected files before the finally deletes them.
+                Wait-Process -InputObject $proc -Timeout 2 -ErrorAction SilentlyContinue
+                return ""
+            }
+            $raw = "$(Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue)"
+        } catch { return "" }
+        finally {
+            foreach ($stale in @($scriptFile, $outFile, $errFile)) {
+                Remove-Item -LiteralPath $stale -Force -ErrorAction SilentlyContinue
+            }
+        }
+        return "$raw".Trim()
+    }
+
     # "source;cudaMajor;cudaMinor;cap,cap" from NVML, else the CUDA driver API; "" when neither
     # answers. Versions are major*1000 + minor*10. One runspace + deadline per reader: a shared one let slow NVML starve CUDA.
+    # A wedged driver can block inside the library, and each deadline leaves its runspace behind.
+    # The Python rung below spends what the emitted rung left of ONE budget (a per-reader bound for
+    # NVML plus one for CUDA), so the worst-case wall clock is the emitted rung's own. Its first child
+    # reads NVML then the CUDA driver API under at most one per-reader bound; only when that child is
+    # killed at its bound (a hung NVML) and at least 2 s remain does a second child read the CUDA
+    # driver API alone with the rest, so a hung NVML no longer starves a healthy CUDA driver API.
     function Read-NvidiaLibraryRaw {
         param([int]$TimeoutMs = 30000)
+        $deadline = (Get-Date).AddMilliseconds($TimeoutMs * 2)
+        $native = ""
         $type = Get-NvidiaLibraryProbeType
-        if (-not $type) { return "" }
-        $reader = {
-            param($T, $Which)
-            function Read-Nvml {
-                if ($T::nvmlInit_v2() -ne 0) { return "" }
-                try {
-                    [uint32]$count = 0
-                    if ($T::nvmlDeviceGetCount_v2([ref]$count) -ne 0 -or $count -eq 0) { return "" }
+        if ($type) {
+            $reader = {
+                param($T, $Which)
+                function Read-Nvml {
+                    if ($T::nvmlInit_v2() -ne 0) { return "" }
+                    try {
+                        [uint32]$count = 0
+                        if ($T::nvmlDeviceGetCount_v2([ref]$count) -ne 0 -or $count -eq 0) { return "" }
+                        [int]$ver = 0
+                        if ($T::nvmlSystemGetCudaDriverVersion_v2([ref]$ver) -ne 0 -or $ver -lt 1000) { return "" }
+                        $caps = @()
+                        for ([uint32]$i = 0; $i -lt $count; $i++) {
+                            [IntPtr]$dev = [IntPtr]::Zero; [int]$major = 0; [int]$minor = 0
+                            # One unreadable GPU voids the source: a partial list misleads the pre-Turing cap.
+                            if ($T::nvmlDeviceGetHandleByIndex_v2($i, [ref]$dev) -ne 0) { return "" }
+                            if ($T::nvmlDeviceGetCudaComputeCapability($dev, [ref]$major, [ref]$minor) -ne 0) { return "" }
+                            $caps += "$major.$minor"
+                        }
+                        return "nvml;$([int][math]::Floor($ver / 1000));$([int][math]::Floor(($ver % 1000) / 10));$($caps -join ',')"
+                    } finally { $null = $T::nvmlShutdown() }
+                }
+                function Read-Cuda {
+                    # The driver API honours CUDA_VISIBLE_DEVICES; the inventory must be the physical one,
+                    # so a hidden pre-Turing card still caps the family. cuInit reads the mask once.
+                    $saved = $env:CUDA_VISIBLE_DEVICES
+                    Remove-Item Env:CUDA_VISIBLE_DEVICES -ErrorAction SilentlyContinue
+                    try { $init = $T::cuInit([uint32]0) } finally { if ($null -ne $saved) { $env:CUDA_VISIBLE_DEVICES = $saved } }
+                    if ($init -ne 0) { return "" }
+                    [int]$count = 0
+                    if ($T::cuDeviceGetCount([ref]$count) -ne 0 -or $count -eq 0) { return "" }
                     [int]$ver = 0
-                    if ($T::nvmlSystemGetCudaDriverVersion_v2([ref]$ver) -ne 0 -or $ver -lt 1000) { return "" }
+                    if ($T::cuDriverGetVersion([ref]$ver) -ne 0 -or $ver -lt 1000) { return "" }
                     $caps = @()
-                    for ([uint32]$i = 0; $i -lt $count; $i++) {
-                        [IntPtr]$dev = [IntPtr]::Zero; [int]$major = 0; [int]$minor = 0
-                        # One unreadable GPU voids the source: a partial list misleads the pre-Turing cap.
-                        if ($T::nvmlDeviceGetHandleByIndex_v2($i, [ref]$dev) -ne 0) { return "" }
-                        if ($T::nvmlDeviceGetCudaComputeCapability($dev, [ref]$major, [ref]$minor) -ne 0) { return "" }
+                    for ($i = 0; $i -lt $count; $i++) {
+                        [int]$dev = 0; [int]$major = 0; [int]$minor = 0
+                        if ($T::cuDeviceGet([ref]$dev, $i) -ne 0) { return "" }
+                        # CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75, _MINOR = 76.
+                        if ($T::cuDeviceGetAttribute([ref]$major, 75, $dev) -ne 0) { return "" }
+                        if ($T::cuDeviceGetAttribute([ref]$minor, 76, $dev) -ne 0) { return "" }
                         $caps += "$major.$minor"
                     }
-                    return "nvml;$([int][math]::Floor($ver / 1000));$([int][math]::Floor(($ver % 1000) / 10));$($caps -join ',')"
-                } finally { $null = $T::nvmlShutdown() }
-            }
-            function Read-Cuda {
-                # The driver API honours CUDA_VISIBLE_DEVICES; the inventory must be the physical one,
-                # so a hidden pre-Turing card still caps the family. cuInit reads the mask once.
-                $saved = $env:CUDA_VISIBLE_DEVICES
-                Remove-Item Env:CUDA_VISIBLE_DEVICES -ErrorAction SilentlyContinue
-                try { $init = $T::cuInit([uint32]0) } finally { if ($null -ne $saved) { $env:CUDA_VISIBLE_DEVICES = $saved } }
-                if ($init -ne 0) { return "" }
-                [int]$count = 0
-                if ($T::cuDeviceGetCount([ref]$count) -ne 0 -or $count -eq 0) { return "" }
-                [int]$ver = 0
-                if ($T::cuDriverGetVersion([ref]$ver) -ne 0 -or $ver -lt 1000) { return "" }
-                $caps = @()
-                for ($i = 0; $i -lt $count; $i++) {
-                    [int]$dev = 0; [int]$major = 0; [int]$minor = 0
-                    if ($T::cuDeviceGet([ref]$dev, $i) -ne 0) { return "" }
-                    # CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75, _MINOR = 76.
-                    if ($T::cuDeviceGetAttribute([ref]$major, 75, $dev) -ne 0) { return "" }
-                    if ($T::cuDeviceGetAttribute([ref]$minor, 76, $dev) -ne 0) { return "" }
-                    $caps += "$major.$minor"
+                    return "cuda;$([int][math]::Floor($ver / 1000));$([int][math]::Floor(($ver % 1000) / 10));$($caps -join ',')"
                 }
-                return "cuda;$([int][math]::Floor($ver / 1000));$([int][math]::Floor(($ver % 1000) / 10));$($caps -join ',')"
+                $r = ""
+                try { if ($Which -eq "nvml") { $r = Read-Nvml } else { $r = Read-Cuda } } catch { $r = "" }
+                return "$r"
             }
-            $r = ""
-            try { if ($Which -eq "nvml") { $r = Read-Nvml } else { $r = Read-Cuda } } catch { $r = "" }
-            return "$r"
+            foreach ($which in @("nvml", "cuda")) {
+                $ps = $null; $handle = $null; $r = ""
+                try {
+                    $ps = [powershell]::Create()
+                    $null = $ps.AddScript($reader.ToString()).AddArgument($type).AddArgument($which)
+                    $handle = $ps.BeginInvoke()
+                    if ($handle.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+                        $r = "$(@($ps.EndInvoke($handle)) | Select-Object -Last 1)"
+                    }
+                } catch { $r = "" }
+                finally { if ($ps -and $handle -and $handle.IsCompleted) { $ps.Dispose() } }
+                if ($r) { $native = $r; break }
+            }
         }
-        foreach ($which in @("nvml", "cuda")) {
-            $ps = $null; $handle = $null; $r = ""
-            try {
-                $ps = [powershell]::Create()
-                $null = $ps.AddScript($reader.ToString()).AddArgument($type).AddArgument($which)
-                $handle = $ps.BeginInvoke()
-                if ($handle.AsyncWaitHandle.WaitOne($TimeoutMs)) {
-                    $r = "$(@($ps.EndInvoke($handle)) | Select-Object -Last 1)"
-                }
-            } catch { $r = "" }
-            finally { if ($ps -and $handle -and $handle.IsCompleted) { $ps.Dispose() } }
-            if ($r) { return $r }
-        }
-        return ""
+        if ($native) { return $native }
+        $remainingMs = [int]($deadline - (Get-Date)).TotalMilliseconds
+        # Not worth a child process we cannot wait out; the emitted rung already spent the budget.
+        if ($remainingMs -lt 3000) { return "" }
+        # Each child gets at most one per-reader bound, compared by hand: CLM refuses [math]. 2 s of
+# every child's share is kept back for reaping it if it hangs, so the pair ends inside the deadline.
+        $childMs = $remainingMs - 2000; if ($childMs -gt $TimeoutMs) { $childMs = $TimeoutMs }
+        $raw = ""
+        try { $raw = Read-NvidiaLibraryRawViaPython -TimeoutMs $childMs } catch { return "" }
+        # Only a first child killed at its bound (a hung NVML) earns a CUDA-only child, with what is left.
+        if (-not $script:NvidiaPythonProbeTimedOut) { return $raw }
+        $remainingMs = [int]($deadline - (Get-Date)).TotalMilliseconds
+        if ($remainingMs -lt 3000) { return "" }
+        $childMs = $remainingMs - 2000; if ($childMs -gt $TimeoutMs) { $childMs = $TimeoutMs }
+        try { return (Read-NvidiaLibraryRawViaPython -TimeoutMs $childMs -SkipNvml) } catch { return "" }
     }
 
     # NVIDIA inventory from the driver's own libraries (NVML, then the CUDA driver API), for a
@@ -8748,9 +9289,13 @@ exit 0
         }
     }
     if (-not $HasNvidiaSmi -and (Get-NvidiaLibraryInventory)) {
-        # Same promotion as setup.ps1: the gates below read $HasNvidiaSmi as "NVIDIA GPU present".
-        $HasNvidiaSmi = $true
-        Write-StudioLine "   NVIDIA GPU found through the driver library; nvidia-smi is unavailable" -ForegroundColor Gray
+        # A driver too old for any CUDA wheel (below 11) is no GPU this route can serve: the Intel and
+        # AMD routes still get their turn instead of the install falling to CPU.
+        if ((Get-NvidiaLibraryInventory).CudaMajor -ge 11) {
+            # Same promotion as setup.ps1: the gates below read $HasNvidiaSmi as "NVIDIA GPU present".
+            $HasNvidiaSmi = $true
+            Write-StudioLine "   NVIDIA GPU found through the driver library; nvidia-smi is unavailable" -ForegroundColor Gray
+        }
     }
     # nvidia-smi was already resolved above and never asked which card it found, so the
     # banner said "NVIDIA GPU detected" on every NVIDIA host alike. compute_cap is the
@@ -11251,7 +11796,7 @@ sys.exit(2 if conflict else (0 if installed else 1))
     }
 
     # New-StudioShortcuts gates the .lnk shortcuts on env-mode internally.
-    New-StudioShortcuts -ManagedPythonPath $VenvPython
+    New-StudioShortcuts -ManagedPythonPath $VenvPython -DestinationValidated
 
     # Compare content hashes so hardlinks and identical copies do not false-trigger.
     try {
