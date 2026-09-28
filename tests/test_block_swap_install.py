@@ -471,3 +471,12 @@ def test_fastmodel_refuses_the_same_load_modes_before_trimming():
             n.lineno for n in ast.walk(fn) if isinstance(n, ast.Raise) and needle in ast.unparse(n)
         ]
         assert hits and min(hits) < trim, needle
+
+
+def test_host_built_layers_get_the_checkpointing_function_with_the_flag():
+    # A layer with gradient_checkpointing = True but no _gradient_checkpointing_func
+    # raises AttributeError on its first forward (Qwen3.5).
+    src = open(UTILS, encoding = "utf-8").read()
+    fn = next(n for n in ast.parse(src).body
+              if isinstance(n, ast.FunctionDef) and n.name == "attach_block_swap_layers")
+    assert "'_gradient_checkpointing_func'" in ast.unparse(fn)

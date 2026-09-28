@@ -5428,7 +5428,8 @@ def attach_block_swap_layers(
         )
     finally:
         del handles
-    # Carry over plain attributes post_patch set on loaded layers (Gemma's norm variance_epsilon).
+    # Carry over plain attributes post_patch set on loaded layers (Gemma's norm variance_epsilon),
+    # and the checkpointing function that goes with the gradient_checkpointing flag.
     reference = dict(layers[0].named_modules())
     for layer in new:
         for name, module in layer.named_modules():
@@ -5436,7 +5437,9 @@ def attach_block_swap_layers(
             if ref is None:
                 continue
             for key, value in vars(ref).items():
-                if key.startswith("_") or key in vars(module):
+                if key.startswith("_") and key != "_gradient_checkpointing_func":
+                    continue
+                if key in vars(module):
                     continue
                 if not isinstance(value, (torch.Tensor, torch.nn.Module)):
                     setattr(module, key, value)
