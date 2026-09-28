@@ -43,6 +43,7 @@ from .loader_utils import (
     planner_quantization_kwargs,
     requested_device_map,
     resolve_unsloth_device_map,
+    warn_if_bitsandbytes_quantized_nothing,
 )
 from ..utils.packing import (
     get_packed_info_from_kwargs,
@@ -2454,6 +2455,23 @@ class FastLlamaModel:
         # HF gets it again through **kwargs alongside our config= and fails with a duplicate kwarg.
         user_config = kwargs.pop("config", None)
         block_swap_layers = kwargs.pop("block_swap_layers", 0)
+        if block_swap_layers and kwargs.get("state_dict") is not None:
+            raise ValueError(
+                "Unsloth: from_pretrained(block_swap_layers = ...) does not take a state_dict; "
+                "save it as a safetensors checkpoint and load that."
+            )
+        if block_swap_layers and kwargs.get("quantization_config") is not None:
+            raise ValueError(
+                "Unsloth: from_pretrained(block_swap_layers = ...) does not take a quantization_config; "
+                "pass load_in_4bit = True instead."
+            )
+        if block_swap_layers and (
+            kwargs.get("gguf_file") or kwargs.get("use_safetensors") is False
+        ):
+            raise ValueError(
+                "Unsloth: from_pretrained(block_swap_layers = ...) needs a safetensors checkpoint; "
+                "it does not support gguf_file or use_safetensors = False."
+            )
         if user_config is not None:
             model_config = user_config
             # model_name may have been remapped to a prequantized repo whose checkpoint needs its
@@ -2606,8 +2624,44 @@ class FastLlamaModel:
 
         # Disable bitsandbytes loading if the model has non-bitsandbytes quantization.
         load_in_4bit, load_in_8bit, _ckpt_quant_method = check_and_disable_bitsandbytes_loading(
-            model_config, load_in_4bit = load_in_4bit, load_in_8bit = load_in_8bit
+            model_config,
+            load_in_4bit = load_in_4bit,
+            load_in_8bit = load_in_8bit,
+            rewrite_modelopt = not _vllm_will_load_weights(fast_inference, num_labels),
+            token = token,
+            model_name = model_name,
+            revision = revision,
+            hub_kwargs = {
+                "cache_dir": kwargs.get("cache_dir"),
+                "subfolder": kwargs.get("subfolder"),
+                "local_files_only": kwargs.get("local_files_only", False),
+            },
         )
+        if block_swap_layers and load_in_8bit:
+            raise ValueError(
+                "Unsloth: block_swap_layers supports 16-bit and 4-bit loads, not load_in_8bit."
+            )
+        if block_swap_layers and _ckpt_quant_method not in (None, "bitsandbytes"):
+            # The host tail is rebuilt as dense or bnb 4-bit layers; packed formats would not survive it.
+            raise ValueError(
+                f"Unsloth: from_pretrained(block_swap_layers = ...) does not support {_ckpt_quant_method} "
+                "checkpoints; use a bitsandbytes or 16-bit checkpoint."
+            )
+        from .modelopt_fp8 import (
+            keep_fp8_scale_names_on_save,
+            move_config_overrides_onto_config,
+            keep_task_heads_unquantized,
+            modelopt_planner_quantization_config,
+            modelopt_rewritten,
+            pop_modelopt_key_mapping,
+        )
+
+        _modelopt_rewritten = modelopt_rewritten(model_config)
+        if _modelopt_rewritten:
+            verify_fp8_support_if_applicable(model_config)
+        if _modelopt_rewritten and num_labels is not None:
+            keep_task_heads_unquantized(model_config, AutoModelForSequenceClassification)
+        pop_modelopt_key_mapping(model_config, kwargs)
         # Correct UNSLOTH_MODEL_NAME's bnb tokens now the effective bnb state is known (the per-load env
         # was built before remap/disable). gpt-oss only.
         sync_unsloth_model_name_bnb_flags(load_in_4bit, load_in_8bit)
@@ -2623,7 +2677,11 @@ class FastLlamaModel:
         if _planner_skip_reason is None and num_labels is not None:
             _planner_skip_reason = (
                 planner_class_mismatch_reason(
-                    resolve_model_class(AutoModelForSequenceClassification, model_config),
+                    resolve_model_class(
+                        AutoModelForSequenceClassification,
+                        model_config,
+                        trust_remote_code = trust_remote_code,
+                    ),
                     planner_model_class(model_config, trust_remote_code = trust_remote_code),
                 )
                 or "num_labels loads a task head the repo config does not describe"
@@ -2670,6 +2728,9 @@ class FastLlamaModel:
                 load_in_4bit = load_in_4bit,
                 load_in_8bit = load_in_8bit,
                 quantization_config = kwargs.get("quantization_config", None),
+                rewritten_quantization_config = modelopt_planner_quantization_config(model_config)
+                if _modelopt_rewritten
+                else None,
                 # The same extra the bnb config below adds.
                 extra_skip_modules = ["out_proj"] if IS_FALCON_H1 else None,
             ),
@@ -2725,9 +2786,16 @@ class FastLlamaModel:
                 "Unsloth: from_pretrained(block_swap_layers = ...) does not support "
                 "fast_inference or classification heads."
             )
-        # The swapped tail skips the standard load and is built straight in host
-        # RAM afterwards, so a model larger than the card can load at all.
+        if block_swap_layers:
+            import copy as _copy
+
+            # Trim a copy: HF deep-copies config= anyway, so a trimmed caller config would stay short.
+            model_config = _copy.deepcopy(model_config)
+        # Swapped tail is built in host RAM afterwards so models larger than the card load.
         _block_swap_saved = trim_config_for_block_swap(model_config, block_swap_layers)
+        _undo_block_swap_keys = skip_swapped_checkpoint_keys(
+            _block_swap_saved, model_config.num_hidden_layers
+        )
 
         raise_handler = RaiseUninitialized()
         try:
@@ -2765,6 +2833,9 @@ class FastLlamaModel:
                         and not _head.weight.is_floating_point()
                     ):
                         _head.to(dtype)
+                warn_if_bitsandbytes_quantized_nothing(
+                    model, kwargs.get("quantization_config", None), model_name
+                )
                 # Attach dispatch hooks for bnb multi-device loads. The hooks stand aside only when vLLM
                 # owns the weights, which it never does here: vLLM has no classification head, so this
                 # branch loaded the weights in-process even though the caller asked for fast_inference.
@@ -2793,13 +2864,19 @@ class FastLlamaModel:
                     subfolder = kwargs.get("subfolder"),
                     cache_dir = kwargs.get("cache_dir"),
                     variant = kwargs.get("variant"),
+                    dtype = dtype,
                 )
             elif not fast_inference:
-                if user_config is not None or _block_swap_saved is not None:
+                if user_config is not None or _modelopt_rewritten or _block_swap_saved is not None:
                     # Transformers 5.x @strict model init rejects extra kwargs next to config=, so set the override
                     # on the config and pass the single config object through.
                     if max_position_embeddings is not None:
                         model_config.max_position_embeddings = max_position_embeddings
+                    _rope_scaling = kwargs.pop("rope_scaling", None)
+                    if _rope_scaling is not None:
+                        model_config.rope_scaling = _rope_scaling
+                    if _modelopt_rewritten and user_config is None:
+                        move_config_overrides_onto_config(model_config, kwargs)
                     model = AutoModelForCausalLM.from_pretrained(
                         model_name,
                         config = model_config,
@@ -2821,6 +2898,9 @@ class FastLlamaModel:
                         revision = revision,
                         **kwargs,
                     )
+                warn_if_bitsandbytes_quantized_nothing(
+                    model, kwargs.get("quantization_config", None), model_name
+                )
                 from unsloth.models.vision import _attach_bnb_multidevice_hooks
                 from unsloth.models._remote_code_buffers import (
                     restore_remote_code_non_persistent_buffers,
@@ -2846,6 +2926,7 @@ class FastLlamaModel:
                     subfolder = kwargs.get("subfolder"),
                     cache_dir = kwargs.get("cache_dir"),
                     variant = kwargs.get("variant"),
+                    dtype = dtype,
                 )
                 model.fast_generate = make_fast_generate_wrapper(model.generate)
                 model.fast_generate_batches = None
@@ -2900,7 +2981,10 @@ class FastLlamaModel:
                 model.fast_generate_batches = functools.partial(generate_batches, model.vllm_engine)
         finally:
             raise_handler.remove()
+            _undo_block_swap_keys()
             os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = old_hf_transfer
+        if _modelopt_rewritten:
+            keep_fp8_scale_names_on_save(model)
 
         # Counteract saved tokenizers.
         tokenizer_name = model_name if tokenizer_name is None else tokenizer_name
@@ -2928,12 +3012,14 @@ class FastLlamaModel:
             model_name,
             dtype,
             load_in_4bit,
-            skip_modules = SKIP_QUANTIZATION_MODULES,
+            # The load's own skip list: Falcon-H1 adds out_proj, which its mamba kernels need unquantized.
+            skip_modules = llm_int8_skip_modules if load_in_4bit else SKIP_QUANTIZATION_MODULES,
             token = token,
             revision = revision,
             cache_dir = kwargs.get("cache_dir"),
             local_files_only = kwargs.get("local_files_only", False),
             subfolder = kwargs.get("subfolder"),
+            variant = kwargs.get("variant"),
         )
 
         for idx, layer in enumerate(model.model.layers):
@@ -3171,7 +3257,6 @@ class FastLlamaModel:
         layers_pattern = None,
         finetune_last_n_layers = None,
         use_gradient_checkpointing = "unsloth",
-        block_swap_layers = 0,
         random_state = 3407,
         max_seq_length = 2048,  # not used anymore
         use_rslora = False,
@@ -3182,6 +3267,7 @@ class FastLlamaModel:
         qat_scheme = None,
         target_parameters = None,  # For MoE expert layers (nn.Parameter)
         ensure_weight_tying = None,  # None = auto (tie when we redirect a tied pair)
+        block_swap_layers = 0,
         **kwargs,
     ):
         if os.environ.get("UNSLOTH_USE_NEW_MODEL", "0") == "1":
@@ -3341,6 +3427,9 @@ class FastLlamaModel:
                 # apply_unsloth_gradient_checkpointing above already re-patched global state to match (#4735).
                 model._unsloth_gradient_checkpointing = use_gradient_checkpointing
                 model = _exclude_rope_inv_freq_from_ddp(model)
+                install_block_swap(
+                    model, block_swap_layers, use_gradient_checkpointing = use_gradient_checkpointing
+                )
                 return model
             else:
                 raise TypeError(
