@@ -247,9 +247,11 @@ export function TrainingMemoryParams(): ReactElement {
         >
           <Input
             type="number"
+            inputMode="numeric"
             min={0}
             step={1}
-            value={store.blockSwapLayers}
+            placeholder="0"
+            value={store.blockSwapLayers || ""}
             onChange={(e) =>
               store.setBlockSwapLayers(Math.max(0, Math.floor(Number(e.target.value) || 0)))
             }
