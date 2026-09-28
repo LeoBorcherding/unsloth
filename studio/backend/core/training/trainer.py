@@ -351,6 +351,7 @@ class UnslothTrainer:
         self.is_audio_vlm = False
         self._audio_type = None
         self._use_gradient_checkpointing = "unsloth"
+        self._block_swap_layers = 0
         # True until a probe says otherwise, so a path that never probes cannot trip the inconclusive-detection guard.
         self._audio_type_known = True
         self._is_dataset_audio = False
@@ -882,8 +883,11 @@ class UnslothTrainer:
         model_revision: Optional[str] = None,
         use_gradient_checkpointing: Union[str, bool] = "unsloth",
         on_model_resolved: Optional[Callable[[str], None]] = None,
+        block_swap_layers: int = 0,
     ) -> bool:
         """Load model for training (supports both text and vision models)"""
+        # Block swap streams frozen base weights, so it has nothing to do in a full finetune.
+        self._block_swap_layers = 0 if full_finetuning else int(block_swap_layers or 0)
         self.load_in_4bit = load_in_4bit
         self.trust_remote_code = trust_remote_code
         # The loader installs the checkpointing implementation; a full finetune never reinstalls it.
@@ -1210,7 +1214,7 @@ class UnslothTrainer:
                 )
                 logger.info(f"[VLM Diagnostic] Usable as vision processor: {has_image_proc}\n")
             else:
-                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                text_kwargs = dict(
                     model_name = lookup_name,
                     max_seq_length = max_seq_length,
                     dtype = _auto_dtype,
@@ -1224,6 +1228,19 @@ class UnslothTrainer:
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
                 )
+                try:
+                    # Loads the swapped tail straight into host RAM, so a model larger than the
+                    # card can load at all.
+                    self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                        **text_kwargs,
+                        **({"block_swap_layers": self._block_swap_layers} if self._block_swap_layers else {}),
+                    )
+                except NotImplementedError:
+                    if not self._block_swap_layers:
+                        raise
+                    # Architectures without a host-RAM load path swap from get_peft_model instead.
+                    logger.info("Block swap: loading onto the card first; swap installs with LoRA")
+                    self.model, self.tokenizer = FastLanguageModel.from_pretrained(**text_kwargs)
                 logger.info("Loaded text model")
 
             raise_if_offloaded(self.model, device_map, "Unsloth training")
@@ -1275,6 +1292,7 @@ class UnslothTrainer:
                     model_revision = model_revision,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    block_swap_layers = block_swap_layers,
                 )
             error_msg = str(e)
             error_lower = error_msg.lower()
@@ -1425,6 +1443,7 @@ class UnslothTrainer:
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
+                    block_swap_layers = self._block_swap_layers,
                 )
                 if self.is_audio_vlm:
                     peft_kwargs.update(
@@ -1502,6 +1521,7 @@ class UnslothTrainer:
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
                     modules_to_save = modules_to_save,
+                    block_swap_layers = self._block_swap_layers,
                 )
             else:
                 logger.info(f"Text model LoRA configuration:")
@@ -1522,6 +1542,7 @@ class UnslothTrainer:
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
                     modules_to_save = modules_to_save,
+                    block_swap_layers = self._block_swap_layers,
                 )
 
             if self.should_stop:

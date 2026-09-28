@@ -153,6 +153,8 @@ export function buildTrainingStartPayload(
     lora_dropout: config.loraDropout,
     target_modules: adapterMethod ? config.targetModules : [],
     gradient_checkpointing: config.gradientCheckpointing,
+    block_swap_layers:
+      config.trainingMethod === "full" ? 0 : Math.max(0, Math.floor(config.blockSwapLayers || 0)),
     use_rslora: adapterMethod && config.loraVariant === "rslora",
     use_loftq: adapterMethod && config.loraVariant === "loftq",
     use_dora: adapterMethod && config.loraVariant === "dora",

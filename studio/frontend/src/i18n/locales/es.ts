@@ -2570,6 +2570,9 @@ export const es = {
         "Fracción del total de pasos de entrenamiento entre evaluaciones (0-1). Pon 0 para desactivar la evaluación. P. ej. 0.01 = evaluar cada 1 % de los pasos.",
       seed: "Semilla",
       seedTooltip: "Semilla aleatoria para reproducibilidad.",
+      blockSwap: "Capas de intercambio",
+      blockSwapTooltip:
+        "Mantiene este número de capas del decodificador en la RAM del sistema y transfiere cada una a la GPU justo antes de ejecutarla. Permite entrenar con LoRA un modelo más grande que tu VRAM. 0 lo desactiva. Requiere gradient checkpointing.",
       gradCheckpoint: "Checkpoint de gradiente",
       gradCheckpointTooltip:
         "Intercambia cómputo por memoria recalculando las activaciones.",

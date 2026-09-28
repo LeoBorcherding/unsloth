@@ -1353,6 +1353,7 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
         },
         setGradientCheckpointing: (gradientCheckpointing) =>
           setUserEdit({ gradientCheckpointing }),
+        setBlockSwapLayers: (blockSwapLayers) => setUserEdit({ blockSwapLayers }),
         setRandomSeed: (randomSeed) => setUserEdit({ randomSeed }),
         setEnableWandb: (enableWandb) => setUserEdit({ enableWandb }),
         setWandbToken: (wandbToken) => setUserEdit({ wandbToken }),

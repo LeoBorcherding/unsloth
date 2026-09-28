@@ -1784,6 +1784,7 @@ async def start_training(
             "gradient_checkpointing": request.gradient_checkpointing.strip()
             if request.gradient_checkpointing and request.gradient_checkpointing.strip()
             else "unsloth",
+            "block_swap_layers": request.block_swap_layers,
             "use_rslora": request.use_rslora,
             "use_loftq": request.use_loftq,
             "use_dora": request.use_dora,

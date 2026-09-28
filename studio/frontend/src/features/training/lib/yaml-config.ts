@@ -94,6 +94,7 @@ export function serializeConfigToYaml(
     packing: state.packing,
     train_on_completions: state.trainOnCompletions,
     gradient_checkpointing: state.gradientCheckpointing,
+    block_swap_layers: state.blockSwapLayers,
     optim: state.optimizerType,
     lr_scheduler_type: state.lrSchedulerType,
   };

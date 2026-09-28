@@ -299,6 +299,7 @@ def _build_training_worker_config(values: dict[str, Any]) -> dict[str, Any]:
         "lora_dropout": values.get("lora_dropout", 0.0),
         "target_modules": values.get("target_modules"),
         "gradient_checkpointing": values.get("gradient_checkpointing", "unsloth"),
+        "block_swap_layers": int(values.get("block_swap_layers") or 0),
         "use_rslora": values.get("use_rslora", False),
         "use_loftq": values.get("use_loftq", False),
         "use_dora": values.get("use_dora", False),

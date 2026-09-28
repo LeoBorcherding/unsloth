@@ -2543,6 +2543,9 @@ export const ptBR = {
         "Fração dos passos totais de treino entre as validações (0-1). Defina como 0 para desativar. Ex: 0.01 = valida a cada 1% dos passos.",
       seed: "Seed",
       seedTooltip: "Semente aleatória para reprodutibilidade.",
+      blockSwap: "Camadas em swap",
+      blockSwapTooltip:
+        "Mantém esse número de camadas do decodificador na RAM do sistema e envia cada uma para a GPU logo antes de executá-la. Permite treinar com LoRA um modelo maior que sua VRAM. 0 desativa. Requer gradient checkpointing.",
       gradCheckpoint: "Checkpoint de gradiente",
       gradCheckpointTooltip:
         "Reduz o uso de memória ao recalcular as ativações, em troca de maior custo computacional.",

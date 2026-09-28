@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -123,6 +124,7 @@ export function TrainingMemoryParams(): ReactElement {
       packing: state.packing,
       trainOnCompletions: state.trainOnCompletions,
       gradientCheckpointing: state.gradientCheckpointing,
+      blockSwapLayers: state.blockSwapLayers,
       isVisionModel: state.isVisionModel,
       isEmbeddingModel: state.isEmbeddingModel,
       isDatasetImage: state.isDatasetImage,
@@ -131,6 +133,7 @@ export function TrainingMemoryParams(): ReactElement {
       setPacking: state.setPacking,
       setTrainOnCompletions: state.setTrainOnCompletions,
       setGradientCheckpointing: state.setGradientCheckpointing,
+      setBlockSwapLayers: state.setBlockSwapLayers,
     })),
   );
   const showVisionLora = store.isVisionModel && store.isDatasetImage === true;
@@ -237,6 +240,23 @@ export function TrainingMemoryParams(): ReactElement {
           </SelectContent>
         </Select>
       </ParamsRow>
+      {!isMac && store.trainingMethod !== "full" && (
+        <ParamsRow
+          label={t("studio.params.blockSwap")}
+          tooltip={t("studio.params.blockSwapTooltip")}
+        >
+          <Input
+            type="number"
+            min={0}
+            step={1}
+            value={store.blockSwapLayers}
+            onChange={(e) =>
+              store.setBlockSwapLayers(Math.max(0, Math.floor(Number(e.target.value) || 0)))
+            }
+            className="w-28 font-mono"
+          />
+        </ParamsRow>
+      )}
       {showPacking && (
         <PackingOption
           isMac={isMac}

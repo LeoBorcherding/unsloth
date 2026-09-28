@@ -2577,6 +2577,9 @@ export const it = {
         "Frazione degli step totali fra due valutazioni (0-1). Imposta 0 per disattivare la valutazione. Per esempio 0,01 = valuta ogni 1% degli step.",
       seed: "Seed",
       seedTooltip: "Seed casuale per la riproducibilità.",
+      blockSwap: "Livelli in swap",
+      blockSwapTooltip:
+        "Mantiene questo numero di livelli del decoder nella RAM di sistema e trasferisce ciascuno alla GPU subito prima dell'esecuzione. Consente di addestrare con LoRA un modello più grande della tua VRAM. 0 lo disattiva. Richiede il gradient checkpointing.",
       gradCheckpoint: "Checkpoint del gradiente",
       gradCheckpointTooltip:
         "Riduce l'uso della memoria ricalcolando le attivazioni, al costo di più calcoli.",

@@ -107,6 +107,7 @@ export interface TrainingConfigState {
   packing: boolean;
   trainOnCompletions: boolean;
   gradientCheckpointing: GradientCheckpointing;
+  blockSwapLayers: number;
   randomSeed: number;
   enableWandb: boolean;
   wandbToken: string;
@@ -241,6 +242,7 @@ export interface TrainingConfigActions {
   setPacking: (value: boolean) => void;
   setTrainOnCompletions: (value: boolean) => void;
   setGradientCheckpointing: (value: GradientCheckpointing) => void;
+  setBlockSwapLayers: (value: number) => void;
   setRandomSeed: (value: number) => void;
   setEnableWandb: (value: boolean) => void;
   setWandbToken: (value: string) => void;

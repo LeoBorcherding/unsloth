@@ -30,6 +30,7 @@ interface BackendTrainingDefaults {
   eval_steps?: number;
   weight_decay?: number;
   random_seed?: number;
+  block_swap_layers?: number;
   vision_image_size?: number | string | null;
   packing?: boolean;
   train_on_completions?: boolean;

@@ -163,6 +163,7 @@ export const DEFAULT_HYPERPARAMS = {
   packing: false,
   trainOnCompletions: false,
   gradientCheckpointing: "unsloth" as const,
+  blockSwapLayers: 0,
   randomSeed: 3407,
   enableWandb: false,
   wandbToken: "",

@@ -2438,6 +2438,9 @@ export const zhCN = {
         "评估之间间隔占总训练步数的比例（0-1）。设为 0 则禁用评估。例如 0.01 = 每 1% 步评估一次。",
       seed: "随机种子",
       seedTooltip: "用于复现的随机种子。",
+      blockSwap: "块交换层数",
+      blockSwapTooltip:
+        "将指定数量的解码器层保存在系统内存中，并在每层运行前传输到 GPU。可以用 LoRA 训练比显存更大的模型。0 表示关闭。需要启用梯度检查点。",
       gradCheckpoint: "梯度检查点",
       gradCheckpointTooltip: "通过重算激活以时间换 VRAM。",
       none: "无",

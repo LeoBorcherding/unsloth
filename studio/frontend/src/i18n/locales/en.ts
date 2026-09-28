@@ -2500,6 +2500,9 @@ export const en = {
         "Fraction of total training steps between evaluations (0-1). Set to 0 to disable evaluation. E.g. 0.01 = evaluate every 1% of steps.",
       seed: "Seed",
       seedTooltip: "Random seed for reproducibility.",
+      blockSwap: "Block swap layers",
+      blockSwapTooltip:
+        "Keep this many decoder layers in system RAM and stream each one to the GPU just before it runs. Lets a model larger than your VRAM train with LoRA. 0 turns it off. Needs gradient checkpointing.",
       gradCheckpoint: "Grad Checkpoint",
       gradCheckpointTooltip:
         "Trade compute for memory by recomputing activations.",

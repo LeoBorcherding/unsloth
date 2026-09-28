@@ -2587,6 +2587,9 @@ export const fr = {
         "Fraction du nombre total d'étapes d'entraînement entre les évaluations (0-1). Définissez 0 pour désactiver l'évaluation. Ex. 0,01 = évaluer tous les 1 % d'étapes.",
       seed: "Graine",
       seedTooltip: "Graine aléatoire pour la reproductibilité.",
+      blockSwap: "Couches en swap",
+      blockSwapTooltip:
+        "Garde ce nombre de couches du décodeur en RAM système et transfère chacune vers le GPU juste avant son exécution. Permet d'entraîner avec LoRA un modèle plus grand que votre VRAM. 0 le désactive. Nécessite le gradient checkpointing.",
       gradCheckpoint: "Checkpoint de gradient",
       gradCheckpointTooltip:
         "Échanger du calcul contre de la mémoire en recalculant les activations.",

@@ -2577,6 +2577,9 @@ export const de = {
         "Anteil der gesamten Trainingsschritte zwischen Auswertungen (0-1). Auf 0 setzen, um die Auswertung zu deaktivieren. Z. B. 0.01 = alle 1 % der Schritte auswerten.",
       seed: "Seed",
       seedTooltip: "Zufalls-Seed für Reproduzierbarkeit.",
+      blockSwap: "Block-Swap-Schichten",
+      blockSwapTooltip:
+        "So viele Decoder-Schichten im Arbeitsspeicher halten und jede kurz vor ihrer Ausführung auf die GPU streamen. So lässt sich ein Modell, das größer als der VRAM ist, mit LoRA trainieren. 0 schaltet es aus. Benötigt Gradient Checkpointing.",
       gradCheckpoint: "Grad-Checkpoint",
       gradCheckpointTooltip:
         "Rechenaufwand gegen Speicher tauschen, indem Aktivierungen neu berechnet werden.",

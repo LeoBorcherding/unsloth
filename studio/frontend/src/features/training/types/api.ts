@@ -61,6 +61,7 @@ export interface TrainingStartRequest {
   lora_dropout: number;
   target_modules: string[];
   gradient_checkpointing: string;
+  block_swap_layers: number;
   use_rslora: boolean;
   use_loftq: boolean;
   use_dora: boolean;

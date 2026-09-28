@@ -571,6 +571,12 @@ class TrainingStartRequest(BaseModel):
     lora_dropout: float = Field(0.0, description = "LoRA dropout")
     target_modules: List[str] = Field(default_factory = list, description = "Target modules for LoRA")
     gradient_checkpointing: str = Field("", description = "Gradient checkpointing setting")
+    block_swap_layers: int = Field(
+        0,
+        ge = 0,
+        le = 1024,
+        description = "Decoder layers streamed from host RAM during training (0 = off)",
+    )
     use_rslora: bool = Field(False, description = "Use RSLoRA")
     use_loftq: bool = Field(False, description = "Use LoftQ")
     use_dora: bool = Field(False, description = "Use DoRA")
