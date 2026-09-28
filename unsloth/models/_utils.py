@@ -4721,6 +4721,28 @@ def _checkpoint_tensors(model_name, token = None, revision = None, cache_dir = N
     return tensors, handles
 
 
+def _block_swap_text_config(config):
+    get = getattr(config, "get_text_config", None)
+    return get() if callable(get) else config
+
+
+def _block_swap_prefix(model, layers, tensors, last_idx):
+    """Checkpoint key prefix of the decoder layers, e.g. `model.language_model.layers.`."""
+    import re
+    found = set()
+    for key in tensors:
+        m = re.match(r"^(.*?layers\.)(\d+)\.", key)
+        if m and int(m.group(2)) == last_idx:
+            found.add(m.group(1))
+    names = [name + "." for name, mod in model.named_modules() if mod is layers]
+    for c in found:
+        if c in names:
+            return c
+    if len(found) == 1:
+        return found.pop()
+    raise RuntimeError(f"Unsloth: block swap could not tell which checkpoint layers to load: {sorted(found)}")
+
+
 def trim_config_for_block_swap(config, block_swap_layers):
     """Shorten the config so the standard load stops before the swapped tail.
     Returns the per-layer attributes to put back, or None when off."""
@@ -4732,6 +4754,8 @@ def trim_config_for_block_swap(config, block_swap_layers):
             "Run `pip install --upgrade unsloth_zoo`."
         )
     _check_block_swap(config)
+    # A multimodal config keeps the decoder depth on its text sub-config.
+    config = _block_swap_text_config(config)
     total = config.num_hidden_layers
     n = min(int(block_swap_layers), total - 1)
     saved = {"num_hidden_layers": total}
@@ -4750,7 +4774,7 @@ def attach_block_swap_layers(model, saved, model_name, dtype, load_in_4bit, skip
         return None
     layers = find_decoder_layers(model)
     first = len(layers)
-    config = model.config
+    config = _block_swap_text_config(model.config)
     for key, value in saved.items():
         setattr(config, key, value)
     count = config.num_hidden_layers - first
@@ -4761,6 +4785,10 @@ def attach_block_swap_layers(model, saved, model_name, dtype, load_in_4bit, skip
             lambda idx: layer_cls(config, idx), first, count, tensors,
             device = torch.device("cuda", torch.cuda.current_device()),
             compute_dtype = dtype, quantize_4bit = load_in_4bit, skip_modules = skip_modules,
+            prefix = _block_swap_prefix(model, layers, tensors, config.num_hidden_layers - 1),
+            reference_layers = list(layers),
+            keep_fp32 = tuple(getattr(model, "_keep_in_fp32_modules", None) or ())
+            + tuple(getattr(model, "_keep_in_fp32_modules_strict", None) or ()),
         )
     finally:
         del handles

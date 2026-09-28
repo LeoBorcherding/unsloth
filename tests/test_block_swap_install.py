@@ -10,7 +10,8 @@ import pytest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UTILS = os.path.join(HERE, "unsloth", "models", "_utils.py")
-NAMES = ("_check_block_swap", "install_block_swap", "trim_config_for_block_swap")
+NAMES = ("_check_block_swap", "install_block_swap", "_block_swap_text_config",
+         "trim_config_for_block_swap")
 
 
 def _load(
@@ -156,6 +157,17 @@ def test_trim_keeps_at_least_one_layer_on_the_card():
     cfg = _Config()
     ns["trim_config_for_block_swap"](cfg, 100)
     assert cfg.num_hidden_layers == 1
+
+
+def test_trim_acts_on_the_text_config_of_a_multimodal_config():
+    ns, _ = _load()
+    text = _Config()
+    cfg = _Config(n = 27, text_config = text)
+    cfg.get_text_config = lambda: text
+    saved = ns["trim_config_for_block_swap"](cfg, 5)
+    assert text.num_hidden_layers == 3 and len(text.layer_types) == 3
+    assert cfg.num_hidden_layers == 27, "the vision tower's depth is left alone"
+    assert saved["num_hidden_layers"] == 8
 
 
 def test_trim_refuses_what_install_refuses():

@@ -1251,11 +1251,10 @@ class FastBaseModel:
         user_config = kwargs.pop("config", None)
         if auto_config is None and user_config is not None:
             auto_config = user_config
-        if kwargs.pop("block_swap_layers", 0):
+        block_swap_layers = kwargs.pop("block_swap_layers", 0)
+        if block_swap_layers and fast_inference:
             raise NotImplementedError(
-                "Unsloth: loading straight to host RAM with from_pretrained(block_swap_layers = ...) "
-                "covers the Llama, Mistral and Qwen2/Qwen3 text paths. For this model, pass "
-                "block_swap_layers to get_peft_model instead; the model must then fit on the card to load."
+                "Unsloth: from_pretrained(block_swap_layers = ...) does not support fast_inference."
             )
 
         # Offline snapshot for the loads below; not popped, so the weight load still reads local_files_only from **kwargs. See _get_effective_local_files_only.
@@ -1727,6 +1726,8 @@ class FastBaseModel:
             )
         _set_attn_impl(auto_config, config_attn_impl)
         model_config = auto_config
+        # The standard load stops before the swapped tail; it is built in host RAM after post_patch.
+        _block_swap_saved = trim_config_for_block_swap(model_config, block_swap_layers)
 
         verify_fp8_support_if_applicable(model_config)
 
@@ -2203,6 +2204,19 @@ class FastBaseModel:
             model_type = model_type_arch,
             tokenizer = tokenizer,
             float32_mixed_precision = float32_mixed_precision,
+        )
+        attach_block_swap_layers(
+            model,
+            _block_swap_saved,
+            model_name,
+            dtype,
+            load_in_4bit,
+            skip_modules = bnb_config.llm_int8_skip_modules if bnb_config is not None else (),
+            token = token,
+            revision = _revision,
+            cache_dir = kwargs.get("cache_dir"),
+            local_files_only = local_files_only,
+            subfolder = kwargs.get("subfolder"),
         )
         for _ in range(3):
             gc.collect()
