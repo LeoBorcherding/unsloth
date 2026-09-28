@@ -5195,6 +5195,30 @@ def _check_block_swap(model_or_config):
         )
 
 
+def _frozen_bytes(layer):
+    return sum(
+        p.numel() * p.element_size()
+        for name, p in layer.named_parameters()
+        if not p.requires_grad and "lora_" not in name
+    )
+
+
+def _check_block_swap_host_ram(per_layer, count):
+    """Refuse a swap whose pinned tail would not fit in free host RAM."""
+    need = per_layer * count
+    vm = psutil.virtual_memory()
+    # Headroom for the OS, the checkpoint reads during load and the dataloader.
+    allowed = vm.available - max(4 * 2**30, vm.total // 10)
+    if need <= allowed:
+        return
+    fit = max(0, int(allowed // per_layer)) if per_layer else 0
+    raise MemoryError(
+        f"Unsloth: block_swap_layers = {count} needs {need / 2**30:.1f} GiB of pinned host RAM, "
+        f"but only {vm.available / 2**30:.1f} GiB is free and some must stay free for the system. "
+        f"Try block_swap_layers = {fit} or less, or close other programs."
+    )
+
+
 def install_block_swap(
     model,
     block_swap_layers = 0,
@@ -5220,6 +5244,8 @@ def install_block_swap(
         )
     _check_block_swap(model)
     layers = find_decoder_layers(model)
+    tail = layers[len(layers) - min(int(block_swap_layers), len(layers)) :]
+    _check_block_swap_host_ram(max(map(_frozen_bytes, tail), default = 0), len(tail))
     swapper = BlockSwap(layers, block_swap_layers, prefetch_depth)
     # On the layer list too: the fast decode loop only sees the inner model.
     layers._unsloth_block_swap = swapper
@@ -5377,6 +5403,8 @@ def attach_block_swap_layers(
     for key, value in saved.items():
         setattr(config, key, value)
     count = config.num_hidden_layers - first
+    # A loaded layer has the same shapes and quantization the host-built ones will get.
+    _check_block_swap_host_ram(_frozen_bytes(layers[first - 1]), count)
     layer_cls = type(layers[0])
     # The tail runs where the resident prefix landed (device_map = {"": 1}), not the current device.
     device = next(layers[first - 1].parameters()).device

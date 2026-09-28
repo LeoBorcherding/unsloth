@@ -9,7 +9,8 @@ import pytest
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UTILS = os.path.join(HERE, "unsloth", "models", "_utils.py")
 NAMES = ("_check_block_swap", "install_block_swap", "_block_swap_text_config",
-         "trim_config_for_block_swap")
+         "trim_config_for_block_swap", "_check_block_swap_host_ram")
+GiB = 2**30
 
 
 def _load(
@@ -18,6 +19,9 @@ def _load(
     integrated = False,
     zoo = True,
     cuda = True,
+    ram_free = 64 * GiB,
+    ram_total = 128 * GiB,
+    layer_bytes = 0,
 ):
     src = open(UTILS, encoding = "utf-8").read()
     mod = ast.parse(src)
@@ -36,6 +40,10 @@ def _load(
         "BlockSwap": FakeSwap if zoo else None,
         "build_host_layers": object() if zoo else None,
         "find_decoder_layers": lambda m: m.layers,
+        "_frozen_bytes": lambda layer: layer_bytes,
+        "psutil": types.SimpleNamespace(
+            virtual_memory = lambda: types.SimpleNamespace(available = ram_free, total = ram_total)
+        ),
         "torch": types.SimpleNamespace(cuda = types.SimpleNamespace(is_available = lambda: cuda)),
     }
     for name in NAMES:
@@ -418,6 +426,47 @@ def test_every_unsupported_load_mode_is_refused_before_trimming():
         "_ckpt_quant_method",
         "safetensors",
     ):
+        hits = [
+            n.lineno for n in ast.walk(fn) if isinstance(n, ast.Raise) and needle in ast.unparse(n)
+        ]
+        assert hits and min(hits) < trim, needle
+
+
+def test_a_tail_that_would_exhaust_host_ram_is_refused_with_a_count_that_fits():
+    ns, calls = _load(ram_free = 20 * GiB, ram_total = 32 * GiB, layer_bytes = GiB)
+    with pytest.raises(MemoryError, match = r"block_swap_layers = 16 or less"):
+        ns["_check_block_swap_host_ram"](GiB, 17)
+    ns["_check_block_swap_host_ram"](GiB, 16)
+
+
+def test_install_checks_host_ram_before_building_the_swapper():
+    ns, calls = _load(ram_free = 5 * GiB, ram_total = 32 * GiB, layer_bytes = GiB)
+    with pytest.raises(MemoryError):
+        ns["install_block_swap"](_Model(), 2)
+    assert calls == []
+
+
+def test_both_load_paths_check_host_ram_before_pinning():
+    src = open(UTILS, encoding = "utf-8").read()
+    fn = next(n for n in ast.parse(src).body
+              if isinstance(n, ast.FunctionDef) and n.name == "attach_block_swap_layers")
+    body = ast.unparse(fn)
+    assert body.index("_check_block_swap_host_ram") < body.index("build_host_layers(")
+
+
+def test_fastmodel_refuses_the_same_load_modes_before_trimming():
+    mod = ast.parse(
+        open(os.path.join(HERE, "unsloth", "models", "vision.py"), encoding = "utf-8").read()
+    )
+    cls = next(n for n in mod.body if isinstance(n, ast.ClassDef) and n.name == "FastBaseModel")
+    fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "from_pretrained")
+    trim = min(
+        n.lineno
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "trim_config_for_block_swap"
+    )
+    for needle in ("load_in_8bit", "quantization_config", "state_dict", "_ckpt_quant_method",
+                   "safetensors", "fast_inference"):
         hits = [
             n.lineno for n in ast.walk(fn) if isinstance(n, ast.Raise) and needle in ast.unparse(n)
         ]
