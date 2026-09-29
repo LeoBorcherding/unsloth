@@ -1,0 +1,16 @@
+<h2 class="sr-only">Test results for unslothai/unsloth PR 11668 turn navigator: six checks passed on the tester PC at ba267ee.</h2>
+<style>.t{display:grid;grid-template-columns:minmax(0,1fr) 92px 92px;gap:8px;align-items:center;border:0.5px solid var(--border);border-radius:var(--radius);padding:8px 12px;font-size:14px}.c{border-radius:var(--radius);padding:2px 8px;font-size:12px;text-align:center}.p{background:var(--bg-success);color:var(--text-success)}.n{background:var(--surface-1);color:var(--text-secondary)}</style>
+<div style="background:var(--surface-2);border:0.5px solid var(--border);border-radius:12px;padding:1rem 1.25rem">
+<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px"><span style="font-weight:500">#11668 turn navigator</span><span style="font-size:12px;color:var(--text-secondary)"><code>ba267ee</code> · tester PC · Windows 11 · RX 5700 XT + RX 6500 XT</span></div>
+<div style="display:flex;flex-direction:column;gap:6px">
+<div class="t" style="border:none;color:var(--text-muted);font-size:12px;padding:0 12px"><span>check</span><span>setting off</span><span>setting on</span></div>
+<div class="t"><span><i class="ti ti-toggle-left" aria-hidden="true"></i> Turn navigation in Settings, off by default</span><span class="c p">off</span><span class="c p">toggles</span></div>
+<div class="t"><span><i class="ti ti-hash" aria-hidden="true"></i> "Turn N" label above each prompt</span><span class="c p">absent</span><span class="c p">shown</span></div>
+<div class="t"><span><i class="ti ti-layout-sidebar-right" aria-hidden="true"></i> Rail, one dash per turn (4 turns)</span><span class="c p">absent</span><span class="c p">4 dashes</span></div>
+<div class="t"><span><i class="ti ti-hand-finger" aria-hidden="true"></i> Hover card: prompt, reply, bookmark</span><span class="c n">n/a</span><span class="c p">shown</span></div>
+<div class="t"><span><i class="ti ti-arrow-up" aria-hidden="true"></i> Click dash jumps to turn under header</span><span class="c n">n/a</span><span class="c p">jumped</span></div>
+<div class="t"><span><i class="ti ti-bookmark" aria-hidden="true"></i> Bookmark marks label and accents dash</span><span class="c n">n/a</span><span class="c p">marked</span></div>
+<div class="t"><span><i class="ti ti-test-pipe" aria-hidden="true"></i> <code>thread-turns.test.ts</code>, node 24</span><span class="c n">n/a</span><span class="c p">3 / 3</span></div>
+</div>
+<div style="font-size:12px;color:var(--text-muted);margin-top:10px">Driven with desktop-drive in an Edge app window on the branch studio :8892 (same WebView2 as Unsloth Desktop), Qwen3-1.7B UD-Q4_K_XL. Not run: 150-turn perf, keyboard-only rail access, the Tauri shell itself.</div>
+</div>
