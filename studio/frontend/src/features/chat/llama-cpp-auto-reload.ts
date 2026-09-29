@@ -23,6 +23,7 @@ interface ConnectionState {
   baseUrl: string;
   hasApiKey: boolean;
   connected: boolean;
+  catalog?: string;
   busy: boolean;
 }
 
@@ -73,8 +74,14 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
         connection.connected = false;
         return;
       }
-      if (connection.connected) return;
+      // a restart shorter than the poll interval never fails a probe, so a
+      // connected server is still re-listed and only a changed catalog goes on
       const listed = await listProviderModels(payload);
+      const catalog = JSON.stringify(
+        [...new Set(listed.map((model) => model.id.trim()))].sort(),
+      );
+      if (!current(provider.id, connection)) return;
+      if (connection.connected && catalog === connection.catalog) return;
       await withProviderModelUpdate(provider.id, async () => {
         if (!current(provider.id, connection)) return;
         const saved = (await listProviderConfigs()).find(
@@ -139,6 +146,7 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
           );
         }
         connection.connected = true;
+        connection.catalog = catalog;
       });
     } catch {
       // retry on the next probe, retaining the last successful catalog through outages.

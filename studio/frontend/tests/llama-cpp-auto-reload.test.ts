@@ -152,22 +152,31 @@ test("monitor refreshes once per connection, retains selections, retries failure
     await waitFor(() => counts.saves === 1);
     assert.deepEqual(store.getState().providers[0].models, ["kept", "new"]);
     await pause();
-    assert.equal(counts.catalogs, 1, "healthy probes must not reload again");
+    assert.equal(counts.saves, 1, "an unchanged catalog must not save again");
+    healthy = false;
+    const catalogsWhileDown = counts.catalogs;
+    await pause();
+    assert.equal(counts.catalogs, catalogsWhileDown, "a failed probe must not list");
+    healthy = true;
+    await pause();
+    // a restart faster than the poll interval: every probe passes, the catalog changes
+    models = ["kept", "disabled", "new", "restarted"];
+    await waitFor(() => store.getState().providers[0].models.includes("restarted"));
     healthy = false;
     await pause();
-    assert.equal(counts.catalogs, 1);
     healthy = true;
     models = ["replacement"];
     failSave = true;
-    await waitFor(() => counts.saves >= 2);
-    assert.deepEqual(store.getState().providers[0].models, ["kept", "new"]);
+    const savesBeforeFailure = counts.saves;
+    await waitFor(() => counts.saves > savesBeforeFailure);
+    assert.deepEqual(store.getState().providers[0].models, ["kept", "new", "restarted"]);
     failSave = false;
     await waitFor(
       () => store.getState().providers[0].models[0] === "replacement",
     );
-    const successfulCatalogs = counts.catalogs;
+    const savesAfterReplacement = counts.saves;
     await pause();
-    assert.equal(counts.catalogs, successfulCatalogs);
+    assert.equal(counts.saves, savesAfterReplacement);
     healthy = false;
     await pause();
     healthy = true;
