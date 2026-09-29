@@ -18,6 +18,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -42,7 +43,6 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 const MIN_NAVIGATOR_TURNS = 3;
-// cut well past what the card's one prompt line and three reply lines show
 const PROMPT_PREVIEW_CHARS = 240;
 const REPLY_PREVIEW_CHARS = 480;
 // long enough to cross from a marker onto the card
@@ -62,7 +62,6 @@ function useIsTurnBookmarked(
   );
 }
 
-// null when the setting is off, in incognito, or before the chat is saved
 function useTurnBookmark(): { bookmarked: boolean; toggle: () => void } | null {
   const enabled = useChatPreferencesStore((state) => state.showTurnNavigation);
   const incognito = useChatRuntimeStore((state) => state.incognito);
@@ -292,6 +291,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   );
   const bookmarked = useMemo(() => new Set(bookmarkedIds), [bookmarkedIds]);
   const anchorRef = useRef<HTMLDivElement>(null);
+  const previewId = useId();
   const [preview, setPreview] = useState<TurnPreview | null>(null);
   const hideTimerRef = useRef<number | undefined>(undefined);
   const cancelHide = useCallback(
@@ -395,38 +395,47 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     }, PREVIEW_HIDE_DELAY_MS);
   }, [cancelHide, setActiveMarker]);
 
-  const onRailKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
-    const markers = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        "button[data-turn-id]",
-      ),
-    );
-    const current = markers.indexOf(
-      document.activeElement as HTMLButtonElement,
-    );
-    if (current < 0) {
-      return;
-    }
-    let next: number;
-    switch (event.key) {
-      case "ArrowUp":
-        next = current - 1;
-        break;
-      case "ArrowDown":
-        next = current + 1;
-        break;
-      case "Home":
-        next = 0;
-        break;
-      case "End":
-        next = markers.length - 1;
-        break;
-      default:
+  const onRailKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (event.key === "Escape") {
+        cancelHide();
+        setPreview(null);
+        setActiveMarker(null);
         return;
-    }
-    event.preventDefault();
-    markers[Math.min(Math.max(next, 0), markers.length - 1)]?.focus();
-  }, []);
+      }
+      const markers = Array.from(
+        event.currentTarget.querySelectorAll<HTMLButtonElement>(
+          "button[data-turn-id]",
+        ),
+      );
+      const current = markers.indexOf(
+        document.activeElement as HTMLButtonElement,
+      );
+      if (current < 0) {
+        return;
+      }
+      let next: number;
+      switch (event.key) {
+        case "ArrowUp":
+          next = current - 1;
+          break;
+        case "ArrowDown":
+          next = current + 1;
+          break;
+        case "Home":
+          next = 0;
+          break;
+        case "End":
+          next = markers.length - 1;
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+      markers[Math.min(Math.max(next, 0), markers.length - 1)]?.focus();
+    },
+    [cancelHide, setActiveMarker],
+  );
 
   const markers = useMemo(
     () =>
@@ -439,6 +448,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
             data-turn-id={openerId}
             data-turn={index + 1}
             tabIndex={index === 0 ? 0 : -1}
+            aria-describedby={previewId}
             aria-label={t(
               isBookmarked ? "turns.bookmarkedLabel" : "turns.label",
               {
@@ -463,7 +473,15 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
           </button>
         );
       }),
-    [openerIds, bookmarked, t, onMarkerClick, showPreview, hidePreview],
+    [
+      openerIds,
+      bookmarked,
+      t,
+      previewId,
+      onMarkerClick,
+      showPreview,
+      hidePreview,
+    ],
   );
 
   if (openerIds.length < MIN_NAVIGATOR_TURNS) {
@@ -478,7 +496,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       {...{ [FIND_SKIP_ATTRIBUTE]: "" }}
       className="aui-turn-navigator-anchor pointer-events-none sticky top-1/2 z-10 h-0 w-full shrink-0"
     >
-      {/* the gap beside the message column: the rail shows only when it fits there, never over messages */}
+      {/* gutter beside the message column: the rail hides when it would overlap messages */}
       <div
         style={{
           width:
@@ -498,7 +516,8 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       </div>
       {preview && (
         <div
-          aria-hidden={true}
+          id={previewId}
+          role="tooltip"
           style={{ top: preview.markerTop }}
           onPointerEnter={cancelHide}
           onPointerLeave={hidePreview}
