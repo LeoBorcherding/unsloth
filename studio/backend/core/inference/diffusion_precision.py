@@ -167,8 +167,8 @@ _TE_QUANT_REQUIREMENTS = {
     TE_QUANT_FP8_DYNAMIC: "an NVIDIA GPU with fp8 tensor cores (Ada sm_89 or newer)",
     TE_QUANT_INT8: "an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer)",
     TE_QUANT_NVFP4: (
-        "an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer) and torchao 0.15 or newer on "
-        "torch 2.8 or newer"
+        "an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer) and torchao 0.15 or newer, which "
+        "Studio installs with torch 2.10 or newer"
     ),
 }
 
