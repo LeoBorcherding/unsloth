@@ -11,6 +11,7 @@ import {
   type ExternalProviderConfig,
 } from "./external-providers";
 import {
+  providerReloadWrites,
   providerSavesInFlight,
   useExternalProvidersStore,
 } from "./stores/external-providers-store";
@@ -84,7 +85,13 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
       // A manual save is in flight or landed since the read: skip, the next probe merges against it.
       if (providerSavesInFlight.has(provider.id) || edited()) return;
       if (!sameList(models, previousModels) || !sameList(catalog, previousCatalog)) {
-        await updateProviderConfig(provider.id, { models, availableModels: catalog });
+        const write = updateProviderConfig(provider.id, { models, availableModels: catalog });
+        providerReloadWrites.set(provider.id, write);
+        try {
+          await write;
+        } finally {
+          if (providerReloadWrites.get(provider.id) === write) providerReloadWrites.delete(provider.id);
+        }
       }
       if (stopped) return;
       if (edited()) return;

@@ -81,6 +81,7 @@ import {
   toExternalBackendProviderType,
 } from "./external-providers";
 import {
+  providerReloadWrites,
   providerSavesInFlight,
   useExternalProvidersStore,
 } from "./stores/external-providers-store";
@@ -1018,6 +1019,8 @@ export function ChatProvidersSettings({
     setMutatingProvider(true);
     providerSavesInFlight.add(editingProviderId);
     try {
+      // A reload sent before this save began could otherwise land after it and restore stale models.
+      await providerReloadWrites.get(editingProviderId)?.catch(() => undefined);
       const baseUrl = parseBaseUrlForProvider(
         baseUrlDraft,
         isEditingCustomProvider,

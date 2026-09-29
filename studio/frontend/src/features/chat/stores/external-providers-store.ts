@@ -20,6 +20,9 @@ interface ExternalProvidersState {
 /** Connection ids whose settings save is awaiting the backend; auto reload holds its writes. */
 export const providerSavesInFlight = new Set<string>();
 
+/** Auto-reload writes on the wire; a settings save waits for its connection's before sending. */
+export const providerReloadWrites = new Map<string, Promise<unknown>>();
+
 export const useExternalProvidersStore = create<ExternalProvidersState>(
   (set) => ({
     providers: loadExternalProviders(),

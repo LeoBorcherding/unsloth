@@ -50,6 +50,7 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
   let served: string[] | null = ["alpha", "beta"];
   const puts: Array<{ models: string[]; available_models: string[] }> = [];
   let calls = 0;
+  let holdPut: Promise<void> | null = null;
   const originals = [globalThis.window, globalThis.localStorage, globalThis.fetch] as const;
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -73,6 +74,7 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
     }
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body));
+      if (holdPut) await holdPut;
       puts.push(body);
       Object.assign(saved, body);
       return Response.json({ id: "p", ...saved });
@@ -86,7 +88,7 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
   const { startLlamaCppAutoReload } = await vite.ssrLoadModule(
     "/src/features/chat/llama-cpp-auto-reload.ts",
   );
-  const { providerSavesInFlight, useExternalProvidersStore: store } = await vite.ssrLoadModule(
+  const { providerReloadWrites, providerSavesInFlight, useExternalProvidersStore: store } = await vite.ssrLoadModule(
     "/src/features/chat/stores/external-providers-store.ts",
   );
   store.setState({
@@ -158,18 +160,27 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
     await settle(() => puts.length === 5);
     assert.deepEqual(puts[4].models, ["manual", "gamma", "delta", "zeta"]);
 
+    // A reload write already on the wire is published, so a save that starts now can wait it out.
+    let release = () => {};
+    holdPut = new Promise((r) => { release = r; });
+    served = ["gamma", "delta", "zeta", "eta"];
+    await settle(() => providerReloadWrites.has("p"));
+    holdPut = null;
+    release();
+    await settle(() => !providerReloadWrites.has("p") && puts.length === 6);
+
     // Another tab replaced the IDs by hand and left no catalog: the saved IDs win over this tab's copy.
     Object.assign(saved, { models: ["typed"], available_models: [] });
     served = ["gamma", "omega"];
-    await settle(() => puts.length === 6);
-    assert.deepEqual(puts[5].models, ["typed", "gamma", "omega"]);
+    await settle(() => puts.length === 7);
+    assert.deepEqual(puts[6].models, ["typed", "gamma", "omega"]);
 
     store.setState({ providers: [{ ...row(), autoReloadModels: false }] });
     served = null;
     await idle();
     served = ["gamma", "epsilon"];
     await idle();
-    assert.equal(puts.length, 6);
+    assert.equal(puts.length, 7);
   } finally {
     stop();
   }
