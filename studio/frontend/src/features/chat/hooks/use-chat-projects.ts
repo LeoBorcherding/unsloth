@@ -146,10 +146,14 @@ export async function deleteChatProject(
   args: { deleteFiles?: boolean } = {},
 ): Promise<void> {
   // A failed lookup only leaves stale bookmarks; it must not block the delete.
-  const threads = await listStoredChatThreads({ projectId }).catch(() => []);
-  const threadIds = threads.map((t) => t.id);
+  const members = await listStoredChatThreads({ projectId }).catch(() => []);
   const kept = await deleteStoredChatProject(projectId, args);
-  useBookmarkedTurnsStore.getState().forgetThreads(threadIds);
+  // Membership can change before the delete runs, so forget only members that are gone now.
+  const survivors = await listStoredChatThreads().catch(() => members);
+  const alive = new Set(survivors.map((t) => t.id));
+  useBookmarkedTurnsStore
+    .getState()
+    .forgetThreads(members.map((t) => t.id).filter((id) => !alive.has(id)));
   // The member chats went with the project, so their own sandboxes are reachable from nothing: the
   // same offer an ordinary chat delete makes, and a sandbox the backend could not remove is kept
   // even when asked to go.
