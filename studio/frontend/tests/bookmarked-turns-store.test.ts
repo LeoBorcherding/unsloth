@@ -24,3 +24,15 @@ test("forgetting chats with no bookmarks keeps the state object", () => {
   store().forgetThreads(["t1"]);
   assert.equal(store().bookmarkedByThread, before);
 });
+
+test("every chat delete route forgets the deleted chats' bookmarks", async () => {
+  // A project delete or a clear-all removes chats without going through deleteChatItems.
+  const { readSrcAsync } = await import("./helpers/kit.ts");
+  for (const file of [
+    "features/chat/hooks/use-chat-sidebar-items.ts",
+    "features/chat/hooks/use-chat-projects.ts",
+    "features/chat/utils/clear-all-chats.ts",
+  ]) {
+    assert.match(await readSrcAsync(file), /forgetThreads\(/, `${file} leaves bookmarks behind`);
+  }
+});
