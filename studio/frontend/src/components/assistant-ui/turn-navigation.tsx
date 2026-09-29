@@ -63,23 +63,30 @@ function useIsTurnBookmarked(
 }
 
 function useTurnBookmark(): { bookmarked: boolean; toggle: () => void } | null {
-  const enabled = useChatPreferencesStore((state) => state.showTurnNavigation);
   const incognito = useChatRuntimeStore((state) => state.incognito);
-  const threadId = useAuiState(({ threadListItem }) => threadListItem.remoteId);
-  const openerId = useAuiState(({ thread, message }) =>
-    enabled ? turnOpenerIdAt(thread.messages, message.index) : undefined,
+  // one primitive selector: it runs on every store write (keystrokes, streamed tokens) for every mounted message
+  const key = useAuiState(
+    ({ thread, message, threadListItem }) =>
+      `${threadListItem.remoteId ?? ""}\n${turnOpenerIdAt(thread.messages, message.index) ?? ""}`,
   );
+  const [threadId, openerId] = key.split("\n");
   const bookmarked = useIsTurnBookmarked(threadId, openerId);
   const toggleBookmarkedTurn = useBookmarkedTurnsStore(
     (state) => state.toggleBookmarkedTurn,
   );
-  if (!enabled || incognito || !threadId || !openerId) {
+  if (incognito || !threadId || !openerId) {
     return null;
   }
   return { bookmarked, toggle: () => toggleBookmarkedTurn(threadId, openerId) };
 }
 
+// gated so the default (off) mounts no thread subscriptions per message
 export const BookmarkTurnButton: FC = () => {
+  const enabled = useChatPreferencesStore((state) => state.showTurnNavigation);
+  return enabled ? <BookmarkTurnButtonInner /> : null;
+};
+
+const BookmarkTurnButtonInner: FC = () => {
   const t = useT();
   const turnBookmark = useTurnBookmark();
   if (!turnBookmark) {
@@ -103,6 +110,13 @@ export const BookmarkTurnButton: FC = () => {
 };
 
 export const BookmarkTurnMenuItem: FC<{ className?: string }> = ({
+  className,
+}) => {
+  const enabled = useChatPreferencesStore((state) => state.showTurnNavigation);
+  return enabled ? <BookmarkTurnMenuItemInner className={className} /> : null;
+};
+
+const BookmarkTurnMenuItemInner: FC<{ className?: string }> = ({
   className,
 }) => {
   const t = useT();
@@ -132,11 +146,12 @@ export const UserTurnLabel: FC = () => {
 
 const UserTurnLabelText: FC = () => {
   const t = useT();
-  const turn = useAuiState(({ thread, message }) =>
-    turnNumberAt(thread.messages, message.index),
+  const key = useAuiState(
+    ({ thread, message, threadListItem }) =>
+      `${turnNumberAt(thread.messages, message.index)}\n${threadListItem.remoteId ?? ""}\n${message.id}`,
   );
-  const threadId = useAuiState(({ threadListItem }) => threadListItem.remoteId);
-  const messageId = useAuiState(({ message }) => message.id);
+  const [turnText, threadId, messageId] = key.split("\n");
+  const turn = Number(turnText);
   const bookmarked = useIsTurnBookmarked(threadId, messageId);
   if (turn === 0) {
     return null;
