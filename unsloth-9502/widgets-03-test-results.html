@@ -1,0 +1,31 @@
+<h2 class="sr-only">Test results for unslothai/unsloth PR 9502 at 207fd45 on the tester PC: code read plus headless checks; the change does not alter any Unsloth Desktop output, and fork CI has not run.</h2>
+<style>
+.tr{font-size:13px;color:var(--text-primary)}
+.tr .box{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.tr .h{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.tr .row{display:grid;grid-template-columns:minmax(0,1fr) 110px 110px;gap:8px;align-items:center;border-top:0.5px solid var(--border);padding:6px 0}
+.tr .row.hd{border-top:none;color:var(--text-muted);font-size:12px;padding-top:0}
+.tr .c{border-radius:6px;padding:2px 8px;font-size:12px;text-align:center}
+.tr .p{background:var(--bg-success);color:var(--text-success)}
+.tr .f{background:var(--bg-danger);color:var(--text-danger)}
+.tr .w{background:var(--bg-warning);color:var(--text-warning)}
+.tr .n{background:var(--surface-2);color:var(--text-secondary)}
+.tr .sub{font-size:12px;color:var(--text-secondary)}
+</style>
+<div class="tr">
+<div class="box">
+<div class="h"><span style="font-weight:500;font-size:15px">#9502: code read plus headless checks, no Unsloth Desktop run</span><span class="sub"><code>207fd45</code> vs base <code>38d4a48</code> · tester PC · Windows 11 Home · node 24.14.1 · Python 3.13</span></div>
+<div class="row hd"><span>what ran</span><span>base 38d4a48</span><span>head 207fd45</span></div>
+<div class="row"><span><i class="ti ti-test-pipe" aria-hidden="true"></i> <code>titlebar-responsive-sidebar.test.ts</code> (new, matches source text)</span><span class="c n">absent</span><span class="c p">4 / 4</span></div>
+<div class="row"><span><i class="ti ti-brand-python" aria-hidden="true"></i> <code>test_desktop_reliability_frontend_contract.py</code>, every test called directly (no pytest on this PC)</span><span class="c p">37 / 37</span><span class="c p">37 / 37</span></div>
+<div class="row"><span><i class="ti ti-table" aria-hidden="true"></i> Before/after geometry expressions over 16 input combos; rows where Unsloth Desktop output changes</span><span class="c n">n/a</span><span class="c f">0 of 8</span></div>
+<div class="row"><span><i class="ti ti-git-merge" aria-hidden="true"></i> <code>git merge-tree</code> against upstream main <code>6c20f0f</code> (GitHub agrees: CONFLICTING)</span><span class="c n">n/a</span><span class="c f">3 files</span></div>
+<div class="row"><span><i class="ti ti-git-merge" aria-hidden="true"></i> <code>git merge-tree</code> onto #12070 head <code>826b692</code></span><span class="c n">n/a</span><span class="c f">conflicts</span></div>
+<div class="row"><span><i class="ti ti-brand-rust" aria-hidden="true"></i> <code>cargo check</code>: no Rust toolchain on this PC, and the PR touches no Rust</span><span class="c n">not run</span><span class="c n">not run</span></div>
+<div class="row"><span><i class="ti ti-app-window" aria-hidden="true"></i> Unsloth Desktop below 768px: no branch Tauri build script on this PC</span><span class="c n">not run</span><span class="c n">not run</span></div>
+</div>
+<div class="box">
+<div class="h"><span style="font-weight:500">CI</span></div>
+<div class="sub">Fork mirror <a href="https://github.com/LeoBorcherding/unsloth/pull/80">#80</a> at <code>207fd45</code>: every job still pending, so no failures to classify. Upstream, oobabooga reported the jobs on <code>75aaee8</code> as cancelled without a runner and got Frontend, Unsloth UI, Windows Unsloth UI, Lint and studiobench parity green on a fork of main merged with the branch. That was before the last main merge and the pre-commit autofix. Codex found nothing at <code>a6fb8ba</code>, which is not the current head.</div>
+</div>
+</div>

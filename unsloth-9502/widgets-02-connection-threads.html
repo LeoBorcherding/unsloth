@@ -1,0 +1,47 @@
+<h2 class="sr-only">Connection map for unslothai/unsloth PR 9502: issue 8600 is likely already fixed on main by PR 10706, and PR 12070 deletes the code 9502 edits.</h2>
+<style>
+.ct{font-size:13px;color:var(--text-primary)}
+.ct .g{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.ct .gt{font-weight:500;margin-bottom:6px}
+.ct .r{display:grid;grid-template-columns:72px 64px 1fr auto;gap:8px;align-items:center;padding:5px 0;border-top:0.5px solid var(--border)}
+.ct .r:first-of-type{border-top:none}
+.ct .pill{font-size:11px;border-radius:999px;padding:2px 8px;text-align:center;white-space:nowrap}
+.ct .open{background:var(--bg-success);color:var(--text-success)}
+.ct .merged{background:#ede4fb;color:#5b2ea6}
+.ct .issue{background:var(--surface-2);color:var(--text-secondary);border:0.5px solid var(--border)}
+.ct .chip{font-size:11px;border-radius:6px;padding:2px 6px;white-space:nowrap}
+.ct .amb{background:var(--bg-warning);color:var(--text-warning)}
+.ct .red{background:var(--bg-danger);color:var(--text-danger)}
+.ct .sub{color:var(--text-secondary);font-size:12px}
+.ct .legend{font-size:12px;color:var(--text-secondary);display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px}
+.ct ul{margin:4px 0 0 18px;padding:0}
+.ct li{margin:3px 0}
+</style>
+<div class="ct">
+<div style="font-weight:500;font-size:16px">#8600 titlebar corner stub: #10706 got there first, #12070 removes the block</div>
+<div class="sub">#9502 is open and CONFLICTING. Its fix is right for a mobile shell the desktop app stopped using on Sep 11. Nothing run in Unsloth Desktop.</div>
+<div class="legend"><span class="pill open">open</span><span class="pill merged">merged</span><span class="pill issue">issue</span><span class="chip red">conflict</span><span class="chip amb">unit tests / CI only</span></div>
+
+<div class="g"><div class="gt"><i class="ti ti-bug" aria-hidden="true"></i> Origin</div>
+<div class="r"><span class="pill issue">issue</span><a href="https://github.com/unslothai/unsloth/issues/8600">#8600</a><span>corner stub after resizing Desktop</span><span class="chip amb">open, Aug 12</span></div>
+<div class="r"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/9502">#9502</a><span>closes #8600, gates on isMobile</span><span class="chip amb">unit tests, tester PC</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-arrows-exchange" aria-hidden="true"></i> Supersedes the mechanism</div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/10706">#10706</a><span>desktop never enters the mobile shell</span><span class="chip amb">merged, not rerun here</span></div>
+<div class="r"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/12070">#12070</a><span>deletes the titlebar decoration</span><span class="chip red">conflict (merge-tree)</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-git-compare" aria-hidden="true"></i> Why it conflicts with main</div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11648">#11648</a><span>landed since: rewrote titlebar spacing</span><span class="chip red">conflict</span></div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11458">#11458</a><span>landed since: titlebar spacing scale</span><span class="chip red">conflict</span></div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11179">#11179</a><span>landed since: edited the autofixed Playwright file</span><span class="chip red">conflict</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-list-check" aria-hidden="true"></i> Before deciding</div>
+<ul>
+<li>Settle ourselves: launch Unsloth Desktop from main on Windows, pin the sidebar, drag to under 768px, and look for the corner. If it's gone, #8600 is fixed by #10706 and #9502 can close. Unblocks #8600.</li>
+<li>Settle ourselves: whether #12070 lands. If it does, #9502 has nothing left to edit.</li>
+<li>Ask the reporter only if main still shows the stub: which OS and whether the sidebar was pinned. Unblocks #8600.</li>
+</ul></div>
+</div>

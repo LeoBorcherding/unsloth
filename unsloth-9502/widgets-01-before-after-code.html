@@ -1,0 +1,87 @@
+<h2 class="sr-only">Before and after code for unslothai/unsloth PR 9502: the mobile-width gate on the titlebar corner never fires in Unsloth Desktop because the mobile flag is always false under Tauri since PR 10706.</h2>
+<style>
+.ba{font-size:13px;color:var(--text-primary)}
+.ba .card{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.ba .hd{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ba .nm{font-weight:500;font-size:14px}
+.ba .pill{font-size:11px;border-radius:999px;padding:2px 8px;margin-left:6px;white-space:nowrap}
+.ba .open{background:var(--bg-success);color:var(--text-success)}
+.ba .amb{background:var(--bg-warning);color:var(--text-warning)}
+.ba .red{background:var(--bg-danger);color:var(--text-danger)}
+.ba .meta{color:var(--text-secondary);font-size:12px;margin:6px 0}
+.ba .panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;margin-top:8px}
+.ba .pane{border:0.5px solid var(--border);border-radius:8px;overflow:hidden}
+.ba .pt{font-size:12px;font-weight:500;padding:6px 10px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between}
+.ba .pt code{font-weight:400;color:var(--text-secondary)}
+.ba pre{margin:0;padding:6px 0;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+.ba .l{display:grid;grid-template-columns:34px 1fr;padding:0 8px}
+.ba .l span:first-child{color:var(--text-muted);text-align:right;padding-right:8px;user-select:none}
+.ba .del{background:var(--bg-danger)}
+.ba .add{background:var(--bg-success)}
+.ba .gap{color:var(--text-muted);padding:2px 10px;font-style:italic}
+.ba .file{color:var(--text-secondary);padding:2px 10px;font-size:11px;border-top:0.5px dashed var(--border)}
+.ba .ann{margin:2px 10px 4px 42px;padding:3px 8px;border-radius:6px;font-size:12px}
+.ba .note{background:var(--bg-warning);color:var(--text-warning)}
+.ba .nit{background:var(--bg-danger);color:var(--text-danger)}
+.ba .rv{margin-top:10px;font-size:12px}
+.ba .rv div{padding:4px 0;border-top:0.5px solid var(--border)}
+.ba .legend{font-size:12px;color:var(--text-secondary);margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap}
+.ba .sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}
+.ba table{border-collapse:collapse;font-size:12px;margin-top:10px;width:100%}
+.ba td,.ba th{border-top:0.5px solid var(--border);padding:4px 6px;text-align:left;font-weight:400}
+.ba th{color:var(--text-muted)}
+</style>
+<div class="ba">
+<div style="font-weight:500;font-size:16px">#9502: a mobile gate that Unsloth Desktop can no longer reach</div>
+<div class="meta">Open, conflicting with main. Read at <code>38d4a48</code> (base) and <code>207fd45</code> (head), tester PC. The fix is correct for the old mobile shell, but #10706 took that shell out of the desktop app first.</div>
+<div class="legend"><span><span class="sw" style="background:var(--bg-danger)"></span>removed / nit</span><span><span class="sw" style="background:var(--bg-success)"></span>added</span><span><span class="sw" style="background:var(--bg-warning)"></span>note</span></div>
+
+<div class="card">
+<div class="hd"><span class="nm">A. A detached sidebar corner under the titlebar at widths below 768px</span><span><span class="pill open">open PR</span><span class="pill red">no-op in Unsloth Desktop</span><span class="pill amb">risk low</span></span></div>
+<div class="meta"><b style="font-weight:500">When:</b> custom titlebar (Windows/Linux) with the sidebar pinned and the window narrower than 768px, and <code>isMobile</code> true.<br>
+<b style="font-weight:500">Before:</b> a 12px corner square drawn at the desktop sidebar's edge over a sheet sidebar that holds no width (#8600).<br>
+<b style="font-weight:500">After:</b> same pixels in Unsloth Desktop, because <code>isMobile</code> is false there at every width.</div>
+<div class="panes">
+<div class="pane"><div class="pt">Before <code>window-titlebar.tsx @ 38d4a48</code></div><pre>
+<div class="l"><span>203</span><span>  const isMobile = useIsMobileShell();</span></div>
+<div class="gap">6 lines</div>
+<div class="l del"><span>210</span><span>  const sidebarWidth = showSidebarSurface</span></div>
+<div class="gap">6 lines</div>
+<div class="l del"><span>217</span><span>  const titlebarNavigationWidth =</span></div>
+<div class="l del"><span>218</span><span>    showSidebarSurface &amp;&amp; !pinned ? "7rem" : sidebarWidth;</span></div>
+<div class="l del"><span>219</span><span>  const contentBorderLeft = pinned ? `calc(${sidebarWidth} + 12px)` : "0px";</span></div>
+<div class="ann note">▲ in a browser with the titlebar forced on, isMobile is true below 768px and the corner keeps the desktop offset</div>
+<div class="gap">141 lines</div>
+<div class="l del"><span>361</span><span>          {pinned &amp;&amp; (</span></div>
+<div class="file">hooks/use-mobile.ts @ 38d4a48 (unchanged by the PR)</div>
+<div class="l"><span>36</span><span>export function useIsMobileShell(): boolean {</span></div>
+<div class="l"><span>37</span><span>  return useIsMobile() &amp;&amp; !isTauri;</span></div>
+</pre></div>
+<div class="pane"><div class="pt">After <code>window-titlebar.tsx @ 207fd45</code></div><pre>
+<div class="l"><span>203</span><span>  const isMobile = useIsMobileShell();</span></div>
+<div class="gap">6 lines</div>
+<div class="l add"><span>210</span><span>  const showDesktopSidebarSurface = showSidebarSurface &amp;&amp; !isMobile;</span></div>
+<div class="ann nit">⚠ WindowTitlebar only mounts under Tauri, where useIsMobileShell() is false, so this equals showSidebarSurface</div>
+<div class="l add"><span>211</span><span>  const sidebarWidth = showDesktopSidebarSurface</span></div>
+<div class="gap">6 lines</div>
+<div class="l"><span>218</span><span>  const titlebarNavigationWidth =</span></div>
+<div class="l add"><span>219</span><span>    showSidebarSurface &amp;&amp; (isMobile || !pinned) ? "7rem" : sidebarWidth;</span></div>
+<div class="gap">145 lines</div>
+<div class="l add"><span>365</span><span>          {showDesktopSidebarSurface &amp;&amp; pinned &amp;&amp; (</span></div>
+</pre></div>
+</div>
+<table>
+<tr><th>shape (sidebar surface on)</th><th>isMobile</th><th>before</th><th>after</th><th>verified</th></tr>
+<tr><td>Unsloth Desktop, pinned, any width</td><td>false</td><td>corner at 280px</td><td>corner at 280px</td><td>ran: truth table, 0 of 8 Tauri rows differ</td></tr>
+<tr><td>Unsloth Desktop, collapsed, any width</td><td>false</td><td>no corner</td><td>no corner</td><td>ran: same script</td></tr>
+<tr><td>Browser, titlebar forced on, pinned, &lt;768px</td><td>true</td><td>corner at 280px</td><td>no corner, border at 0</td><td>ran: only row that differs; not a shipping config</td></tr>
+</table>
+<div class="rv">
+<div><span class="pill red">bug</span> ran: evaluated the before and after expressions for all 16 combinations of Tauri / narrow / surface / pinned. The only row that changes is <code>isTauri=false</code>, where <code>WindowTitlebar</code> returns null (<code>window-titlebar.tsx:349</code>). #10706 (<code>22bbff6</code>, in this PR's base) made the desktop ignore the breakpoint.</div>
+<div><span class="pill red">bug</span> ran: <code>git merge-tree</code> against main <code>6c20f0f</code> conflicts in <code>window-titlebar.tsx</code>, <code>test_desktop_reliability_frontend_contract.py</code> and <code>playwright_queue_localization.py</code>; GitHub reports CONFLICTING. Onto #12070's head it conflicts too, and #12070 deletes the decoration block outright.</div>
+<div><span class="pill amb">gap</span> grep: the last commit, a pre-commit.ci autofix (<code>207fd45</code>), put 3 unrelated Python files back into the diff (<code>main.py</code>, <code>test_bootstrap_banner_password_visibility.py</code>, <code>playwright_queue_localization.py</code>) after oobabooga's main merge had dropped them. Main has since landed the same formatting, so they're diff noise, not a style change.</div>
+<div><span class="pill amb">gap</span> read: the new <code>titlebar-responsive-sidebar.test.ts</code> matches source text, so it passes 4/4 without the gate ever changing a rendered pixel.</div>
+</div>
+<div class="meta">Leaves alone: desktop geometry at 768px and up. Tests: <code>titlebar-responsive-sidebar.test.ts</code> (new), contract test updated. Links: <a href="https://github.com/unslothai/unsloth/pull/9502">#9502</a>, <a href="https://github.com/unslothai/unsloth/issues/8600">#8600</a>, <a href="https://github.com/unslothai/unsloth/pull/10706">#10706</a>, mirror <a href="https://github.com/LeoBorcherding/unsloth/pull/80">fork #80</a>.</div>
+</div>
+</div>
