@@ -6755,6 +6755,11 @@ def _monitor_perf_callback(monitor_id: Optional[str], context_length):
         return None
 
     def _callback(timings: dict) -> None:
+        # Report the decode phase once per prefill round, not on every token.
+        if "prompt_progress" in timings:
+            _callback.needs_phase = True
+        elif timings.get("running_phase") == "token_generation":
+            _callback.needs_phase = False
         _monitor_usage(
             monitor_id,
             None,
@@ -6762,6 +6767,7 @@ def _monitor_perf_callback(monitor_id: Optional[str], context_length):
             timings = timings,
         )
 
+    _callback.needs_phase = True
     return _callback
 
 
@@ -32036,8 +32042,12 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                             # so don't let the middleware claim the slot and evict a
                             # preview-owned model.
                             mark_response_failed(getattr(request, "scope", None))
-                        if not _client_wants_progress and _is_prefill_progress_only(
-                            LlamaCppBackend._sse_event_payload(event.decode("utf-8", "replace"))
+                        if (
+                            not _client_wants_progress
+                            and b'"prompt_progress"' in event
+                            and _is_prefill_progress_only(
+                                LlamaCppBackend._sse_event_payload(event.decode("utf-8", "replace"))
+                            )
                         ):
                             if progress_keepalive.due():
                                 yield _OPENAI_PASSTHROUGH_SSE_KEEPALIVE.encode()
@@ -39722,7 +39732,8 @@ async def _openai_passthrough_stream_admitted(
         body = await _build_openai_passthrough_body_async(
             payload, backend_ctx = llama_backend.context_length, llama_backend = llama_backend
         )
-        client_wants_progress = bool(body.get("return_progress"))
+        # The body builder is allowlisted, so the caller's opt-in lives in the extra fields.
+        client_wants_progress = bool((payload.model_extra or {}).get("return_progress"))
         body["return_progress"] = True
         client_wants_usage = _wants_stream_usage(payload)
         upstream_stream_options = dict(body.get("stream_options") or {})

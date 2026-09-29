@@ -1694,3 +1694,41 @@ def test_a_bad_predicted_ms_is_dropped_rather_than_raising(monkeypatch, predicte
     monitor.finish(entry_id)
 
     assert monitor.snapshot()[0]["decode_ms"] is None
+
+
+def test_perf_callback_reports_decode_phase_once_per_prefill_round(monkeypatch):
+    import routes.inference as inf_mod
+    from core.inference.llama_cpp import _report_live_llama_timings
+
+    seen = []
+    monkeypatch.setattr(
+        inf_mod,
+        "_monitor_usage",
+        lambda *_a, timings, **_k: seen.append(timings.get("running_phase")),
+    )
+    callback = inf_mod._monitor_perf_callback("apireq_x", 4096)
+    progress = {
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": None}}],
+        "prompt_progress": {"total": 10, "processed": 10, "cache": 0, "time_ms": 1},
+    }
+    token = {"choices": [{"index": 0, "delta": {"content": "a"}}], "timings": {"predicted_n": 1}}
+    for chunk in (progress, token, token, token, progress, token, token):
+        _report_live_llama_timings(callback, chunk)
+
+    assert seen == [None, "token_generation", None, None, None, "token_generation", None]
+
+
+def test_progress_updates_advance_updated_at_on_a_frozen_clock(monkeypatch):
+    import core.inference.api_monitor as monitor_mod
+
+    monitor = ApiMonitor(max_entries = 3)
+    entry_id = monitor.start(endpoint = "/v1/chat/completions", method = "POST", model = "m", prompt = "p")
+    monkeypatch.setattr(monitor_mod.time, "time", lambda: 1_000.0)
+    seen = []
+    for processed in (10, 20):
+        monitor.set_prompt_progress(entry_id, total = 100, processed = processed)
+        seen.append(monitor.snapshot()[0]["updated_at"])
+    monitor.set_running_phase(entry_id, "token_generation")
+    seen.append(monitor.snapshot()[0]["updated_at"])
+
+    assert seen[0] < seen[1] < seen[2]
