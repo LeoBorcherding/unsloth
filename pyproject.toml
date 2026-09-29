@@ -175,7 +175,7 @@ studio = [
     "fastmcp>=3.0.2",
     "gguf==0.19.0 ; python_version >= '3.10'",
     "gguf==0.18.0 ; python_version < '3.10'",
-    "av>=12.3.0",
+    "av>=12.3.0,<19",
     # No win_arm64 wheel and no sdist either, so it cannot be floored or built. Dropped rather
     # than pinned: the RAG store already treats a missing sqlite_vec as "RAG unavailable".
     "sqlite-vec==0.1.9 ; sys_platform != 'win32' or platform_machine != 'ARM64'",
@@ -269,22 +269,22 @@ huggingfacenotorch = [
 audio-torch211 = [
     "torchcodec>=0.11.0,<0.12.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
     "soundfile>=0.12.1 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
-    "av>=12.3.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+    "av>=12.3.0,<19 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
 ]
 audio-torch210 = [
     "torchcodec>=0.10.0,<0.11.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
     "soundfile>=0.12.1 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
-    "av>=12.3.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+    "av>=12.3.0,<19 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
 ]
 audio-torch290 = [
     "torchcodec>=0.8.0,<0.10.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
     "soundfile>=0.12.1 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
-    "av>=12.3.0 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+    "av>=12.3.0,<19 ; python_version >= '3.10' and python_version < '3.15' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
 ]
 audio-torch280 = [
     "torchcodec>=0.6.0,<0.8.0 ; python_version >= '3.9' and python_version < '3.14' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
     "soundfile>=0.12.1 ; python_version >= '3.9' and python_version < '3.14' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
-    "av>=12.3.0 ; python_version >= '3.9' and python_version < '3.14' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
+    "av>=12.3.0,<19 ; python_version >= '3.9' and python_version < '3.14' and (((sys_platform == 'linux' or sys_platform == 'win32') and (platform_machine == 'x86_64' or platform_machine == 'AMD64')) or (sys_platform == 'darwin' and platform_machine == 'arm64'))",
 ]
 huggingface = [
     "unsloth[huggingfacenotorch]",
