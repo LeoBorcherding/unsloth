@@ -8,6 +8,7 @@ import { persist } from "zustand/middleware";
 export interface BookmarkedTurnsState {
   bookmarkedByThread: Record<string, string[]>;
   toggleBookmarkedTurn: (threadId: string, messageId: string) => void;
+  clearThreads: (threadIds: readonly string[]) => void;
 }
 
 export const useBookmarkedTurnsStore = create<BookmarkedTurnsState>()(
@@ -28,6 +29,17 @@ export const useBookmarkedTurnsStore = create<BookmarkedTurnsState>()(
           return {
             bookmarkedByThread:
               next.length > 0 ? { ...others, [threadId]: next } : others,
+          };
+        }),
+      clearThreads: (threadIds) =>
+        set((state) => {
+          const dropping = new Set(threadIds);
+          return {
+            bookmarkedByThread: Object.fromEntries(
+              Object.entries(state.bookmarkedByThread).filter(
+                ([id]) => !dropping.has(id),
+              ),
+            ),
           };
         }),
     }),
