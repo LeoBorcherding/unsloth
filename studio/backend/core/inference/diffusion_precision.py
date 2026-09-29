@@ -39,6 +39,8 @@ from functools import lru_cache
 
 from core._torchao_stub import is_stubbed, torch_is_rocm
 
+from .diffusion_nvfp4_flag import nvfp4_blocked, nvfp4_disabled_message
+
 TE_QUANT_FP8 = "fp8"
 TE_QUANT_NVFP4 = "nvfp4"
 TE_QUANT_INT8 = "int8"
@@ -80,6 +82,8 @@ def normalize_te_quant(value: Optional[str]) -> Optional[str]:
         raise ValueError(
             f"Unsupported text_encoder_quant '{value}'. Use one of: {', '.join(TE_QUANT_MODES)}."
         )
+    if nvfp4_blocked(normalized):
+        raise ValueError(nvfp4_disabled_message("text_encoder_quant"))
     return normalized
 
 
@@ -111,7 +115,7 @@ def resolve_te_quant_request(
     """
     if not te_quant_is_auto(value):
         return normalize_te_quant(value), False
-    if auto_scheme is None:
+    if auto_scheme is None or nvfp4_blocked(auto_scheme):
         return None, False
     # Validate the family's own field rather than trusting it: a typo here would otherwise reach
     # quantize_text_encoders as an unknown mode on every default load of that family.
@@ -161,7 +165,6 @@ def torchao_quantize_importable() -> bool:
     return not is_stubbed("torchao")
 
 
-# what each mode needs from the host, worded for the refusal a user reads
 _TE_QUANT_REQUIREMENTS = {
     TE_QUANT_FP8: "an NVIDIA or AMD GPU that runs bf16 (NVIDIA Ampere sm_80 or newer)",
     TE_QUANT_FP8_DYNAMIC: "an NVIDIA GPU with fp8 tensor cores (Ada sm_89 or newer)",
@@ -180,15 +183,12 @@ def te_quant_unsupported_reason(mode: str) -> str:
 
 @lru_cache(maxsize = 1)
 def nvfp4_weight_only_importable() -> bool:
-    """Whether this torchao ships ``NVFP4WeightOnlyConfig`` (0.15+) and accepts the installed torch.
-
-    Studio pins torchao 0.14 for torch 2.9 and older, which only has the dynamic NVFP4 config, so
-    without this the pre-load gate passes and ``_cast_nvfp4`` fails after the download."""
+    """Whether torchao ships a usable ``NVFP4WeightOnlyConfig`` (0.15+; Studio pins 0.14 on torch <= 2.9)."""
     try:
         from torchao.prototype.mx_formats import NVFP4WeightOnlyConfig
         from .diffusion_transformer_quant import _quiet_config
         _quiet_config(NVFP4WeightOnlyConfig)
-    except Exception:  # noqa: BLE001 -- older torchao, or a torch the config rejects
+    except Exception:  # noqa: BLE001
         return False
     return True
 
@@ -198,6 +198,8 @@ def te_quant_supported(target: Any, mode: str) -> bool:
     needs -- fp8 dtype (fp8, nvfp4 block scales), fp8 GEMM sm_89+ (fp8_dynamic), int8 sm_80+
     (int8). nvfp4 is weight-only, so it has no FP4 tensor-core requirement."""
     if getattr(target, "device", None) != "cuda":
+        return False
+    if nvfp4_blocked(mode):
         return False
     # Torchao modes cannot use the Windows stub or ROCm's non-SM capability values. Plain fp8 is only a dtype cast and
     # remains supported.
@@ -216,7 +218,7 @@ def te_quant_supported(target: Any, mode: str) -> bool:
         if mode == TE_QUANT_INT8:
             return torch.cuda.get_device_capability()[0] >= 8  # int8 cores: Ampere sm_80+
         if mode == TE_QUANT_NVFP4:
-            # weight-only nvfp4 dequantises to bf16 and runs a plain gemm; the block scales are stored as e4m3
+            # weight-only: dequantised to bf16 for a plain gemm, so only the e4m3 block-scale dtype is needed
             return hasattr(torch, "float8_e4m3fn") and nvfp4_weight_only_importable()
     except Exception:
         return False
