@@ -1,0 +1,61 @@
+<!-- connection-threads, unslothai/unsloth#11161, head c7ed763b79, 2026-09-29 tester PC. connect.py ran; hot-file passes kept symbol matches only. -->
+<style>
+.ct{font-size:13px;color:var(--text-primary)}
+.ct .ttl{font-size:17px;font-weight:500;margin:0 0 2px}
+.ct .sub{font-size:12px;color:var(--text-secondary);margin:0 0 10px}
+.ct .leg{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;font-size:11px;color:var(--text-secondary);align-items:center}
+.ct .grp{border:0.5px solid var(--border);border-radius:12px;padding:10px 12px;margin:0 0 10px;background:var(--surface-1)}
+.ct .gh{font-size:12px;font-weight:500;color:var(--text-secondary);margin:0 0 6px;display:flex;gap:6px;align-items:center}
+.ct .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:0.5px solid var(--border);font-size:12px}
+.ct .row:first-of-type{border-top:none}
+.ct .row.me{background:var(--bg-accent);border-radius:8px;padding:6px 8px}
+.ct .ds{flex:1;min-width:180px;color:var(--text-primary)}
+.ct a{color:var(--text-accent);text-decoration:none;font-family:var(--font-mono);font-size:12px}
+.ct .p{font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.ct .m{background:rgba(127,119,221,.18);color:#7F77DD}.ct .o{background:var(--bg-success);color:var(--text-success)}
+.ct .cl{background:var(--bg-danger);color:var(--text-danger)}
+.ct .t{font-size:10px;padding:0 5px;border-radius:4px;border:0.5px solid;white-space:nowrap}
+.ct .t.amb{color:#BA7517}.ct .t.red{color:var(--text-danger)}
+.ct .cf{font-size:11px;color:var(--text-danger)}
+.ct .gap{border:0.5px dashed var(--border);border-radius:12px;padding:10px 12px;margin:0 0 10px}
+.ct .gap h4{font-size:12px;font-weight:500;margin:6px 0 4px}
+.ct .gap ul{margin:0 0 4px 16px;padding:0;font-size:12px}
+.ct .gap li{margin:0 0 3px}
+</style>
+<div class="ct">
+<div class="ttl">Prefill progress over the API: issue 11141 and the PR that closes it</div>
+<div class="sub">11161 open, conflicts with main in main.py (the expose_headers line, one-line fix) and a Playwright script it only reflows. Nothing ran against a live llama-server.</div>
+<div class="leg"><span class="p m">merged</span><span class="p o">open</span><span class="p cl">conflict</span><span class="t amb">unit tests / CI only</span><span class="t red">needs a live run</span></div>
+
+<div class="grp"><div class="gh"><i class="ti ti-target"></i>Origin</div>
+<div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/issues/11141">#11141</a><span class="ds">asks for processed/total + phase on /api/inference/monitor (option 1)</span></div>
+<div class="row me"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/pull/11161">#11161</a><span class="ds">closes it: counters on each monitor entry, phase label, X-Unsloth-Monitor-ID</span><span class="t amb">unit tests, Linux + tester PC</span></div>
+</div>
+
+<div class="grp"><div class="gh"><i class="ti ti-plug-connected"></i>Transport half, already landed</div>
+<div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/10911">#10911</a><span class="ds">keep-alive comments through prefill; 11161 keeps them firing by holding the stream in its pre-first-item state</span></div>
+</div>
+
+<div class="grp"><div class="gh"><i class="ti ti-git-merge"></i>Why it conflicts (git merge-tree vs upstream/main, 893 commits ahead of base)</div>
+<div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/11761">#11761</a><span class="ds">grew expose_headers into a list; 11161 adds X-Unsloth-Monitor-ID on the old one-liner</span><span class="cf">conflict: studio/backend/main.py (real, one line)</span></div>
+<div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/12186">#12186</a><span class="ds">added x-typesafe-request-id to the same list</span><span class="cf">same hunk</span></div>
+<div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/11139">#11139</a><span class="ds">changed page.goto in the Playwright script 11161 only reflows</span><span class="cf">conflict: tests/studio/playwright_queue_localization.py (formatting-only on our side)</span></div>
+</div>
+
+<div class="grp"><div class="gh"><i class="ti ti-layout-dashboard"></i>Same page</div>
+<div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/11340">#11340</a><span class="ds">copy full prompts from the API monitor; same file, no overlap in the header</span></div>
+</div>
+
+<div class="gap">
+<div class="gh"><i class="ti ti-list-check"></i>Before merging</div>
+<h4>Settle ourselves</h4>
+<ul>
+<li>Merge main: re-add X-Unsloth-Monitor-ID to the new expose_headers list, and drop the formatting-only hunks Daniel asked about (main.py banner reflow, two test files, the Playwright script), which also clears the second conflict. Unblocks 11161.</li>
+<li>Decide whether passthrough clients should see progress frames only on opt-in, like usage. Unblocks 11161.</li>
+</ul>
+<h4>Not run yet</h4>
+<ul>
+<li>A real long prompt against llama-server on a GGUF, polling /api/inference/monitor while it prefills. Unblocks closing 11141 with evidence.</li>
+</ul>
+</div>
+</div>

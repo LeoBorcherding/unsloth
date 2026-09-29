@@ -1,0 +1,45 @@
+<!-- test-results, unslothai/unsloth#11161, base 38d4a4869a, head c7ed763b79, run 2026-09-29 on the tester PC -->
+<style>
+.tr{font-size:13px;color:var(--text-primary)}
+.tr .ttl{font-size:17px;font-weight:500;margin:0 0 2px}
+.tr .sub{font-size:12px;color:var(--text-secondary);margin:0 0 10px}
+.tr .mc{border:0.5px solid var(--border);border-radius:12px;padding:8px 12px;margin:0 0 10px;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px;background:var(--surface-1)}
+.tr .mc dt{color:var(--text-secondary)}.tr .mc dd{margin:0}
+.tr .card{border:0.5px solid var(--border);border-radius:12px;overflow:hidden;margin:0 0 10px}
+.tr table{width:100%;border-collapse:collapse;font-size:12px}
+.tr th{font-weight:500;text-align:left;color:var(--text-secondary);padding:6px 10px;border-bottom:0.5px solid var(--border);font-size:11px}
+.tr td{padding:6px 10px;border-top:0.5px solid var(--border);vertical-align:top}
+.tr tr:first-child td{border-top:none}
+.tr .what{font-weight:500}
+.tr .how{font-size:11px;color:var(--text-secondary);margin-top:2px;font-family:var(--font-mono);word-break:break-word}
+.tr .chip{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap;margin:0 0 2px}
+.tr .pass{background:var(--bg-success);color:var(--text-success)}
+.tr .fail{background:var(--bg-danger);color:var(--text-danger)}
+.tr .pre{background:rgba(186,117,23,.16);color:#BA7517}
+.tr .na{background:rgba(136,135,128,.18);color:var(--text-secondary)}
+.tr .n{font-size:11px;color:var(--text-secondary);display:block}
+.tr .foot{font-size:12px;color:var(--text-secondary);margin:6px 0 0}
+.tr .foot b{font-weight:500;color:var(--text-primary)}
+</style>
+<div class="tr">
+<div class="ttl">PR 11161 test results: backend suites green on both sides, new tests fail on base as they should</div>
+<div class="sub">Headless, no llama-server, no GPU work. Every row watched on the tester PC.</div>
+<dl class="mc">
+<dt>machine</dt><dd>tester PC, Windows 11 Home 10.0.26200, Python 3.13.15 (fix-studio-mmproj-10296 Unsloth Studio venv, read-only), Node 24.14.1. GPUs RX 6500 XT + RX 5700 XT, unused</dd>
+<dt>base</dt><dd>38d4a4869a (merge base, night-shift-tester/11161-base)</dd>
+<dt>head</dt><dd>c7ed763b79 (night-shift-tester/11161, same as the PR head)</dd>
+</dl>
+<div class="card"><table>
+<tr><th>what ran</th><th>base 38d4a4869</th><th>head c7ed763b7</th></tr>
+<tr><td><div class="what">Monitor, route timeouts, passthrough, stall timeout</div><div class="how">pytest test_api_monitor test_llama_route_timeouts test_openai_tool_passthrough test_llama_cpp_stall_timeout</div></td><td><span class="chip pass">546 passed</span></td><td><span class="chip pass">558 passed</span><span class="n">+12 are the PR's new tests</span></td></tr>
+<tr><td><div class="what">Head's new tests run against base code</div><div class="how">head test files copied into the base worktree, -k progress/prefill/monitor_id/tool_only_stream</div></td><td><span class="chip fail">12 failed, 1 passed</span><span class="n">expected: APIs don't exist on base</span></td><td><span class="chip pass">pass</span><span class="n">covered by the row above</span></td></tr>
+<tr><td><div class="what">Tool loop, progress and timings subset</div><div class="how">pytest test_llama_cpp_tool_loop.py -k "timings or progress or stall"</div></td><td><span class="chip pass">3 passed</span></td><td><span class="chip pass">3 passed</span><span class="n">includes the 2 new prompt_progress / running_phase asserts</span></td></tr>
+<tr><td><div class="what">Tool loop, full file</div><div class="how">pytest test_llama_cpp_tool_loop.py -v, 900 s cap</div></td><td><span class="chip pre">129 passed, cut off at 78%</span></td><td><span class="chip pre">129 passed, cut off at 78%</span><span class="n">slow on Windows, same point on both sides, no failures seen</span></td></tr>
+<tr><td><div class="what">Tunnel gate + bootstrap banner</div><div class="how">pytest test_secure_tunnel_gate test_bootstrap_banner_password_visibility</div></td><td><span class="chip pass">65 passed</span></td><td><span class="chip pass">65 passed</span></td></tr>
+<tr><td><div class="what">Canned llama-server stream through the real passthrough</div><div class="how">probe_passthrough.py: 4 progress frames (ggml-org chat shape), role chunk, "ok", stop, [DONE]</div></td><td><span class="chip na">no return_progress, no header, no phase fields</span></td><td><span class="chip pass">return_progress True, header set, phase token_generation, 4096/4096 100%</span><span class="n">client still sees all 4 progress frames (5 role-only chunks)</span></td></tr>
+<tr><td><div class="what">Frontend typecheck</div><div class="how">npm ci; npm run typecheck</div></td><td><span class="chip na">not run</span></td><td><span class="chip pass">exit 0</span></td></tr>
+<tr><td><div class="what">Live llama-server long prompt, monitor polled during prefill</div><div class="how">needs a GGUF loaded in an isolated Unsloth Studio</div></td><td><span class="chip na">not run</span></td><td><span class="chip na">not run</span></td></tr>
+<tr><td><div class="what">API monitor header visual</div><div class="how">needs Unsloth Studio or Unsloth Desktop on screen</div></td><td><span class="chip na">not run</span></td><td><span class="chip na">not run</span><span class="n">author and Imagineer99 posted seeded screenshots</span></td></tr>
+</table></div>
+<div class="foot"><b>Bottom line:</b> the plumbing does what it says on canned input and nothing existing regressed; the open gap is a real long prefill on llama-server, which none of these rows touch.</div>
+</div>

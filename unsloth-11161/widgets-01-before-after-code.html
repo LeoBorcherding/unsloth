@@ -1,0 +1,127 @@
+<!-- before-after-code, unslothai/unsloth#11161, base 38d4a4869a, head c7ed763b79, 2026-09-29 tester PC -->
+<style>
+.ba{font-size:13px;color:var(--text-primary)}
+.ba .ttl{font-size:17px;font-weight:500;margin:0 0 2px}
+.ba .sub{font-size:12px;color:var(--text-secondary);margin:0 0 10px}
+.ba .leg{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 12px;font-size:11px;color:var(--text-secondary)}
+.ba .sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:4px}
+.ba .card{border:0.5px solid var(--border);border-radius:12px;padding:12px;margin:0 0 14px;background:var(--surface-1)}
+.ba .hd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}
+.ba .id{font-size:11px;font-weight:500;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--text-primary);color:var(--surface-1)}
+.ba .name{font-size:14px;font-weight:500;flex:1;min-width:200px}
+.ba .meta{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin:0 0 10px}
+.ba .meta dt{color:var(--text-secondary)}.ba .meta dd{margin:0}
+.ba .sides{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:8px}
+.ba .side{border:0.5px solid var(--border);border-radius:8px;overflow:hidden;min-width:0}
+.ba .sh{font-size:11px;padding:4px 8px;display:flex;gap:6px;align-items:center;border-bottom:0.5px solid var(--border)}
+.ba .sh b{font-weight:500}.ba .sh .f{color:var(--text-secondary);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ba .bf .sh{background:var(--bg-danger);color:var(--text-danger)}.ba .af .sh{background:var(--bg-success);color:var(--text-success)}
+.ba .code{font-family:var(--font-mono);font-size:11px;line-height:1.55;padding:4px 0}
+.ba .ln{display:grid;grid-template-columns:40px 12px 1fr;white-space:pre-wrap;word-break:break-word}
+.ba .ln .no{color:var(--text-muted);text-align:right;padding-right:6px;user-select:none}
+.ba .ln.del{background:rgba(226,75,74,.13)}.ba .ln.add{background:rgba(29,158,117,.13)}
+.ba .ln.gap .tx{color:var(--text-muted)}
+.ba .note{grid-column:3;font-family:var(--font-sans);font-size:11px;color:#BA7517;padding:1px 0 3px}
+.ba .note.ok{color:var(--text-success)}.ba .note.nit{color:#D85A30;font-weight:500}
+.ba .rv{margin:8px 0 0;border-left:2px solid #D85A30;padding:2px 0 2px 10px;font-size:12px}
+.ba .rv div{margin:0 0 4px}.ba .rv .ev{font-size:11px;color:var(--text-secondary);display:block}
+.ba .rv .sv{font-size:11px;font-weight:500;color:#D85A30;margin-right:6px}
+.ba .foot{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-secondary);margin:8px 0 0}
+.ba a{color:var(--text-accent);text-decoration:none}
+.ba .p{font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.ba .o{background:var(--bg-success);color:var(--text-success)}
+.ba .t{font-size:10px;padding:0 5px;border-radius:4px;border:0.5px solid;white-space:nowrap;color:#BA7517}
+</style>
+<div class="ba">
+<div class="ttl">PR 11161: prefill progress reaches the API monitor</div>
+<div class="sub">Open, Codex clean at c7ed763b79, conflicts with main (expose_headers in main.py, plus a reflowed Playwright script). Unit tests and a canned-stream probe ran on the tester PC; no live llama-server run.</div>
+<div class="leg"><span><span class="sw" style="background:rgba(226,75,74,.35)"></span>removed</span><span><span class="sw" style="background:rgba(29,158,117,.35)"></span>added</span><span style="color:#BA7517">mechanism note</span><span style="color:var(--text-success)">why it holds</span><span style="color:#D85A30">nit</span></div>
+
+<div class="card">
+<div class="hd"><span class="id">A</span><span class="name">The /v1/chat/completions passthrough never asked llama-server for progress</span><span class="p o">open</span><span class="t">unit tests + probe, tester PC</span></div>
+<dl class="meta">
+<dt>when</dt><dd>any streamed chat completion that takes the GGUF passthrough (tools, or plain OpenAI clients)</dd>
+<dt>before</dt><dd>API monitor row sits on RUNNING for the whole prefill; nothing advances</dd>
+<dt>after</dt><dd>row shows prompt processing with processed/total/percent, then token generation; response carries X-Unsloth-Monitor-ID</dd>
+</dl>
+<div class="sides">
+<div class="side bf"><div class="sh"><b>Before</b><span class="f">studio/backend/routes/inference.py @ 38d4a4869</span></div><div class="code">
+<div class="ln"><span class="no">35745</span><span></span><span class="tx">        body = await _build_openai_passthrough_body_async(</span></div>
+<div class="ln"><span class="no">35746</span><span></span><span class="tx">            payload, backend_ctx = llama_backend.context_length, llama_backend = llama_backend</span></div>
+<div class="ln"><span class="no">35747</span><span></span><span class="tx">        )</span></div>
+<div class="ln"><span class="no">35748</span><span></span><span class="tx">        client_wants_usage = _wants_stream_usage(payload)</span><span class="note">llama-server only emits prompt_progress frames when the request sets return_progress (server-context.cpp:3789), so this path had nothing to report</span></div>
+<div class="ln gap"><span class="no"></span><span></span><span class="tx">...</span></div>
+<div class="ln"><span class="no">36250</span><span></span><span class="tx">                    post_first_item_read_timeout_s = _terminal_read_timeout_s,</span></div>
+</div></div>
+<div class="side af"><div class="sh"><b>After</b><span class="f">studio/backend/routes/inference.py @ c7ed763b7</span></div><div class="code">
+<div class="ln"><span class="no">35779</span><span></span><span class="tx">        body = await _build_openai_passthrough_body_async(</span></div>
+<div class="ln"><span class="no">35780</span><span></span><span class="tx">            payload, backend_ctx = llama_backend.context_length, llama_backend = llama_backend</span></div>
+<div class="ln"><span class="no">35781</span><span></span><span class="tx">        )</span></div>
+<div class="ln add"><span class="no">35782</span><span>+</span><span class="tx">        body["return_progress"] = True</span><span class="note nit">the progress frames this unlocks are relayed to the client unchanged: one extra role-only chunk with a non-standard prompt_progress key per prefill batch, whether or not the client asked</span></div>
+<div class="ln"><span class="no">35783</span><span></span><span class="tx">        client_wants_usage = _wants_stream_usage(payload)</span></div>
+<div class="ln gap"><span class="no"></span><span></span><span class="tx">...</span></div>
+<div class="ln add"><span class="no">36288</span><span>+</span><span class="tx">                    track_prefill_progress = True,</span></div>
+<div class="ln"><span class="no">36289</span><span></span><span class="tx">                    post_first_item_read_timeout_s = _terminal_read_timeout_s,</span></div>
+</div></div>
+</div>
+<div class="rv">
+<div><span class="sv">nit</span>Public stream shape changes: progress frames reach OpenAI clients that never opted in. usage gets the opt-in treatment (terminal_state filter at inference.py:36420), progress doesn't.<span class="ev">ran: probe_passthrough.py through the real _openai_passthrough_stream at c7ed763b7 with 4 ggml-org-shaped progress frames: upstream return_progress True, client got 7 frames, 5 role-only, 4 carrying prompt_progress. Shape confirmed from ggml-org server-task.cpp to_json_oaicompat_chat (first || is_progress adds the role delta).</span></div>
+<div><span class="sv">gap</span>/v1/completions (inference.py:28600) gets the same opt-in and relays progress frames as empty-text choices; only the upstream-body assert covers it.<span class="ev">read: _cmpl_stream_event_out filters usage only; test_openai_tool_passthrough.py asserts upstream_bodies[0]["return_progress"], nothing on the client body</span></div>
+</div>
+<div class="foot"><span>also: 28600/28655 same change on /v1/completions</span><span>tests: test_passthrough_prompt_progress_reaches_monitor_and_response_header</span><span><a href="https://github.com/unslothai/unsloth/pull/11161">PR 11161</a></span></div>
+</div>
+
+<div class="card">
+<div class="hd"><span class="id">B</span><span class="name">Once progress frames arrive, the first one ended the 20 minute prefill window</span><span class="p o">open</span><span class="t">unit tests, tester PC</span></div>
+<dl class="meta">
+<dt>when</dt><dd>long prompt on the passthrough with return_progress on, and a later prefill batch takes longer than the post-first-item stall timeout</dd>
+<dt>before</dt><dd>(introduced and fixed inside this PR; Codex P2 on 22c5d54) first progress frame counted as the first token, switched to the short stall timeout, request aborted mid-prefill</dd>
+<dt>after</dt><dd>advancing progress renews the first-token deadline; the switch happens on real output or a finish frame</dd>
+</dl>
+<div class="sides">
+<div class="side bf"><div class="sh"><b>Before</b><span class="f">studio/backend/routes/inference.py @ 38d4a4869</span></div><div class="code">
+<div class="ln"><span class="no">3186</span><span></span><span class="tx">            if last_item_at is None and response is not None:</span></div>
+<div class="ln"><span class="no">3189</span><span></span><span class="tx">                _set_stream_response_read_timeout(response, _post_first_timeout_s())</span><span class="note">any first item flips to the post-token timeout; harmless on base only because the passthrough didn't request progress</span></div>
+<div class="ln"><span class="no">3190</span><span></span><span class="tx">            last_item_at = time.monotonic()</span></div>
+<div class="ln"><span class="no">3191</span><span></span><span class="tx">            yield item</span></div>
+</div></div>
+<div class="side af"><div class="sh"><b>After</b><span class="f">studio/backend/routes/inference.py @ c7ed763b7</span></div><div class="code">
+<div class="ln add"><span class="no">3208</span><span>+</span><span class="tx">            if track_prefill_progress and last_item_at is None:</span></div>
+<div class="ln gap"><span class="no"></span><span></span><span class="tx">... split bytes into SSE events (3209-3215)</span></div>
+<div class="ln add"><span class="no">3221</span><span>+</span><span class="tx">                    if _llama_chunk_has_generated_output(data) or any(</span></div>
+<div class="ln add"><span class="no">3226</span><span>+</span><span class="tx">                        starts_output = True</span></div>
+<div class="ln add"><span class="no">3228</span><span>+</span><span class="tx">                    processed = LlamaCppBackend._sse_event_prefill_progress(event)</span></div>
+<div class="ln add"><span class="no">3229</span><span>+</span><span class="tx">                    if processed is not None and (</span></div>
+<div class="ln add"><span class="no">3230</span><span>+</span><span class="tx">                        last_prefill_progress is None or processed &gt; last_prefill_progress</span></div>
+<div class="ln add"><span class="no">3233</span><span>+</span><span class="tx">                        first_token_deadline = time.monotonic() + _first_token_timeout_s()</span><span class="note ok">only strictly advancing progress renews, so a stuck server repeating the same count still times out</span></div>
+<div class="ln add"><span class="no">3237</span><span>+</span><span class="tx">                    yield item</span></div>
+<div class="ln add"><span class="no">3238</span><span>+</span><span class="tx">                    continue</span></div>
+<div class="ln"><span class="no">3241</span><span></span><span class="tx">                _set_stream_response_read_timeout(response, _post_first_timeout_s())</span></div>
+</div></div>
+</div>
+<div class="foot"><span>tests: test_prompt_progress_does_not_start_the_decode_timeout[lines|bytes], test_only_advancing_prefill_progress_renews_the_deadline[True|False], test_prefill_tracking_preserves_terminal_grace_without_output</span></div>
+</div>
+
+<div class="card">
+<div class="hd"><span class="id">C</span><span class="name">API monitor detail header only ever said RUNNING</span><span class="p o">open</span><span class="t">code read, needs a visual pass</span></div>
+<dl class="meta">
+<dt>when</dt><dd>API monitor page, a running request selected</dd>
+<dt>before</dt><dd>RUNNING</dd>
+<dt>after</dt><dd>PROMPT PROCESSING · 60%, then TOKEN GENERATION (uppercased by the header class)</dd>
+</dl>
+<div class="sides">
+<div class="side bf"><div class="sh"><b>Before</b><span class="f">studio/frontend/src/features/api-monitor/api-monitor-page.tsx @ 38d4a4869</span></div><div class="code">
+<div class="ln"><span class="no">421</span><span></span><span class="tx">            {entry.status}</span></div>
+</div></div>
+<div class="side af"><div class="sh"><b>After</b><span class="f">studio/frontend/src/features/api-monitor/api-monitor-page.tsx @ c7ed763b7</span></div><div class="code">
+<div class="ln add"><span class="no">383</span><span>+</span><span class="tx">function requestStatusLabel(entry: ApiMonitorEntry): string {</span></div>
+<div class="ln add"><span class="no">384</span><span>+</span><span class="tx">  if (entry.status !== "running") return entry.status;</span></div>
+<div class="ln add"><span class="no">385</span><span>+</span><span class="tx">  if (entry.running_phase === "token_generation") return "Token generation";</span></div>
+<div class="ln add"><span class="no">386</span><span>+</span><span class="tx">  if (entry.running_phase !== "prompt_processing") return "Running";</span></div>
+<div class="ln gap"><span class="no"></span><span></span><span class="tx">... percent, else processed tokens, else bare label</span></div>
+<div class="ln add"><span class="no">435</span><span>+</span><span class="tx">            {requestStatusLabel(entry)}</span></div>
+</div></div>
+</div>
+<div class="foot"><span>list rows and status dots unchanged; only the detail header</span></div>
+</div>
+</div>
