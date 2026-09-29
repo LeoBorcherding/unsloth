@@ -10977,14 +10977,19 @@ def _remote_required_ubatch(
     disable_vision: bool = False,
 ) -> int:
     """Return a conservative micro-batch for an undownloaded GGUF config."""
-    from core.inference.llama_cpp import _launch_required_ubatch, extra_args_disable_mmproj
-
-    from core.inference.llama_cpp import _unknown_projector_ubatch
+    from core.inference.llama_cpp import (
+        _extra_args_device,
+        _launch_required_ubatch,
+        _unknown_projector_ubatch,
+        extra_args_disable_mmproj,
+    )
 
     if (
         bool(getattr(config, "is_vision", False))
         and not disable_vision
         and not extra_args_disable_mmproj(llama_extra_args)
+        # a pass-through --mmproj replaces the repo's projector, and the launch sizes that file
+        and not _extra_args_device(llama_extra_args, {"--mmproj", "-mm"})
     ):
         # Match the worst-case post-download allocation.
         return _unknown_projector_ubatch(llama_extra_args)

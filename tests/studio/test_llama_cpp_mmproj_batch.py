@@ -113,13 +113,14 @@ class TestLaunchNeedsBiggerUbatch:
         path = projector("gemma4uv")
         assert _launch_required_ubatch(path, 3840, ["--no-mmproj"], env = {}) == 0
 
-    def test_a_pass_through_projector_survives_both(self, projector):
-        # Appended after the managed flags and stripped by neither the switch nor
-        # --no-mmproj, so this opens an image tower regardless.
+    def test_a_pass_through_projector_follows_the_vision_switch(self, projector):
+        # The launch strips a pass-through --mmproj and emits it as the managed projector,
+        # so the vision switch and --no-mmproj now drop it like any other.
         path = projector("gemma4uv")
-        for extra_kwargs in ({}, {"vision_off": True}):
-            got = _launch_required_ubatch(None, 3840, ["--mmproj", path], env = {}, **extra_kwargs)
-            assert got == _GEMMA4
+        extras = ["--mmproj", path]
+        assert _launch_required_ubatch(None, 3840, extras, env = {}) == _GEMMA4
+        assert _launch_required_ubatch(None, 3840, extras, env = {}, vision_off = True) == 0
+        assert _launch_required_ubatch(None, 3840, [*extras, "--no-mmproj"], env = {}) == 0
 
     def test_a_pass_through_projector_is_still_classified(self, projector):
         path = projector("qwen3vl_merger")
@@ -290,6 +291,21 @@ def test_the_remote_estimate_honours_a_custom_ceiling_too():
     config = SimpleNamespace(is_vision = True, gguf_hf_repo = "owner/repo")
     assert _remote_required_ubatch(config, None, False) == _MMPROJ_UNKNOWN_UBATCH
     assert _remote_required_ubatch(config, ["--image-max-tokens", "4096"], False) == 4096
+
+
+def test_the_remote_estimate_sizes_a_custom_projector_like_the_launch(projector):
+    """A local --mmproj on an undownloaded vision repo replaces the repo's projector."""
+    from types import SimpleNamespace
+
+    from studio.backend.routes.inference import _remote_required_ubatch
+
+    config = SimpleNamespace(is_vision = True, gguf_hf_repo = "owner/repo")
+    audio = projector("whisper", accepts_image = False)
+    extras = ["--mmproj", audio]
+    assert _remote_required_ubatch(config, extras, False) == _launch_required_ubatch(
+        None, None, extras, is_vision = False
+    )
+    assert _remote_required_ubatch(config, extras, False) < _MMPROJ_UNKNOWN_UBATCH
 
 
 @pytest.mark.parametrize(
