@@ -36,7 +36,6 @@ test("a reload keeps manual IDs and picks, drops removed IDs and enables new one
     mergeReloadedModels(["manual", "alpha"], ["alpha", "beta"], ["beta", "gamma"]),
     ["manual", "gamma"],
   );
-  // A manual ID the server now lists stays selected once.
   assert.deepEqual(
     mergeReloadedModels(["manual"], [], ["manual", "alpha"]),
     ["manual", "alpha"],
@@ -87,7 +86,7 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
   const { startLlamaCppAutoReload } = await vite.ssrLoadModule(
     "/src/features/chat/llama-cpp-auto-reload.ts",
   );
-  const { useExternalProvidersStore: store } = await vite.ssrLoadModule(
+  const { providerSavesInFlight, useExternalProvidersStore: store } = await vite.ssrLoadModule(
     "/src/features/chat/stores/external-providers-store.ts",
   );
   store.setState({
@@ -142,19 +141,26 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
     await settle(() => puts.length === 3);
     assert.deepEqual(puts[2].models, ["manual", "gamma"]);
 
-    // Restarted with other models inside one poll: no probe fails, the new catalog still loads.
-    served = ["gamma", "epsilon"];
+    // A restart inside one poll interval is never seen offline; the changed list alone must reload.
+    served = ["gamma", "delta"];
     await settle(() => puts.length === 4);
-    assert.deepEqual(puts[3].models, ["manual", "gamma", "epsilon"]);
-    await settle(() => row().models.join() === "manual,gamma,epsilon");
+    assert.deepEqual(puts[3].models, ["manual", "gamma", "delta"]);
 
-    // Switched off: a reconnect changes nothing.
+    // A manual save in flight holds the reload until it ends, so the save is never overwritten.
+    providerSavesInFlight.add("p");
+    served = ["gamma", "delta", "zeta"];
+    await idle();
+    assert.equal(puts.length, 4);
+    providerSavesInFlight.delete("p");
+    await settle(() => puts.length === 5);
+    assert.deepEqual(puts[4].models, ["manual", "gamma", "delta", "zeta"]);
+
     store.setState({ providers: [{ ...row(), autoReloadModels: false }] });
     served = null;
     await idle();
-    served = ["gamma", "delta"];
+    served = ["gamma", "epsilon"];
     await idle();
-    assert.equal(puts.length, 4);
+    assert.equal(puts.length, 5);
   } finally {
     stop();
   }

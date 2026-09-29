@@ -10,7 +10,10 @@ import {
   getExternalProviderApiKey,
   type ExternalProviderConfig,
 } from "./external-providers";
-import { useExternalProvidersStore } from "./stores/external-providers-store";
+import {
+  providerSavesInFlight,
+  useExternalProvidersStore,
+} from "./stores/external-providers-store";
 
 /** Keeps manual IDs and the user's picks, drops IDs the server no longer lists, enables new ones. */
 export function mergeReloadedModels(
@@ -39,16 +42,15 @@ function autoReloadConnections(): ExternalProviderConfig[] {
   );
 }
 
-/** Polls opted-in llama.cpp connections; reloads their models on first contact and each reconnect. */
 export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
-  // Connection id -> endpoint and catalog it was last reloaded at. Absent: offline or not reloaded yet.
+  // Connection id -> endpoint + catalog it was last reloaded with. Absent: offline or not reloaded yet.
+  // Keyed on the catalog too: a restart inside one poll interval is never seen offline.
   const online = new Map<string, string>();
   const inFlight = new Set<string>();
   let stopped = false;
   const endpoint = (p: ExternalProviderConfig) => `${p.baseUrl}|${p.hasApiKey === true}`;
 
   async function probe(provider: ExternalProviderConfig) {
-    const key = endpoint(provider);
     inFlight.add(provider.id);
     try {
       const listed = await listProviderModels({
@@ -58,29 +60,33 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
         apiKey: provider.hasApiKey ? "" : getExternalProviderApiKey(provider.id),
       });
       const catalog = [...new Set(listed.map((m) => m.id.trim()).filter(Boolean))];
-      // A restart inside one poll never fails a probe, so an unchanged endpoint alone isn't enough.
-      const seen = `${key}|${JSON.stringify(catalog)}`;
-      if (stopped || online.get(provider.id) === seen) return;
+      const key = `${endpoint(provider)}|${catalog.join("\n")}`;
       // A server still starting can list nothing: keep the last good selection.
-      if (catalog.length === 0) return;
+      if (stopped || online.get(provider.id) === key || catalog.length === 0) return;
       // Merge against the saved row, not this tab's copy, so tabs agree on what the user picked.
       const saved = (await listProviderConfigs()).find((c) => c.id === provider.id);
       const latest = autoReloadConnections().find((p) => p.id === provider.id);
-      if (stopped || !saved || !latest || endpoint(latest) !== key) return;
+      if (stopped || !saved || !latest || endpoint(latest) !== endpoint(provider)) return;
       const hasSaved = (saved.available_models?.length ?? 0) > 0;
       const previousModels = hasSaved ? (saved.models ?? []) : latest.models;
       const previousCatalog = hasSaved
         ? (saved.available_models ?? [])
         : (latest.availableModels ?? []);
       const models = mergeReloadedModels(previousModels, previousCatalog, catalog);
+      const edited = () => {
+        const row = useExternalProvidersStore.getState().providers.find((p) => p.id === provider.id);
+        return row?.models !== latest.models || row?.availableModels !== latest.availableModels;
+      };
+      // A manual save is in flight or landed since the read: skip, the next probe merges against it.
+      if (providerSavesInFlight.has(provider.id) || edited()) return;
       if (!sameList(models, previousModels) || !sameList(catalog, previousCatalog)) {
         await updateProviderConfig(provider.id, { models, availableModels: catalog });
       }
       if (stopped) return;
+      if (edited()) return;
       const { providers, setProviders } = useExternalProvidersStore.getState();
       const current = providers.find((p) => p.id === provider.id);
-      // A manual save landed meanwhile: leave it, and re-merge on the next probe.
-      if (current?.models !== latest.models) return;
+      if (!current) return;
       if (
         !sameList(models, current.models) ||
         !sameList(catalog, current.availableModels ?? [])
@@ -91,7 +97,7 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
           ),
         );
       }
-      online.set(provider.id, seen);
+      online.set(provider.id, key);
     } catch {
       online.delete(provider.id);
     } finally {

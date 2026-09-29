@@ -812,9 +812,11 @@ test("a served catalogue cannot take away a context window it has no field for",
 });
 
 test("connection saves write back the live store, not the render snapshot", () => {
-  // Auto reload can update a llama.cpp row while a save awaits the backend.
   const liveWrites = providersDialog.match(
     /onProvidersChange\(\s*\[?\s*(\.\.\.)?useExternalProvidersStore\.getState\(\)\.providers\.(map|filter)\(/g,
   );
   assert.equal(liveWrites?.length, 3);
+  // Untouched llama.cpp model fields stay out of the PUT, so a concurrent reload is not overwritten.
+  assert.match(providersDialog, /models: keepSavedModels \? undefined : modelsToSave,/);
+  assert.match(providersDialog, /availableModels: keepSavedModels \? undefined : availableModelsToSave,/);
 });
