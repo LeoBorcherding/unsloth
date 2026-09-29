@@ -1,0 +1,83 @@
+<!-- connection-threads, unslothai/unsloth#11352 at 5221059dfb, statuses read from GitHub 2026-09-29 -->
+<style>
+.ct{font-size:13px;color:var(--text-primary)}
+.ct .ttl{font-size:17px;font-weight:500;margin:0 0 2px}
+.ct .sub{font-size:12px;color:var(--text-secondary);margin:0 0 12px}
+.ct .leg{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--text-secondary);margin:0 0 12px}
+.ct .root{border:0.5px solid var(--border);border-radius:12px;padding:10px 12px;margin:0 0 12px;background:var(--surface-1)}
+.ct .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:10px}
+.ct .grp{border:0.5px solid var(--border);border-radius:12px;padding:10px 12px}
+.ct .gh{font-size:13px;font-weight:500;margin:0 0 2px}
+.ct .gd{font-size:11px;color:var(--text-secondary);margin:0 0 8px}
+.ct .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:3px 0;border-top:0.5px dashed var(--border);font-size:12px}
+.ct .row:first-of-type{border-top:none}
+.ct .w{flex:1;min-width:140px;color:var(--text-primary)}
+.ct a{color:var(--text-accent);text-decoration:none}
+.ct .p{font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.ct .m{background:rgba(127,119,221,.18);color:#7F77DD}.ct .o{background:rgba(29,158,117,.18);color:#1D9E75}
+.ct .dp{background:rgba(136,135,128,.2);color:#888780}.ct .c{background:rgba(226,75,74,.16);color:#E24B4A}
+.ct .t{font-size:10px;padding:0 5px;border-radius:4px;border:0.5px solid;white-space:nowrap}
+.ct .t.ok{color:#1D9E75}.ct .t.part{color:#BA7517}.ct .t.no{color:#E24B4A}.ct .t.na{color:var(--text-secondary)}
+.ct .ov{font-size:10px;padding:0 5px;border-radius:4px;white-space:nowrap}
+.ct .ov.cf{background:rgba(226,75,74,.14);color:#E24B4A}.ct .ov.cl{background:rgba(186,117,23,.14);color:#BA7517}
+.ct .gap{border:0.5px solid var(--border);border-radius:12px;padding:10px 12px;margin:12px 0 0}
+.ct .gap h4{font-size:12px;font-weight:500;margin:6px 0 2px;color:var(--text-secondary)}
+.ct .gap li{font-size:12px;margin:0 0 3px}
+.ct ul{margin:0;padding-left:18px}
+</style>
+<div class="ct">
+<h2 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Related issues and PRs for custom mmproj support in Unsloth Studio, centred on PR 11352.</h2>
+<div class="ttl">Custom mmproj in Unsloth Studio: #11352 closes #10296, and #8909 is the same ask unlinked</div>
+<div class="sub">#11352 open and mergeable at 5221059dfb. It conflicts with open #9365 in routes/inference.py; #10783 and #11823 share files but merge clean.</div>
+<div class="leg"><span class="p m">merged</span><span class="p o">open</span><span class="p c">closed</span><span class="t ok">ran on hw</span><span class="t part">unit / headers only</span><span class="t na">not checked in this pass</span><span class="ov cf">conflict (plan.py)</span><span class="ov cl">same file, merges clean</span></div>
+
+<div class="root">
+ <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/pull/11352">#11352</a><span class="w">allow --mmproj / -mm; Gemma 4 pairs by dims</span><span class="t part">unit + real Gemma 4 headers, tester PC (Win 11, RX 6500 XT + RX 5700 XT)</span></div>
+ <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/issues/10296">#10296</a><span class="w">closes: the Gembrain 31B report</span><span class="t part">reporter shape rebuilt from real 31B header: base drops, head picks</span></div>
+</div>
+
+<div class="grid">
+ <div class="grp">
+  <div class="gh">Same ask, not linked</div>
+  <div class="gd">Covered by the explicit --mmproj path, not by the Gemma-4-only auto pairing</div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/issues/8909">#8909</a><span class="w">force-load a "metadata mismatch" mmproj (KAT Coder + Qwen 3.6 base projector)</span><span class="t na">not run</span></div>
+ </div>
+
+ <div class="grp">
+  <div class="gh">Discovery misses a projector</div>
+  <div class="gd">Neighbouring detection gaps; a custom path is the user workaround for both</div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/issues/9286">#9286</a><span class="w">Desktop-downloaded vision models don't detect mmproj</span><span class="t na">not checked</span></div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/pull/9365">#9365</a><span class="w">find a hand-added mmproj when the repo ships none</span><span class="ov cf">conflicts with #11352: routes/inference.py</span><span class="t na">not checked</span></div>
+  <div class="row"><span class="p c">closed</span><a href="https://github.com/unslothai/unsloth/issues/10599">#10599</a><span class="w">mmproj published after the weights never picked up</span></div>
+  <div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/11448">#11448</a><span class="w">fixed #10599 on the chat load route</span><span class="t na">not checked</span></div>
+ </div>
+
+ <div class="grp">
+  <div class="gh">Extra Arguments and projector flags</div>
+  <div class="gd">Same blocklist and companion-device plumbing #11352 edits</div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/issues/11810">#11810</a><span class="w">--mmproj-device rejected when Unsloth pins one GPU</span><span class="t na">not checked</span></div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/pull/11823">#11823</a><span class="w">widen the GPU mask for companion devices</span><span class="ov cl">llama_cpp.py, merges clean</span><span class="t na">not checked</span></div>
+  <div class="row"><span class="p o">open</span><a href="https://github.com/unslothai/unsloth/pull/10783">#10783</a><span class="w">per-model llama.cpp INI config, also edits the blocklist</span><span class="ov cl">4 files, merges clean</span><span class="t na">not checked</span></div>
+ </div>
+
+ <div class="grp">
+  <div class="gh">Prior art this builds on</div>
+  <div class="gd">Merged behaviour #11352 has to keep: the Vision switch, audio-only projectors, the image micro-batch</div>
+  <div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/9383">#9383</a><span class="w">Disable Vision toggle in Advanced Settings</span></div>
+  <div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/8807">#8807</a><span class="w">image capability for audio-only projectors</span></div>
+  <div class="row"><span class="p m">merged</span><a href="https://github.com/unslothai/unsloth/pull/10683">#10683</a><span class="w">micro-batch raise for image projectors (the Codex P2 path)</span></div>
+  <div class="row"><span class="p c">closed</span><a href="https://github.com/unslothai/unsloth/pull/7408">#7408</a><span class="w">earlier mmproj load toggle, closed unmerged</span></div>
+ </div>
+</div>
+
+<div class="gap">
+ <h4>Ask the reporter</h4>
+ <ul><li>Load the real Gembrain 31B with the official projector on this head, auto and via --mmproj, and send one image (unblocks closing #10296 on evidence, not fixtures).</li></ul>
+ <h4>Unknowns we can settle</h4>
+ <ul><li>Whether #8909's Qwen 3.6 case should get a functional check too, or whether --mmproj is the answer there (decides "Closes #8909" in the #11352 body).</li>
+ <li>A live llama-server load with -mm on Windows. Nothing here ran one; the author's live run was Linux CPU only.</li></ul>
+ <h4>Not built yet</h4>
+ <ul><li>Codex P2: size the remote micro-batch from the custom projector (routes/inference.py:11892 at 5221059dfb). Over-reserve only, #11352.</li>
+ <li>Rebase order with #9365: whichever lands second resolves routes/inference.py.</li></ul>
+</div>
+</div>

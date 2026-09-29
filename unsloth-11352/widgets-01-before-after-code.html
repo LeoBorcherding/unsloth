@@ -1,0 +1,170 @@
+<!-- before-after-code, unslothai/unsloth#11352, base 04c9951b4d, head 5221059dfb, 2026-09-29 -->
+<style>
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.ttl{font-size:17px;font-weight:500;color:var(--text-primary);margin:0 0 2px}
+.sub{font-size:12px;color:var(--text-secondary);margin:0 0 12px}
+.leg{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px;font-size:11px;color:var(--text-secondary);align-items:center}
+.card{border:0.5px solid var(--border);border-radius:12px;padding:12px;margin:0 0 14px}
+.hd{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 6px}
+.id{font-size:11px;font-weight:500;min-width:20px;height:20px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:var(--text-primary);color:var(--surface-1)}
+.name{font-size:14px;font-weight:500;color:var(--text-primary);flex:1;min-width:200px}
+.meta{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;margin:0 0 10px}
+.meta dt{color:var(--text-secondary)}.meta dd{margin:0;color:var(--text-primary)}
+.sides{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:8px}
+.side{border:0.5px solid var(--border);border-radius:8px;overflow:hidden;min-width:0}
+.sh{font-size:11px;padding:4px 8px;display:flex;gap:6px;align-items:center;border-bottom:0.5px solid var(--border)}
+.sh b{font-weight:500}.sh .f{color:var(--text-secondary);font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bf .sh{background:rgba(226,75,74,.10);color:#E24B4A}.af .sh{background:rgba(29,158,117,.10);color:#1D9E75}
+.code{font-family:var(--font-mono);font-size:11px;line-height:1.55;padding:4px 0}
+.ln{display:grid;grid-template-columns:38px 12px 1fr;white-space:pre-wrap;word-break:break-word}
+.ln .no{color:var(--text-muted);text-align:right;padding-right:6px;user-select:none}
+.ln .mk{color:var(--text-muted)}
+.ln.del{background:rgba(226,75,74,.13)}.ln.del .mk{color:#E24B4A}
+.ln.add{background:rgba(29,158,117,.13)}.ln.add .mk{color:#1D9E75}
+.ln.gap .tx{color:var(--text-muted)}
+.note{grid-column:3;font-family:var(--font-sans);font-size:11px;color:#BA7517;padding:1px 0 3px}
+.note.ok{color:#1D9E75}.note.nit{color:#D85A30;font-weight:500}
+.ln.fh{display:block;font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);padding:3px 8px;border-top:0.5px dashed var(--border);border-bottom:0.5px dashed var(--border);margin:2px 0}
+.rv{margin:8px 0 0;border-left:2px solid #D85A30;padding:2px 0 2px 10px;font-size:12px}
+.rv div{margin:0 0 4px;color:var(--text-primary)}.rv .ev{font-size:11px;color:var(--text-secondary);margin-left:6px}
+.rv .sv{font-size:11px;font-weight:500;color:#D85A30;margin-right:6px}
+.kw{color:#7F77DD}.st{color:#1D9E75}.cm{color:var(--text-muted);font-style:italic}.nu{color:#BA7517}
+.foot{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-secondary);margin:8px 0 0}
+a{color:var(--text-accent);text-decoration:none}
+.p{font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.m{background:rgba(127,119,221,.18);color:#7F77DD}.o{background:rgba(29,158,117,.18);color:#1D9E75}
+.dp{background:rgba(136,135,128,.2);color:#888780}.c{background:rgba(226,75,74,.16);color:#E24B4A}
+.dr{background:var(--bg-accent);color:var(--text-accent)}
+.t{font-size:10px;padding:0 5px;border-radius:4px;border:0.5px solid;white-space:nowrap}
+.t.ok{color:#1D9E75}.t.part{color:#BA7517}.t.no{color:#E24B4A}
+.r{font-size:10px;color:var(--text-secondary)}
+</style>
+<h2 class="sr-only">PR 11352 lets a per-model --mmproj path through and pairs Gemma 4 finetune projectors by dimensions; four fixes shown before and after.</h2>
+<div class="ttl">Custom vision projectors in Unsloth Studio: 4 fixes in #11352</div>
+<div class="sub">Open, head 5221059dfb, 729 commits behind main but merges clean. Unit and header-level runs on the tester PC (Windows 11, RX 6500 XT + RX 5700 XT); no live llama-server load here.</div>
+<div class="leg"><span class="p m">merged</span><span class="p o">open</span><span class="p dp">draft PR</span><span class="p dr">local</span><span class="t ok">ran on hw</span><span class="t part">CI / unit only</span><span class="t no">not run</span><span style="color:#E24B4A">&#9632; removed / buggy</span><span style="color:#1D9E75">&#9632; added / fixed</span><span style="color:#BA7517">&#9650; why</span><span style="color:#1D9E75">&#10003; why it holds</span><span style="color:#D85A30">&#9888; nit</span></div>
+<div id="cards"></div>
+<script>
+const REPO="unslothai/unsloth";
+const BASE="04c9951b4d", HEAD="5221059dfb";
+const L=[["#11352","https://github.com/unslothai/unsloth/pull/11352"],["#10296","https://github.com/unslothai/unsloth/issues/10296"]];
+const FIXES=[{
+ id:"A", name:"Extra Arguments refuses --mmproj / -mm, so there's no way to name a projector", status:["o","open"], test:["part","unit, tester PC: new tests fail at base, pass at head"], risk:"low",
+ links:L,
+ when:"User types --mmproj <file> or -mm <file> in a model's Extra Arguments",
+ before_effect:"\"--mmproj is managed by Unsloth and cannot be passed here\", Load stays disabled",
+ after_effect:"Accepted; --mmproj=path is still refused (llama-server wants two tokens), --mmproj-url still blocked",
+ before:{file:"studio/backend/core/inference/llama_server_args.py", sha:BASE, on_github:true, lines:[
+   [67,"ctx","    frozenset({\"-hffv\", \"--hf-file-v\"}),"],[68,"ctx","    frozenset({\"-hft\", \"--hf-token\"}),"],
+   [69,"del","    frozenset({\"-mm\", \"--mmproj\"}),",{note:"on the managed-flag blocklist, so validate_extra_args raises before the load starts"}],
+   [70,"ctx","    frozenset({\"-mmu\", \"--mmproj-url\"}),"]]},
+ after:{file:"studio/backend/core/inference/llama_server_args.py", sha:HEAD, on_github:true, lines:[
+   [67,"ctx","    frozenset({\"-hffv\", \"--hf-file-v\"}),"],[68,"ctx","    frozenset({\"-hft\", \"--hf-token\"}),"],
+   [69,"ctx","    frozenset({\"-mmu\", \"--mmproj-url\"}),",{ok:"only the local-path pair leaves the list; a URL projector would still bypass Unsloth's download and sizing"}]]},
+ guarantees:"--mmproj-url, --host, --port and the rest of the managed set", tests:"test_custom_projector_is_allowed[--mmproj|-mm]"
+},{
+ id:"B", name:"A Gemma 4 finetune's official projector is dropped as a metadata mismatch", status:["o","open"], test:["part","real Gemma 4 GGUF headers + unit, tester PC"], risk:"low",
+ links:L,
+ when:"Finetune GGUF with its own basename / base_model repo next to the official gemma-4 mmproj (the #10296 reporter's Gembrain 31B)",
+ before_effect:"\"dropped mmproj-gemma-4-31B-it-BF16.gguf (metadata mismatch)\", Vision never turns on",
+ after_effect:"Picked when gemma4.embedding_length equals clip.vision.projection_dim; a size mismatch is dropped and the log names both numbers",
+ before:{file:"studio/backend/utils/models/model_config.py", sha:BASE, on_github:true, lines:[
+   [2126,"ctx","    for c in candidates:"],[2127,"ctx","        cand_meta = read_gguf_general_metadata(str(c))"],
+   [2128,"ctx","        meta_score = pairing_score(weight_meta, cand_meta)"],
+   [2129,"ctx","        if meta_score == -1:",{note:"identity only: a finetune's basename and base_model repo never match the Google projector's"}],
+   [2130,"del","            logger.info(f\"detect_mmproj_file: dropped {c.name} (metadata mismatch)\")"],
+   [2131,"ctx","            continue"]]},
+ after:{file:"studio/backend/utils/models/model_config.py", sha:HEAD, on_github:true, lines:[
+   [2129,"ctx","    for c in candidates:"],[2130,"ctx","        cand_meta = read_gguf_general_metadata(str(c))"],
+   [2131,"ctx","        meta_score = pairing_score(weight_meta, cand_meta)"],
+   [2132,"add","        functional_match, mismatch = mmproj_functional_match(str(p), str(c))"],
+   [2133,"add","        if functional_match is False:"],
+   [2134,"add","            logger.info(f\"detect_mmproj_file: dropped {c.name} ({mismatch})\")"],
+   [2135,"add","            continue"],
+   [2136,"add","        if functional_match is True:"],
+   [2137,"add","            meta_score = max(meta_score, 50)",{ok:"gemma4 + gemma4v only. On real unsloth headers E2B 1536, E4B 2560, 26B-A4B 2816 and 31B 5376 each pair with their own projector and reject the other three"}],
+   [2138,"ctx","        if meta_score == -1:"],
+   ["gap","2139-2148 build the per-field difference string"],
+   [2149,"add","            logger.info(f\"detect_mmproj_file: dropped {c.name} (metadata mismatch: {differences})\")"]]},
+ guarantees:"every non-Gemma-4 pair still goes through identity pairing; the launcher family guard asks the same check first",
+ tests:"test_gemma4_finetune_pairs_by_functional_metadata (6 cases), test_mmproj_rejection_names_mismatched_fields"
+},{
+ id:"C", name:"An explicit projector path has nowhere to win over discovery and the filename family guard", status:["o","open"], test:["part","unit only, tester PC; no llama-server run"], risk:"medium",
+ links:L,
+ when:"A projector is named in Extra Arguments (possible once A lands), including for a Hub model or with Vision off",
+ before_effect:"Unreachable (A blocked it); the resolver only knew the discovered mmproj_path",
+ after_effect:"The named file wins, a missing file is a 400 before anything unloads, Vision off drops an image projector but keeps an audio-only one, and replacing the file in place forces a reload",
+ before:{file:"studio/backend/core/inference/llama_cpp.py", sha:BASE, on_github:true, lines:[
+   [19234,"ctx","    def _resolve_launch_mmproj_path("],
+   [19235,"del","        self, *, model_path: str, mmproj_path: Optional[str]"],
+   [19236,"ctx","    ) -> Optional[str]:"],["gap"],
+   [19241,"ctx","        if not mmproj_path:"],[19242,"ctx","            return None"],
+   [19244,"ctx","        mmproj = Path(mmproj_path)"],
+   [19245,"ctx","        if not mmproj.is_file():",{note:"only the discovered path is known; a missing file quietly degrades to text-only"}],
+   [19246,"ctx","            logger.warning(f\"mmproj file not found: {mmproj_path}\")"],
+   [19247,"ctx","            return None"],
+   ["file","studio/backend/core/inference/llama_cpp.py"],
+   [27627,"del","                    _emit_extra_args = list(_mem_extras)"]]},
+ after:{file:"studio/backend/core/inference/llama_cpp.py", sha:HEAD, on_github:true, lines:[
+   [19234,"ctx","    def _resolve_launch_mmproj_path("],
+   [19239,"add","        extra_args: Optional[Iterable[str]] = None,"],
+   [19240,"ctx","    ) -> Optional[str]:"],
+   [19242,"add","        override = _extra_args_device(extra_args, {\"--mmproj\", \"-mm\"})"],
+   [19243,"add","        if override is not None:"],
+   [19244,"add","            if not override or not Path(override).is_file():"],
+   [19245,"add","                raise ValueError(\"The custom mmproj path must name an existing file.\")",{ok:"load_model resolves this before the serial scope, so the resident model isn't unloaded first; the /load route maps ValueError to 400"}],
+   [19246,"add","            return override"],
+   [19247,"ctx","        if not mmproj_path:"],
+   ["file","studio/backend/core/inference/llama_cpp.py"],
+   [27639,"add","                    _emit_extra_args = self._strip_mmproj_args(list(_mem_extras))",{ok:"the managed --mmproj emits the custom file once; the user's copy is stripped so Vision off can really drop it"}]]},
+ guarantees:"loads with no projector flag take the old path (override is None)",
+ tests:"test_custom_projector_replaces_discovery_and_respects_vision_switch (4), test_missing_custom_projector_is_rejected_before_unloading, test_hub_load_rechecks_custom_projector_replaced_in_place (2)"
+},{
+ id:"D", name:"The training-coexistence estimate drops a remote model's bytes when a custom projector is named", status:["o","open"], test:["part","unit + probe, tester PC"], risk:"low",
+ links:[...L,["Codex finding","https://github.com/unslothai/unsloth/pull/11352#pullrequestreview-5322752129"]],
+ when:"Hub GGUF not downloaded yet, plus --mmproj <local file>, while a training job holds VRAM",
+ before_effect:"The override bytes pushed total_bytes above 0, so the local return ran and 4 GiB of remote weights were never charged",
+ after_effect:"Override bytes are added on both paths and the repo's own projector isn't double charged",
+ before:{file:"studio/backend/routes/inference.py", sha:BASE, on_github:true, lines:[
+   [11705,"ctx","        if _sized_attrs == [\"gguf_mmproj_file\"]:"],
+   [11706,"del","            _mmproj_override = _extra_args_device(llama_extra_args, {\"--mmproj\", \"-mm\"})"],
+   [11707,"ctx","            if _mmproj_override and Path(_mmproj_override).is_file():"],
+   [11709,"ctx","                _mmproj_override_bytes = LlamaCppBackend._get_gguf_size_bytes(_mmproj_override)"],
+   [11710,"del","                total_bytes += _mmproj_override_bytes",{note:"for a remote model total_bytes was 0; this makes it non-zero and flips the estimator onto the local-file branch"}],
+   ["gap"],
+   [11858,"del","                include_mmproj = bool(has_vision),"]]},
+ after:{file:"studio/backend/routes/inference.py", sha:HEAD, on_github:true, lines:[
+   [11706,"ctx","        if _sized_attrs == [\"gguf_mmproj_file\"]:"],
+   [11707,"ctx","            if _mmproj_override and Path(_mmproj_override).is_file():"],
+   [11709,"ctx","                _mmproj_override_bytes = LlamaCppBackend._get_gguf_size_bytes(_mmproj_override)"],
+   ["gap"],
+   [11857,"add","                include_mmproj = bool(has_vision) and _mmproj_override is None,"],
+   ["gap"],
+   [11880,"add","            total_gb = (main_bytes + companions + _mmproj_override_bytes + _extras_bytes) / ("],
+   ["gap"],
+   [11892,"ctx","                required_ubatch = _remote_required_ubatch(config, llama_extra_args, disable_vision),",{nit:"still sizes the repo's unknown projector (2048), not the custom file"}]]},
+ review:[["nit","ran","Remote micro-batch reserve ignores the custom projector (the Codex P2). It only over-reserves, so it can refuse a load that would fit, never admit one that won't.","_remote_required_ubatch(vision repo, ['--mmproj', audio-only]) = 2048 vs _launch_required_ubatch(same) = 0, at 5221059dfb and at local merge 4ca6de8 onto main 6c20f0fac; logs/probe-head-5221059.log"]],
+ guarantees:"local-file estimates add the same bytes as before, just at the return", tests:"test_vision_off_still_charges_a_custom_audio_only_projector, test_custom_projector_does_not_hide_remote_model_bytes (2)"
+}];
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const KW=/\b(def|class|return|if|elif|else|for|while|in|not|and|or|is|None|True|False|import|from|as|try|except|with|lambda|await|async|const|let|function|export|fi|then|local|echo)\b/g;
+function hl(t){const parts=[];let rest=t,m;const tok=/(#[^\n]*$|\/\/[^\n]*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)|(\b\d+(?:\.\d+)?\b)/g;let last=0;
+ while((m=tok.exec(t))){parts.push(esc(t.slice(last,m.index)).replace(KW,'<span class="kw">$1</span>'));
+  parts.push(`<span class="${m[1]?"cm":m[2]?"st":"nu"}">${esc(m[0])}</span>`);last=tok.lastIndex;if(m[1])break;}
+ parts.push(esc(t.slice(last)).replace(KW,'<span class="kw">$1</span>'));return parts.join("");}
+function pane(side,cls,label){const url=side.on_github&&side.sha?`https://github.com/${REPO}/blob/${side.sha}/${side.file}`:"";
+ const first=(side.lines.find(l=>typeof l[0]==="number")||[""])[0];
+ const N=[["note","","&#9650;"],["ok","ok","&#10003;"],["nit","nit","&#9888;"]];
+ let h=`<div class="side ${cls}"><div class="sh"><b>${label}</b><span class="f">${url?`<a href="${url}#L${first}">`:""}${esc(side.file)}:${first}${url?"</a>":""} @ ${esc(side.sha||"")}</span></div><div class="code">`;
+ side.lines.forEach(l=>{if(l[0]==="gap"){h+=`<div class="ln gap"><span class="no"></span><span class="mk"></span><span class="tx">&#8943;${l[1]?" "+esc(l[1]):""}</span></div>`;return}
+  if(l[0]==="file"){const u=side.on_github&&side.sha?`https://github.com/${REPO}/blob/${side.sha}/${l[1]}`:"";h+=`<div class="ln fh">${u?`<a href="${u}">`:""}${esc(l[1])}${u?"</a>":""}</div>`;return}
+  const [n,k,t,o]=l;h+=`<div class="ln ${k}"><span class="no">${n}</span><span class="mk">${k==="del"?"-":k==="add"?"+":""}</span><span class="tx">${hl(t)}</span>${o?N.filter(([key])=>o[key]).map(([key,c,ic])=>`<span class="no"></span><span></span><span class="note ${c}">${ic} ${esc(o[key])}</span>`).join(""):""}</div>`});
+ return h+"</div></div>";}
+document.getElementById("cards").innerHTML=FIXES.map(f=>`<div class="card">
+<div class="hd"><span class="id">${f.id}</span><span class="name">${esc(f.name)}</span><span class="p ${f.status[0]}">${f.status[1]}</span><span class="t ${f.test[0]}">${esc(f.test[1])}</span>${f.risk?`<span class="r">risk: ${f.risk}</span>`:""}</div>
+<dl class="meta"><dt>when</dt><dd>${esc(f.when)}</dd><dt>before</dt><dd>${esc(f.before_effect)}</dd><dt>after</dt><dd>${esc(f.after_effect)}</dd></dl>
+<div class="sides">${pane(f.before,"bf",(f.labels||["Before"])[0])}${pane(f.after,"af",(f.labels||[0,"After"])[1])}</div>
+${f.review&&f.review.length?`<div class="rv">${f.review.map(([sv,how,txt,ev])=>`<div><span class="sv">${esc(sv)}</span>${esc(txt)}<span class="ev">${esc(how)}: ${esc(ev)}</span></div>`).join("")}</div>`:""}
+<div class="foot">${f.guarantees?`<span>unchanged: ${esc(f.guarantees)}</span>`:""}${f.tests?`<span>tests: ${esc(f.tests)}</span>`:""}<span>${f.links.map(([t,u])=>u?`<a href="${u}">${esc(t)}</a>`:esc(t)).join(" · ")}</span></div>
+</div>`).join("");
+</script>

@@ -1,0 +1,61 @@
+<!-- test-results, unslothai/unsloth#11352, base 04c9951b4d, head 5221059dfb, run 2026-09-29 on the tester PC -->
+<style>
+.tr{font-size:13px;color:var(--text-primary)}
+.tr .ttl{font-size:17px;font-weight:500;margin:0 0 2px}
+.tr .sub{font-size:12px;color:var(--text-secondary);margin:0 0 10px}
+.tr .mc{border:0.5px solid var(--border);border-radius:12px;padding:8px 12px;margin:0 0 10px;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px;background:var(--surface-1)}
+.tr .mc dt{color:var(--text-secondary)}.tr .mc dd{margin:0}
+.tr .card{border:0.5px solid var(--border);border-radius:12px;overflow:hidden}
+.tr table{width:100%;border-collapse:collapse;font-size:12px}
+.tr th{font-weight:500;text-align:left;color:var(--text-secondary);padding:6px 10px;border-bottom:0.5px solid var(--border);font-size:11px}
+.tr td{padding:6px 10px;border-top:0.5px solid var(--border);vertical-align:top}
+.tr tr:first-child td{border-top:none}
+.tr .what{font-weight:500}
+.tr .how{font-size:11px;color:var(--text-secondary);margin-top:2px}
+.tr .chip{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;white-space:nowrap;margin:0 0 2px}
+.tr .pass{background:var(--bg-success);color:var(--text-success)}
+.tr .fail{background:var(--bg-danger);color:var(--text-danger)}
+.tr .pre{background:rgba(186,117,23,.16);color:#BA7517}
+.tr .na{background:rgba(136,135,128,.18);color:var(--text-secondary)}
+.tr .n{font-size:11px;color:var(--text-secondary);display:block}
+.tr .foot{font-size:11px;color:var(--text-secondary);margin:8px 0 0}
+</style>
+<div class="tr">
+<h2 style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Test results for PR 11352 on the tester PC, base versus head.</h2>
+<div class="ttl">#11352 test results: every new test flips fail to pass, one Codex nit confirmed</div>
+<div class="sub">Headless on the tester PC. No live llama-server or Unsloth Studio API load ran here (see last rows).</div>
+<dl class="mc">
+ <dt>machine</dt><dd>tester PC, Windows 11 Home 10.0.26200, AMD Radeon RX 6500 XT + RX 5700 XT (driver 32.0.21045.5002); none of these runs touch the GPU</dd>
+ <dt>python</dt><dd>3.13.15, the branch's own venv (fix-studio-mmproj-10296/studio-home), pytest 9.1.1</dd>
+ <dt>base</dt><dd>04c9951b4d (merge base, same as the author's)</dd>
+ <dt>head</dt><dd>5221059dfb; also a local-only merge onto main 6c20f0fac = 4ca6de8, not pushed</dd>
+</dl>
+<div class="card"><table>
+<tr><th style="width:44%">what ran</th><th>base 04c9951b4d</th><th>head 5221059dfb</th></tr>
+<tr><td><div class="what">13 focused backend test files</div><div class="how">the author's list: detect_mmproj, gguf_metadata, llama_server_args, mmproj_placement, vram accounting, memory estimate, reload/cache/slots...</div></td>
+ <td><span class="chip pre">1155 passed, 1 failed</span><span class="n">failure is Windows-only (spawns /usr/bin/true)</span></td>
+ <td><span class="chip pass">1173 passed</span> <span class="chip pre">1 failed</span><span class="n">same pre-existing test, same cause</span></td></tr>
+<tr><td><div class="what">Head's 4 changed test files run against base code</div><div class="how">proves the new tests test the change</div></td>
+ <td><span class="chip fail">17 failed</span><span class="n">every new test; 590 old ones pass</span></td>
+ <td><span class="chip pass">all pass</span><span class="n">inside the 1173 above</span></td></tr>
+<tr><td><div class="what">Same 13 files, PR merged onto current main</div><div class="how">local merge 4ca6de8, clean, no conflicts</div></td>
+ <td><span class="chip pre">main 6c20f0fac alone: 4 failed in test_gguf_load_cache_reuse</span><span class="n">/usr/bin/true + 3 symlink tests (WinError 1314, no symlink privilege)</span></td>
+ <td><span class="chip pass">1293 passed</span> <span class="chip pre">4 failed</span><span class="n">the same 4 as main alone</span></td></tr>
+<tr><td><div class="what">Official Gemma 4 pairs, real headers</div><div class="how">first 24 MB of unsloth/gemma-4-{E2B,E4B,26B-A4B,31B}-it Q4_K_M + first 2 MB of each mmproj-BF16</div></td>
+ <td><span class="chip pass">4 of 4 detected</span></td>
+ <td><span class="chip pass">4 of 4 detected</span><span class="n">12 of 12 cross-size pairs rejected with both dims in the reason</span></td></tr>
+<tr><td><div class="what">#10296 reporter shape</div><div class="how">real 31B header with basename, base_model repo and org rewritten same-length, next to the official projector named mmproj-gemma-4-31B-it-BF16.gguf</div></td>
+ <td><span class="chip fail">dropped (metadata mismatch)</span></td>
+ <td><span class="chip pass">projector selected</span></td></tr>
+<tr><td><div class="what">Codex P2 probe: remote micro-batch with a custom audio-only projector</div><div class="how">_remote_required_ubatch vs _launch_required_ubatch, same args</div></td>
+ <td><span class="chip na">path unreachable (flag blocked)</span></td>
+ <td><span class="chip fail">2048 vs 0</span><span class="n">confirmed, also at 4ca6de8; over-reserve only</span></td></tr>
+<tr><td><div class="what">tests/studio/test_pull_requests_cancel_superseded_runs.py</div><div class="how">the one non-backend file (formatter change)</div></td>
+ <td><span class="chip pass">8 passed</span></td><td><span class="chip pass">8 passed</span></td></tr>
+<tr><td><div class="what">Live load through the running branch Unsloth Studio (:8891)</div></td>
+ <td colspan="2"><span class="chip na">not run</span><span class="n">API answers "Not authenticated"; the bootstrap password isn't in the launch log and I didn't create an account from a headless run</span></td></tr>
+<tr><td><div class="what">Upstream CI at 5221059dfb (run of 2026-09-20)</div></td>
+ <td colspan="2"><span class="chip pre">2 failed: (Python 3.13, rest), Repo tests (CPU, studio)</span><span class="n">logs expired (HTTP 410), so not attributed; main's own "(Python 3.13, rest)" failed in run 35664598182 on 2026-09-21; "Repo tests (CPU, studio)" passed on main that day</span></td></tr>
+</table></div>
+<div class="foot">Logs: prs/unsloth-11352/logs/ (pytest-head-5221059.log, pytest-base-04c9951.log, pytest-headtests-on-base.log, pytest-merged-main-6c20f0f.log, gemma4-*.log, probe-head-5221059.log)</div>
+</div>
