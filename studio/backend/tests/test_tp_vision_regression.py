@@ -385,11 +385,15 @@ def test_tensor_split_abort_raises_early_to_layer_fallback():
     # The strip is matched on the call, not on what is passed to it. What this
     # test is about is that the abort raises BEFORE the projector is thrown
     # away; which command the strip reads from is that code's own business.
-    for label, needle in (
-        ("the flash-attn-off retry", "_with_flash_attn_off"),
-        ("the text-only mmproj strip", "_strip_mmproj_args("),
+    # Searched from the fallback's reason tag: pass-through extras are also
+    # stripped of --mmproj before launch, and that call keeps the projector.
+    fallback_idx = src.find('"projector_startup_failure"')
+    assert fallback_idx != -1, "the text-only fallback no longer tags its reason"
+    for label, needle, start in (
+        ("the flash-attn-off retry", "_with_flash_attn_off", 0),
+        ("the text-only mmproj strip", "_strip_mmproj_args(", fallback_idx),
     ):
-        idx = src.find(needle)
+        idx = src.find(needle, start)
         assert idx != -1, (
             f"{label} is no longer in load_model, so the ordering below asserts "
             f"nothing. If it moved, point this at where it moved to."
