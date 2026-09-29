@@ -1531,6 +1531,29 @@ def _rewrite_cmpl_id(raw: bytes) -> bytes:
     )
 
 
+def _is_progress_only_chunk(obj: Any) -> bool:
+    """A llama-server ``return_progress`` frame: progress and nothing a client renders."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("prompt_progress"), dict):
+        return False
+    for choice in obj.get("choices") or []:
+        if not isinstance(choice, dict) or choice.get("finish_reason") or choice.get("text"):
+            return False
+        delta = choice.get("delta") or {}
+        if any(delta.get(k) for k in ("content", "tool_calls", "reasoning_content")):
+            return False
+    return True
+
+
+def _sse_event_is_progress_only(event: bytes) -> bool:
+    for ln in event.split(b"\n"):
+        if ln.startswith(b"data:"):
+            try:
+                return _is_progress_only_chunk(json.loads(ln[len(b"data:") :].strip()))
+            except Exception:
+                return False
+    return False
+
+
 def _cmpl_stream_event_out(event: bytes, include_usage: bool) -> Optional[bytes]:
     """Process one legacy /v1/completions SSE event (text between blank-line
     separators).
@@ -28597,6 +28620,8 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
             # request it for internal accounting, then keep the caller's opt-in
             # contract by filtering that chunk through _cmpl_stream_event_out.
             upstream_body = dict(body)
+            # Requested for the monitor; relayed only to a caller that asked for it.
+            _client_wants_progress = bool(body.get("return_progress"))
             upstream_body["return_progress"] = True
             upstream_stream_options = dict(body.get("stream_options") or {})
             upstream_stream_options["include_usage"] = True
@@ -28675,6 +28700,8 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                             # so don't let the middleware claim the slot and evict a
                             # preview-owned model.
                             mark_response_failed(getattr(request, "scope", None))
+                        if not _client_wants_progress and _sse_event_is_progress_only(event):
+                            continue
                         out = _cmpl_stream_event_out(event, _include_usage)
                         if out is not None:
                             yield out + b"\n\n"
@@ -35779,6 +35806,8 @@ async def _openai_passthrough_stream_admitted(
         body = await _build_openai_passthrough_body_async(
             payload, backend_ctx = llama_backend.context_length, llama_backend = llama_backend
         )
+        # Requested for the monitor; relayed only to a caller that asked for it.
+        client_wants_progress = bool(body.get("return_progress"))
         body["return_progress"] = True
         client_wants_usage = _wants_stream_usage(payload)
         upstream_stream_options = dict(body.get("stream_options") or {})
@@ -35959,6 +35988,7 @@ async def _openai_passthrough_stream_admitted(
             saw_stream_item = False
             saw_tool_call_delta = False
             terminal_seen = False
+            relayed_progress_role = False
             last_chunk_id = completion_id
             last_chunk_model = model_name
             last_chunk_created = int(time.time())
@@ -36417,6 +36447,18 @@ async def _openai_passthrough_stream_admitted(
                         )
                         # The upstream usage-only chunk is always requested for
                         # accounting, but remains caller-visible only by opt-in.
+                        if (
+                            not client_wants_progress
+                            and out_line is raw_line
+                            and _is_progress_only_chunk(chunk_data)
+                        ):
+                            # the first frame can be the only one carrying the role delta
+                            if relayed_progress_role:
+                                continue
+                            relayed_progress_role = True
+                            client_data = dict(chunk_data)
+                            client_data.pop("prompt_progress", None)
+                            out_line = "data: " + json.dumps(client_data, separators = (",", ":"))
                         if terminal_state != "usage" or client_wants_usage:
                             yield out_line + "\n\n"
                         if monitor_event == "done":

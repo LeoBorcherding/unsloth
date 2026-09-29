@@ -8488,6 +8488,49 @@ class TestApiMonitorProviderAndCompletionStreams:
 
         asyncio.run(_run())
 
+    def test_passthrough_prompt_progress_is_not_relayed_to_a_client_that_did_not_ask(
+        self, monkeypatch
+    ):
+        def progress(processed):
+            return (
+                'data: {"prompt_progress":{"total":4096,"processed":%d,"cache":0,"time_ms":900},'
+                '"choices":[{"index":0,"delta":{"role":"assistant","content":null},'
+                '"finish_reason":null}]}' % processed
+            )
+
+        async def _run():
+            result = await self._run_passthrough_stream(
+                monkeypatch,
+                [
+                    progress(1024),
+                    progress(2048),
+                    progress(4096),
+                    'data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+                    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                    "data: [DONE]",
+                ],
+            )
+
+            relayed = "".join(result.chunks)
+            assert "prompt_progress" not in relayed
+            # the first frame still delivers the role delta, the rest are dropped
+            assert relayed.count('"role":"assistant"') == 1, relayed
+            assert '"content":"ok"' in relayed
+            [entry] = result.monitor.snapshot()
+            assert entry["prompt_progress"]["percent"] == 100.0
+
+        asyncio.run(_run())
+
+    def test_completions_progress_events_are_recognised_for_dropping(self):
+        from routes.inference import _sse_event_is_progress_only
+
+        head = b'data: {"prompt_progress":{"total":8,"processed":4},'
+        progress = head + b'"choices":[{"index":0,"text":""}]}'
+        text = head + b'"choices":[{"index":0,"text":"hi"}]}'
+        assert _sse_event_is_progress_only(progress) is True
+        assert _sse_event_is_progress_only(text) is False
+        assert _sse_event_is_progress_only(b"data: [DONE]") is False
+
     def test_passthrough_stream_queued_request_sends_keepalive_before_upstream(self, monkeypatch):
         import routes.inference as inf_mod
         async def _run():
