@@ -121,6 +121,10 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
     await settle(() => row().models.length === 3);
     await idle();
     assert.equal(puts.length, 1, "no rewrite while the server stays up");
+    // A late settings sync restores older lists in this tab: the next probe repairs them without a write.
+    store.setState({ providers: [{ ...row(), models: ["manual", "alpha"], availableModels: ["alpha"] }] });
+    await settle(() => row().availableModels?.join() === "alpha,beta");
+    assert.equal(puts.length, 1);
 
     // Another tab deselected beta; this tab's copy still has it. The reload must follow the saved row.
     saved.models = ["manual", "alpha"];
@@ -155,12 +159,18 @@ test("the monitor reloads on first contact and each reconnect only", async () =>
     await settle(() => puts.length === 5);
     assert.deepEqual(puts[4].models, ["manual", "gamma", "delta", "zeta"]);
 
+    // Another tab replaced the IDs by hand and left no catalog: the saved IDs win over this tab's copy.
+    Object.assign(saved, { models: ["typed"], available_models: [] });
+    served = ["gamma", "omega"];
+    await settle(() => puts.length === 6);
+    assert.deepEqual(puts[5].models, ["typed", "gamma", "omega"]);
+
     store.setState({ providers: [{ ...row(), autoReloadModels: false }] });
     served = null;
     await idle();
     served = ["gamma", "epsilon"];
     await idle();
-    assert.equal(puts.length, 5);
+    assert.equal(puts.length, 6);
   } finally {
     stop();
   }

@@ -62,12 +62,17 @@ export function startLlamaCppAutoReload(intervalMs = 10_000): () => void {
       const catalog = [...new Set(listed.map((m) => m.id.trim()).filter(Boolean))];
       const key = `${endpoint(provider)}|${catalog.join("\n")}`;
       // A server still starting can list nothing: keep the last good selection.
-      if (stopped || online.get(provider.id) === key || catalog.length === 0) return;
+      if (stopped || catalog.length === 0) return;
+      // Skip only while this tab still shows the catalog: a late settings sync can restore older lists.
+      const shown = useExternalProvidersStore.getState().providers.find((p) => p.id === provider.id);
+      if (online.get(provider.id) === key && sameList(catalog, shown?.availableModels ?? [])) return;
       // Merge against the saved row, not this tab's copy, so tabs agree on what the user picked.
       const saved = (await listProviderConfigs()).find((c) => c.id === provider.id);
       const latest = autoReloadConnections().find((p) => p.id === provider.id);
       if (stopped || !saved || !latest || endpoint(latest) !== endpoint(provider)) return;
-      const hasSaved = (saved.available_models?.length ?? 0) > 0;
+      // Rows saved before model lists reached the backend hold neither: only then trust this tab.
+      const hasSaved =
+        (saved.models?.length ?? 0) > 0 || (saved.available_models?.length ?? 0) > 0;
       const previousModels = hasSaved ? (saved.models ?? []) : latest.models;
       const previousCatalog = hasSaved
         ? (saved.available_models ?? [])
