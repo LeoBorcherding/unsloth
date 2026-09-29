@@ -1,0 +1,16 @@
+<h2 class="sr-only">Test results for unslothai/unsloth PR 11341: with the toggle on, the llama.cpp model list follows a server restart; with it off, the list stays stale.</h2>
+<style>.row{display:grid;grid-template-columns:120px 1fr 1fr;gap:8px;align-items:center;font-size:14px}.c{border-radius:var(--radius);padding:3px 8px;font-size:12px;text-align:center}.p{background:var(--bg-success);color:var(--text-success)}.f{background:var(--bg-danger);color:var(--text-danger)}.n{background:var(--surface-1);color:var(--text-secondary)}@keyframes s{0%,20%{opacity:.25}35%,100%{opacity:1}}.a{animation:s 3s infinite}</style>
+<div style="background:var(--surface-2);border:0.5px solid var(--border);border-radius:12px;padding:1rem 1.25rem">
+<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px"><span style="font-weight:500">#11341 reload llama.cpp models on reconnect</span><span style="font-size:12px;color:var(--text-secondary)"><code>df68cf4</code> · tester PC · Windows 11</span></div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div class="row" style="color:var(--text-muted);font-size:12px"><span>server serves</span><span>toggle off (old behaviour)</span><span>toggle on (this PR)</span></div>
+<div class="row"><code>nst-model-A</code><span class="c n">list: A</span><span class="c n">list: A</span></div>
+<div class="row"><span><i class="ti ti-plug-connected-x" aria-hidden="true"></i> killed 25s</span><span class="c n">—</span><span class="c n">—</span></div>
+<div class="row"><code>nst-model-B</code><span class="c n">not run</span><span class="c p a">list: B, no clicks</span></div>
+<div class="row"><code>nst-model-C</code><span class="c f a">list stuck on B</span><span class="c n">not run</span></div>
+</div>
+<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+<span class="c p">toggle present, off by default</span><span class="c p">33 / 33 unit tests</span><span class="c p">A/B on real llama-server</span>
+</div>
+<div style="font-size:12px;color:var(--text-muted);margin-top:10px">Branch studio :8893 driven with desktop-drive (Edge app window). llama-server from the branch's own llama.cpp, Qwen3-1.7B UD-Q4_K_XL on CPU, poll interval 10s. Not run: cross-tab sync, manual-ID preservation on reconnect, Firefox.</div>
+</div>
