@@ -1,0 +1,115 @@
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<style>
+.cm{font-family:var(--font-sans,system-ui);color:var(--text-primary);font-size:13px;line-height:1.45}
+.cm h2{font-size:16px;font-weight:500;margin:0 0 2px}
+.cm .sub{color:var(--text-secondary);margin:0 0 12px}
+.cm .card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface-1);padding:14px;margin-bottom:14px}
+.cm .card h3{font-size:14px;font-weight:500;margin:0 0 4px}
+.cm .claim{color:var(--text-secondary);margin:0 0 10px}
+.cm .panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+.cm .pane{border:0.5px solid var(--border);border-radius:8px;overflow:hidden}
+.cm .ph{font-size:12px;font-weight:500;padding:6px 10px;border-bottom:0.5px solid var(--border)}
+.cm .ph span{color:var(--text-secondary);font-weight:400}
+.cm pre{margin:0;padding:6px 0;font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px;white-space:pre-wrap;word-break:break-word}
+.cm .l{display:grid;grid-template-columns:40px 1fr;padding-right:8px;border-left:2px solid transparent}
+.cm .l i{font-style:normal;color:var(--text-secondary);text-align:right;padding-right:8px}
+.cm .l.hi{background:var(--bg-info,rgba(37,99,235,.08));border-left-color:var(--text-info,#2563eb)}
+.cm .step{padding:6px 10px;border-bottom:0.5px solid var(--border);cursor:default}
+.cm .step:last-child{border-bottom:0}
+.cm .step .lab{font-size:11.5px;color:var(--text-secondary)}
+.cm .step .why{font-size:11.5px;color:var(--text-secondary)}
+.cm .step.hi{background:var(--bg-info,rgba(37,99,235,.08))}
+.cm table{border-collapse:collapse;width:100%;font-size:12px;margin-top:10px}
+.cm td,.cm th{border-bottom:0.5px solid var(--border);padding:4px 6px;text-align:left;font-weight:400;vertical-align:top}
+.cm th{color:var(--text-secondary);font-weight:500}
+.cm code{font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px}
+.cm .chip{font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.cm .ok{background:var(--bg-success);color:var(--text-success)}
+.cm .part{background:rgba(217,119,6,.12);color:var(--text-warning,#b45309)}
+.cm .no{background:var(--bg-danger);color:var(--text-danger)}
+</style>
+<div class="cm">
+<h2>What the text-encoder precision gate computes, and the nvfp4 memory math</h2>
+<p class="sub">#11413 @ d4d7cc0772 (open, conflicts with main). Gate truth table ran with a stubbed torch on the RX 5700 XT / RX 6500 XT Windows box; memory numbers are the author's, checked by arithmetic only.</p>
+
+<div class="card" data-card="g">
+<h3>1. <code>te_quant_supported(target, mode)</code> at head</h3>
+<p class="claim">After this PR nvfp4 has no capability term of its own. Its floor is sm_80, and it gets that only through the bf16 dtype the device layer picks.</p>
+<div class="panes">
+<div class="pane"><div class="ph">Code <span>studio/backend/core/inference/diffusion_precision.py @ d4d7cc0772</span></div><pre>
+<div class="l" data-l="200"><i>200</i>    if getattr(target, "device", None) != "cuda":</div>
+<div class="l" data-l="201"><i>201</i>        return False</div>
+<div class="l" data-l="204"><i>204</i>    if mode in _TE_TORCHAO_MODES and (is_stubbed("torchao") or torch_is_rocm()):</div>
+<div class="l" data-l="205"><i>205</i>        return False</div>
+<div class="l" data-l="209"><i>209</i>        if getattr(target, "dtype", None) is not torch.bfloat16:</div>
+<div class="l" data-l="210"><i>210</i>            return False</div>
+<div class="l" data-l="211"><i>211</i>        if mode == TE_QUANT_FP8:</div>
+<div class="l" data-l="212"><i>212</i>            return hasattr(torch, "float8_e4m3fn")</div>
+<div class="l" data-l="213"><i>213</i>        if mode == TE_QUANT_FP8_DYNAMIC:</div>
+<div class="l" data-l="215"><i>215</i>            return hasattr(torch, "float8_e4m3fn") and torch.cuda.get_device_capability() &gt;= (8, 9)</div>
+<div class="l" data-l="216"><i>216</i>        if mode == TE_QUANT_INT8:</div>
+<div class="l" data-l="217"><i>217</i>            return torch.cuda.get_device_capability()[0] &gt;= 8</div>
+<div class="l" data-l="218"><i>218</i>        if mode == TE_QUANT_NVFP4:</div>
+<div class="l" data-l="220"><i>220</i>            return hasattr(torch, "float8_e4m3fn") and nvfp4_weight_only_importable()</div>
+<div class="l" data-l="423" style="margin-top:6px"><i>423</i>        dtype = torch.bfloat16 if major &gt;= 8 else torch.float16   <span style="color:var(--text-secondary)"># diffusion_device.py</span></div>
+</pre></div>
+<div class="pane"><div class="ph">Math</div>
+<div class="step" data-lines="200-210"><div class="lab">common guard</div><div class="tex">G = \mathbb{1}[\text{dev}=\text{cuda}]\cdot\mathbb{1}[\tau=\text{bf16}]\cdot\big(1-\mathbb{1}[m\in T]\,\mathbb{1}[\text{rocm}\lor\text{stub}]\big)</div><div class="why">T = {int8, fp8_dynamic, nvfp4}, the torchao modes.</div></div>
+<div class="step" data-lines="211-217"><div class="lab">per mode</div><div class="tex">\begin{aligned}S_{\text{fp8}}&=G\,f\\ S_{\text{fp8dyn}}&=G\,f\,\mathbb{1}[c\ge(8,9)]\\ S_{\text{int8}}&=G\,\mathbb{1}[c_0\ge 8]\end{aligned}</div></div>
+<div class="step" data-lines="218-220"><div class="lab">nvfp4, before and after</div><div class="tex">\begin{aligned}S^{\text{base}}_{\text{nvfp4}}&=G\,\mathbb{1}[c_0\ge 10]\\ S^{\text{head}}_{\text{nvfp4}}&=G\,f\,p\end{aligned}</div><div class="why">p is the cached torchao probe; f is torch having float8_e4m3fn.</div></div>
+<div class="step" data-lines="423"><div class="lab">where the floor comes from (NVIDIA)</div><div class="tex">\tau=\text{bf16}\iff c_0\ge 8\;\Rightarrow\;S^{\text{head}}_{\text{nvfp4}}=\mathbb{1}[c_0\ge 8]\,f\,p</div><div class="why">Exact on NVIDIA. ROCm is already zeroed by G.</div></div>
+</div>
+</div>
+<table><tr><th>symbol</th><th>meaning</th><th>code</th></tr>
+<tr><td class="tex-i">c=(c_0,c_1)</td><td>compute capability</td><td><code>torch.cuda.get_device_capability()</code></td></tr>
+<tr><td class="tex-i">\tau</td><td>target dtype</td><td><code>target.dtype</code></td></tr>
+<tr><td class="tex-i">m</td><td>requested mode</td><td><code>mode</code></td></tr>
+<tr><td class="tex-i">f</td><td>fp8 dtype present</td><td><code>hasattr(torch, "float8_e4m3fn")</code></td></tr>
+<tr><td class="tex-i">p</td><td>torchao ships and builds NVFP4WeightOnlyConfig</td><td><code>nvfp4_weight_only_importable()</code></td></tr>
+</table>
+<table><tr><th>check</th><th>status</th></tr>
+<tr><td class="tex-i">c=(8,6),\ \tau=\text{bf16},\ p=1:\ S^{\text{base}}=0,\ S^{\text{head}}=1</td><td><span class="chip ok">ran, stubbed torch, RX 5700 XT box @ ea11ce28bf / d4d7cc0772</span></td></tr>
+<tr><td class="tex-i">c=(12,0),\ p=0:\ S^{\text{base}}=1,\ S^{\text{head}}=0</td><td><span class="chip ok">ran, stubbed torch, same box and SHAs</span></td></tr>
+<tr><td class="tex-i">\text{rocm}=1:\ S_{\text{nvfp4}}=0\ \text{both sides, all } c</td><td><span class="chip ok">ran, stubbed torch, same box and SHAs</span></td></tr>
+<tr><td class="tex-i">p\ \text{real, no torchao installed} = 0</td><td><span class="chip ok">ran unstubbed in the worktree venv @ d4d7cc0772</span></td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>2. Why weight-only nvfp4 is about 3.5x, not 4x</h3>
+<p class="claim">The PR changes the docstring from "~4x" to "~3.5x". The e4m3 block scale is the difference: one byte per 16 weights.</p>
+<div class="panes">
+<div class="pane"><div class="ph">Code <span>diffusion_precision.py @ d4d7cc0772, docstring</span></div><pre>
+<div class="l"><i>18</i>  nvfp4       - torchao NVFP4 weight-only: 4-bit float storage, two-level microscaling, each</div>
+<div class="l"><i>19</i>                weight dequantised to bf16 per forward (no FP4 GEMM). ~3.5x smaller (lowest</div>
+<div class="l"><i>20</i>                VRAM) but a steeper quality cost and a slower prompt encode; cc &gt;= 8.0.</div>
+</pre></div>
+<div class="pane"><div class="ph">Math</div>
+<div class="step"><div class="lab">bits per weight</div><div class="tex">b_{\text{nvfp4}} = 4 + \tfrac{8}{16} = 4.5,\quad b_{\text{bf16}}=16</div><div class="why">Per-tensor fp32 scale ignored; it's 4 bytes per matrix.</div></div>
+<div class="step"><div class="lab">ratio</div><div class="tex">r=\frac{16}{4.5}\approx 3.56</div></div>
+<div class="step"><div class="lab">one 5120 x 16384 linear</div><div class="tex">\begin{aligned}M_{\text{bf16}}&=\tfrac{5120\cdot16384\cdot2}{2^{20}}=160\ \text{MiB}\\ M_{\text{nvfp4}}&=40+5=45\ \text{MiB}\end{aligned}</div></div>
+</div>
+</div>
+<table><tr><th>check</th><th>status</th></tr>
+<tr><td class="tex-i">160 \to 45\ \text{MiB}\ (3.55\times)</td><td><span class="chip part">author's run on RTX 5060 Ti, matches arithmetic only; not run here</span></td></tr>
+<tr><td class="tex-i">\text{Qwen3.5-0.8B TE: } 1664 \to 977\ \text{MiB}</td><td><span class="chip no">author's number, not run here (no NVIDIA GPU)</span></td></tr>
+</table>
+</div>
+</div>
+<script>
+(function(){
+function go(){
+ if(!window.katex){return setTimeout(go,100);}
+ document.querySelectorAll('.cm .tex').forEach(function(e){katex.render(e.textContent,e,{displayMode:true,throwOnError:false});});
+ document.querySelectorAll('.cm .tex-i').forEach(function(e){katex.render(e.textContent,e,{throwOnError:false});});
+ document.querySelectorAll('.cm .step[data-lines]').forEach(function(s){
+  var r=s.dataset.lines.split('-').map(Number);var a=r[0],b=r[1]||r[0];
+  var card=s.closest('.card');
+  s.addEventListener('mouseenter',function(){s.classList.add('hi');card.querySelectorAll('.l[data-l]').forEach(function(l){var n=+l.dataset.l;if(n>=a&&n<=b)l.classList.add('hi');});});
+  s.addEventListener('mouseleave',function(){s.classList.remove('hi');card.querySelectorAll('.l.hi').forEach(function(l){l.classList.remove('hi');});});
+ });
+}
+go();
+})();
+</script>

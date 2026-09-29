@@ -1,0 +1,121 @@
+<style>
+.ba{font-family:var(--font-sans,system-ui);color:var(--text-primary);font-size:13px;line-height:1.45}
+.ba h2{font-size:16px;font-weight:500;margin:0 0 2px}
+.ba .sub{color:var(--text-secondary);margin:0 0 12px}
+.ba .legend{display:flex;gap:12px;flex-wrap:wrap;color:var(--text-secondary);font-size:12px;margin-bottom:12px}
+.ba .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.ba .card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface-1);padding:14px;margin-bottom:14px}
+.ba .card h3{font-size:14px;font-weight:500;margin:0 0 6px}
+.ba .meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.ba .pill{font-size:11px;border:0.5px solid var(--border);border-radius:999px;padding:1px 8px;color:var(--text-secondary)}
+.ba .pill.ok{background:var(--bg-success);color:var(--text-success);border-color:transparent}
+.ba .pill.warn{background:var(--bg-warning,rgba(217,119,6,.12));color:var(--text-warning,#b45309);border-color:transparent}
+.ba .pill.bad{background:var(--bg-danger);color:var(--text-danger);border-color:transparent}
+.ba .when{color:var(--text-secondary);margin:0 0 8px}
+.ba .panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+.ba .pane{border:0.5px solid var(--border);border-radius:8px;overflow:hidden}
+.ba .ph{font-size:12px;font-weight:500;padding:6px 10px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between;gap:8px}
+.ba .ph span{color:var(--text-secondary);font-weight:400}
+.ba pre{margin:0;padding:6px 0;font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px;white-space:pre-wrap;word-break:break-word}
+.ba .l{display:grid;grid-template-columns:40px 1fr;padding:0 8px 0 0}
+.ba .l i.n{font-style:normal;color:var(--text-tertiary,var(--text-secondary));text-align:right;padding-right:8px;user-select:none}
+.ba .del{background:var(--bg-danger)}
+.ba .add{background:var(--bg-success)}
+.ba .gap{color:var(--text-secondary);font-style:italic;padding:2px 10px}
+.ba .ann{margin:2px 8px 4px 48px;font-size:11.5px;padding:3px 8px;border-radius:6px}
+.ba .ann.note{background:rgba(217,119,6,.12);color:var(--text-warning,#b45309)}
+.ba .ann.okn{background:var(--bg-success);color:var(--text-success)}
+.ba .ann.nit{background:rgba(234,88,12,.12);color:#c2410c}
+.ba .eff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;font-size:12px}
+.ba .eff div{border:0.5px solid var(--border);border-radius:8px;padding:6px 10px}
+.ba .eff b{font-weight:500}
+.ba table{border-collapse:collapse;width:100%;font-size:12px;margin-top:8px}
+.ba td,.ba th{border-bottom:0.5px solid var(--border);padding:4px 6px;text-align:left;font-weight:400}
+.ba th{color:var(--text-secondary);font-weight:500}
+.ba .rev{margin-top:10px;border-top:0.5px solid var(--border);padding-top:8px}
+.ba .rev div{margin:4px 0;font-size:12px}
+.ba .foot{color:var(--text-secondary);font-size:12px;margin-top:8px}
+.ba a{color:var(--text-info,#2563eb)}
+</style>
+<div class="ba">
+<h2>PR 11413: text-encoder nvfp4 gate and refusal text, before and after</h2>
+<p class="sub">Open PR by mahiatlinux, head <code>d4d7cc0772</code> over base <code>ea11ce28bf</code>. Conflicts with main <code>6c20f0fac7</code>, where NVFP4 is switched off by default.</p>
+<div class="legend"><span><i class="sw" style="background:var(--bg-danger)"></i>removed</span><span><i class="sw" style="background:var(--bg-success)"></i>added</span><span><i class="sw" style="background:rgba(217,119,6,.3)"></i>note</span><span><i class="sw" style="background:rgba(234,88,12,.3)"></i>nit</span></div>
+
+<div class="card">
+<h3>A. Weight-only nvfp4 was gated on FP4 tensor cores it never uses</h3>
+<div class="meta"><span class="pill ok">open</span><span class="pill warn">unit + stubbed-capability runs, RX 5700 XT / RX 6500 XT Windows box</span><span class="pill ok">ran on A100 40GB (Leo, Colab)</span><span class="pill">risk low</span></div>
+<p class="when">When: an NVIDIA bf16 GPU below sm_100 (A100, 3090, 4090, H100) asks for text encoder <code>nvfp4</code>.</p>
+<div class="panes">
+<div class="pane"><div class="ph">Before <span>diffusion_precision.py @ ea11ce28bf</span></div><pre>
+<div class="l"><i class="n">163</i>def te_quant_supported(target: Any, mode: str) -&gt; bool:</div>
+<div class="gap">7 lines</div>
+<div class="l"><i class="n">171</i>    if mode in _TE_TORCHAO_MODES and (is_stubbed("torchao") or torch_is_rocm()):</div>
+<div class="l"><i class="n">172</i>        return False</div>
+<div class="gap">12 lines: bf16 check, fp8, fp8_dynamic, int8</div>
+<div class="l"><i class="n">185</i>        if mode == TE_QUANT_NVFP4:</div>
+<div class="l del"><i class="n">186</i>            return torch.cuda.get_device_capability()[0] &gt;= 10  # NVFP4 cores: Blackwell sm_100+</div>
+<div class="ann note">sm_100 is what the FP4 GEMM needs. NVFP4WeightOnlyConfig dequantises to bf16 and calls F.linear; torchao's is_sm_at_least_100 assert sits only in the dynamic handler (inference_workflow.py:140 at torchao v0.15.0).</div>
+</pre></div>
+<div class="pane"><div class="ph">After <span>diffusion_precision.py @ d4d7cc0772</span></div><pre>
+<div class="l add"><i class="n">181</i>@lru_cache(maxsize = 1)</div>
+<div class="l add"><i class="n">182</i>def nvfp4_weight_only_importable() -&gt; bool:</div>
+<div class="gap">docstring</div>
+<div class="l add"><i class="n">187</i>    try:</div>
+<div class="l add"><i class="n">188</i>        from torchao.prototype.mx_formats import NVFP4WeightOnlyConfig</div>
+<div class="l add"><i class="n">189</i>        from .diffusion_transformer_quant import _quiet_config</div>
+<div class="l add"><i class="n">190</i>        _quiet_config(NVFP4WeightOnlyConfig)</div>
+<div class="l add"><i class="n">191</i>    except Exception:  # noqa: BLE001 -- older torchao, or a torch the config rejects</div>
+<div class="l add"><i class="n">192</i>        return False</div>
+<div class="l add"><i class="n">193</i>    return True</div>
+<div class="gap">te_quant_supported, same ROCm/stub guard at 204</div>
+<div class="l"><i class="n">218</i>        if mode == TE_QUANT_NVFP4:</div>
+<div class="l add"><i class="n">220</i>            return hasattr(torch, "float8_e4m3fn") and nvfp4_weight_only_importable()</div>
+<div class="ann okn">The cc floor now comes from the bf16 check: diffusion_device.py:423 gives NVIDIA bf16 only at major &gt;= 8. The probe turns Studio's torchao 0.14 pin (torch 2.9) into an up-front refusal instead of an ImportError in _cast_nvfp4 after the download.</div>
+</pre></div>
+</div>
+<table><tr><th>host shape (stubbed torch, real gate code)</th><th>base</th><th>head</th></tr>
+<tr><td>NVIDIA bf16, cc 8.0 / 8.6 / 8.9 / 9.0, torchao has the config</td><td>False</td><td>True</td></tr>
+<tr><td>NVIDIA bf16, cc 10.0 / 12.0, torchao has the config</td><td>True</td><td>True</td></tr>
+<tr><td>NVIDIA bf16, cc 10.0 / 12.0, torchao 0.14 (no config)</td><td>True, then fails in _cast_nvfp4</td><td>False, refused before download</td></tr>
+<tr><td>NVIDIA fp16, cc 7.5</td><td>False</td><td>False</td></tr>
+<tr><td>ROCm torch, any cc</td><td>False</td><td>False</td></tr>
+</table>
+<div class="rev">
+<div><span class="pill bad">bug</span> <b>ran</b> Rebased onto main, the change is dark by default: #10729 added <code>UNSLOTH_NVFP4_DIFFUSION</code> (default off) and <code>normalize_te_quant('nvfp4')</code> raises before the gate is ever asked. Probe on main 6c20f0fac7 + d4d7cc077 merged: unset -&gt; ValueError "NVFP4 is disabled in this build"; <code>=1</code> -&gt; nvfp4.</div>
+<div><span class="pill warn">gap</span> <b>grep</b> Merge conflict in images-page.tsx:4512 on main: main wraps the TE options in <code>withNvfp4Option(..., nvfp4Diffusion)</code>. The resolution has to keep that wrapper and take only the label change, or the option shows on hosts where the backend 400s it.</div>
+</div>
+<p class="foot">Tests added: test_nvfp4_supported_without_fp4_cores (6 cc values), test_nvfp4_unsupported_when_torchao_lacks_the_weight_only_config, test_nvfp4_weight_only_probe_reads_the_installed_torchao, test_quantize_nvfp4_engages_on_ampere. <a href="https://github.com/unslothai/unsloth/pull/11413">#11413</a></p>
+</div>
+
+<div class="card">
+<h3>B. The pre-load refusal named no requirement</h3>
+<div class="meta"><span class="pill ok">open</span><span class="pill warn">unit tests + printed strings, RX 5700 XT / RX 6500 XT Windows box</span></div>
+<p class="when">When: any explicit text encoder mode the gate declines, image (diffusion.py) and video (video.py) loads.</p>
+<div class="panes">
+<div class="pane"><div class="ph">Before <span>diffusion.py @ ea11ce28bf</span></div><pre>
+<div class="l"><i class="n">1887</i>        elif te_effective is not None and not te_quant_supported(target, te_effective):</div>
+<div class="l del"><i class="n">1888</i>            te_reason = (</div>
+<div class="l del"><i class="n">1889</i>                "this device does not have the tensor cores that backend needs (a CUDA GPU in "</div>
+<div class="l del"><i class="n">1890</i>                "bf16, plus fp8 / int8 / NVFP4 support depending on the mode)"</div>
+<div class="l del"><i class="n">1891</i>            )</div>
+<div class="ann note">Same text for every mode, so a user can't tell whether to change GPU, torch or mode.</div>
+</pre></div>
+<div class="pane"><div class="ph">After <span>diffusion.py / diffusion_precision.py @ d4d7cc0772</span></div><pre>
+<div class="l"><i class="n">1888</i>        elif te_effective is not None and not te_quant_supported(target, te_effective):</div>
+<div class="l add"><i class="n">1889</i>            te_reason = te_quant_unsupported_reason(te_effective)</div>
+<div class="gap">diffusion_precision.py</div>
+<div class="l add"><i class="n">166</i>    TE_QUANT_FP8: "an NVIDIA or AMD GPU that runs bf16 (NVIDIA Ampere sm_80 or newer)",</div>
+<div class="ann nit">models/inference.py:3809 and :4891, touched by this PR, still say fp8 needs cc &gt;= 8.9. The gate has no cc check for fp8 (ran: True at cc 8.0, bf16).</div>
+<div class="l add"><i class="n">167</i>    TE_QUANT_FP8_DYNAMIC: "an NVIDIA GPU with fp8 tensor cores (Ada sm_89 or newer)",</div>
+<div class="l add"><i class="n">168</i>    TE_QUANT_INT8: "an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer)",</div>
+<div class="l add"><i class="n">169</i>    TE_QUANT_NVFP4: (</div>
+<div class="l add"><i class="n">170</i>        "an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer) and torchao 0.15 or newer on "</div>
+<div class="l add"><i class="n">171</i>        "torch 2.8 or newer"</div>
+<div class="ann nit">Keyed on mode, not cause. A 5090 on torch 2.9 (Studio installs torchao 0.14 there) reads "needs an NVIDIA GPU ... and torchao 0.15", and has to work out which half failed.</div>
+</pre></div>
+</div>
+<div class="eff"><div><b>Before:</b> "does not have the tensor cores that backend needs"</div><div><b>After:</b> "text-encoder 'int8' needs an NVIDIA GPU that runs bf16 (Ampere sm_80 or newer), which this host does not provide"</div></div>
+<p class="foot">The frontend's <code>text_encoder_quant='...' could not be used:</code> prefix is unchanged. Also in video.py:364 and quantize_text_encoders.</p>
+</div>
+</div>

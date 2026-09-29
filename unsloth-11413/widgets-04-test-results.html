@@ -1,0 +1,49 @@
+<style>
+.tr{font-family:var(--font-sans,system-ui);color:var(--text-primary);font-size:13px;line-height:1.45}
+.tr h2{font-size:16px;font-weight:500;margin:0 0 2px}
+.tr .sub{color:var(--text-secondary);margin:0 0 12px}
+.tr .card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface-1);padding:12px;margin-bottom:12px}
+.tr .card h3{font-size:13px;font-weight:500;margin:0 0 8px}
+.tr table{border-collapse:collapse;width:100%;font-size:12px}
+.tr td,.tr th{border-bottom:0.5px solid var(--border);padding:5px 6px;text-align:left;font-weight:400;vertical-align:top}
+.tr th{color:var(--text-secondary);font-weight:500}
+.tr tr:last-child td{border-bottom:0}
+.tr .chip{display:inline-block;font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.tr .pass{background:var(--bg-success);color:var(--text-success)}
+.tr .fail{background:var(--bg-danger);color:var(--text-danger)}
+.tr .same{background:rgba(217,119,6,.12);color:var(--text-warning,#b45309)}
+.tr .na{border:0.5px solid var(--border);color:var(--text-secondary)}
+.tr code{font-family:var(--font-mono,ui-monospace,monospace);font-size:11.5px}
+.tr .m{color:var(--text-secondary);font-size:12px}
+</style>
+<div class="tr">
+<h2>PR 11413 test results: gate logic and backend suites, base vs head</h2>
+<p class="sub">Machine: Leo's tester PC, AMD RX 5700 XT + RX 6500 XT, Windows 11, no NVIDIA GPU. Python 3.12 venv in the head worktree, torch 2.14.0+cpu, no torchao. Base <code>ea11ce28bf</code>, head <code>d4d7cc0772</code>, main <code>6c20f0fac7</code>.</p>
+
+<div class="card">
+<h3><i class="ti ti-flask"></i> What ran</h3>
+<table>
+<tr><th>test</th><th>base ea11ce28bf</th><th>head d4d7cc0772</th><th>main + head merged</th></tr>
+<tr><td>test_diffusion_precision.py + test_dense_quant_rocm_gate_9396.py</td><td><span class="chip pass">97 passed</span></td><td><span class="chip pass">110 passed</span></td><td><span class="chip na">in the row below</span></td></tr>
+<tr><td>Head's test_diffusion_precision.py against base code</td><td><span class="chip fail">collection error</span> <span class="m">no te_quant_unsupported_reason</span></td><td><span class="chip pass">passes</span></td><td></td></tr>
+<tr><td>The PR's 7 listed suites (precision, rocm gate, xformers parity, te_prequant, auto policy, train scheme contract, video h3)</td><td><span class="chip pass">269 passed</span> <span class="chip same">3 failed</span> 2 skipped</td><td><span class="chip pass">282 passed</span> <span class="chip same">3 failed</span> 2 skipped</td><td><span class="chip na">not run as a set</span></td></tr>
+<tr><td>precision + rocm gate + te_prequant + video h3</td><td></td><td></td><td><span class="chip pass">191 passed</span> <span class="chip same">3 failed</span> 2 skipped</td></tr>
+<tr><td>Gate truth table, stubbed torch, cc 7.5 to 12.0, ROCm on/off, probe on/off (28 rows)</td><td colspan="2">nvfp4 flips only where intended: False to True at cc 8.0 / 8.6 / 8.9 / 9.0 with the config present, True to False at cc 10 / 12 without it. fp8, fp8_dynamic, int8 identical in all 28 rows. ROCm False on both.</td><td></td></tr>
+<tr><td><code>nvfp4_weight_only_importable()</code>, real, no stubs</td><td><span class="chip na">does not exist</span></td><td><span class="chip pass">False</span> <span class="m">no torchao in the venv</span></td><td></td></tr>
+<tr><td><code>normalize_te_quant("nvfp4")</code>, <code>UNSLOTH_NVFP4_DIFFUSION</code> unset</td><td><span class="chip na">not checked</span></td><td><span class="chip na">not checked</span></td><td><span class="chip fail">ValueError: NVFP4 is disabled in this build</span></td></tr>
+<tr><td><code>normalize_te_quant("nvfp4")</code>, <code>UNSLOTH_NVFP4_DIFFUSION=1</code></td><td></td><td></td><td><span class="chip pass">nvfp4</span></td></tr>
+</table>
+<p class="m">The 3 failures are the same test_diffusion_te_prequant.py hub-resolution tests on base, head and the merge; the PR doesn't touch that file or its code. The main + head column is a working-tree merge with the images-page.tsx conflict left unresolved; only backend code ran there.</p>
+</div>
+
+<div class="card">
+<h3><i class="ti ti-circle-dashed"></i> Not run here</h3>
+<table>
+<tr><th>what</th><th>why</th></tr>
+<tr><td>A real nvfp4 cast and encode on any NVIDIA card</td><td>No NVIDIA GPU on this box. Leo's A100 40GB run on Colab at d4d7cc0772 covers the Ampere load (NVFP4 applied, clean image).</td></tr>
+<tr><td>Blackwell on torch 2.9 with torchao 0.14 (the new up-front refusal)</td><td>Only the stubbed probe ran. Needs a Blackwell box on Studio's torch 2.9 stack.</td></tr>
+<tr><td>Frontend tsc / vite / playwright</td><td>Change is a label and a hint string; the conflict with main has to be resolved first anyway.</td></tr>
+<tr><td>AMD/ROCm device run</td><td>Not needed: ROCm is refused by the same guard before and after (line 204), so no ROCm behaviour moves.</td></tr>
+</table>
+</div>
+</div>

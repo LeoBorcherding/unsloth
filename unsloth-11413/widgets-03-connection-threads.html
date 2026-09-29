@@ -1,0 +1,73 @@
+<style>
+.ct{font-family:var(--font-sans,system-ui);color:var(--text-primary);font-size:13px;line-height:1.45}
+.ct h2{font-size:16px;font-weight:500;margin:0 0 2px}
+.ct .sub{color:var(--text-secondary);margin:0 0 10px}
+.ct .legend{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;margin-bottom:12px}
+.ct .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+.ct .card{border:0.5px solid var(--border);border-radius:12px;background:var(--surface-1);padding:12px}
+.ct .card h3{font-size:13px;font-weight:500;margin:0 0 8px}
+.ct .center{border-color:var(--text-info,#2563eb)}
+.ct .row{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;padding:4px 0;border-bottom:0.5px solid var(--border)}
+.ct .row:last-child{border-bottom:0}
+.ct .row .w{flex:1;min-width:120px;color:var(--text-secondary)}
+.ct .pill{font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap}
+.ct .merged{background:rgba(130,80,223,.14);color:#8250df}
+.ct .open{background:var(--bg-success);color:var(--text-success)}
+.ct .closed{background:var(--bg-danger);color:var(--text-danger)}
+.ct .local{border:0.5px dashed var(--text-info,#2563eb);color:var(--text-info,#2563eb)}
+.ct .chip{font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap;margin-left:auto}
+.ct .cg{background:var(--bg-success);color:var(--text-success)}
+.ct .ca{background:rgba(217,119,6,.12);color:var(--text-warning,#b45309)}
+.ct .cr{background:var(--bg-danger);color:var(--text-danger)}
+.ct a{color:var(--text-info,#2563eb);text-decoration:none}
+.ct .gaps{margin-top:12px}
+.ct .gaps ul{margin:4px 0 8px 18px;padding:0}
+.ct .gaps li{margin:2px 0}
+.ct .lab{font-size:12px;font-weight:500;color:var(--text-secondary)}
+</style>
+<div class="ct">
+<h2>Text-encoder nvfp4 on pre-Blackwell: one open PR, now behind main's NVFP4 off switch</h2>
+<p class="sub">#11413 @ d4d7cc0772 is open and conflicts with main 6c20f0fac7 in images-page.tsx. #10729 landed after its base and turned NVFP4 off by default, text encoder included.</p>
+<div class="legend"><span class="pill merged">merged</span><span class="pill open">open</span><span class="pill closed">closed</span><span class="pill local">local</span><span class="chip cg" style="margin:0">ran on hardware</span><span class="chip ca" style="margin:0">unit/CI only</span><span class="chip cr" style="margin:0">needs hardware</span></div>
+<div class="grid">
+<div class="card center">
+<h3><i class="ti ti-target"></i> Under review</h3>
+<div class="row"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/11413">#11413</a><span class="w">gate drops sm_100, per-mode refusal</span><span class="chip cg">ran on A100 40GB (Leo, Colab)</span></div>
+<div class="row"><span class="pill open">open</span><a href="https://github.com/LeoBorcherding/unsloth/pull/76">fork #76</a><span class="w">mirror night-shift-tester/11413</span><span class="chip ca">unit tests, RX 5700 XT box</span></div>
+<div class="row"><span class="pill open">open</span><a href="https://github.com/LeoBorcherding/unsloth-staging-review/pull/32">staging #32</a><span class="w">Codex mirror: no major issues</span><span class="chip ca">review only</span></div>
+</div>
+<div class="card">
+<h3><i class="ti ti-git-branch"></i> Origin</h3>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/10788">#10788</a><span class="w">added the TE precision control</span></div>
+<div class="row"><span class="pill closed">closed</span><a href="https://github.com/unslothai/unsloth/issues/10716">#10716</a><span class="w">user feedback: generic refusal</span></div>
+</div>
+<div class="card">
+<h3><i class="ti ti-alert-triangle"></i> Landed since the base, changes the outcome</h3>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/10729">#10729</a><span class="w">NVFP4 off by default, TE nvfp4 400s; conflict source</span></div>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/12047">#12047</a><span class="w">same playwright driver, sets the flag; merges clean</span></div>
+</div>
+<div class="card">
+<h3><i class="ti ti-stack-2"></i> Same gate, already in the base</h3>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11631">#11631</a><span class="w">AMD int8/fp8 without torchao</span></div>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11539">#11539</a><span class="w">hosted fp8 TE default on Qwen-Image 2.1</span></div>
+<div class="row"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/11802">#11802</a><span class="w">counts hosted TE in the fit</span></div>
+</div>
+</div>
+<div class="gaps card" style="margin-top:12px">
+<h3><i class="ti ti-list-check"></i> Before this lands</h3>
+<div class="lab">Settle ourselves</div>
+<ul>
+<li>Resolve images-page.tsx: keep main's <code>withNvfp4Option(..., nvfp4Diffusion)</code>, take only the "NVFP4" label (#11413).</li>
+<li>Say in the body that on main this only reaches users with <code>UNSLOTH_NVFP4_DIFFUSION=1</code> (#11413, #10729).</li>
+<li>Re-run Codex on the merge commit; the clean review was at 6b7468faf0, before #10729 and #12047.</li>
+</ul>
+<div class="lab">Needs hardware</div>
+<ul>
+<li>Blackwell on torch 2.9 with Studio's torchao 0.14: the new up-front refusal has only run with a stubbed probe.</li>
+</ul>
+<div class="lab">Already raised, not filed</div>
+<ul>
+<li>Leo's A100 notes on #11413: nvfp4 under memory auto refuses on 40 GB, and a successful nvfp4 load logs nothing.</li>
+</ul>
+</div>
+</div>
