@@ -1,0 +1,40 @@
+<h2 class="sr-only">Test results for unslothai/unsloth PR 12070 at 826b692 on the tester PC: code read plus headless tests; five CI failures are the PR's, one is drift from main.</h2>
+<style>
+.tr{font-size:13px;color:var(--text-primary)}
+.tr .box{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.tr .h{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.tr .row{display:grid;grid-template-columns:minmax(0,1fr) 110px 110px;gap:8px;align-items:center;border-top:0.5px solid var(--border);padding:6px 0}
+.tr .row.hd{border-top:none;color:var(--text-muted);font-size:12px;padding-top:0}
+.tr .ci{display:grid;grid-template-columns:190px 70px minmax(0,1fr);gap:8px;align-items:start;border-top:0.5px solid var(--border);padding:6px 0}
+.tr .ci.hd{border-top:none;color:var(--text-muted);font-size:12px;padding-top:0}
+.tr .c{border-radius:6px;padding:2px 8px;font-size:12px;text-align:center}
+.tr .p{background:var(--bg-success);color:var(--text-success)}
+.tr .f{background:var(--bg-danger);color:var(--text-danger)}
+.tr .w{background:var(--bg-warning);color:var(--text-warning)}
+.tr .n{background:var(--surface-2);color:var(--text-secondary)}
+.tr .sub{font-size:12px;color:var(--text-secondary)}
+</style>
+<div class="tr">
+<div class="box">
+<div class="h"><span style="font-weight:500;font-size:15px">#12070: code read plus headless tests, no Unsloth Desktop run</span><span class="sub"><code>826b692</code> vs base <code>9c74453</code> · tester PC · Windows 11 Home · node 24.14.1 · Python 3.13</span></div>
+<div class="row hd"><span>what ran</span><span>base 9c74453</span><span>head 826b692</span></div>
+<div class="row"><span><i class="ti ti-test-pipe" aria-hidden="true"></i> 11 PR-touched frontend test files plus <code>contrast-slider.test.ts</code></span><span class="c p">306 / 306</span><span class="c f">307 / 308</span></div>
+<div class="row"><span><i class="ti ti-palette" aria-hidden="true"></i> <code>contrast-slider</code> "a light wash follows the slider": flags <code>window-titlebar.tsx</code>. Passes 22/22 at <code>ef45e31</code>, the last commit before the #11668 transfer</span><span class="c n">pass</span><span class="c f">fail</span></div>
+<div class="row"><span><i class="ti ti-list-numbers" aria-hidden="true"></i> Full <code>npm test</code>. Second failure is <code>reasoning-source-render</code> timing out at 30s under load; 2/2 when run alone</span><span class="c n">not run</span><span class="c w">9222 / 9224</span></div>
+<div class="row"><span><i class="ti ti-brand-python" aria-hidden="true"></i> <code>test_desktop_reliability_frontend_contract.py</code>, every test called directly (no pytest on this PC). 42/42 at <code>ef45e31</code> too</span><span class="c p">42 / 42</span><span class="c f">38 / 42</span></div>
+<div class="row"><span><i class="ti ti-brand-typescript" aria-hidden="true"></i> <code>tsc --noEmit</code>, app and test configs (node_modules borrowed from the #11668 worktree; package.json unchanged by this PR)</span><span class="c n">not run</span><span class="c p">clean</span></div>
+<div class="row"><span><i class="ti ti-git-merge" aria-hidden="true"></i> <code>git merge-tree</code> against upstream main <code>6c20f0f</code></span><span class="c n">n/a</span><span class="c p">clean</span></div>
+<div class="row"><span><i class="ti ti-brand-rust" aria-hidden="true"></i> <code>cargo check</code>: no Rust toolchain on this PC, and the PR touches no Rust</span><span class="c n">not run</span><span class="c n">not run</span></div>
+<div class="row"><span><i class="ti ti-app-window" aria-hidden="true"></i> Unsloth Desktop on Windows: no branch Tauri build script on this PC</span><span class="c n">not run</span><span class="c n">not run</span></div>
+</div>
+
+<div class="box">
+<div class="h"><span style="font-weight:500">Fork CI failures on <a href="https://github.com/LeoBorcherding/unsloth/pull/74">#74</a> at <code>826b692</code></span><span class="sub">compared with the same job on upstream main</span></div>
+<div class="ci hd"><span>job</span><span>whose</span><span>evidence</span></div>
+<div class="ci"><span>Frontend build + bundle sanity</span><span class="c f">PR</span><span><code>contrast-slider.test.ts:432</code> fails on <code>window-titlebar.tsx:147</code> (<code>hover:bg-foreground/10 active:bg-foreground/20</code>, added in <code>1288950f1</code>). Typecheck step green. Main's Frontend CI green at <code>6c20f0f</code>. Reproduced locally.</span></div>
+<div class="ci"><span>Frontend unit tests (Windows)</span><span class="c f">PR</span><span>Same single test, same file. Reproduced locally.</span></div>
+<div class="ci"><span>Repo tests (CPU, studio)</span><span class="c f">PR</span><span>4 contract tests pin the old 34px band and 30px buttons (<code>test_titlebar_navigation_slot_holds...</code>, <code>test_collapsed_tauri_keeps_history_arrows...</code>, <code>test_fixed_sheets_start_below...</code>, <code>test_tauri_collapse_removes_the_icon_rail...</code>). Main's studio job at <code>6c20f0f</code> fails a different test (<code>test_every_playwright_driver_is_invoked_by_ci</code>). Reproduced locally: 0 at base, 4 at head.</span></div>
+<div class="ci"><span>Repo tests (CPU, rest)</span><span class="c w">drift</span><span><code>test_remote_code_training_gates::test_wrapper_refuses_gradient_checkpointing_on_its_own</code>. PR touches no file there; #12187 (<code>505cfda</code>, merged after this base) rewrote that test; main's rest job green at <code>6c20f0f</code>. Merging main should clear it (not run).</span></div>
+<div class="sub" style="margin-top:6px">Still queued on the fork at time of writing: Unsloth UI CI (Chat UI chat/extra), Windows Unsloth Update CI, studiobench UI parity. Windows Unsloth UI CI and Unsloth Tauri CI passed. No Codex review on this PR yet.</div>
+</div>
+</div>

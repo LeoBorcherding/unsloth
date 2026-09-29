@@ -1,0 +1,48 @@
+<h2 class="sr-only">Connection map for unslothai/unsloth PR 12070: its titlebar commits came from 11668, it deletes the block 9502 edits, and its one drift failure is fixed on main by 12187.</h2>
+<style>
+.ct{font-size:13px;color:var(--text-primary)}
+.ct .g{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.ct .gt{font-weight:500;margin-bottom:6px}
+.ct .r{display:grid;grid-template-columns:72px 64px 1fr auto;gap:8px;align-items:center;padding:5px 0;border-top:0.5px solid var(--border)}
+.ct .r:first-of-type{border-top:none}
+.ct .pill{font-size:11px;border-radius:999px;padding:2px 8px;text-align:center;white-space:nowrap}
+.ct .open{background:var(--bg-success);color:var(--text-success)}
+.ct .merged{background:#ede4fb;color:#5b2ea6}
+.ct .issue{background:var(--surface-2);color:var(--text-secondary);border:0.5px solid var(--border)}
+.ct .chip{font-size:11px;border-radius:6px;padding:2px 6px;white-space:nowrap}
+.ct .amb{background:var(--bg-warning);color:var(--text-warning)}
+.ct .red{background:var(--bg-danger);color:var(--text-danger)}
+.ct .grn{background:var(--bg-success);color:var(--text-success)}
+.ct .sub{color:var(--text-secondary);font-size:12px}
+.ct .legend{font-size:12px;color:var(--text-secondary);display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 12px}
+.ct ul{margin:4px 0 0 18px;padding:0}
+.ct li{margin:3px 0}
+</style>
+<div class="ct">
+<div style="font-weight:500;font-size:16px">#12070 Windows top row: absorbed #11668's titlebar work, collides with #9502</div>
+<div class="sub">Open and mergeable against main <code>6c20f0f</code>. 5 of its CI failures are its own, 1 is drift already fixed on main. Nothing run in Unsloth Desktop.</div>
+<div class="legend"><span class="pill open">open</span><span class="pill merged">merged</span><span class="pill issue">issue</span><span class="chip red">conflict</span><span class="chip amb">unit tests / CI only</span><span class="chip grn">ran on hardware</span></div>
+
+<div class="g"><div class="gt"><i class="ti ti-git-merge" aria-hidden="true"></i> Origin</div>
+<div class="r"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/12070">#12070</a><span>this PR, head <code>826b692</code></span><span class="chip amb">unit tests, tester PC</span></div>
+<div class="r"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/11668">#11668</a><span>gave up 7 titlebar commits, restored at <code>ba267ee</code></span><span class="chip grn">turn nav ran: Edge app window, tester PC</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-layout-navbar" aria-hidden="true"></i> Titlebar sidebar corner</div>
+<div class="r"><span class="pill open">open</span><a href="https://github.com/unslothai/unsloth/pull/9502">#9502</a><span>edits the decoration this PR deletes</span><span class="chip red">conflict (merge-tree)</span></div>
+<div class="r"><span class="pill issue">issue</span><a href="https://github.com/unslothai/unsloth/issues/8600">#8600</a><span>corner stub on narrow window</span><span class="chip amb">open</span></div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/10706">#10706</a><span>desktop ignores the 768px breakpoint</span><span class="chip amb">merged, not rerun here</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-alert-triangle" aria-hidden="true"></i> CI drift, not this PR</div>
+<div class="r"><span class="pill merged">merged</span><a href="https://github.com/unslothai/unsloth/pull/12187">#12187</a><span>fixes the gradient-checkpointing gate test</span><span class="chip amb">main green at 6c20f0f</span></div>
+</div>
+
+<div class="g"><div class="gt"><i class="ti ti-list-check" aria-hidden="true"></i> Before this can land</div>
+<ul>
+<li>Work not done: route the Windows caption hover through the contrast gain (<code>window-titlebar.tsx:147</code>) and update the 4 Python contract tests to 36px / 30px targets. Unblocks #12070's frontend and studio CI.</li>
+<li>Settle ourselves: which lands first, #12070 or #9502. #12070 removes the block, so #9502 is moot after it (see #9502's own review).</li>
+<li>Settle ourselves: a Windows Unsloth Desktop run of this head, which nobody has posted since the transfer commits. The body's Windows runner evidence predates them.</li>
+<li>Ask the author: refresh the body's corner geometry (4px from top/right) to the transferred 46 x 36 flush layout.</li>
+</ul></div>
+</div>

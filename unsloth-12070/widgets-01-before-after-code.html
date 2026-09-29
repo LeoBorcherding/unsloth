@@ -1,0 +1,113 @@
+<h2 class="sr-only">Before and after code for unslothai/unsloth PR 12070: one top row on the Windows and Linux custom titlebar, and Windows caption buttons. Read at 9c74453 and 826b692; one fix fails a unit test.</h2>
+<style>
+.ba{font-size:13px;color:var(--text-primary)}
+.ba .card{background:var(--surface-1);border:0.5px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.ba .hd{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ba .nm{font-weight:500;font-size:14px}
+.ba .pill{font-size:11px;border-radius:999px;padding:2px 8px;margin-left:6px;white-space:nowrap}
+.ba .open{background:var(--bg-success);color:var(--text-success)}
+.ba .amb{background:var(--bg-warning);color:var(--text-warning)}
+.ba .red{background:var(--bg-danger);color:var(--text-danger)}
+.ba .meta{color:var(--text-secondary);font-size:12px;margin:6px 0}
+.ba .panes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;margin-top:8px}
+.ba .pane{border:0.5px solid var(--border);border-radius:8px;overflow:hidden}
+.ba .pt{font-size:12px;font-weight:500;padding:6px 10px;border-bottom:0.5px solid var(--border);display:flex;justify-content:space-between}
+.ba .pt code{font-weight:400;color:var(--text-secondary)}
+.ba pre{margin:0;padding:6px 0;font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+.ba .l{display:grid;grid-template-columns:34px 1fr;padding:0 8px}
+.ba .l span:first-child{color:var(--text-muted);text-align:right;padding-right:8px;user-select:none}
+.ba .del{background:var(--bg-danger)}
+.ba .add{background:var(--bg-success)}
+.ba .gap{color:var(--text-muted);padding:2px 10px;font-style:italic}
+.ba .file{color:var(--text-secondary);padding:2px 10px;font-size:11px;border-top:0.5px dashed var(--border)}
+.ba .ann{margin:2px 10px 4px 42px;padding:3px 8px;border-radius:6px;font-size:12px}
+.ba .note{background:var(--bg-warning);color:var(--text-warning)}
+.ba .ok{background:var(--bg-success);color:var(--text-success)}
+.ba .nit{background:var(--bg-danger);color:var(--text-danger)}
+.ba .rv{margin-top:10px;font-size:12px}
+.ba .rv div{padding:4px 0;border-top:0.5px solid var(--border)}
+.ba .legend{font-size:12px;color:var(--text-secondary);margin-bottom:10px;display:flex;gap:10px;flex-wrap:wrap}
+.ba .sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}
+</style>
+<div class="ba">
+<div style="font-weight:500;font-size:16px">#12070: one titlebar row on Windows and Linux, and native-looking Windows caption buttons</div>
+<div class="meta">Open, mergeable, no approval yet. Code read at <code>9c74453</code> (base) and <code>826b692</code> (head), tester PC. One fix fails an existing unit test; nothing was launched in Unsloth Desktop.</div>
+<div class="legend"><span><span class="sw" style="background:var(--bg-danger)"></span>removed / nit</span><span><span class="sw" style="background:var(--bg-success)"></span>added / ok</span><span><span class="sw" style="background:var(--bg-warning)"></span>note</span></div>
+
+<div class="card">
+<div class="hd"><span class="nm">A. The page header was a second bar under min/max/close</span><span><span class="pill open">open PR</span><span class="pill amb">unit tests only, tester PC</span><span class="pill amb">risk medium</span></span></div>
+<div class="meta"><b style="font-weight:500">When:</b> Unsloth Desktop on Windows or Linux (custom titlebar), any chat-like route (/chat, /images, /video, /audio).<br>
+<b style="font-weight:500">Before:</b> a 34px strip with the window buttons, then the page header as a second row below it.<br>
+<b style="font-weight:500">After:</b> the header sits in the band beside the window buttons, like macOS. Band is 36px on Windows, 42px on Linux.</div>
+<div class="panes">
+<div class="pane"><div class="pt">Before <code>provider.tsx @ 9c74453</code></div><pre>
+<div class="l"><span>569</span><span>const CUSTOM_CHROME_STYLE = {</span></div>
+<div class="gap">1 line</div>
+<div class="l del"><span>571</span><span>  "--studio-custom-titlebar-height": "34px",</span></div>
+<div class="gap">5 lines</div>
+<div class="l del"><span>577</span><span>  "--studio-content-top-inset": "34px",</span></div>
+<div class="ann note">▲ every chat-like page starts 34px down, under the band, so its header is a second row</div>
+<div class="gap">2 lines</div>
+<div class="l del"><span>580</span><span>  "--studio-chat-header-height": "calc(48px * var(--ui-space-scale, 1))",</span></div>
+<div class="gap">4 lines</div>
+<div class="l del"><span>585</span><span>  "--studio-window-control-inset": "112px",</span></div>
+<div class="file">window-titlebar.tsx @ 9c74453</div>
+<div class="l"><span>362</span><span>          data-slot="window-titlebar-decoration"</span></div>
+<div class="l"><span>391</span><span>          showSidebarSurface &amp;&amp; "bg-sidebar text-sidebar-foreground",</span></div>
+</pre></div>
+<div class="pane"><div class="pt">After <code>provider.tsx @ 826b692</code></div><pre>
+<div class="l"><span>573</span><span>const CUSTOM_CHROME_STYLE = {</span></div>
+<div class="gap">1 line</div>
+<div class="l add"><span>575</span><span>  "--studio-custom-titlebar-height": "var(--studio-windows-caption-height,42px)",</span></div>
+<div class="gap">7 lines</div>
+<div class="l add"><span>583</span><span>  "--studio-content-top-inset": "0px",</span></div>
+<div class="ann ok">✓ chat-like pages start at 0, so their header is the band's row; other routes get non-chat-scroller-top instead</div>
+<div class="gap">6 lines</div>
+<div class="l add"><span>590</span><span>  "--studio-chat-header-height": "calc(40px * var(--ui-space-scale, 1))",</span></div>
+<div class="gap">14 lines</div>
+<div class="l add"><span>605</span><span>  "--studio-window-control-inset": "var(--studio-windows-control-inset,136px)",</span></div>
+<div class="file">window-titlebar.tsx @ 826b692</div>
+<div class="l add"><span>301</span><span>  const unifiedRow = showSidebarSurface &amp;&amp; !isMobile &amp;&amp; pageHeaderInBand;</span></div>
+<div class="l add"><span>461</span><span>        {!unifiedRow &amp;&amp; (</span></div>
+<div class="ann nit">⚠ the 36px value is set in a useEffect (267), after first paint; until then Windows lays out at the 42px Linux fallback</div>
+</pre></div>
+</div>
+<div class="rv">
+<div><span class="pill amb">nit</span> grep: <code>toast-offset.ts:9</code> still has <code>DESKTOP_TITLEBAR_HEIGHT = 34</code>. Probe of <code>getToastOffsets("/hub", true, 1, true)</code> printed top 46, so on Linux's 42px band a toast sits 4px under it, not 12.</div>
+<div><span class="pill amb">gap</span> read: the decoration strip (<code>window-titlebar-decoration</code>) is deleted outright. #9502 edits exactly that block, so one of the two has to give.</div>
+</div>
+<div class="meta">Leaves alone: macOS native titlebar values (<code>MAC_NATIVE_CHROME_STYLE</code>), the plain web app. Tests: 11 frontend test files and 2 Python test files touched. Links: <a href="https://github.com/unslothai/unsloth/pull/12070">#12070</a>, mirror <a href="https://github.com/LeoBorcherding/unsloth/pull/74">fork #74</a>.</div>
+</div>
+
+<div class="card">
+<div class="hd"><span class="nm">B. Windows caption buttons were small rounded icons, not Windows' flush 46px targets</span><span><span class="pill open">open PR</span><span class="pill red">fails contrast-slider test</span><span class="pill amb">risk low</span></span></div>
+<div class="meta"><b style="font-weight:500">When:</b> Unsloth Desktop on Windows only (<code>getClientPlatform().includes("win")</code>). Linux keeps the rounded 34px buttons.<br>
+<b style="font-weight:500">Before:</b> 26px rounded buttons 4px from the edge, a soft red wash on Close.<br>
+<b style="font-weight:500">After:</b> 46 x 36 flush buttons in the corner, Windows red Close, DPI-rounded 10px glyphs. Came in with the commits moved from #11668.</div>
+<div class="panes">
+<div class="pane"><div class="pt">Before <code>window-titlebar.tsx @ 9c74453</code></div><pre>
+<div class="l del"><span>96</span><span>        "relative z-[80] inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[10px] text-nav-icon-idle dark:text-nav-fg-muted transition-colors hover:bg-nav-surface-hover hover:text-foreground dark:hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",</span></div>
+<div class="ann note">▲ one class for every platform, so Windows got macOS-style pill buttons</div>
+<div class="gap">327 lines</div>
+<div class="l del"><span>424</span><span>          className="pointer-events-auto absolute right-1 top-0 flex h-full items-center gap-0.5"</span></div>
+<div class="gap">45 lines</div>
+<div class="l del"><span>470</span><span>            className="hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/70 dark:hover:bg-destructive/20 dark:hover:text-destructive"</span></div>
+</pre></div>
+<div class="pane"><div class="pt">After <code>window-titlebar.tsx @ 826b692</code></div><pre>
+<div class="l add"><span>146</span><span>        "relative z-[80] inline-flex size-[34px] shrink-0 items-center justify-center rounded-[10px] text-nav-icon-idle dark:text-nav-fg-muted transition-colors hover:bg-nav-surface-hover hover:text-foreground dark:hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",</span></div>
+<div class="l add"><span>147</span><span>        getClientPlatform().includes("win") &amp;&amp; "h-full w-[46px] rounded-none text-foreground dark:text-foreground hover:bg-foreground/10 active:bg-foreground/20",</span></div>
+<div class="ann nit">⚠ bg-foreground/10 and /20 are fixed alphas; contrast-slider.test.ts:432 flags this file, 1 of 308 fails</div>
+<div class="gap">326 lines</div>
+<div class="l add"><span>474</span><span>          className={cn("pointer-events-auto absolute top-0 flex h-full items-center", windowsCaption ? "right-0 gap-0" : "right-[12px] gap-[4px]")}</span></div>
+<div class="gap">46 lines</div>
+<div class="l add"><span>521</span><span>            className={windowsCaption ? "hover:bg-[#e81123] hover:text-white dark:hover:text-white active:bg-[#e81123]/60" : "hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/70 dark:hover:bg-destructive/20 dark:hover:text-destructive"}</span></div>
+</pre></div>
+</div>
+<div class="rv">
+<div><span class="pill red">bug</span> ran: <code>node --test tests/contrast-slider.test.ts</code> fails at <code>826b692</code> (actual <code>['components/tauri/window-titlebar.tsx']</code>), passes 22/22 at <code>ef45e31</code> (last commit before the transfer). Added by <code>1288950f1</code>. Same failure on fork CI, both frontend jobs.</div>
+<div><span class="pill red">bug</span> ran: 4 Python contract tests in <code>test_desktop_reliability_frontend_contract.py</code> still pin the 34px band and <code>size-[30px]</code>: 4 of 42 fail at head, 0 at base and at <code>ef45e31</code>.</div>
+<div><span class="pill amb">gap</span> read: the PR body still says min/max/close sit 4px from the top and right; at head Windows is flush (<code>right-0</code>, <code>h-full</code>) and Linux is 12px in.</div>
+</div>
+<div class="meta">Leaves alone: Linux and macOS button styling. Tests: none added for the Windows caption path. Links: <a href="https://github.com/unslothai/unsloth/pull/11668">#11668</a> (source of the moved commits).</div>
+</div>
+</div>
