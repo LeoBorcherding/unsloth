@@ -154,7 +154,8 @@ _SAME_TASK_RESPONSES = {"_SameTaskStreamingResponse", "_sse_streaming_response"}
 
 def test_sse_streaming_response_is_same_task():
     [helper] = [
-        n for n in ast.walk(_TREE)
+        n
+        for n in ast.walk(_TREE)
         if isinstance(n, ast.FunctionDef) and n.name == "_sse_streaming_response"
     ]
     returns = [n.value for n in ast.walk(helper) if isinstance(n, ast.Return)]
