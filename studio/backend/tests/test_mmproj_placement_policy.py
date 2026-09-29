@@ -1758,3 +1758,29 @@ def test_hub_load_rechecks_custom_projector_replaced_in_place(tmp_path, flag):
     replacement = _write_gguf(tmp_path / "replacement.gguf")
     replacement.replace(custom)
     assert not backend.matches_load_source(intent)
+
+
+def test_remote_ubatch_sizes_the_custom_projector_not_the_repo_one(tmp_path, monkeypatch):
+    import routes.inference as routes
+
+    custom = _write_gguf(tmp_path / "custom-audio.gguf")
+    monkeypatch.setattr(_meta, "mmproj_accepts_image", lambda _path: False)
+    config = SimpleNamespace(is_vision = True)
+    assert routes._remote_required_ubatch(config, []) > 0
+    assert routes._remote_required_ubatch(config, ["--mmproj", str(custom)]) == 0
+
+
+@pytest.mark.parametrize("flag", ["--mmproj", "-mm"])
+@pytest.mark.parametrize("managed", [False, True])
+def test_only_the_owner_may_name_a_custom_projector(monkeypatch, flag, managed):
+    import routes.inference as routes
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(routes.account_access, "managed_account", lambda: managed)
+    routes._refuse_managed_custom_projector(["--ctx-size", "4096"])
+    if not managed:
+        routes._refuse_managed_custom_projector([flag, "/models/p.gguf"])
+        return
+    with pytest.raises(HTTPException) as err:
+        routes._refuse_managed_custom_projector([flag, "/models/p.gguf"])
+    assert err.value.status_code == 403
