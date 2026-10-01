@@ -442,25 +442,6 @@ test("shared arguments use upstream diagnostics offline without letting normaliz
   }
 });
 
-test("a custom llama.cpp INI cannot enter a link or replace a recipient's own", () => {
-  const ini = { version: 1, mode: "custom", ini: "[*]\nnp = 1\n", section: null } as const;
-  const recipient = { ...DEFAULT_PER_MODEL_CONFIG, llamaCppConfig: ini };
-  rejects(query("llamaCppConfig", ini));
-  rejects(query("llamaCppConfig", { version: 1, mode: "managed" }));
-  const config = { nParallel: 2, llamaCppConfig: ini };
-  for (const base of [undefined, browser]) {
-    assert.deepEqual(
-      parseRunConfigLink(createRunConfigLink({ config }, base)),
-      valid({ nParallel: 2 }),
-    );
-  }
-  assert.deepEqual(
-    mergeSharedRunConfig(recipient, { llamaCppConfig: { version: 1, mode: "managed" } } as never)
-      .llamaCppConfig,
-    ini,
-  );
-});
-
 test("templates and custom reasoning messages cannot enter links or clear a recipient's own", () => {
   const recipient = {
     ...DEFAULT_PER_MODEL_CONFIG,

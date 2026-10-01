@@ -123,22 +123,6 @@ export function explicitSamplingFields(
     .map(([, wire]) => wire);
 }
 
-/** The loaded INI's request defaults, split by whether a value set here is sent over them. */
-export function iniSamplingDefaults(
-  summary: LlamaCppConfigSummary | null,
-  explicit: readonly string[] | undefined,
-): { applied: [string, unknown][]; overridden: string[] } {
-  // The composer always sends Max Tokens as max_tokens, which keeps the INI's n_predict out.
-  const pinned = new Set([...(explicit ?? []), "n_predict"]);
-  const entries = Object.entries(summary?.request_defaults ?? {});
-  return {
-    applied: entries.filter(([wire]) => !pinned.has(wire)),
-    overridden: entries
-      .filter(([wire]) => pinned.has(wire))
-      .map(([wire]) => wire),
-  };
-}
-
 export function inheritedSamplingFields(
   snapshot: Record<string, unknown>,
   fallback: Record<string, unknown>,

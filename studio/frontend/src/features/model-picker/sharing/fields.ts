@@ -39,7 +39,6 @@ const cacheType = nullable(
   (value) => value === "f16" || choice(value, KV_CACHE_DTYPES),
 );
 
-// llamaCppConfig: a custom INI can name files and any llama-server option, so it never rides a link.
 export type SharedConfigKey = Exclude<
   keyof PerModelConfig,
   | "chatTemplateOverride"

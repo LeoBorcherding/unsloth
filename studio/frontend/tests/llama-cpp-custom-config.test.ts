@@ -19,7 +19,6 @@ const {
   customSamplingPayload,
   markSamplingFields,
   explicitSamplingFields,
-  iniSamplingDefaults,
 } = await import(
   "../src/features/model-picker/model-config/llama-cpp-config.ts"
 );
@@ -440,24 +439,4 @@ test("a diffusion load sends managed in place of a custom config, never omits it
     llama_cpp_config: managed,
   });
   assert.deepEqual(llamaCppConfigPayload(undefined, { isDiffusion: true }), {});
-});
-
-test("the Sampling note lists the INI defaults in effect and the ones pinned over them", () => {
-  const summary = {
-    mode: "custom" as const,
-    section: "long",
-    digest: "d",
-    tuning: {},
-    request_defaults: { seed: 42, temperature: 0.3, top_k: 7 },
-    diagnostics: [],
-  };
-  assert.deepEqual(iniSamplingDefaults(summary, ["temperature", "enable_thinking"]), {
-    applied: [["seed", 42], ["top_k", 7]],
-    overridden: ["temperature"],
-  });
-  assert.deepEqual(iniSamplingDefaults(null, ["temperature"]), { applied: [], overridden: [] });
-  assert.deepEqual(
-    iniSamplingDefaults({ ...summary, request_defaults: { n_predict: 64, top_k: 7 } }, []),
-    { applied: [["top_k", 7]], overridden: ["n_predict"] },
-  );
 });
