@@ -307,6 +307,11 @@ export function SandboxTab() {
                           {t("settings.sandbox.lockedDacl")}
                         </span>
                       ) : null}
+                      {view.builtInContainer ? (
+                        <span className={`${NOTE_CLASS} text-muted-foreground`}>
+                          {t("settings.sandbox.builtInContainer")}
+                        </span>
+                      ) : null}
                     </div>
                   </SettingsRow>
                   <p className="pb-2 text-xs text-muted-foreground leading-relaxed">

@@ -85,6 +85,7 @@ const WINDOWS_STATUS = {
     grants_locked_by_environment: false,
     host_prep_missing: ["prepare-null-device"],
     prepare_repeats_after_restart: true,
+    tier: "base-container",
   },
   checked_at: 12,
 };
@@ -120,6 +121,7 @@ test("the status maps to camelCase and keeps the saved and effective values apar
       grantsLockedByEnvironment: false,
       hostPrepMissing: ["prepare-null-device"],
       prepareRepeatsAfterRestart: true,
+      tier: "base-container",
     },
     checkedAt: 12,
   });

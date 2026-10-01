@@ -743,6 +743,7 @@ export const zhCN = {
       prepDeclined: "管理员提示被拒绝。",
       prepFailed: "准备失败。",
       runtimeMissing: "未安装 MXC 运行时。请重新运行 Unsloth 安装程序以添加它。",
+      builtInContainer: "此电脑已使用 Windows 内置容器隔离工具调用，因此无需此开关。",
     },
     debugging: {
       logSection: "日志文件",

@@ -749,6 +749,7 @@ export const fr = {
       prepDeclined: "La demande administrateur a été refusée.",
       prepFailed: "La préparation a échoué.",
       runtimeMissing: "Le runtime MXC n'est pas installé. Relancez le programme d'installation d'Unsloth pour l'ajouter.",
+      builtInContainer: "Ce PC isole déjà les appels d'outils avec le conteneur intégré de Windows, cet interrupteur n'est donc pas nécessaire.",
     },
     debugging: {
       logSection: "Fichier journal",

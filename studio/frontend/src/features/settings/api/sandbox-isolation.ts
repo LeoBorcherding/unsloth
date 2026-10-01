@@ -30,6 +30,8 @@ export type WindowsSandboxStatus = {
   // null: MXC could not tell which host preparation steps are missing.
   hostPrepMissing: string[] | null;
   prepareRepeatsAfterRestart: boolean;
+  // The tier MXC picks without the opt-in; null when it could not tell.
+  tier: string | null;
 };
 
 export type SandboxStatus = {
@@ -92,6 +94,7 @@ type ApiWindowsStatus = {
   host_prep_missing?: string[] | null;
   // biome-ignore lint/style/useNamingConvention: API schema
   prepare_repeats_after_restart?: boolean;
+  tier?: string | null;
 };
 
 type ApiSandboxStatus = {
@@ -148,6 +151,7 @@ function windowsFromApi(
         ? null
         : windows.host_prep_missing,
     prepareRepeatsAfterRestart: windows.prepare_repeats_after_restart ?? true,
+    tier: windows.tier ?? null,
   };
 }
 

@@ -752,6 +752,7 @@ export const en = {
       prepDeclined: "The administrator prompt was declined.",
       prepFailed: "Preparation failed.",
       runtimeMissing: "The MXC runtime is not installed. Rerun the Unsloth installer to add it.",
+      builtInContainer: "This PC already isolates tool calls with Windows' built-in container, so this switch is not needed.",
     },
     debugging: {
       logSection: "Log file",

@@ -747,6 +747,7 @@ export const ptBR = {
       prepDeclined: "O pedido de administrador foi recusado.",
       prepFailed: "A preparação falhou.",
       runtimeMissing: "O runtime do MXC não está instalado. Execute o instalador do Unsloth novamente para adicioná-lo.",
+      builtInContainer: "Este PC já isola as chamadas de ferramentas com o contêiner integrado do Windows, então esta opção não é necessária.",
     },
     debugging: {
       logSection: "Arquivo de log",

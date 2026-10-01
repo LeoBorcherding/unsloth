@@ -745,6 +745,7 @@ export const ko = {
       prepDeclined: "관리자 확인이 거부되었습니다.",
       prepFailed: "준비에 실패했습니다.",
       runtimeMissing: "MXC 런타임이 설치되어 있지 않습니다. 추가하려면 Unsloth 설치 프로그램을 다시 실행하세요.",
+      builtInContainer: "이 PC는 이미 Windows 기본 제공 컨테이너로 도구 호출을 격리하므로 이 스위치가 필요하지 않습니다.",
     },
     debugging: {
       logSection: "로그 파일",

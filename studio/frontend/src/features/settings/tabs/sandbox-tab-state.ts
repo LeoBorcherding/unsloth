@@ -13,6 +13,9 @@ export const HOST_PREP_POLL_MS = 2000;
 // The one step wxc-host-prep undoes on every restart; missing alone, the PC was prepared before.
 const REPEATING_STEP = "prepare-null-device";
 
+// MXC's tier when Windows' own container works: the opt-in would only add ACEs here.
+const BUILT_IN_CONTAINER_TIER = "base-container";
+
 const BACKEND_LABELS: Record<string, string> = {
   bubblewrap: "bubblewrap",
   "macos-seatbelt": "Seatbelt",
@@ -48,6 +51,7 @@ export type HostPrepStatus =
 
 export type WindowsView = {
   runtimeMissing: boolean;
+  builtInContainer: boolean;
   optInChecked: boolean;
   optInDisabled: boolean;
   optInLocked: boolean;
@@ -62,7 +66,7 @@ export type WindowsView = {
 
 export function hostPrepStatus(windows: WindowsSandboxStatus): HostPrepStatus {
   if (!windows.runtimeInstalled) return "runtimeMissing";
-  if (!windows.allowDaclFallback) return "off";
+  if (!windows.allowDaclFallback || hasBuiltInContainer(windows)) return "off";
   const missing = windows.hostPrepMissing;
   if (missing === null) return "unknown";
   if (missing.length === 0) return "prepared";
@@ -70,6 +74,10 @@ export function hostPrepStatus(windows: WindowsSandboxStatus): HostPrepStatus {
     return "needsPreparingAgain";
   }
   return "needsPreparing";
+}
+
+export function hasBuiltInContainer(windows: WindowsSandboxStatus): boolean {
+  return windows.tier === BUILT_IN_CONTAINER_TIER;
 }
 
 export function windowsView(
@@ -80,11 +88,18 @@ export function windowsView(
   const prep = hostPrepStatus(windows);
   const running = job?.state === "running";
   const runtimeMissing = prep === "runtimeMissing";
+  const builtInContainer = hasBuiltInContainer(windows);
   return {
     runtimeMissing,
+    builtInContainer,
     optInChecked: windows.allowDaclFallback,
+    // Still enabled while on, so an owner who opted in here can turn it back off.
     optInDisabled:
-      runtimeMissing || windows.daclLockedByEnvironment || saving || running,
+      runtimeMissing ||
+      windows.daclLockedByEnvironment ||
+      saving ||
+      running ||
+      (builtInContainer && !windows.allowDaclFallback),
     optInLocked: windows.daclLockedByEnvironment,
     showGrantsRow: !runtimeMissing && windows.allowDaclFallback,
     grantsChecked: windows.persistentReadGrants,

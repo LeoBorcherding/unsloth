@@ -749,6 +749,7 @@ export const de = {
       prepDeclined: "Die Administratorabfrage wurde abgelehnt.",
       prepFailed: "Vorbereitung fehlgeschlagen.",
       runtimeMissing: "Die MXC-Laufzeit ist nicht installiert. Führe das Unsloth-Installationsprogramm erneut aus, um sie hinzuzufügen.",
+      builtInContainer: "Dieser PC isoliert Tool-Aufrufe bereits mit dem integrierten Container von Windows, daher wird dieser Schalter nicht benötigt.",
     },
     debugging: {
       logSection: "Protokolldatei",

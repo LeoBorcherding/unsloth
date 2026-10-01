@@ -4419,6 +4419,8 @@ class SandboxWindowsStatus(BaseModel):
     # None: MXC could not tell; [] prepared; otherwise the wxc-host-prep verbs still missing.
     host_prep_missing: Optional[list[str]] = None
     prepare_repeats_after_restart: bool = True
+    # MXC's own tier pick from --probe; "base-container" means the opt-in would only add ACEs here.
+    tier: Optional[str] = None
 
 
 class SandboxStatusResponse(BaseModel):
@@ -4497,8 +4499,9 @@ def _sandbox_windows_status() -> SandboxWindowsStatus:
     except Exception:
         installed = False
     missing: Optional[list[str]] = None
+    tier: Optional[str] = None
     if installed:
-        steps = mxc_runtime.probe_host_prep_steps(env = mxc_adapter._control_environment())
+        tier, steps = mxc_runtime.probe_host_report(env = mxc_adapter._control_environment())
         missing = None if steps is None else list(steps)
     return SandboxWindowsStatus(
         runtime_installed = installed,
@@ -4511,6 +4514,7 @@ def _sandbox_windows_status() -> SandboxWindowsStatus:
             mxc_read_grants.PERSISTENT_GRANTS_ENV
         ),
         host_prep_missing = missing,
+        tier = tier,
     )
 
 

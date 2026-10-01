@@ -748,6 +748,7 @@ export const hi = {
       prepDeclined: "व्यवस्थापक संकेत अस्वीकार कर दिया गया।",
       prepFailed: "तैयारी विफल रही।",
       runtimeMissing: "MXC रनटाइम इंस्टॉल नहीं है। इसे जोड़ने के लिए Unsloth इंस्टॉलर फिर से चलाएँ।",
+      builtInContainer: "यह PC पहले से ही Windows के बिल्ट-इन कंटेनर से टूल कॉल को अलग करता है, इसलिए इस स्विच की ज़रूरत नहीं है।",
     },
     debugging: {
       logSection: "लॉग फ़ाइल",

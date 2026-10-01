@@ -30,6 +30,7 @@ const windows = (
   grantsLockedByEnvironment: false,
   hostPrepMissing: [],
   prepareRepeatsAfterRestart: true,
+  tier: null,
   ...overrides,
 });
 
@@ -211,4 +212,35 @@ test("a late read of an earlier job never replaces the one this tab started", ()
     false,
   );
   assert.equal(isOlderJob(job({ id: "j3", startedAt: 30 }), started), false);
+});
+
+test("a PC whose built-in container works is not invited to opt in or prepare", () => {
+  // wxc-exec --probe on Windows 11 Home 25H2 reported tier "base-container" with no warnings.
+  const off = windowsView(
+    windows({ allowDaclFallback: false, tier: "base-container" }),
+    null,
+    false,
+  );
+  assert.equal(off.builtInContainer, true);
+  assert.equal(off.optInDisabled, true);
+  assert.equal(off.prep, "off");
+  assert.equal(off.showPrepareButton, false);
+
+  // Already on (env var era, or an earlier click): it stays switchable so it can be turned off,
+  // and "Prepared" is not claimed for a PC that was never prepared.
+  const on = windowsView(windows({ tier: "base-container" }), null, false);
+  assert.equal(on.optInDisabled, false);
+  assert.equal(on.prep, "off");
+
+  const dacl = windowsView(
+    windows({ allowDaclFallback: false, tier: "appcontainer-dacl" }),
+    null,
+    false,
+  );
+  assert.equal(dacl.builtInContainer, false);
+  assert.equal(dacl.optInDisabled, false);
+  assert.equal(
+    windowsView(windows({ allowDaclFallback: false }), null, false).optInDisabled,
+    false,
+  );
 });

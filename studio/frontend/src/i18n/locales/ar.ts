@@ -745,6 +745,7 @@ export const ar = {
       prepDeclined: "تم رفض طلب المسؤول.",
       prepFailed: "فشل التجهيز.",
       runtimeMissing: "بيئة تشغيل MXC غير مثبتة. أعد تشغيل مثبّت Unsloth لإضافتها.",
+      builtInContainer: "يعزل هذا الكمبيوتر استدعاءات الأدوات بالفعل باستخدام الحاوية المضمّنة في Windows، لذا لا حاجة إلى هذا المفتاح.",
     },
     debugging: {
       logSection: "ملف السجل",

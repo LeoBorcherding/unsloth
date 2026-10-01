@@ -312,19 +312,18 @@ def recover_dacl_state(env: dict[str, str] | None = None) -> bool:
     return clean
 
 
-def probe_host_prep_steps(
-    *,
-    package_root: Path | None = None,
-    env: dict[str, str] | None = None,
-    replay_journal: bool = True,
-) -> tuple[str, ...] | None:
-    """Host preparation `wxc-exec --probe` reports missing; None when it cannot tell."""
+def _probe_report(package_root, env, replay_journal) -> dict | None:
     try:
         completed = _run_wxc_probe(package_root, env, replay_journal = replay_journal)
-        warnings = json.loads(completed.stdout).get("warnings")
+        report = json.loads(completed.stdout)
     except Exception:  # noqa: BLE001 - advice only, never a capability verdict
         return None
-    if completed.returncode != 0 or not isinstance(warnings, list):
+    return report if completed.returncode == 0 and isinstance(report, dict) else None
+
+
+def _missing_steps(report: dict | None) -> tuple[str, ...] | None:
+    warnings = report.get("warnings") if report is not None else None
+    if not isinstance(warnings, list):
         return None
     # MXC names the verb in each Tier 3 warning (fallback_detector.rs push_host_prep_warnings).
     return tuple(
@@ -332,3 +331,22 @@ def probe_host_prep_steps(
         for step in HOST_PREP_STEPS
         if any(isinstance(item, str) and f"wxc-host-prep {step}" in item for item in warnings)
     )
+
+
+def probe_host_prep_steps(
+    *,
+    package_root: Path | None = None,
+    env: dict[str, str] | None = None,
+    replay_journal: bool = True,
+) -> tuple[str, ...] | None:
+    """Host preparation `wxc-exec --probe` reports missing; None when it cannot tell."""
+    return _missing_steps(_probe_report(package_root, env, replay_journal))
+
+
+def probe_host_report(
+    *, env: dict[str, str] | None = None
+) -> tuple[str | None, tuple[str, ...] | None]:
+    """(tier, missing host preparation) from one `wxc-exec --probe`; each None when it cannot tell."""
+    report = _probe_report(None, env, True)
+    tier = report.get("tier") if report is not None else None
+    return (tier if isinstance(tier, str) else None), _missing_steps(report)

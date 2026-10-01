@@ -747,6 +747,7 @@ export const ja = {
       prepDeclined: "管理者の確認が拒否されました。",
       prepFailed: "準備に失敗しました。",
       runtimeMissing: "MXC ランタイムがインストールされていません。追加するには Unsloth インストーラーを再実行してください。",
+      builtInContainer: "この PC はすでに Windows の組み込みコンテナーでツール呼び出しを分離しているため、このスイッチは不要です。",
     },
     debugging: {
       logSection: "ログファイル",
