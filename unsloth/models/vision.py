@@ -1414,7 +1414,11 @@ class FastBaseModel:
         # Forced float32 loads in bfloat16 then casts to float16. Resolved here, not at the load, because attention resolution and the device-map planner both size the same dtype.
         torch_dtype = dtype
         if do_forced_float32:
-            torch_dtype = torch.bfloat16
+            # The cast after the load makes these weights float16 anyway, so a device without bfloat16 stages in float16 and never holds a bfloat16 tensor; float32 staging would leave weights the cast skips in float32 (Half != float) at twice the load VRAM.
+            if SUPPORTS_BFLOAT16 or dtype == torch.bfloat16:
+                torch_dtype = torch.bfloat16
+            else:
+                torch_dtype = torch.float16
         # What attention actually runs in, not the load dtype: the UNSLOTH_FORCE_CUSTOM_DTYPE families (csm, falcon_h1, nemotron_h) load float32 for Mamba precision then cast projections back to correct_dtype, so flash stays.
         attn_dtype = correct_dtype if correct_dtype is not None else torch_dtype
         attn_impl = resolve_attention_implementation(

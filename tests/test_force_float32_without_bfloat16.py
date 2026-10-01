@@ -33,7 +33,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from unsloth.models._utils import force_float32_dtype
+from unsloth.models._utils import SUPPORTS_BFLOAT16, force_float32_dtype
 from unsloth import device_type
 
 
@@ -105,3 +105,49 @@ def test_vision_force_float32_branch_no_longer_skips_the_downgrade():
 
     source = inspect.getsource(vision)
     assert "dtype == torch.float16 or (dtype == torch.bfloat16 and not SUPPORTS_BFLOAT16)" in source
+
+
+def _gemma3_270m_cached():
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return False
+    return isinstance(try_to_load_from_cache("unsloth/gemma-3-270m-it", "config.json"), str)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available()
+    or SUPPORTS_BFLOAT16
+    or not _gemma3_270m_cached(),
+    reason = "needs a GPU without bfloat16 and unsloth/gemma-3-270m-it in the HF cache",
+)
+def test_no_bfloat16_device_never_holds_a_bfloat16_weight(monkeypatch):
+    """The decision tests above pass while the load itself still asks transformers for
+    bfloat16. This one watches the real load on a device without bfloat16."""
+    import transformers
+    from unsloth import FastLanguageModel
+
+    seen = []
+    original = transformers.modeling_utils.PreTrainedModel.from_pretrained.__func__
+
+    def spy(cls, *args, **kwargs):
+        model = original(cls, *args, **kwargs)
+        seen.append({p.dtype for p in model.parameters()})
+        return model
+
+    monkeypatch.setattr(
+        transformers.modeling_utils.PreTrainedModel, "from_pretrained", classmethod(spy)
+    )
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        "unsloth/gemma-3-270m-it",
+        max_seq_length = 256,
+        dtype = torch.float16,
+        load_in_4bit = False,
+    )
+    assert seen and all(torch.bfloat16 not in dtypes for dtypes in seen), seen
+    assert all(p.dtype != torch.bfloat16 for p in model.parameters())
+    assert torch.float16 in {p.dtype for p in model.parameters()}
+    batch = tokenizer("The capital of France is Paris.", return_tensors = "pt").to("cuda")
+    with torch.no_grad():
+        loss = model(**batch, labels = batch["input_ids"]).loss
+    assert torch.isfinite(loss), loss
