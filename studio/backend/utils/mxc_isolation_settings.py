@@ -79,23 +79,39 @@ def persistent_grants_setting() -> bool:
     return _setting(GRANTS_SETTING_KEY, DEFAULT_PERSISTENT_GRANTS)
 
 
-def _write(key: str, value: Any) -> None:
-    if not isinstance(value, bool):
+def _write(values: dict[str, Any]) -> None:
+    if not all(isinstance(value, bool) for value in values.values()):
         raise ValueError("MXC isolation settings must be true or false.")
     from storage.studio_db import upsert_app_settings
     from utils.account_context import OWNER, run_as
 
-    run_as(OWNER, upsert_app_settings, {key: value})
+    run_as(OWNER, upsert_app_settings, values)
     # Dropped, not replaced: a write that did not land must not be believed.
     forget_cached_setting()
 
 
 def set_dacl_fallback_setting(value: bool) -> None:
-    _write(DACL_SETTING_KEY, value)
+    _write({DACL_SETTING_KEY: value})
 
 
 def set_persistent_grants_setting(value: bool) -> None:
-    _write(GRANTS_SETTING_KEY, value)
+    _write({GRANTS_SETTING_KEY: value})
+
+
+def set_isolation_settings(
+    *, dacl_fallback: bool | None = None, persistent_grants: bool | None = None
+) -> None:
+    """Both switches in one transaction, so a launch in another process never sees half a change."""
+    values = {
+        key: value
+        for key, value in (
+            (DACL_SETTING_KEY, dacl_fallback),
+            (GRANTS_SETTING_KEY, persistent_grants),
+        )
+        if value is not None
+    }
+    if values:
+        _write(values)
 
 
 def locked_by_environment(name: str) -> bool:

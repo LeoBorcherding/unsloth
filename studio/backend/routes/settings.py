@@ -4567,10 +4567,10 @@ def _sandbox_apply(payload: SandboxSettingsPayload) -> Optional[int]:
     from core.inference import mxc_policy, mxc_read_grants
     from utils import mxc_isolation_settings as saved
 
-    if payload.allow_dacl_fallback is not None:
-        saved.set_dacl_fallback_setting(payload.allow_dacl_fallback)
-    if payload.persistent_read_grants is not None:
-        saved.set_persistent_grants_setting(payload.persistent_read_grants)
+    saved.set_isolation_settings(
+        dacl_fallback = payload.allow_dacl_fallback,
+        persistent_grants = payload.persistent_read_grants,
+    )
     saved.forget_cached_setting()
     _sandbox_invalidate()
     if not (mxc_policy.dacl_fallback_enabled() and mxc_read_grants.enabled()):

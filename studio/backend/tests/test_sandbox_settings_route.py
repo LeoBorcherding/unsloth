@@ -75,14 +75,15 @@ def host(monkeypatch):
     monkeypatch.setattr(mxc_read_grants, "revoke_recorded", revoke)
     monkeypatch.setattr(mxc_policy, "dacl_fallback_enabled", lambda: saved["dacl"])
     monkeypatch.setattr(mxc_read_grants, "enabled", lambda: saved["grants"])
-    monkeypatch.setattr(
-        mxc_isolation_settings, "set_dacl_fallback_setting", lambda v: saved.__setitem__("dacl", v)
-    )
-    monkeypatch.setattr(
-        mxc_isolation_settings,
-        "set_persistent_grants_setting",
-        lambda v: saved.__setitem__("grants", v),
-    )
+
+    def save(*, dacl_fallback = None, persistent_grants = None):
+        saved["writes"] = saved.get("writes", 0) + 1
+        if dacl_fallback is not None:
+            saved["dacl"] = dacl_fallback
+        if persistent_grants is not None:
+            saved["grants"] = persistent_grants
+
+    monkeypatch.setattr(mxc_isolation_settings, "set_isolation_settings", save)
     monkeypatch.setattr(mxc_isolation_settings, "locked_by_environment", lambda _name: False)
     monkeypatch.setattr(mxc_runtime, "installation_identity", lambda: "identity")
 

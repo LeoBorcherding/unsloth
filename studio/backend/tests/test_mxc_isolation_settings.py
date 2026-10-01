@@ -172,3 +172,20 @@ def test_the_remediation_names_the_same_host_prep_command(monkeypatch):
     advice = mxc_probe.host_prep_remediation()
     assert subprocess.list2cmdline(command) in advice
     assert "Settings > Sandbox" in advice
+
+
+def test_both_switches_land_in_one_settings_write(monkeypatch):
+    writes = []
+    upsert = studio_db.upsert_app_settings
+
+    def recording(values, *args, **kwargs):
+        writes.append(dict(values))
+        return upsert(values, *args, **kwargs)
+
+    monkeypatch.setattr(studio_db, "upsert_app_settings", recording)
+    settings.set_isolation_settings(dacl_fallback = True, persistent_grants = False)
+    assert writes == [{settings.DACL_SETTING_KEY: True, settings.GRANTS_SETTING_KEY: False}]
+    assert mxc_policy.dacl_fallback_enabled() is True
+    assert mxc_read_grants.enabled() is False
+    settings.set_isolation_settings()
+    assert len(writes) == 1
