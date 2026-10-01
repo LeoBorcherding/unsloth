@@ -4675,7 +4675,7 @@ async def start_sandbox_prepare(
         await asyncio.to_thread(mxc_runtime.installation_identity)
     except Exception as exc:
         raise HTTPException(
-            status_code = 409, detail = "The MXC runtime is not installed; rerun Studio setup."
+            status_code = 409, detail = "The MXC runtime is not installed; rerun the Unsloth installer."
         ) from exc
     mxc_host_prep_job.add_finish_hook(_forget_sandbox_status)
     job = await asyncio.to_thread(mxc_host_prep_job.start)
