@@ -79,3 +79,23 @@ def test_message_skips_internal_row_id() -> None:
         SimpleNamespace(name = "draft", drop = True),
     ]
     assert "(draft)." in _all_blocks_dropped_message(columns)
+
+
+@pytest.mark.parametrize("keep_upper", [False, True])
+def test_github_seed_checks_all_dropped_without_fetching(keep_upper: bool) -> None:
+    recipe = _recipe(Path("unused.parquet"), keep_upper = keep_upper)
+    recipe["seed_config"]["source"] = {
+        "seed_type": "github_repo",
+        "repos": ["org/name"],
+        "item_types": ["issues"],
+        "limit": 5,
+    }
+    response = _validate(recipe)
+
+    codes = [e.code for e in response.errors]
+    if keep_upper:
+        assert response.valid is True
+    else:
+        assert response.valid is False
+        assert codes == ["all_columns_dropped"]
+        assert "(draft, upper)" in response.errors[0].message

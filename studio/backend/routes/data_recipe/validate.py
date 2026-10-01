@@ -176,7 +176,17 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
         if static_errors:
             return ValidateResponse(valid = False, errors = static_errors)
         try:
-            build_config_builder(recipe)
+            builder = build_config_builder(recipe)
+            # Seed columns don't count toward this check, so it needs no GitHub fetch.
+            from data_designer.engine.validation import validate_columns_not_all_dropped
+
+            columns = builder.build().columns
+            if validate_columns_not_all_dropped(columns):
+                message = _all_blocks_dropped_message(columns)
+                return ValidateResponse(
+                    valid = False,
+                    errors = [ValidateError(message = message, code = "all_columns_dropped")],
+                )
         except ModuleNotFoundError as exc:
             # data_designer is an optional runtime dep and full validation is deferred to run start, so only ITS
             # ImportError is bypassed; others still fail.
