@@ -189,6 +189,7 @@ _TOOL_LOOP_HOOKS = (
     "on_conversation_grew",
     "on_decode_slot",
     "thinking_budget_tokens",
+    "mcp_image",
     "request_template_kwargs",
 )
 
