@@ -11,6 +11,7 @@ import {
   type LlamaCppConfigSummary,
 } from "@/features/model-picker/model-config/llama-cpp-config";
 import { authFetch } from "@/features/auth";
+import type { ImageDisclosure } from "../api/mcp-image";
 import {
   mirrorHfTokenInto,
   useHfTokenStore,
@@ -2452,7 +2453,12 @@ type ChatRuntimeStore = {
    *  `autoAllowKey` scopes "Always allow" per chat. Backend-gated local calls only. */
   toolConfirmations: Record<
     string,
-    { approvalId: string; sessionId: string; autoAllowKey: string }
+    {
+      approvalId: string;
+      sessionId: string;
+      autoAllowKey: string;
+      imageDisclosure?: ImageDisclosure;
+    }
   >;
   /** Fetch pill state, independent of `toolsEnabled` (Search). Read only when the provider
    *  supports builtin web_fetch. */
@@ -2723,6 +2729,7 @@ type ChatRuntimeStore = {
     approvalId: string,
     sessionId: string,
     autoAllowKey: string,
+    imageDisclosure?: ImageDisclosure,
   ) => void;
   clearToolConfirmation: (toolCallId: string) => void;
   setWebFetchToolsEnabled: (enabled: boolean) => void;
@@ -5674,11 +5681,17 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
       next.set(sessionId, new Set(current ?? []).add(toolName));
       return { alwaysAllowToolsBySession: next };
     }),
-  setToolConfirmation: (toolCallId, approvalId, sessionId, autoAllowKey) =>
+  setToolConfirmation: (
+    toolCallId,
+    approvalId,
+    sessionId,
+    autoAllowKey,
+    imageDisclosure,
+  ) =>
     set((state) => ({
       toolConfirmations: {
         ...state.toolConfirmations,
-        [toolCallId]: { approvalId, sessionId, autoAllowKey },
+        [toolCallId]: { approvalId, sessionId, autoAllowKey, imageDisclosure },
       },
     })),
   clearToolConfirmation: (toolCallId) =>
