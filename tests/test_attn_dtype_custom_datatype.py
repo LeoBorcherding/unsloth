@@ -72,9 +72,10 @@ def _attention_dtype_expression():
 PREAMBLE, DTYPE_EXPR = _attention_dtype_expression()
 
 
-def _selected(dtype, do_forced_float32, correct_dtype):
+def _selected(dtype, do_forced_float32, correct_dtype, supports_bfloat16 = True):
     namespace = {
         "torch": torch,
+        "SUPPORTS_BFLOAT16": supports_bfloat16,
         "dtype": dtype,
         "do_forced_float32": do_forced_float32,
         "correct_dtype": correct_dtype,
@@ -92,22 +93,26 @@ def _selected(dtype, do_forced_float32, correct_dtype):
 
 
 @pytest.mark.parametrize(
-    "dtype, do_forced_float32, correct_dtype, expected",
+    "dtype, do_forced_float32, correct_dtype, expected, supports_bfloat16",
     [
         # Plain loads: the load dtype is the attention dtype.
-        (torch.float32, False, None, torch.float32),
-        (torch.bfloat16, False, None, torch.bfloat16),
-        (torch.float16, False, None, torch.float16),
+        (torch.float32, False, None, torch.float32, True),
+        (torch.bfloat16, False, None, torch.bfloat16, True),
+        (torch.float16, False, None, torch.float16, True),
         # UNSLOTH_FORCE_FLOAT32: loaded bfloat16 despite the name, so flash stays on.
-        (torch.bfloat16, True, None, torch.bfloat16),
-        (torch.float32, True, None, torch.bfloat16),
+        (torch.bfloat16, True, None, torch.bfloat16, True),
+        (torch.float32, True, None, torch.bfloat16, True),
+        # ...except on a device without bfloat16, which stages in float16 unless bfloat16 was asked for.
+        (torch.float32, True, None, torch.float16, False),
+        (torch.float16, True, None, torch.float16, False),
+        (torch.bfloat16, True, None, torch.bfloat16, False),
         # UNSLOTH_FORCE_CUSTOM_DTYPE: csm / falcon_h1 / nemotron_h load float32 and cast the projections back to
         # correct_dtype, so attention runs in float16.
-        (torch.float32, False, torch.float16, torch.float16),
+        (torch.float32, False, torch.float16, torch.float16, True),
     ],
 )
-def test_attention_dtype_is_the_post_cast_dtype(dtype, do_forced_float32, correct_dtype, expected):
-    assert _selected(dtype, do_forced_float32, correct_dtype) is expected
+def test_attention_dtype_is_the_post_cast_dtype(dtype, do_forced_float32, correct_dtype, expected, supports_bfloat16):
+    assert _selected(dtype, do_forced_float32, correct_dtype, supports_bfloat16) is expected
 
 
 def test_custom_datatype_load_does_not_disable_flash_attention():
