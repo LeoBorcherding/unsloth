@@ -374,6 +374,45 @@ def test_project_delete_cancels_research_before_workspace_cleanup(monkeypatch):
     assert cancelled == ["run-1"]
 
 
+def test_project_delete_reports_the_member_ids_it_deleted(monkeypatch):
+    # The client forgets these chats' bookmarks, and only the transaction knows
+    # about a chat moved into the project after the client's own listing.
+    project = {
+        "id": "project-1",
+        "name": "Project",
+        "createdAt": 1,
+        "updatedAt": 1,
+        "memberIds": ["moved-in", "thread-1"],
+    }
+    monkeypatch.setattr(
+        chat_history,
+        "delete_chat_project",
+        lambda _project_id, delete_files = False: project,
+    )
+    monkeypatch.setattr(chat_history, "_cancel_research_runs", lambda _request, _ids: None)
+    monkeypatch.setattr(chat_history, "_cancel_chat_generation_runs", lambda _request, _ids: None)
+    monkeypatch.setattr(chat_history, "_cancel_active_generations", lambda _ids: None)
+    monkeypatch.setattr(chat_history, "_delete_project_rag_sources", lambda _id: None)
+    monkeypatch.setattr(chat_history, "_remove_thread_rag_data", lambda _ids, cutoff = None: None)
+    monkeypatch.setattr(chat_history.chat_originals, "sweep", lambda: None)
+
+    async def remove_sandboxes(_ids, _delete_files):
+        return None, []
+
+    monkeypatch.setattr(chat_history, "_remove_sandboxes", remove_sandboxes)
+
+    deleted = asyncio.run(
+        chat_history.delete_project(
+            "project-1",
+            SimpleNamespace(),
+            delete_files = False,
+            current_subject = "test-user",
+        )
+    )
+
+    assert deleted.model_dump()["memberIds"] == ["moved-in", "thread-1"]
+
+
 # ---------------------------------------------------------------------------
 # /api/chat/settings
 # ---------------------------------------------------------------------------

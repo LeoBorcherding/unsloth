@@ -36,3 +36,38 @@ test("every chat delete route forgets the deleted chats' bookmarks", async () =>
     assert.match(await readSrcAsync(file), /forgetThreads\(/, `${file} leaves bookmarks behind`);
   }
 });
+
+test("a project delete forgets the chats the backend deleted, not an earlier listing", async () => {
+  // A chat moved into the project after any client-side listing is still deleted with it.
+  const { loadWithStubs } = await import("./helpers/module-stubs.ts");
+  const forgotten: string[][] = [];
+  const projects = loadWithStubs<{
+    deleteChatProject: (id: string) => Promise<void>;
+  }>(
+    new URL("../src/features/chat/hooks/use-chat-projects.ts", import.meta.url),
+    {
+      react: {},
+      "../api/chat-api": { CHAT_PROJECTS_UPDATED_EVENT: "projects-updated" },
+      "../stores/bookmarked-turns-store": {
+        useBookmarkedTurnsStore: {
+          getState: () => ({
+            forgetThreads: (ids: string[]) => forgotten.push(ids),
+          }),
+        },
+      },
+      "../utils/chat-history-storage": {
+        deleteStoredChatProject: async () => ({
+          deletedThreadIds: ["listed", "moved-in"],
+          sandboxesKept: [],
+        }),
+        listStoredChatThreads: async (args?: { projectId?: string }) =>
+          args?.projectId ? [{ id: "listed" }] : [],
+      },
+      "../utils/offer-kept-sandbox-files": {
+        offerToDeleteKeptSandboxes: () => {},
+      },
+    },
+  );
+  await projects.deleteChatProject("p1");
+  assert.deepEqual(forgotten.flat().sort(), ["listed", "moved-in"]);
+});
