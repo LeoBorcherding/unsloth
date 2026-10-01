@@ -10,6 +10,7 @@ import {
   deleteStoredChatProject,
   isExpectedBackgroundChatStorageError,
   listStoredChatProjects,
+  listStoredChatThreads,
   moveStoredChatItemToProject,
   updateStoredChatProject,
 } from "../utils/chat-history-storage";
@@ -144,10 +145,11 @@ export async function deleteChatProject(
   projectId: string,
   args: { deleteFiles?: boolean } = {},
 ): Promise<void> {
-  const { deletedThreadIds, sandboxesKept: kept } =
-    await deleteStoredChatProject(projectId, args);
-  // The backend's own membership: a chat moved in or out after any listing here is counted right.
-  useBookmarkedTurnsStore.getState().forgetThreads(deletedThreadIds);
+  // A failed lookup only leaves stale bookmarks; it must not block the delete.
+  const threads = await listStoredChatThreads({ projectId }).catch(() => []);
+  const threadIds = threads.map((t) => t.id);
+  const kept = await deleteStoredChatProject(projectId, args);
+  useBookmarkedTurnsStore.getState().forgetThreads(threadIds);
   // The member chats went with the project, so their own sandboxes are reachable from nothing: the
   // same offer an ordinary chat delete makes, and a sandbox the backend could not remove is kept
   // even when asked to go.

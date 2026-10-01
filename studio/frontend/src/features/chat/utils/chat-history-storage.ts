@@ -999,7 +999,7 @@ export async function updateStoredChatProject(
 export async function deleteStoredChatProject(
   projectId: string,
   args: { deleteFiles?: boolean } = {},
-): Promise<{ deletedThreadIds: string[]; sandboxesKept: string[] }> {
+): Promise<string[]> {
   return deleteChatProject(projectId, args);
 }
 

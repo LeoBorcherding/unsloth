@@ -328,9 +328,8 @@ class ChatProject(BaseModel):
 
 
 class ChatProjectDeleted(ChatProject):
-    """The deleted project, its deleted members, and the member sandboxes still holding files."""
+    """The deleted project, plus the member sandboxes that still hold files."""
 
-    memberIds: list[str] = []
     sandboxes_kept: list[str] = []
 
 

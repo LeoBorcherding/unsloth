@@ -1133,11 +1133,11 @@ export async function updateChatProject(
   return project;
 }
 
-/** The member chats the delete removed, and those whose sandbox still holds files. */
+/** Member thread ids whose sandbox still holds files, from the route. */
 export async function deleteChatProject(
   projectId: string,
   args: { deleteFiles?: boolean } = {},
-): Promise<{ deletedThreadIds: string[]; sandboxesKept: string[] }> {
+): Promise<string[]> {
   const params = new URLSearchParams();
   if (args.deleteFiles) params.set("delete_files", "true");
   const qs = params.toString();
@@ -1146,15 +1146,10 @@ export async function deleteChatProject(
     { method: "DELETE" },
   );
   const data = await parseJsonOrThrow<
-    ProjectRecord & { memberIds?: string[]; sandboxes_kept?: string[] }
+    ProjectRecord & { sandboxes_kept?: string[] }
   >(response);
   notifyChatProjectsUpdated();
-  return {
-    deletedThreadIds: Array.isArray(data?.memberIds) ? data.memberIds : [],
-    sandboxesKept: Array.isArray(data?.sandboxes_kept)
-      ? data.sandboxes_kept
-      : [],
-  };
+  return Array.isArray(data?.sandboxes_kept) ? data.sandboxes_kept : [];
 }
 
 export async function listChatMessages(
