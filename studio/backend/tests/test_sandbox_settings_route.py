@@ -301,9 +301,7 @@ def test_the_windows_block_reports_the_tier_from_the_same_probe(monkeypatch):
 
     monkeypatch.setattr(mxc_runtime, "installation_identity", lambda: "identity")
     monkeypatch.setattr(mxc_adapter, "_control_environment", lambda: {})
-    monkeypatch.setattr(
-        mxc_runtime, "probe_host_report", lambda **_kw: ("base-container", ())
-    )
+    monkeypatch.setattr(mxc_runtime, "probe_host_report", lambda **_kw: ("base-container", ()))
     monkeypatch.setattr(mxc_policy, "dacl_fallback_enabled", lambda: False)
     monkeypatch.setattr(mxc_read_grants, "enabled", lambda: True)
     monkeypatch.setattr(mxc_isolation_settings, "dacl_fallback_setting", lambda: False)

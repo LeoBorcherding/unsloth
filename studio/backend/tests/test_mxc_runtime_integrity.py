@@ -244,7 +244,12 @@ def test_one_probe_reports_the_tier_and_the_missing_preparation(
 ):
     runs = []
 
-    def run(package_root, env, *, replay_journal = True):
+    def run(
+        package_root,
+        env,
+        *,
+        replay_journal = True,
+    ):
         runs.append(replay_journal)
         return subprocess.CompletedProcess([], returncode, stdout = stdout, stderr = "")
 
