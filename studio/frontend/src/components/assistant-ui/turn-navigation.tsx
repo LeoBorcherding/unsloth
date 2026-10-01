@@ -47,6 +47,8 @@ const PROMPT_PREVIEW_CHARS = 240;
 const REPLY_PREVIEW_CHARS = 480;
 // long enough to cross from a marker onto the card
 const PREVIEW_HIDE_DELAY_MS = 150;
+// a pointer heading for the open card crosses neighbouring markers; only a pause on one retargets it
+const PREVIEW_SWITCH_DELAY_MS = 120;
 const PYRAMID_REACH = 3;
 // math blocks above the target settle from placeholder heights once reached, so the jump re-aligns briefly
 const JUMP_ALIGN_FRAMES = 4;
@@ -377,10 +379,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
 
   // read on hover so the rail never holds stale message text
   const showPreview = useCallback(
-    (
-      event: PointerEvent<HTMLButtonElement> | FocusEvent<HTMLButtonElement>,
-    ) => {
-      const marker = event.currentTarget;
+    (marker: HTMLButtonElement) => {
       const anchor = anchorRef.current;
       const openerId = marker.dataset.turnId;
       if (!anchor || !openerId) {
@@ -401,6 +400,26 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       });
     },
     [aui, cancelHide, setActiveMarker],
+  );
+  const onMarkerFocus = useCallback(
+    (event: FocusEvent<HTMLButtonElement>) => showPreview(event.currentTarget),
+    [showPreview],
+  );
+  const onMarkerPointerEnter = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      const marker = event.currentTarget;
+      if (raisedRef.current.length === 0) {
+        showPreview(marker);
+        return;
+      }
+      // shares the hide timer, so reaching the card or leaving the marker cancels it
+      cancelHide();
+      hideTimerRef.current = window.setTimeout(
+        () => showPreview(marker),
+        PREVIEW_SWITCH_DELAY_MS,
+      );
+    },
+    [cancelHide, showPreview],
   );
   const hidePreview = useCallback(() => {
     cancelHide();
@@ -471,9 +490,9 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
               },
             )}
             onClick={onMarkerClick}
-            onPointerEnter={showPreview}
+            onPointerEnter={onMarkerPointerEnter}
             onPointerLeave={hidePreview}
-            onFocus={showPreview}
+            onFocus={onMarkerFocus}
             onBlur={hidePreview}
             className="group flex min-h-1 w-full flex-1 cursor-pointer items-center justify-end rounded-sm pr-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
@@ -494,7 +513,8 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       t,
       previewId,
       onMarkerClick,
-      showPreview,
+      onMarkerPointerEnter,
+      onMarkerFocus,
       hidePreview,
     ],
   );
