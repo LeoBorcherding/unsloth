@@ -66,5 +66,20 @@ Check "uninstall.ps1 reads uv-cache-dir" ($ps1Text -match 'uv-cache-dir')
 Check "uninstall.sh names uv cache clean"  ($shText  -match 'uv cache clean')
 Check "uninstall.ps1 names uv cache clean" ($ps1Text -match 'uv cache clean')
 
+# The marker records a rooted UV_CACHE_DIR verbatim, so the under-root test must not care
+# which separator it was written with, or a Studio-owned cache is reported as left behind.
+$uvFn = [System.Management.Automation.Language.Parser]::ParseFile($ps1Path, [ref]$null, [ref]$null).FindAll({
+    param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "_UvCacheUnderRoot"
+}, $true)
+Check "found _UvCacheUnderRoot" ($uvFn.Count -eq 1)
+if ($uvFn.Count -eq 1) {
+    . ([scriptblock]::Create($uvFn[0].Extent.Text))
+    Check "uv cache under root, backslashes"     (_UvCacheUnderRoot 'C:\Users\u\.unsloth\studio\cache\uv' 'C:\Users\u\.unsloth\studio')
+    Check "uv cache under root, forward slashes" (_UvCacheUnderRoot 'C:/Users/u/.unsloth/studio/cache/uv' 'C:\Users\u\.unsloth\studio')
+    Check "uv cache under root, any case"        (_UvCacheUnderRoot 'c:\users\u\.UNSLOTH\studio\cache\uv' 'C:\Users\u\.unsloth\studio')
+    Check "shared uv cache is not under root"    (-not (_UvCacheUnderRoot 'C:\Users\u\AppData\Local\uv\cache' 'C:\Users\u\.unsloth\studio'))
+    Check "sibling prefix is not under root"     (-not (_UvCacheUnderRoot 'C:\Users\u\.unsloth\studio2\cache' 'C:\Users\u\.unsloth\studio'))
+}
+
 if ($failures -gt 0) { Write-Host ""; Write-Host "FAILED ($failures)" -ForegroundColor Red; exit 1 }
 Write-Host ""; Write-Host "All tests passed."; exit 0

@@ -419,13 +419,11 @@ Environment:
     function _UvCacheUnderRoot {
         param([string]$Cache, [string]$Root)
         if ([string]::IsNullOrWhiteSpace($Cache) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
-        $normCache = $Cache.TrimEnd('\', '/')
-        $normRoot = $Root.TrimEnd('\', '/')
+        # A rooted UV_CACHE_DIR is recorded verbatim, so C:/.../cache/uv must still match C:\...
+        $normCache = $Cache.Replace('/', '\').TrimEnd('\')
+        $normRoot = $Root.Replace('/', '\').TrimEnd('\')
         if ($normCache -eq $normRoot) { return $true }
-        $sep = [IO.Path]::DirectorySeparatorChar
-        if ($normCache.StartsWith($normRoot + $sep, [StringComparison]::OrdinalIgnoreCase)) { return $true }
-        if ($normCache.StartsWith($normRoot + '/', [StringComparison]::OrdinalIgnoreCase)) { return $true }
-        return $false
+        return $normCache.StartsWith($normRoot + '\', [StringComparison]::OrdinalIgnoreCase)
     }
 
     # Hard deny list. Refuse to recursively delete drive roots, USERPROFILE
