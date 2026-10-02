@@ -207,8 +207,8 @@ function alignTurnTop(
 
 const SHINE_GRADIENT = {
   light:
-    "linear-gradient(110deg, transparent 36%, rgb(0 0 0 / 0.07) 44%, rgb(255 255 255 / 0.95) 50%, rgb(0 0 0 / 0.07) 56%, transparent 64%)",
-  dark: "linear-gradient(110deg, transparent 36%, rgb(255 255 255 / 0.03) 44%, rgb(255 255 255 / 0.24) 50%, rgb(255 255 255 / 0.03) 56%, transparent 64%)",
+    "linear-gradient(110deg, transparent 30%, rgb(0 0 0 / 0.05) 41%, rgb(255 255 255 / 0.9) 50%, rgb(0 0 0 / 0.05) 59%, transparent 70%)",
+  dark: "linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.03) 41%, rgb(255 255 255 / 0.22) 50%, rgb(255 255 255 / 0.03) 59%, transparent 70%)",
 };
 
 function shineTurn(target: HTMLElement): void {
@@ -423,28 +423,38 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   // so fast sweeps stay smooth instead of stepping through the data-dist widths
   const magnify = useCallback((rail: HTMLElement) => {
     magnifyFrameRef.current = 0;
-    const markers = rail.children;
+    const markers = Array.from(rail.children) as HTMLElement[];
     const spacing = rail.scrollHeight / Math.max(markers.length, 1);
     const reach = (PYRAMID_REACH + 1) * spacing;
     const pointerY =
       magnifyYRef.current - rail.getBoundingClientRect().top + rail.scrollTop;
-    const next: HTMLElement[] = [];
-    for (const marker of markers) {
-      const dash = marker.firstElementChild;
-      if (!(marker instanceof HTMLElement) || !(dash instanceof HTMLElement)) {
-        continue;
-      }
+    // narrow windows give the rail less room, so the peak width shrinks to fit
+    const rem = Number.parseFloat(getComputedStyle(rail).fontSize) || 16;
+    const growth = Math.max(
+      0,
+      Math.min(0.75 * rem, rail.clientWidth - 0.375 * rem - 0.5 * rem),
+    );
+    // read every position before writing any width, so a frame lays out once
+    const widths = markers.map((marker) => {
       const distance = Math.abs(
         marker.offsetTop + marker.offsetHeight / 2 - pointerY,
       );
-      if (distance >= reach) {
-        continue;
+      return distance < reach
+        ? 0.5 * rem +
+            ((1 + Math.cos((Math.PI * distance) / reach)) / 2) * growth
+        : null;
+    });
+    const next: HTMLElement[] = [];
+    markers.forEach((marker, index) => {
+      const dash = marker.firstElementChild;
+      const width = widths[index];
+      if (width === null || !(dash instanceof HTMLElement)) {
+        return;
       }
-      const mag = (1 + Math.cos((Math.PI * distance) / reach)) / 2;
-      dash.style.width = `${0.5 + mag * 0.75}rem`;
+      dash.style.width = `${width}px`;
       dash.style.transitionProperty = "height, background-color";
       next.push(dash);
-    }
+    });
     for (const dash of magnifiedRef.current) {
       if (!next.includes(dash)) {
         dash.style.removeProperty("width");
@@ -595,7 +605,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       {...{ [FIND_SKIP_ATTRIBUTE]: "" }}
       className="aui-turn-navigator-anchor pointer-events-none select-none sticky top-1/2 z-10 h-0 w-full shrink-0"
     >
-      {/* gutter beside the message column: the rail hides when it would overlap messages */}
+      {/* gutter beside the message column; narrow windows tuck the rail into the thread padding */}
       <div
         style={{
           width:
@@ -612,7 +622,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
             lastPointerXRef.current = null;
             clearMagnify();
           }}
-          className="aui-turn-navigator group/rail pointer-events-auto absolute top-0 right-[-1.125rem] hidden w-8 -translate-y-1/2 flex-col overflow-y-auto py-1 [scrollbar-width:none] @[1.5rem]/turn-gutter:flex [&::-webkit-scrollbar]:hidden"
+          className="aui-turn-navigator group/rail pointer-events-auto absolute top-0 right-[-1.25rem] flex w-5 -translate-y-1/2 flex-col overflow-y-auto py-1 [contain:layout_paint] [scrollbar-width:none] @[1.5rem]/turn-gutter:right-[-1.125rem] @[1.5rem]/turn-gutter:w-8 [&::-webkit-scrollbar]:hidden"
         >
           {markers}
         </nav>
