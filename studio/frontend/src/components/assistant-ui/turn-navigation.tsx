@@ -205,11 +205,11 @@ function alignTurnTop(
   }
 }
 
-// a crisp glint line inside a soft halo, like light catching a glossy edge
+// the core stays wider than one frame of travel (~25px), or a thin line strobes
 const SHINE_GRADIENT = {
   light:
-    "linear-gradient(110deg, transparent 36%, rgb(0 0 0 / 0.03) 42%, rgb(255 255 255 / 0.3) 47%, rgb(255 255 255 / 0.7) 49.3%, rgb(255 255 255) 50%, rgb(255 255 255 / 0.7) 50.7%, rgb(255 255 255 / 0.3) 53%, rgb(0 0 0 / 0.03) 58%, transparent 64%)",
-  dark: "linear-gradient(110deg, transparent 36%, rgb(255 255 255 / 0.03) 42%, rgb(255 255 255 / 0.09) 47%, rgb(255 255 255 / 0.2) 49.3%, rgb(255 255 255 / 0.42) 50%, rgb(255 255 255 / 0.2) 50.7%, rgb(255 255 255 / 0.09) 53%, rgb(255 255 255 / 0.03) 58%, transparent 64%)",
+    "linear-gradient(110deg, transparent 34%, rgb(0 0 0 / 0.03) 40%, rgb(255 255 255 / 0.3) 45.5%, rgb(255 255 255 / 0.8) 48.5%, rgb(255 255 255) 50%, rgb(255 255 255 / 0.8) 51.5%, rgb(255 255 255 / 0.3) 54.5%, rgb(0 0 0 / 0.03) 60%, transparent 66%)",
+  dark: "linear-gradient(110deg, transparent 34%, rgb(255 255 255 / 0.03) 40%, rgb(255 255 255 / 0.1) 45.5%, rgb(255 255 255 / 0.28) 48.5%, rgb(255 255 255 / 0.36) 50%, rgb(255 255 255 / 0.28) 51.5%, rgb(255 255 255 / 0.1) 54.5%, rgb(255 255 255 / 0.03) 60%, transparent 66%)",
 };
 
 function shineTurn(target: HTMLElement): void {
@@ -229,7 +229,7 @@ function shineTurn(target: HTMLElement): void {
       { ...shine, backgroundPosition: "100% 0" },
       { ...shine, backgroundPosition: "0% 0" },
     ],
-    { duration: 900, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+    { duration: 1100, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
   );
 }
 
