@@ -205,10 +205,11 @@ function alignTurnTop(
   }
 }
 
+// many stops so the band feathers out instead of ending on a hard edge
 const SHINE_GRADIENT = {
   light:
-    "linear-gradient(110deg, transparent 30%, rgb(0 0 0 / 0.05) 41%, rgb(255 255 255 / 0.9) 50%, rgb(0 0 0 / 0.05) 59%, transparent 70%)",
-  dark: "linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.03) 41%, rgb(255 255 255 / 0.22) 50%, rgb(255 255 255 / 0.03) 59%, transparent 70%)",
+    "linear-gradient(110deg, transparent 24%, rgb(0 0 0 / 0.04) 34%, rgb(255 255 255 / 0.35) 41%, rgb(255 255 255 / 0.75) 47%, rgb(255 255 255 / 0.85) 50%, rgb(255 255 255 / 0.75) 53%, rgb(255 255 255 / 0.35) 59%, rgb(0 0 0 / 0.04) 66%, transparent 76%)",
+  dark: "linear-gradient(110deg, transparent 24%, rgb(255 255 255 / 0.02) 34%, rgb(255 255 255 / 0.08) 41%, rgb(255 255 255 / 0.17) 47%, rgb(255 255 255 / 0.2) 50%, rgb(255 255 255 / 0.17) 53%, rgb(255 255 255 / 0.08) 59%, rgb(255 255 255 / 0.02) 66%, transparent 76%)",
 };
 
 function shineTurn(target: HTMLElement): void {
@@ -220,7 +221,7 @@ function shineTurn(target: HTMLElement): void {
     backgroundImage: document.documentElement.classList.contains("dark")
       ? SHINE_GRADIENT.dark
       : SHINE_GRADIENT.light,
-    backgroundSize: "250% 100%",
+    backgroundSize: "300% 100%",
     backgroundRepeat: "no-repeat",
   };
   bubble.animate(
