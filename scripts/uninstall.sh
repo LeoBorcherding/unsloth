@@ -292,6 +292,11 @@ _uv_register_root() {
     [ -n "$1" ] || return 0
     [ -n "$_UV_ROOTS_FILE" ] || return 0
     printf '%s\n' "$1" >> "$_UV_ROOTS_FILE" 2>/dev/null || true
+    # And its physical path, since the cache is compared by physical path below.
+    _uv_root_phys=$(cd -P "$1" 2>/dev/null && pwd -P) || _uv_root_phys=""
+    if [ -n "$_uv_root_phys" ] && [ "$_uv_root_phys" != "$1" ]; then
+        printf '%s\n' "$_uv_root_phys" >> "$_UV_ROOTS_FILE" 2>/dev/null || true
+    fi
 }
 
 _uv_cache_under_any_root() {
@@ -317,6 +322,10 @@ _uv_collect_marker() {
     _uv_rec=$(sed -n '1p' "$_uv_marker" 2>/dev/null || true)
     _uv_rec=$(printf '%s' "$_uv_rec" | tr -d '\r')
     [ -n "$_uv_rec" ] || return 0
+    # rm -rf on the root unlinks a symlinked cache/uv but keeps its target, so judge the
+    # physical path: a link out of the tree is a leftover.
+    _uv_rec_phys=$(cd -P "$_uv_rec" 2>/dev/null && pwd -P) || _uv_rec_phys=""
+    [ -n "$_uv_rec_phys" ] && _uv_rec="$_uv_rec_phys"
     if _uv_cache_under_any_root "$_uv_rec"; then
         return 0
     fi

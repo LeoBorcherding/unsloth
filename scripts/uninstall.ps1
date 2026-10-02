@@ -775,6 +775,12 @@ Environment:
         $rec = _RecordedUvCache $r
         if ($null -eq $rec) { continue }
         $uvSawMarker = $true
+        # A junctioned or symlinked cache\uv is unlinked with the root and its target kept,
+        # so judge where it points.
+        $recItem = Get-Item -LiteralPath $rec -Force -ErrorAction SilentlyContinue
+        if ($recItem -and $recItem.LinkType -and @($recItem.Target)[0]) {
+            $rec = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Split-Path -Parent $rec), @($recItem.Target)[0]))
+        }
         $under = $false
         foreach ($root in $uvRemovedRoots) {
             if (_UvCacheUnderRoot $rec $root) { $under = $true; break }

@@ -95,6 +95,29 @@ case "$OUT" in
     *) ok "studio-mode does not point at uv cache clean" ;;
 esac
 
+echo "=== cache/uv under the root is a symlink to a shared cache ==="
+
+make_studio
+mkdir -p "$FIXTURE_HOME/shared-uv/wheels-v0" "$FIXTURE_HOME/.unsloth/studio/cache"
+: > "$FIXTURE_HOME/shared-uv/wheels-v0/keep-me.whl"
+ln -s "$FIXTURE_HOME/shared-uv" "$FIXTURE_HOME/.unsloth/studio/cache/uv"
+printf '%s\n' "$FIXTURE_HOME/.unsloth/studio/cache/uv" \
+    > "$FIXTURE_HOME/.unsloth/studio/cache/uv-cache-dir"
+_shared_phys=$(cd -P "$FIXTURE_HOME/shared-uv" && pwd -P)
+run_uninstall
+
+if [ -f "$FIXTURE_HOME/shared-uv/wheels-v0/keep-me.whl" ]; then
+    ok "symlinked shared cache survives uninstall"
+else
+    nope "symlinked shared cache was deleted"
+fi
+case "$OUT" in
+    *"the uv package cache at $_shared_phys was left in place"*)
+        ok "output names the symlink's target as left in place"
+        ;;
+    *) nope "output missing the symlinked cache's target" ;;
+esac
+
 echo "=== no uv-cache-dir marker (pre-#10204 install) ==="
 
 make_studio
