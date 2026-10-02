@@ -205,11 +205,11 @@ function alignTurnTop(
   }
 }
 
-// a narrow specular core inside a soft halo, like a gloss highlight
+// a crisp glint line inside a soft halo, like light catching a glossy edge
 const SHINE_GRADIENT = {
   light:
-    "linear-gradient(110deg, transparent 34%, rgb(0 0 0 / 0.03) 40%, rgb(255 255 255 / 0.35) 45%, rgb(255 255 255 / 0.95) 50%, rgb(255 255 255 / 0.35) 55%, rgb(0 0 0 / 0.03) 60%, transparent 66%)",
-  dark: "linear-gradient(110deg, transparent 34%, rgb(255 255 255 / 0.03) 41%, rgb(255 255 255 / 0.1) 46%, rgb(255 255 255 / 0.28) 50%, rgb(255 255 255 / 0.1) 54%, rgb(255 255 255 / 0.03) 59%, transparent 66%)",
+    "linear-gradient(110deg, transparent 36%, rgb(0 0 0 / 0.03) 42%, rgb(255 255 255 / 0.3) 47%, rgb(255 255 255 / 0.7) 49.3%, rgb(255 255 255) 50%, rgb(255 255 255 / 0.7) 50.7%, rgb(255 255 255 / 0.3) 53%, rgb(0 0 0 / 0.03) 58%, transparent 64%)",
+  dark: "linear-gradient(110deg, transparent 36%, rgb(255 255 255 / 0.03) 42%, rgb(255 255 255 / 0.09) 47%, rgb(255 255 255 / 0.2) 49.3%, rgb(255 255 255 / 0.42) 50%, rgb(255 255 255 / 0.2) 50.7%, rgb(255 255 255 / 0.09) 53%, rgb(255 255 255 / 0.03) 58%, transparent 64%)",
 };
 
 function shineTurn(target: HTMLElement): void {
