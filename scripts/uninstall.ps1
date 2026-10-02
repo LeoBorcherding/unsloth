@@ -771,36 +771,35 @@ Environment:
         if (-not (_IsStudioRoot $r)) { continue }
         $uvRemovedRoots += $r
     }
-    # Bounded, in case of a loop.
-    $uvLinkEnd = {
+    # Physical path: follow a junction or symlink at every component, each chain bounded.
+    $uvPhysical = {
         param($p)
-        for ($hop = 0; $hop -lt 16; $hop++) {
-            $i = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-            if (-not ($i -and $i.LinkType -and @($i.Target)[0])) { break }
-            $p = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Split-Path -Parent $p), @($i.Target)[0]))
+        if (-not [System.IO.Path]::IsPathRooted($p)) { return $p }
+        $p = [System.IO.Path]::GetFullPath($p.Replace('/', '\'))
+        $cur = [System.IO.Path]::GetPathRoot($p)
+        foreach ($seg in $p.Substring($cur.Length).Split([char[]]'\', [StringSplitOptions]::RemoveEmptyEntries)) {
+            $cur = [System.IO.Path]::Combine($cur, $seg)
+            for ($hop = 0; $hop -lt 16; $hop++) {
+                $i = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+                if (-not ($i -and $i.LinkType -and @($i.Target)[0])) { break }
+                $cur = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($cur), @($i.Target)[0]))
+            }
         }
-        return $p
+        return $cur
     }
+    # A linked root is only unlinked and its target kept, so nothing under it goes.
     $uvRealRoots = @()
-    $uvLinkedRoots = @{}
     foreach ($r in $uvRemovedRoots) {
-        $end = & $uvLinkEnd $r
-        if ($end -eq $r) { $uvRealRoots += $r } else { $uvLinkedRoots[$r] = $end.TrimEnd('\') }
+        $i = Get-Item -LiteralPath $r -Force -ErrorAction SilentlyContinue
+        if ($i -and $i.LinkType) { continue }
+        $uvRealRoots += (& $uvPhysical $r)
     }
     foreach ($r in $uvRemovedRoots) {
         $rec = _RecordedUvCache $r
         if ($null -eq $rec) { continue }
         $uvSawMarker = $true
-        # A linked root is only unlinked and its target kept, so read the cache through it.
-        foreach ($root in $uvLinkedRoots.Keys) {
-            if (_UvCacheUnderRoot $rec $root) {
-                $rel = $rec.Replace('/', '\').TrimEnd('\').Substring($root.Replace('/', '\').TrimEnd('\').Length)
-                $rec = $uvLinkedRoots[$root] + $rel
-                break
-            }
-        }
-        # Same for a junctioned or symlinked cache\uv: judge where the chain ends.
-        $rec = & $uvLinkEnd $rec
+        # A link anywhere along the cache path is unlinked with the root and its target kept.
+        $rec = & $uvPhysical $rec
         $under = $false
         foreach ($root in $uvRealRoots) {
             if (_UvCacheUnderRoot $rec $root) { $under = $true; break }
