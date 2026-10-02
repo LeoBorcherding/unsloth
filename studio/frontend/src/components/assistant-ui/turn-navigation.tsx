@@ -406,9 +406,67 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     [showPreview],
   );
   const lastPointerXRef = useRef<number | null>(null);
-  const onRailPointerMove = useCallback((event: PointerEvent<HTMLElement>) => {
-    lastPointerXRef.current = event.clientX;
+  const magnifyFrameRef = useRef(0);
+  const magnifyYRef = useRef(0);
+  const magnifiedRef = useRef<HTMLElement[]>([]);
+  const clearMagnify = useCallback(() => {
+    cancelAnimationFrame(magnifyFrameRef.current);
+    magnifyFrameRef.current = 0;
+    for (const dash of magnifiedRef.current) {
+      dash.style.removeProperty("width");
+      dash.style.removeProperty("transition-property");
+    }
+    magnifiedRef.current = [];
   }, []);
+  useEffect(() => clearMagnify, [clearMagnify]);
+  // dock-style: each dash's width follows its distance to the pointer every frame,
+  // so fast sweeps stay smooth instead of stepping through the data-dist widths
+  const magnify = useCallback((rail: HTMLElement) => {
+    magnifyFrameRef.current = 0;
+    const markers = rail.children;
+    const spacing = rail.scrollHeight / Math.max(markers.length, 1);
+    const reach = (PYRAMID_REACH + 1) * spacing;
+    const pointerY =
+      magnifyYRef.current - rail.getBoundingClientRect().top + rail.scrollTop;
+    const next: HTMLElement[] = [];
+    for (const marker of markers) {
+      const dash = marker.firstElementChild;
+      if (!(marker instanceof HTMLElement) || !(dash instanceof HTMLElement)) {
+        continue;
+      }
+      const distance = Math.abs(
+        marker.offsetTop + marker.offsetHeight / 2 - pointerY,
+      );
+      if (distance >= reach) {
+        continue;
+      }
+      const mag = (1 + Math.cos((Math.PI * distance) / reach)) / 2;
+      dash.style.width = `${0.5 + mag * 0.75}rem`;
+      dash.style.transitionProperty = "height, background-color";
+      next.push(dash);
+    }
+    for (const dash of magnifiedRef.current) {
+      if (!next.includes(dash)) {
+        dash.style.removeProperty("width");
+        dash.style.removeProperty("transition-property");
+      }
+    }
+    magnifiedRef.current = next;
+  }, []);
+  const onRailPointerMove = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      lastPointerXRef.current = event.clientX;
+      if (event.pointerType !== "mouse" || prefersReducedMotion()) {
+        return;
+      }
+      magnifyYRef.current = event.clientY;
+      if (!magnifyFrameRef.current) {
+        const rail = event.currentTarget;
+        magnifyFrameRef.current = requestAnimationFrame(() => magnify(rail));
+      }
+    },
+    [magnify],
+  );
   const onMarkerPointerEnter = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
       const marker = event.currentTarget;
@@ -552,6 +610,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
           onPointerMove={onRailPointerMove}
           onPointerLeave={() => {
             lastPointerXRef.current = null;
+            clearMagnify();
           }}
           className="aui-turn-navigator group/rail pointer-events-auto absolute top-0 right-[-1.125rem] hidden w-8 -translate-y-1/2 flex-col overflow-y-auto py-1 [scrollbar-width:none] @[1.5rem]/turn-gutter:flex [&::-webkit-scrollbar]:hidden"
         >
