@@ -29,6 +29,7 @@ PathBackup registry key. In a default-mode install it also removes the shared
 prebuilts that sit beside the install dir:
 %USERPROFILE%\.unsloth\{llama.cpp,node,whisper.cpp,.cache}. The Hugging Face
 cache is left in place, as is anything else you keep under %USERPROFILE%\.unsloth.
+A shared uv package cache (`uv cache dir`) is also left when install reused one.
 
 Options:
   -Help, -h, --help, -?, /?  Print this message and exit without removing anything.
@@ -397,6 +398,34 @@ Environment:
         return $false
     }
 
+    # install.ps1 writes <root>\cache\uv-cache-dir (the cache that install used).
+    # A Studio-owned cache sits under that root and goes with the rm; a shared
+    # cache does not. Read the marker before any root is deleted.
+    function _RecordedUvCache {
+        param([string]$Root)
+        $marker = Join-Path $Root "cache\uv-cache-dir"
+        if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { return $null }
+        try {
+            $raw = [System.IO.File]::ReadAllText($marker)
+        } catch {
+            return $null
+        }
+        if ($raw.EndsWith("`n")) { $raw = $raw.Substring(0, $raw.Length - 1) }
+        if ($raw.EndsWith("`r")) { $raw = $raw.Substring(0, $raw.Length - 1) }
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+        return $raw
+    }
+
+    function _UvCacheUnderRoot {
+        param([string]$Cache, [string]$Root)
+        if ([string]::IsNullOrWhiteSpace($Cache) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+        # A rooted UV_CACHE_DIR is recorded verbatim, so C:/.../cache/uv must still match C:\...
+        $normCache = $Cache.Replace('/', '\').TrimEnd('\')
+        $normRoot = $Root.Replace('/', '\').TrimEnd('\')
+        if ($normCache -eq $normRoot) { return $true }
+        return $normCache.StartsWith($normRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+    }
+
     # Hard deny list. Refuse to recursively delete drive roots, USERPROFILE
     # itself, parent of USERPROFILE, or system directories.
     function _IsUnsafeRoot {
@@ -733,6 +762,51 @@ Environment:
     if ($defaultStudioHome) { $knownRoots += $defaultStudioHome }
     $knownRoots += $customRoots
 
+    $uvSawMarker = $false
+    $uvLeftovers = @()
+    $uvRemovedRoots = @()
+    if ($defaultStudioHome) { $uvRemovedRoots += $defaultStudioHome }
+    foreach ($r in $customRoots) {
+        if (_IsUnsafeRoot $r) { continue }
+        if (-not (_IsStudioRoot $r)) { continue }
+        $uvRemovedRoots += $r
+    }
+    # Physical path: follow a junction or symlink at every component, each chain bounded.
+    $uvPhysical = {
+        param($p)
+        if (-not [System.IO.Path]::IsPathRooted($p)) { return $p }
+        $p = [System.IO.Path]::GetFullPath($p.Replace('/', '\'))
+        $cur = [System.IO.Path]::GetPathRoot($p)
+        foreach ($seg in $p.Substring($cur.Length).Split([char[]]'\', [StringSplitOptions]::RemoveEmptyEntries)) {
+            $cur = [System.IO.Path]::Combine($cur, $seg)
+            for ($hop = 0; $hop -lt 16; $hop++) {
+                $i = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+                if (-not ($i -and $i.LinkType -and @($i.Target)[0])) { break }
+                $cur = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($cur), @($i.Target)[0]))
+            }
+        }
+        return $cur
+    }
+    # A linked root is only unlinked and its target kept, so nothing under it goes.
+    $uvRealRoots = @()
+    foreach ($r in $uvRemovedRoots) {
+        $i = Get-Item -LiteralPath $r -Force -ErrorAction SilentlyContinue
+        if ($i -and $i.LinkType) { continue }
+        $uvRealRoots += (& $uvPhysical $r)
+    }
+    foreach ($r in $uvRemovedRoots) {
+        $rec = _RecordedUvCache $r
+        if ($null -eq $rec) { continue }
+        $uvSawMarker = $true
+        # A link anywhere along the cache path is unlinked with the root and its target kept.
+        $rec = & $uvPhysical $rec
+        $under = $false
+        foreach ($root in $uvRealRoots) {
+            if (_UvCacheUnderRoot $rec $root) { $under = $true; break }
+        }
+        if (-not $under -and $uvLeftovers -notcontains $rec) { $uvLeftovers += $rec }
+    }
+
     # ── Stop running servers ──
     _Step "Stopping any running Unsloth Studio servers..."
     if ($defaultDataDir) {
@@ -1040,6 +1114,18 @@ Environment:
     Write-Host "      http://localhost:<port> origin you used to remove them."
     Write-Host "Note: Hugging Face model cache at %USERPROFILE%\.cache\huggingface was left in place."
     Write-Host "Remove it manually with 'Remove-Item -Recurse -Force `"$env:USERPROFILE\.cache\huggingface\hub`"' if desired."
+    if ($uvLeftovers.Count -gt 0) {
+        foreach ($p in $uvLeftovers) {
+            Write-Host "Note: the uv package cache at $p was left in place (it may be shared with other tools)."
+            # Named: a bare `uv cache clean` cleans whatever cache uv resolves now, maybe another one.
+            # Single quotes, so a $ or backtick in the path stays literal when pasted.
+            $q = "'" + $p.Replace("'", "''") + "'"
+            Write-Host "      Free it with: uv cache clean --cache-dir $q   (append 'torch' for just the CUDA wheels)"
+        }
+    } elseif (-not $uvSawMarker) {
+        Write-Host 'Note: if install reused a shared uv cache (`uv cache dir`), it was left in place.'
+        Write-Host "      Free it with 'uv cache clean'."
+    }
     if (-not $env:UNSLOTH_STUDIO_HOME -and -not $env:STUDIO_HOME) {
         Write-Host ""
         Write-Host "If you installed Unsloth Studio with UNSLOTH_STUDIO_HOME or STUDIO_HOME"
