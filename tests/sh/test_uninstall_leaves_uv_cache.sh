@@ -68,6 +68,10 @@ case "$OUT" in
     *) nope "shared-cache note missing uv cache clean" ;;
 esac
 case "$OUT" in
+    *"uv cache clean --cache-dir '$FIXTURE_HOME/.cache/uv'"*) ok "cleanup command names the recorded cache" ;;
+    *) nope "cleanup command does not name the recorded cache" ;;
+esac
+case "$OUT" in
     *"uv cache prune"*) nope "shared-cache note still leads with prune" ;;
     *) ok "shared-cache note does not lead with prune" ;;
 esac

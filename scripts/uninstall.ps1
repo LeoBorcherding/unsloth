@@ -776,9 +776,10 @@ Environment:
         if ($null -eq $rec) { continue }
         $uvSawMarker = $true
         # A junctioned or symlinked cache\uv is unlinked with the root and its target kept,
-        # so judge where it points.
-        $recItem = Get-Item -LiteralPath $rec -Force -ErrorAction SilentlyContinue
-        if ($recItem -and $recItem.LinkType -and @($recItem.Target)[0]) {
+        # so judge where the chain ends (bounded, in case of a loop).
+        for ($hop = 0; $hop -lt 16; $hop++) {
+            $recItem = Get-Item -LiteralPath $rec -Force -ErrorAction SilentlyContinue
+            if (-not ($recItem -and $recItem.LinkType -and @($recItem.Target)[0])) { break }
             $rec = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Split-Path -Parent $rec), @($recItem.Target)[0]))
         }
         $under = $false
@@ -1098,7 +1099,8 @@ Environment:
     if ($uvLeftovers.Count -gt 0) {
         foreach ($p in $uvLeftovers) {
             Write-Host "Note: the uv package cache at $p was left in place (it may be shared with other tools)."
-            Write-Host "      Free it with 'uv cache clean', or 'uv cache clean torch' for the CUDA wheels."
+            # Named: a bare `uv cache clean` cleans whatever cache uv resolves now, maybe another one.
+            Write-Host "      Free it with: uv cache clean --cache-dir `"$p`"   (append 'torch' for just the CUDA wheels)"
         }
     } elseif (-not $uvSawMarker) {
         Write-Host 'Note: if install reused a shared uv cache (`uv cache dir`), it was left in place.'
