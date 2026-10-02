@@ -76,6 +76,17 @@ case "$OUT" in
     *) ok "shared-cache note does not lead with prune" ;;
 esac
 
+echo "=== shared uv cache path holding an apostrophe ==="
+
+make_studio
+mkdir -p "$FIXTURE_HOME/it's uv" "$FIXTURE_HOME/.unsloth/studio/cache"
+printf '%s\n' "$FIXTURE_HOME/it's uv" > "$FIXTURE_HOME/.unsloth/studio/cache/uv-cache-dir"
+run_uninstall
+case "$OUT" in
+    *"uv cache clean --cache-dir '$FIXTURE_HOME/it'\\''s uv'"*) ok "cleanup command quotes the apostrophe" ;;
+    *) nope "cleanup command does not quote the apostrophe" ;;
+esac
+
 echo "=== Studio-owned uv cache under the install root ==="
 
 make_studio

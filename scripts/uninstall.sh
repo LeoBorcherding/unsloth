@@ -295,6 +295,8 @@ _UV_CR=$(printf '\r')
 _uv_register_root() {
     [ -n "$1" ] || return 0
     [ -n "$_UV_ROOTS_FILE" ] || return 0
+    # A symlinked root is only unlinked, so nothing under its target goes with it.
+    [ -L "$1" ] && return 0
     printf '%s\n' "$1" >> "$_UV_ROOTS_FILE" 2>/dev/null || true
     # And its physical path, since the cache is compared by physical path below.
     _uv_root_phys=$(cd -P "$1" 2>/dev/null && pwd -P) || _uv_root_phys=""
@@ -373,9 +375,11 @@ _uv_print_leftover_notes() {
             _uv_any=1
             _uv_path=$(cat "$_uv_f"; printf x)
             _uv_path=${_uv_path%x}
+            _uv_q=$(printf '%s' "$_uv_path" | sed "s/'/'\\\\''/g"; printf x)
+            _uv_q=${_uv_q%x}
             echo "Note: the uv package cache at $_uv_path was left in place (it may be shared with other tools)."
             # Named: a bare `uv cache clean` cleans whatever cache uv resolves now, maybe another one.
-            echo "      Free it with: uv cache clean --cache-dir '$_uv_path'   (append 'torch' for just the CUDA wheels)"
+            echo "      Free it with: uv cache clean --cache-dir '$_uv_q'   (append 'torch' for just the CUDA wheels)"
         done
     fi
     if [ -n "$_uv_any" ]; then

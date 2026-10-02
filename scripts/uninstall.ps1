@@ -771,19 +771,38 @@ Environment:
         if (-not (_IsStudioRoot $r)) { continue }
         $uvRemovedRoots += $r
     }
+    # Bounded, in case of a loop.
+    $uvLinkEnd = {
+        param($p)
+        for ($hop = 0; $hop -lt 16; $hop++) {
+            $i = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            if (-not ($i -and $i.LinkType -and @($i.Target)[0])) { break }
+            $p = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Split-Path -Parent $p), @($i.Target)[0]))
+        }
+        return $p
+    }
+    $uvRealRoots = @()
+    $uvLinkedRoots = @{}
+    foreach ($r in $uvRemovedRoots) {
+        $end = & $uvLinkEnd $r
+        if ($end -eq $r) { $uvRealRoots += $r } else { $uvLinkedRoots[$r] = $end.TrimEnd('\') }
+    }
     foreach ($r in $uvRemovedRoots) {
         $rec = _RecordedUvCache $r
         if ($null -eq $rec) { continue }
         $uvSawMarker = $true
-        # A junctioned or symlinked cache\uv is unlinked with the root and its target kept,
-        # so judge where the chain ends (bounded, in case of a loop).
-        for ($hop = 0; $hop -lt 16; $hop++) {
-            $recItem = Get-Item -LiteralPath $rec -Force -ErrorAction SilentlyContinue
-            if (-not ($recItem -and $recItem.LinkType -and @($recItem.Target)[0])) { break }
-            $rec = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Split-Path -Parent $rec), @($recItem.Target)[0]))
+        # A linked root is only unlinked and its target kept, so read the cache through it.
+        foreach ($root in $uvLinkedRoots.Keys) {
+            if (_UvCacheUnderRoot $rec $root) {
+                $rel = $rec.Replace('/', '\').TrimEnd('\').Substring($root.Replace('/', '\').TrimEnd('\').Length)
+                $rec = $uvLinkedRoots[$root] + $rel
+                break
+            }
         }
+        # Same for a junctioned or symlinked cache\uv: judge where the chain ends.
+        $rec = & $uvLinkEnd $rec
         $under = $false
-        foreach ($root in $uvRemovedRoots) {
+        foreach ($root in $uvRealRoots) {
             if (_UvCacheUnderRoot $rec $root) { $under = $true; break }
         }
         if (-not $under -and $uvLeftovers -notcontains $rec) { $uvLeftovers += $rec }
@@ -1100,7 +1119,9 @@ Environment:
         foreach ($p in $uvLeftovers) {
             Write-Host "Note: the uv package cache at $p was left in place (it may be shared with other tools)."
             # Named: a bare `uv cache clean` cleans whatever cache uv resolves now, maybe another one.
-            Write-Host "      Free it with: uv cache clean --cache-dir `"$p`"   (append 'torch' for just the CUDA wheels)"
+            # Single quotes, so a $ or backtick in the path stays literal when pasted.
+            $q = "'" + $p.Replace("'", "''") + "'"
+            Write-Host "      Free it with: uv cache clean --cache-dir $q   (append 'torch' for just the CUDA wheels)"
         }
     } elseif (-not $uvSawMarker) {
         Write-Host 'Note: if install reused a shared uv cache (`uv cache dir`), it was left in place.'
