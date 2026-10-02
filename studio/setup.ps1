@@ -4279,19 +4279,12 @@ if ($vsResult) {
 # ============================================
 # 1e. CUDA Toolkit (nvcc for llama.cpp build + env vars)
 # ============================================
-# Defined here but invoked lazily right before a Phase 4 source build; the
-# prebuilt llama.cpp path needs no local toolkit. With -RequireOrExit a source
-# build is committed, so hard-fail if no driver-compatible toolkit can be found
-# or installed. Without it, detection is best-effort and only sets the flag.
-# Lazy: the prebuilt path needs no local toolkit. -RequireOrExit hard-fails when none is found.
 # MSBuild CUDA .targets and some cmake+CUDAVS integrations append subpaths to the
 # toolkit root. Without a trailing separator that becomes `...\v13.3bin` instead of
 # `...\v13.3\bin` (observed on Windows CUDA 13.3 builds).
-#
-# Format-CudaToolkitDir is the shared normalizer for that trailing separator.
-# Env / MSBuild CudaToolkitDir already uses "$CudaToolkitRoot\" at the call sites
-# (Daniel #9966); the cmake -D roots go through Format-CudaToolkitRootForCmake so
-# Windows PowerShell 5.1 does not misquote a final backslash in native argv.
+# Env / MSBuild CudaToolkitDir already uses "$CudaToolkitRoot\" at the call sites;
+# the cmake -D roots go through Format-CudaToolkitRootForCmake so Windows
+# PowerShell 5.1 does not misquote a final backslash in native argv.
 function Format-CudaToolkitDir {
     param([Parameter(Mandatory = $true)][string]$Root)
     if ([string]::IsNullOrWhiteSpace($Root)) { return $Root }
@@ -4307,6 +4300,7 @@ function Format-CudaToolkitRootForCmake {
     return (Format-CudaToolkitDir $Root).Replace('\', '/')
 }
 
+# Lazy: the prebuilt path needs no local toolkit. -RequireOrExit hard-fails when none is found.
 function Resolve-CudaToolkit {
     param([switch]$RequireOrExit)
 # Toolkit major must be <= the driver's max CUDA major; a newer-major toolkit fails at runtime.
@@ -4505,8 +4499,6 @@ $CudaToolkitRoot = Split-Path (Split-Path $NvccPath -Parent) -Parent
 # CudaToolkitDir: MSBuild property the CUDA .targets checks; trailing backslash required.
 # Already correct as "$CudaToolkitRoot\" -- do not route through Format-CudaToolkitDir.
 [Environment]::SetEnvironmentVariable('CudaToolkitDir', "$CudaToolkitRoot\", 'Process')
-# Always persist CUDA_PATH to User registry so the compatible toolkit is used
-# in future sessions (overwrites any existing value pointing to a newer, incompatible version)
 [Environment]::SetEnvironmentVariable('CUDA_PATH', $CudaToolkitRoot, 'User')
 substep "Persisted CUDA_PATH=$CudaToolkitRoot to user environment"
 # Clear versioned CUDA_PATH_V* vars so cmake/MSBuild cannot find a conflicting install.
