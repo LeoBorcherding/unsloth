@@ -47,7 +47,7 @@ const PROMPT_PREVIEW_CHARS = 240;
 const REPLY_PREVIEW_CHARS = 480;
 // long enough to cross from a marker onto the card
 const PREVIEW_HIDE_DELAY_MS = 150;
-// a pointer heading for the open card crosses neighbouring markers; only a pause on one retargets it
+// a pointer heading left for the open card crosses neighbouring markers; only a pause on one retargets it
 const PREVIEW_SWITCH_DELAY_MS = 120;
 const PYRAMID_REACH = 3;
 // math blocks above the target settle from placeholder heights once reached, so the jump re-aligns briefly
@@ -405,10 +405,16 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     (event: FocusEvent<HTMLButtonElement>) => showPreview(event.currentTarget),
     [showPreview],
   );
+  const lastPointerXRef = useRef<number | null>(null);
+  const onRailPointerMove = useCallback((event: PointerEvent<HTMLElement>) => {
+    lastPointerXRef.current = event.clientX;
+  }, []);
   const onMarkerPointerEnter = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
       const marker = event.currentTarget;
-      if (raisedRef.current.length === 0) {
+      const lastX = lastPointerXRef.current;
+      const towardCard = lastX !== null && event.clientX < lastX - 1;
+      if (raisedRef.current.length === 0 || !towardCard) {
         showPreview(marker);
         return;
       }
@@ -543,6 +549,10 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
           aria-label={t("turns.navigator")}
           style={{ height: `min(${openerIds.length * 0.75 + 0.5}rem, 40dvh)` }}
           onKeyDown={onRailKeyDown}
+          onPointerMove={onRailPointerMove}
+          onPointerLeave={() => {
+            lastPointerXRef.current = null;
+          }}
           className="aui-turn-navigator group/rail pointer-events-auto absolute top-0 right-[-1.125rem] hidden w-8 -translate-y-1/2 flex-col overflow-y-auto py-1 [scrollbar-width:none] @[1.5rem]/turn-gutter:flex [&::-webkit-scrollbar]:hidden"
         >
           {markers}
