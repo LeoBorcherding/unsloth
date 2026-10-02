@@ -1080,6 +1080,38 @@ def test_the_slot_rung_keeps_the_slots_it_cannot_buy_anything_with():
         assert plan.host_bytes == pinned.host_bytes
 
 
+def test_the_slot_rung_gives_back_each_slots_output_buffer():
+    """A flat cache buys nothing per slot, but every slot past the first still holds a
+    vocab-width output buffer (262K vocab: 0.5 GiB at ubatch 512). Priced at the caller's count
+    and never given back, it kept a 4 GiB card from placing a 26B MoE at all."""
+    from core.inference.offload_planner import all_resident_bytes
+
+    layout = graded_moe()
+    ctx, floor, out = 4096, GIB, GIB // 2
+    needed = all_resident_bytes(layout, ctx, kv_bytes_floor = floor, n_seq = 4)
+    card = needed + GIB + 3 * out - GIB  # two slots' buffers short
+    base = dict(
+        overhead_bytes_per_device = GIB,
+        overhead_bytes_per_token = 0,
+        n_parallel = 4,
+        kv_unified = True,
+        kv_bytes_floor_by_parallel = {_p: floor for _p in (1, 2, 3, 4)},
+    )
+    plan = plan_placement(
+        layout,
+        [card],
+        64 * GIB,
+        ctx,
+        kv_bytes_floor = floor,
+        opts = opts(**base, output_bytes_per_extra_slot = out),
+    )
+    assert plan.n_parallel == 2 and not plan.spills_anything, plan.reason
+    unpriced = plan_placement(
+        layout, [card - 3 * out], 64 * GIB, ctx, kv_bytes_floor = floor, opts = opts(**base)
+    )
+    assert unpriced.n_parallel in (0, 4) and unpriced.spills_anything, unpriced.reason
+
+
 def test_the_slot_rung_still_fires_where_a_slot_really_is_a_cache():
     """With a floor map that falls with the count, one slot fewer still closes a deficit no
     weight has to move for."""

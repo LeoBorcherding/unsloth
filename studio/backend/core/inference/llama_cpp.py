@@ -23179,6 +23179,15 @@ class LlamaCppBackend:
                         # and the plan is pinned with --fit off, so the shortfall is
                         # a graph_reserve OOM with nothing left to catch it.
                         "compute_buffer_flat": int(_compute_buffer_pipeline),
+                        # The same lump at one slot: the difference is the vocab-width output
+                        # buffer every slot past the first adds, which rung 1 gives back.
+                        "compute_buffer_flat_one_slot": int(
+                            self._estimate_compute_buffer_bytes(
+                                n_ubatch = _effective_ubatch,
+                                n_parallel = 1,
+                                per_device_tensor = False,
+                            )
+                        ),
                         "ctx_compute_per_device": (
                             _cc_bytes(_spill_ctx, _spill_n_gpus) // _spill_n_gpus
                         ),
@@ -29631,7 +29640,14 @@ class LlamaCppBackend:
         # The compute buffer, on the same terms as the fit that sent us here:
         # ctx_compute is per device, compute_buffer_flat is one lump charged once
         # against the pool and booked onto device 0, where it lives.
-        extra_gpu_bytes += int(inputs.get("compute_buffer_flat") or 0)
+        _cb_flat = int(inputs.get("compute_buffer_flat") or 0)
+        _cb_one_slot = int(inputs.get("compute_buffer_flat_one_slot") or 0)
+        output_bytes_per_extra_slot = (
+            (_cb_flat - _cb_one_slot) // (priced_parallel - 1)
+            if priced_parallel > 1 and 0 < _cb_one_slot < _cb_flat
+            else 0
+        )
+        extra_gpu_bytes += _cb_flat - output_bytes_per_extra_slot * max(0, priced_parallel - 1)
 
         # A projector Studio never resolved but the child loads anyway. arg.cpp
         # applies LLAMA_ARG_MMPROJ before argv (common/arg.cpp:780-802) and a
@@ -29797,6 +29813,7 @@ class LlamaCppBackend:
                 # reserve. Both are in the footprint that produced the use_fit
                 # verdict, so omitting them makes the deficit too small.
                 extra_resident_bytes = extra_gpu_bytes,
+                output_bytes_per_extra_slot = output_bytes_per_extra_slot,
                 # This is the only caller with somewhere else to go: declining here falls
                 # through to ``--fit on``.
                 require_cost_win = True,

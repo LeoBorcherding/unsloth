@@ -140,6 +140,9 @@ class PlanOptions:
     # Below this the term is zero, so the flat reserve is unchanged and no placement moves.
     overhead_free_ctx: int = 32768
     extra_resident_bytes: int = 0
+    # The vocab-width output buffer each slot past the first adds on top of
+    # ``extra_resident_bytes``, so dropping a slot (rung 1) gives it back.
+    output_bytes_per_extra_slot: int = 0
     pipeline_overhead_bytes: int = 0
     # Host RAM this planner refuses to spend, so a spill does not push the box into swap.
     host_ram_headroom_bytes: int = 2 * GIB
@@ -306,9 +309,11 @@ class _Knobs:
 
 
 def _outside_layout_bytes(opts: PlanOptions, knobs: Optional[_Knobs] = None) -> int:
-    """Device bytes the layout cannot see: the caller's scalar, the projector unless rung 0 moved
-    it, and the draft unless rung 2 dropped it."""
+    """Device bytes the layout cannot see: the caller's scalar, the output buffer of every slot
+    past the first, the projector unless rung 0 moved it, and the draft unless rung 2 dropped it."""
     total = max(0, opts.extra_resident_bytes)
+    slots = knobs.n_parallel if knobs is not None else opts.n_parallel
+    total += max(0, opts.output_bytes_per_extra_slot) * max(0, slots - 1)
     if not (knobs and knobs.mmproj_to_host):
         total += max(0, opts.mmproj_bytes)
     if not (knobs and knobs.draft_dropped):
@@ -1670,7 +1675,8 @@ def _plan_at(
     ):
         cand = _Knobs(knobs.n_parallel - 1, knobs.mmproj_to_host, knobs.draft_dropped)
         got = price(cand)
-        if got is None or got[0] >= needed:
+        # A unified cache costs the same at any slot count, so a slot may free only budget.
+        if got is None or (got[0] >= needed and got[1] <= budget):
             break
         knobs, (needed, budget, floor) = cand, got
     if needed > budget and opts.draft_droppable and opts.draft_bytes > 0:
