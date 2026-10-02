@@ -255,13 +255,13 @@ $_roots_from_conf"
 _MARKER_DIR=$(mktemp -d 2>/dev/null || true)
 _REMOVE_FAILED_FLAG=""
 _DB_REMOVED_FLAG=""
-_UV_ROOTS_FILE=""
+_UV_ROOTS_DIR=""
 _UV_LEFTOVER_DIR=""
 _UV_SAW_MARKER_FLAG=""
 if [ -n "$_MARKER_DIR" ] && [ -d "$_MARKER_DIR" ]; then
     _REMOVE_FAILED_FLAG="$_MARKER_DIR/remove-failed"
     _DB_REMOVED_FLAG="$_MARKER_DIR/db-removed"
-    _UV_ROOTS_FILE="$_MARKER_DIR/uv-roots"
+    _UV_ROOTS_DIR="$_MARKER_DIR/uv-roots"
     _UV_LEFTOVER_DIR="$_MARKER_DIR/uv-leftovers"
     _UV_SAW_MARKER_FLAG="$_MARKER_DIR/uv-saw-marker"
 fi
@@ -292,29 +292,53 @@ _UV_NL='
 '
 _UV_CR=$(printf '\r')
 
+# Physical path of $1, newlines kept; empty if it does not resolve.
+_uv_phys() {
+    _uv_p=$(cd -P "$1" 2>/dev/null && pwd -P && printf x) || _uv_p=""
+    [ -n "$_uv_p" ] || return 0
+    _uv_p=${_uv_p%x}
+    printf '%s' "${_uv_p%"$_UV_NL"}"
+}
+
+# One file per path: a root or cache path may hold a newline.
+_uv_store() {
+    mkdir -p "$1" 2>/dev/null || return 0
+    _uv_n=0
+    for _uv_f in "$1"/*; do
+        [ -f "$_uv_f" ] || continue
+        [ "$(cat "$_uv_f"; printf x)" = "${2}x" ] && return 0
+        _uv_n=$((_uv_n + 1))
+    done
+    printf '%s' "$2" > "$1/$_uv_n" 2>/dev/null || true
+}
+
 _uv_register_root() {
     [ -n "$1" ] || return 0
-    [ -n "$_UV_ROOTS_FILE" ] || return 0
+    [ -n "$_UV_ROOTS_DIR" ] || return 0
     # A symlinked root is only unlinked, so nothing under its target goes with it.
     [ -L "$1" ] && return 0
-    printf '%s\n' "$1" >> "$_UV_ROOTS_FILE" 2>/dev/null || true
+    _uv_store "$_UV_ROOTS_DIR" "$1"
     # And its physical path, since the cache is compared by physical path below.
-    _uv_root_phys=$(cd -P "$1" 2>/dev/null && pwd -P) || _uv_root_phys=""
+    _uv_root_phys=$(_uv_phys "$1"; printf x)
+    _uv_root_phys=${_uv_root_phys%x}
     if [ -n "$_uv_root_phys" ] && [ "$_uv_root_phys" != "$1" ]; then
-        printf '%s\n' "$_uv_root_phys" >> "$_UV_ROOTS_FILE" 2>/dev/null || true
+        _uv_store "$_UV_ROOTS_DIR" "$_uv_root_phys"
     fi
 }
 
 _uv_cache_under_any_root() {
     _uv_c="$1"
     [ -n "$_uv_c" ] || return 1
-    [ -f "$_UV_ROOTS_FILE" ] || return 1
-    while IFS= read -r _uv_r; do
+    [ -n "$_UV_ROOTS_DIR" ] || return 1
+    for _uv_f in "$_UV_ROOTS_DIR"/*; do
+        [ -f "$_uv_f" ] || continue
+        _uv_r=$(cat "$_uv_f"; printf x)
+        _uv_r=${_uv_r%x}
         [ -n "$_uv_r" ] || continue
         case "$_uv_c" in
             "$_uv_r"|"$_uv_r"/*) return 0 ;;
         esac
-    done < "$_UV_ROOTS_FILE"
+    done
     return 1
 }
 
@@ -333,21 +357,14 @@ _uv_collect_marker() {
     [ -n "$(printf '%s' "$_uv_rec" | tr -d ' \t\r\n')" ] || return 0
     # rm -rf on the root unlinks a symlinked cache/uv but keeps its target, so judge the
     # physical path: a link out of the tree is a leftover.
-    _uv_rec_phys=$(cd -P "$_uv_rec" 2>/dev/null && pwd -P) || _uv_rec_phys=""
+    _uv_rec_phys=$(_uv_phys "$_uv_rec"; printf x)
+    _uv_rec_phys=${_uv_rec_phys%x}
     [ -n "$_uv_rec_phys" ] && _uv_rec="$_uv_rec_phys"
     if _uv_cache_under_any_root "$_uv_rec"; then
         return 0
     fi
-    # One file per leftover holding the exact path: a line-based list would split one with a newline.
     [ -n "$_UV_LEFTOVER_DIR" ] || return 0
-    mkdir -p "$_UV_LEFTOVER_DIR" 2>/dev/null || return 0
-    _uv_n=0
-    for _uv_f in "$_UV_LEFTOVER_DIR"/*; do
-        [ -f "$_uv_f" ] || continue
-        [ "$(cat "$_uv_f"; printf x)" = "${_uv_rec}x" ] && return 0
-        _uv_n=$((_uv_n + 1))
-    done
-    printf '%s' "$_uv_rec" > "$_UV_LEFTOVER_DIR/$_uv_n" 2>/dev/null || true
+    _uv_store "$_UV_LEFTOVER_DIR" "$_uv_rec"
 }
 
 _uv_collect_from_install_roots() {
