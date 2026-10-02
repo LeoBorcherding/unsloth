@@ -205,11 +205,11 @@ function alignTurnTop(
   }
 }
 
-// many stops so the band feathers out instead of ending on a hard edge
+// a narrow specular core inside a soft halo, like a gloss highlight
 const SHINE_GRADIENT = {
   light:
-    "linear-gradient(110deg, transparent 24%, rgb(0 0 0 / 0.04) 34%, rgb(255 255 255 / 0.35) 41%, rgb(255 255 255 / 0.75) 47%, rgb(255 255 255 / 0.85) 50%, rgb(255 255 255 / 0.75) 53%, rgb(255 255 255 / 0.35) 59%, rgb(0 0 0 / 0.04) 66%, transparent 76%)",
-  dark: "linear-gradient(110deg, transparent 24%, rgb(255 255 255 / 0.02) 34%, rgb(255 255 255 / 0.08) 41%, rgb(255 255 255 / 0.17) 47%, rgb(255 255 255 / 0.2) 50%, rgb(255 255 255 / 0.17) 53%, rgb(255 255 255 / 0.08) 59%, rgb(255 255 255 / 0.02) 66%, transparent 76%)",
+    "linear-gradient(110deg, transparent 34%, rgb(0 0 0 / 0.03) 40%, rgb(255 255 255 / 0.35) 45%, rgb(255 255 255 / 0.95) 50%, rgb(255 255 255 / 0.35) 55%, rgb(0 0 0 / 0.03) 60%, transparent 66%)",
+  dark: "linear-gradient(110deg, transparent 34%, rgb(255 255 255 / 0.03) 41%, rgb(255 255 255 / 0.1) 46%, rgb(255 255 255 / 0.28) 50%, rgb(255 255 255 / 0.1) 54%, rgb(255 255 255 / 0.03) 59%, transparent 66%)",
 };
 
 function shineTurn(target: HTMLElement): void {
@@ -221,7 +221,7 @@ function shineTurn(target: HTMLElement): void {
     backgroundImage: document.documentElement.classList.contains("dark")
       ? SHINE_GRADIENT.dark
       : SHINE_GRADIENT.light,
-    backgroundSize: "300% 100%",
+    backgroundSize: "250% 100%",
     backgroundRepeat: "no-repeat",
   };
   bubble.animate(
