@@ -9,6 +9,7 @@ import {
   CHAT_SEARCH_TABS,
   type ChatSearchKind,
   type ChatSearchRow,
+  chatActivityTime,
   filterRows,
   recentRows,
   stepTab,
@@ -90,4 +91,18 @@ test("Models lists every complete download the Hub knows of, plus the Library's 
   assert.match(DIALOG, /localRows\s*\.filter\(\(row\) => !row\.partial\)/);
   assert.match(DIALOG, /search: \{ tab: "downloaded", model: id \}/);
   assert.match(DIALOG, /sources\.fineTunes\.map/);
+});
+
+test("Recents dates a resumed chat by its last activity, not its creation", () => {
+  const oldChat = { createdAt: 100, updatedAt: 900 };
+  assert.equal(chatActivityTime(oldChat), 900);
+  assert.equal(chatActivityTime({ createdAt: 300 }), 300);
+  const byKind: Record<ChatSearchKind, ChatSearchRow[]> = {
+    chats: [row("chats", "resumed", chatActivityTime(oldChat))],
+    projects: [1, 2, 3, 4, 5].map((n) => row("projects", `p${n}`, 400 + n)),
+    files: [],
+    models: [],
+  };
+  assert.equal(recentRows(byKind)[0].title, "resumed");
+  assert.match(DIALOG, /time: chatActivityTime\(item\)/);
 });

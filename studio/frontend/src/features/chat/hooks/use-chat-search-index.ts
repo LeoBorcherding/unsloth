@@ -26,6 +26,7 @@ import {
   forgetChatSearchHasRows,
   rememberChatSearchHasRows,
 } from "../utils/chat-search-history-hint";
+import { chatActivityTime } from "../utils/chat-search-tabs";
 import {
   formatMcpToolName,
   mcpServerFromProvenance,
@@ -43,6 +44,8 @@ export interface ChatSearchItem {
   // Prebuilt so filtering never re-lowercases per keystroke.
   searchText: string;
   createdAt: number;
+  /** Last activity (thread updatedAt, newest half of a compare); Recents and order use it. */
+  updatedAt?: number;
   projectId?: string | null;
   /** Forked from another chat (branch icon, as in the Library). */
   isFork?: boolean;
@@ -162,7 +165,13 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
     if (t.pairId) {
       if (seenPairs.has(t.pairId)) {
         const existing = itemThreadIds.get(t.pairId);
-        if (existing) existing.threadIds.push(t.id);
+        if (existing) {
+          existing.threadIds.push(t.id);
+          existing.item.updatedAt = Math.max(
+            existing.item.updatedAt ?? 0,
+            chatActivityTime(t),
+          );
+        }
         continue;
       }
       seenPairs.add(t.pairId);
@@ -172,6 +181,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
           id: t.pairId,
           title: t.title,
           createdAt: t.createdAt,
+          updatedAt: chatActivityTime(t),
           projectId: t.projectId ?? null,
         },
         threadIds: [t.id],
@@ -183,6 +193,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
           id: t.id,
           title: t.title,
           createdAt: t.createdAt,
+          updatedAt: chatActivityTime(t),
           projectId: t.projectId ?? null,
           isFork: Boolean(t.forkedFromThreadId),
         },
@@ -252,7 +263,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
     results.push({ ...item, userSearchText, searchText });
   }
 
-  results.sort((a, b) => b.createdAt - a.createdAt);
+  results.sort((a, b) => chatActivityTime(b) - chatActivityTime(a));
   return { items: results, complete };
 }
 

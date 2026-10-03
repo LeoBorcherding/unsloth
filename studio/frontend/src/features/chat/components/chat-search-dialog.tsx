@@ -66,6 +66,7 @@ import {
   type ChatSearchKind,
   type ChatSearchRow,
   type ChatSearchTab,
+  chatActivityTime,
   filterRows,
   haystackMatches,
   queryTokens,
@@ -536,7 +537,7 @@ function chatRow(
     key: `chat:${item.id}`,
     kind: "chats",
     title: item.title || t("shell.search.untitledChat"),
-    time: item.createdAt,
+    time: chatActivityTime(item),
     haystack: item.searchText,
     icon:
       item.type === "compare"

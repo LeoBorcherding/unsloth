@@ -52,6 +52,14 @@ export function stepTab(tab: ChatSearchTab, step: -1 | 1): ChatSearchTab {
 }
 
 /** Newest rows across kinds, for the empty All tab. */
+/** A chat's last activity; older rows without updatedAt fall back to creation. */
+export function chatActivityTime(chat: {
+  createdAt: number;
+  updatedAt?: number;
+}): number {
+  return Math.max(chat.createdAt, chat.updatedAt ?? 0);
+}
+
 export function recentRows<T extends ChatSearchRow>(
   byKind: Record<ChatSearchKind, T[]>,
   limit = RECENT_ROW_LIMIT,
