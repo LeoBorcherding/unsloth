@@ -279,6 +279,7 @@ import {
   showForkCreatedToast,
   type PlusMenuItemId,
   usePlusMenuPrefsStore,
+  useBookmarkedTurnsStore,
   writeComposerDraft,
   normalizeChatImage,
 } from "@/features/chat";
@@ -8310,6 +8311,10 @@ const DeleteMessageButton: FC = () => {
         messageId,
         remoteId,
       });
+      // a deleted prompt can no longer open a turn, so drop its bookmark too
+      if (remoteId) {
+        useBookmarkedTurnsStore.getState().forgetTurns(remoteId, [messageId]);
+      }
     } catch (error) {
       console.error("Failed to delete message", error);
       toast.error("Failed to delete message");
