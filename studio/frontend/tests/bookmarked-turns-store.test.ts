@@ -79,3 +79,15 @@ test("deleting a message forgets its bookmark, and the rail resyncs after keyboa
   assert.match(nav, /addEventListener\("focusout", onFocusOut\)/);
   assert.match(nav, /addEventListener\("scroll", fadeEnds/);
 });
+
+test("an open turn card reads its reply live while it streams", async () => {
+  const nav = await readFile(
+    new URL(
+      "../src/components/assistant-ui/turn-navigation.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(nav, /const liveReply = useAuiState/);
+  assert.match(nav, /\{liveReply \?\? preview\.reply\}/);
+});
