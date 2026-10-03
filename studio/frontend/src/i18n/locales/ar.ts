@@ -2466,6 +2466,7 @@ export const ar = {
       context: "السياق",
       lr: "معدل التعلّم",
       hardware: "الأجهزة",
+      vram: "VRAM",
       noGpu: "لم يتم اكتشاف GPU",
       hfToken: "توكن HF",
       saved: "محفوظ",

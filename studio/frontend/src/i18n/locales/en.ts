@@ -2497,6 +2497,7 @@ export const en = {
       context: "Context",
       lr: "LR",
       hardware: "Hardware",
+      vram: "VRAM",
       noGpu: "No GPU detected",
       hfToken: "HF token",
       saved: "Saved",
