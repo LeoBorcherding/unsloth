@@ -980,8 +980,15 @@ pub async fn start_backend_update(
     update_state: tauri::State<'_, update::UpdateState>,
     install_state: tauri::State<'_, install::InstallState>,
     diagnostics: tauri::State<'_, DiagnosticsState>,
+    source_ref: Option<String>,
 ) -> Result<(), String> {
     info!("start_backend_update command called");
+    // Some(ref) installs that branch, tag or commit of unslothai/unsloth instead of the release.
+    if let Some(source_ref) = source_ref.as_deref() {
+        if !update::valid_source_ref(source_ref) {
+            return Err(format!("Not a valid branch, tag or commit: {source_ref}"));
+        }
+    }
 
     if install_state
         .lock()
@@ -1019,7 +1026,9 @@ pub async fn start_backend_update(
 
     let state = update_state.inner().clone();
     let diagnostics_state = diagnostics.inner().clone();
-    tokio::task::spawn_blocking(move || update::run_backend_update(app, state, diagnostics_state))
+    tokio::task::spawn_blocking(move || {
+        update::run_backend_update(app, state, diagnostics_state, source_ref)
+    })
         .await
         .map_err(|e| format!("Update task panicked: {e}"))?
 }

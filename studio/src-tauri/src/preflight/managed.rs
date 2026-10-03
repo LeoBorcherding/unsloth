@@ -1,6 +1,7 @@
 use super::types::ManagedProbe;
 use super::version::{
-    managed_backend_version_stale_reason, DESKTOP_MANAGEABILITY_VERSION, DESKTOP_PROTOCOL_VERSION,
+    backend_version_stale_reason, managed_backend_version_stale_reason,
+    DESKTOP_MANAGEABILITY_VERSION, DESKTOP_PROTOCOL_VERSION,
 };
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -114,6 +115,9 @@ struct DesktopCapability {
     llama_runtime_ok: Option<bool>,
     llama_runtime_reason: Option<String>,
     version: Option<String>,
+    // A branch the user installed with `studio update --ref`. None from older CLIs.
+    #[serde(default)]
+    source_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1192,6 +1196,11 @@ fn desktop_capability_stale_reason(capability: &DesktopCapability) -> Option<Str
                 .unwrap_or_else(|| "llama_runtime_incomplete".to_string()),
         );
     }
+    // A pinned branch keeps the floor but not the release comparison, or every launch would
+    // repair it straight back to the release.
+    if capability.source_ref.as_deref().is_some_and(|r| !r.is_empty()) {
+        return backend_version_stale_reason(capability.version.as_deref());
+    }
     managed_backend_version_stale_reason(capability.version.as_deref())
 }
 
@@ -1374,7 +1383,35 @@ mod tests {
             llama_runtime_ok: Some(true),
             llama_runtime_reason: None,
             version: Some(MIN_DESKTOP_BACKEND_VERSION.to_string()),
+            source_ref: None,
         }
+    }
+
+    #[test]
+    fn a_pinned_branch_skips_the_release_comparison_but_keeps_the_floor() {
+        let mut capability = healthy_capability();
+        capability.version = Some(MIN_DESKTOP_BACKEND_VERSION.to_string());
+        capability.source_ref = Some("feature/x".to_string());
+        assert_eq!(desktop_capability_stale_reason(&capability), None);
+
+        capability.version = Some("2020.1.1".to_string());
+        assert_eq!(
+            desktop_capability_stale_reason(&capability).as_deref(),
+            Some("desktop_backend_version_too_old")
+        );
+
+        capability.source_ref = Some(String::new());
+        capability.version = Some(MIN_DESKTOP_BACKEND_VERSION.to_string());
+        assert_eq!(
+            desktop_capability_stale_reason(&capability),
+            managed_backend_version_stale_reason(Some(MIN_DESKTOP_BACKEND_VERSION))
+        );
+    }
+
+    #[test]
+    fn capability_json_without_source_ref_still_parses() {
+        let parsed: DesktopCapability = serde_json::from_str(r#"{"version": "2026.1.1"}"#).unwrap();
+        assert_eq!(parsed.source_ref, None);
     }
 
     #[test]

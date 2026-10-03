@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useEffect, useRef, useState } from "react";
+import { authFetch } from "@/features/auth";
 import { isTauri } from "@/lib/api-base";
 import {
   copySupportDiagnostics,
@@ -108,6 +109,8 @@ function manualReleasePageUrl(
   if (!normalized) return null;
   return `${policy.releasePageBaseUrl}${policy.releaseTagPrefix}${normalized}`;
 }
+
+const SOURCE_SWITCH_POLL_MS = 15_000;
 
 export function useTauriUpdate(isExternalServer = false) {
   const [status, setStatus] = useState<UpdateStatus>("idle");
@@ -568,6 +571,72 @@ export function useTauriUpdate(isExternalServer = false) {
     }
   }
 
+  /** Reinstall the backend from a branch, tag or commit (null: the release), then restart it. */
+  async function switchSource(sourceRef: string | null) {
+    if (updatingRef.current) return;
+    updatingRef.current = true;
+    const cleanups: (() => void)[] = [];
+    try {
+      if (!(await crashCleanupReady())) return;
+      const { invoke } = await import("@tauri-apps/api/core");
+      if (!(await invoke<boolean>("confirm_backend_update"))) {
+        // Declined: drop the request, or the poll asks again every tick.
+        await authFetch("/api/studio/source", { method: "DELETE" }).catch(() => {});
+        return;
+      }
+      setUpdatePhase("backend");
+      updateStatus("updating-backend");
+      replaceLogs([]);
+      setUpdateProgress(0);
+      setError(null);
+      setDismissed(false);
+
+      const { listen } = await import("@tauri-apps/api/event");
+      cleanups.push(await listen<string>("update-progress", (e) => appendLog(e.payload)));
+      const result = await new Promise<"complete" | string>((resolve) => {
+        listen<void>("update-complete", () => resolve("complete")).then((u) => cleanups.push(u));
+        listen<string>("update-failed", (e) => resolve(e.payload)).then((u) => cleanups.push(u));
+        invoke("start_backend_update", { sourceRef }).catch((e) => resolve(String(e)));
+      });
+      if (result !== "complete") {
+        retainFailure(result, "backend");
+        setError(result);
+        updateStatus("error");
+        return;
+      }
+      await invoke("start_server", { port: 8888 });
+      updateStatus("idle");
+      replaceLogs([]);
+      toast.success(sourceRef ? `Now running unsloth ${sourceRef}` : "Back on the Unsloth release");
+    } catch (e) {
+      const msg = String(e);
+      retainFailure(msg, phaseRef.current ?? "backend");
+      setError(msg);
+      updateStatus("error");
+    } finally {
+      updatingRef.current = false;
+      cleanup(cleanups);
+    }
+  }
+
+  // POST /api/studio/source only records a request: the backend cannot reinstall itself.
+  useEffect(() => {
+    if (!isTauri || isExternalServer) return;
+    const timer = window.setInterval(async () => {
+      if (updatingRef.current || statusRef.current !== "idle") return;
+      try {
+        const res = await authFetch("/api/studio/source");
+        if (!res.ok) return;
+        const data = (await res.json()) as { pending?: { ref?: string | null } | null };
+        if (data.pending) await switchSource(data.pending.ref ?? null);
+      } catch {
+        // Backend restarting or not signed in yet: the next tick asks again.
+      }
+    }, SOURCE_SWITCH_POLL_MS);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExternalServer]);
+
   function dismiss() {
     setDismissed(true);
   }
@@ -607,6 +676,7 @@ export function useTauriUpdate(isExternalServer = false) {
     releasePageUrl,
     checkForUpdate,
     installUpdate,
+    switchSource,
     retryUpdate,
     skipAndRestart,
     dismiss,

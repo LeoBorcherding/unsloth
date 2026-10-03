@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import List, Literal, Optional, Sequence, Tuple
 import typer
 
-from unsloth_cli import _studio_deps, _studio_runtime_gate, _studio_stage
+from unsloth_cli import _studio_deps, _studio_runtime_gate, _studio_source_ref, _studio_stage
 from unsloth_cli._inference import SpeculativeType
 from unsloth_cli.commands import _password_prompt
 
@@ -4196,6 +4196,11 @@ def _fail_if_install_damaged(package_name: str = "unsloth") -> None:
 @studio_app.command()
 def update(
     local: bool = typer.Option(False, "--local", help = "Install from local repo instead of PyPI"),
+    ref: Optional[str] = typer.Option(
+        None,
+        "--ref",
+        help = "Install a branch, tag or commit of unslothai/unsloth instead of the release.",
+    ),
     package: str = typer.Option(
         "unsloth", "--package", help = "Package name to install/update (for testing)"
     ),
@@ -4229,7 +4234,28 @@ def update(
     os.environ.pop("SKIP_STUDIO_BASE", None)
     os.environ["STUDIO_PACKAGE_NAME"] = package
     repo_root: Optional[Path] = None
-    if local:
+    # Typer passes a str; an in-process caller that omits it gets an OptionInfo.
+    ref = ref if isinstance(ref, str) and ref.strip() else None
+    ref_sha: Optional[str] = None
+    if not staging:
+        # Any update answers a pending API request; one left behind would re-run after a failure forever.
+        _studio_source_ref.clear_request(STUDIO_HOME)
+    if ref is not None:
+        if local:
+            typer.echo("Error: --ref and --local are two different sources; pick one.", err = True)
+            raise typer.Exit(2)
+        ref = ref.strip()
+        try:
+            ref_sha = _studio_source_ref.resolve_ref(ref)
+            typer.echo(f"Installing unslothai/unsloth {ref} ({ref_sha[:12]})")
+            repo_root = _studio_source_ref.fetch_source(ref_sha, STUDIO_HOME)
+        except _studio_source_ref.SourceRefError as exc:
+            typer.echo(f"Error: {exc}", err = True)
+            raise typer.Exit(1)
+        # From here it is a --local install of the downloaded tree.
+        os.environ["STUDIO_LOCAL_INSTALL"] = "1"
+        os.environ["STUDIO_LOCAL_REPO"] = str(repo_root)
+    elif local:
         os.environ["STUDIO_LOCAL_INSTALL"] = "1"
         # Explicit repo root: __file__ holds only from a checkout, and once unsloth is installed non-editably parents[2] IS site-packages, which uv rejects.
         _explicit = (os.environ.get("STUDIO_LOCAL_REPO") or "").strip()
@@ -4279,6 +4305,14 @@ def update(
             launcher_update.validate_launcher()
             if verify:
                 _fail_if_install_damaged(package)
+    if not staging:
+        if ref_sha is not None:
+            _studio_source_ref.write_pin(STUDIO_HOME, ref, ref_sha, repo_root)
+            _studio_source_ref.prune_sources(STUDIO_HOME, keep = repo_root)
+        elif not local:
+            # Back on the release: nothing pinned, and the downloaded trees are unreferenced.
+            _studio_source_ref.clear_pin(STUDIO_HOME)
+            _studio_source_ref.prune_sources(STUDIO_HOME, keep = None)
     # Tauri desktop owns its own bundle entries; refreshing here would duplicate shortcuts.
     if staging or os.environ.get("UNSLOTH_TAURI_UPDATE") == "1":
         if verbose:
@@ -4959,6 +4993,9 @@ def desktop_capabilities(
         payload["version"] = package_version("unsloth")
     except Exception:
         pass
+    # A pinned branch is a choice, not a stale install: the desktop skips its version repair for it.
+    pin = _studio_source_ref.read_pin(STUDIO_HOME)
+    payload["source_ref"] = pin.get("ref") if pin else None
 
     if json_output:
         typer.echo(json.dumps(payload, sort_keys = True))

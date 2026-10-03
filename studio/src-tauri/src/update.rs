@@ -83,9 +83,31 @@ fn configure_runtime_gate_environment(cmd: &mut Command) {
     cmd.env(crate::process::STUDIO_RUNTIME_GATE_HANDOFF_ENV, "1");
 }
 
+/// Mirrors `valid_ref` in unsloth_cli/_studio_source_ref.py; the CLI checks again.
+pub(crate) fn valid_source_ref(source_ref: &str) -> bool {
+    !source_ref.is_empty()
+        && source_ref.len() <= 200
+        && !source_ref.starts_with('-')
+        && !source_ref.ends_with('/')
+        && !source_ref.ends_with(".lock")
+        && !source_ref.contains("..")
+        && source_ref
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'))
+}
+
+fn update_args(source_ref: Option<&str>) -> Vec<&str> {
+    let mut args = UPDATE_ARGS.to_vec();
+    if let Some(source_ref) = source_ref {
+        args.extend(["--ref", source_ref]);
+    }
+    args
+}
+
 fn spawn_update(
     bin: &std::path::Path,
     state: &UpdateState,
+    source_ref: Option<&str>,
 ) -> Result<
     (
         Option<std::process::ChildStdout>,
@@ -99,7 +121,7 @@ fn spawn_update(
     }
     update.intentional_stop = false;
 
-    let mut cmd = build_update_command(bin, UPDATE_ARGS)?;
+    let mut cmd = build_update_command(bin, &update_args(source_ref))?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     // A login-started desktop inherits C:\Windows\system32, which the CLI refuses to run from.
@@ -268,8 +290,9 @@ pub fn run_backend_update(
     app: AppHandle,
     state: UpdateState,
     diagnostics: DiagnosticsState,
+    source_ref: Option<String>,
 ) -> Result<(), String> {
-    run_update(app, state, diagnostics, UpdateKind::Backend)
+    run_update(app, state, diagnostics, UpdateKind::Backend, source_ref)
 }
 
 pub(crate) fn run_backend_update_for_repair(
@@ -278,7 +301,7 @@ pub(crate) fn run_backend_update_for_repair(
     diagnostics: DiagnosticsState,
     repair_group_id: String,
 ) -> Result<(), String> {
-    run_update(app, state, diagnostics, UpdateKind::Repair(repair_group_id))
+    run_update(app, state, diagnostics, UpdateKind::Repair(repair_group_id), None)
 }
 
 fn run_update(
@@ -286,6 +309,7 @@ fn run_update(
     state: UpdateState,
     diagnostics: DiagnosticsState,
     kind: UpdateKind,
+    source_ref: Option<String>,
 ) -> Result<(), String> {
     let attempt = match &kind {
         UpdateKind::Repair(group_id) => {
@@ -326,7 +350,7 @@ fn run_update(
         // has the next idle launch restoring the pre-update trees over everything installed here.
         crate::staged_update::reconcile_before_update(&crate::diagnostics::studio_dir())?;
         let (stdout, stderr) =
-            spawn_update(&bin, &state).map_err(|msg| format!("spawn_update: {msg}"))?;
+            spawn_update(&bin, &state, source_ref.as_deref()).map_err(|msg| format!("spawn_update: {msg}"))?;
         let threads = stream_output(
             &app,
             progress_event,
@@ -565,6 +589,19 @@ pub fn stop_update(state: &UpdateState) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn source_ref_is_passed_as_an_argument_and_validated() {
+        assert_eq!(update_args(None), vec!["studio", "update"]);
+        assert_eq!(update_args(Some("feat/x")), vec!["studio", "update", "--ref", "feat/x"]);
+        for good in ["main", "feat/studio-x", "v2026.9.14", "a25b166e30", "nightly_1.2"] {
+            assert!(valid_source_ref(good), "{good}");
+        }
+        for bad in ["", "-x", "--upload-pack=x", "a..b", "x/", "x.lock", "a b", "a;b", "a@{1}"] {
+            assert!(!valid_source_ref(bad), "{bad}");
+        }
+    }
+
     use super::*;
     use std::io::Cursor;
 
