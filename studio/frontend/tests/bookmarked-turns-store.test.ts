@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { useBookmarkedTurnsStore } from "../src/features/chat/stores/bookmarked-turns-store.ts";
@@ -35,4 +36,13 @@ test("every chat delete route forgets the deleted chats' bookmarks", async () =>
   ]) {
     assert.match(await readSrcAsync(file), /forgetThreads\(/, `${file} leaves bookmarks behind`);
   }
+});
+
+test("clear all chats forgets the cleared chats' bookmarks", async () => {
+  // Settings -> Clear all chats skips deleteChatItems, so it forgets them itself.
+  const clearAll = await readFile(
+    new URL("../src/features/chat/utils/clear-all-chats.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(clearAll, /forgetThreads\(result\.deletedThreadIds\)/);
 });
