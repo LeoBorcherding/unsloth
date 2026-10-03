@@ -52,20 +52,13 @@ export function stepTab(tab: ChatSearchTab, step: -1 | 1): ChatSearchTab {
 }
 
 /** Newest rows across kinds, for the empty All tab. */
-/** A chat's last activity; older rows without updatedAt fall back to creation. */
-export function chatActivityTime(chat: {
-  createdAt: number;
-  updatedAt?: number;
-}): number {
-  return Math.max(chat.createdAt, chat.updatedAt ?? 0);
-}
-
 export function recentRows<T extends ChatSearchRow>(
   byKind: Record<ChatSearchKind, T[]>,
   limit = RECENT_ROW_LIMIT,
 ): T[] {
+  // Kinds need not arrive sorted by `time` (chats are listed by creation, ranked by activity).
   return Object.values(byKind)
-    .flatMap((rows) => rows.slice(0, limit))
+    .flat()
     .sort((a, b) => b.time - a.time)
     .slice(0, limit);
 }

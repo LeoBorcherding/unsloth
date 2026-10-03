@@ -187,7 +187,7 @@ export const it = {
     search: {
       placeholder: "Cerca",
       tabs: {
-        all: "Tutto",
+        all: "Tutti",
         chats: "Chat",
         projects: "Progetti",
         files: "File",
@@ -197,13 +197,13 @@ export const it = {
       actions: "Azioni",
       newChat: "Nuova chat",
       newTemporaryChat: "Nuova chat temporanea",
-      fineTune: "Esegui il fine-tuning di un modello",
+      fineTune: "Fai il fine-tune di un modello",
       generateImage: "Genera un'immagine",
       generateVideo: "Genera un video",
       untitledChat: "Chat senza titolo",
-      compare: "Confronta",
-      fineTuned: "Ottimizzato",
-      loading: "Caricamento…",
+      compare: "Confronto",
+      fineTuned: "Fine-tune",
+      loading: "Caricamento...",
       empty: {
         all: "Ancora niente da cercare.",
         chats: "Ancora nessuna chat.",
@@ -214,9 +214,9 @@ export const it = {
       noMatches: "Nessun risultato.",
       when: {
         today: "Oggi",
-        pastWeek: "Settimana scorsa",
-        pastMonth: "Mese scorso",
-        older: "Più vecchi",
+        pastWeek: "Ultima settimana",
+        pastMonth: "Ultimo mese",
+        older: "Meno recenti",
       },
       footer: {
         close: "Chiudi",

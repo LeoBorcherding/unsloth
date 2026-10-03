@@ -237,11 +237,11 @@ export const es = {
       newTemporaryChat: "Nuevo chat temporal",
       fineTune: "Ajustar un modelo",
       generateImage: "Generar una imagen",
-      generateVideo: "Generar un video",
+      generateVideo: "Generar un vídeo",
       untitledChat: "Chat sin título",
       compare: "Comparar",
       fineTuned: "Ajustado",
-      loading: "Cargando…",
+      loading: "Cargando...",
       empty: {
         all: "Aún no hay nada que buscar.",
         chats: "Aún no hay chats.",
@@ -254,7 +254,7 @@ export const es = {
         today: "Hoy",
         pastWeek: "Última semana",
         pastMonth: "Último mes",
-        older: "Más antiguos",
+        older: "Más antiguo",
       },
       footer: {
         close: "Cerrar",

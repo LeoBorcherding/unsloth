@@ -26,7 +26,6 @@ import {
   forgetChatSearchHasRows,
   rememberChatSearchHasRows,
 } from "../utils/chat-search-history-hint";
-import { chatActivityTime } from "../utils/chat-search-tabs";
 import {
   formatMcpToolName,
   mcpServerFromProvenance,
@@ -44,7 +43,7 @@ export interface ChatSearchItem {
   // Prebuilt so filtering never re-lowercases per keystroke.
   searchText: string;
   createdAt: number;
-  /** Last activity (thread updatedAt, newest half of a compare); Recents and order use it. */
+  /** Last activity (`updatedAt ?? createdAt`; the latest of a compare pair), as the sidebar ranks chats. */
   updatedAt?: number;
   projectId?: string | null;
   /** Forked from another chat (branch icon, as in the Library). */
@@ -169,7 +168,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
           existing.threadIds.push(t.id);
           existing.item.updatedAt = Math.max(
             existing.item.updatedAt ?? 0,
-            chatActivityTime(t),
+            t.updatedAt ?? t.createdAt,
           );
         }
         continue;
@@ -181,7 +180,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
           id: t.pairId,
           title: t.title,
           createdAt: t.createdAt,
-          updatedAt: chatActivityTime(t),
+          updatedAt: t.updatedAt ?? t.createdAt,
           projectId: t.projectId ?? null,
         },
         threadIds: [t.id],
@@ -193,7 +192,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
           id: t.id,
           title: t.title,
           createdAt: t.createdAt,
-          updatedAt: chatActivityTime(t),
+          updatedAt: t.updatedAt ?? t.createdAt,
           projectId: t.projectId ?? null,
           isFork: Boolean(t.forkedFromThreadId),
         },
@@ -263,7 +262,7 @@ export async function buildChatSearchIndex(): Promise<ChatSearchIndexBuild> {
     results.push({ ...item, userSearchText, searchText });
   }
 
-  results.sort((a, b) => chatActivityTime(b) - chatActivityTime(a));
+  results.sort((a, b) => b.createdAt - a.createdAt);
   return { items: results, complete };
 }
 

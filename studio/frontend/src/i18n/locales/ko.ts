@@ -239,15 +239,15 @@ export const ko = {
       untitledChat: "제목 없는 채팅",
       compare: "비교",
       fineTuned: "파인튜닝됨",
-      loading: "로드 중…",
+      loading: "로딩 중...",
       empty: {
         all: "아직 검색할 항목이 없습니다.",
         chats: "아직 채팅이 없습니다.",
         projects: "아직 프로젝트가 없습니다.",
-        files: "라이브러리에 아직 파일이 없습니다.",
+        files: "아직 라이브러리에 파일이 없습니다.",
         models: "아직 다운로드한 모델이 없습니다.",
       },
-      noMatches: "결과 없음.",
+      noMatches: "결과가 없습니다.",
       when: {
         today: "오늘",
         pastWeek: "지난주",
