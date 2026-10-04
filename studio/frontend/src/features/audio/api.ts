@@ -108,7 +108,7 @@ export interface AudioGalleryClip {
   /** The Audio workflow that made the clip. Older servers omit it; read it through clipWorkflow. */
   workflow?: string | null;
   reference_name?: string | null;
-  /** A separation's stems share it; null for a single clip. */
+  /** Clips one run made together share it (a separation's stems, music takes); null for one clip. */
   group_id?: string | null;
   /** The stem a clip holds (vocals, drums, ...). */
   role?: string | null;

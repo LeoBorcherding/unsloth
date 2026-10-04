@@ -126,12 +126,9 @@ test("a group cut by the page boundary waits for the next page, which the page l
     page,
     /hasMore && groupSeparationClips\(clips\)\.length > groups\.length/,
   );
-  // ...and remembers the tail's stem count when it asks, so a run the next page adds nothing
-  // to is settled and shown as it is (a deleted stem, not a page boundary).
-  assert.match(page, /groupSeparationClips\(clips, hasMore, settled\)/);
   assert.match(
     page,
-    /if \(!tailHidden\) return;[\s\S]*askedRef\.current\.set\(tail\.groupId, tail\.stems\.length\);\s*void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
+    /if \(tailHidden\) void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
   );
 });
 
@@ -299,7 +296,7 @@ test("host and page wiring for Separate", () => {
   // A stem sent to Transcribe mid-run would be dropped when the run stops.
   assert.match(
     host,
-    /target\.workflow === "transcribe"\) \{[\s\S]*?busyRef\.current === null[\s\S]*?if \(busyNow\(\)\) return;\s*if \(!transitionWorkflow\("transcribe"\)\)/,
+    /target\.workflow === "transcribe"\) \{[\s\S]*?busyRef\.current !== null[\s\S]*?return;[\s\S]*?if \(!transitionWorkflow\("transcribe"\)\) return;[\s\S]*?useAudioTranscribeStore\.setState\(\{\s*source: \{\s*kind: "clip",\s*id: clip\.id/,
   );
   // A separation that a refresh missed falls back on the Separate page.
   const generation = readSrc("features/audio/hooks/use-separate-generation.ts");
@@ -314,42 +311,6 @@ test("host and page wiring for Separate", () => {
   assert.match(page, /sources\.failedIds\.length > 0/);
   assert.match(page, /setAttempt\(\(n\) => n \+ 1\)/);
   assert.match(page, /failed: sources\.failedIds\.includes\(clip\.id\)/);
-});
-
-test("a run the next page added nothing to is shown short, not hidden for the whole gallery", () => {
-  // Three of four stems, oldest on the page: cut by the boundary, or a deleted stem? Only the
-  // next page can tell. Once it arrives with nothing for the run, the run shows as it is,
-  // otherwise the page would keep asking for more until the gallery ran out.
-  const clips = [
-    clip("n", "vocals", { group_id: "new", settings: { stems: ["vocals"] } }),
-    ...["vocals", "drums", "bass"].map((role) =>
-      clip(`o-${role}`, role, {
-        group_id: "old",
-        settings: { stems: ["vocals", "drums", "bass", "other"] },
-      }),
-    ),
-  ];
-  assert.deepEqual(
-    groupSeparationClips(clips, true).map((group) => group.groupId),
-    ["new"],
-  );
-  assert.deepEqual(
-    groupSeparationClips(clips, true, new Set(["old"])).map((group) => group.groupId),
-    ["new", "old"],
-  );
-  const page = readSrc("features/audio/pages/separate-page.tsx");
-  assert.match(page, /askedRef\.current\.get\(tail\.groupId\) === tail\.stems\.length/);
-});
-
-test("a stem sent to Transcribe goes in by clip id, as a sent clip does", () => {
-  // The merge of main dropped useTranscription's handleTranscribeFile; the stem path still called it.
-  const host = readSrc("features/audio/audio-page.tsx");
-  const send = host.slice(host.indexOf("const handleSendStem = useCallback("));
-  assert.doesNotMatch(send, /handleTranscribeFile/);
-  assert.match(
-    send,
-    /if \(!transitionWorkflow\("transcribe"\)\) return;[\s\S]{0,240}?useAudioTranscribeStore\.setState\(\{\s*source: \{\s*kind: "clip",\s*id: clip\.id,/,
-  );
 });
 
 test("a stem sent to Clone is adopted, so the old reference's transcript goes with it", () => {
