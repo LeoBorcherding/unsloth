@@ -497,7 +497,6 @@ export function AudioPage({
     active,
     busy,
     busyRef,
-    modeRef,
     handleModelSelect,
     transitionWorkflow,
     refreshGallery,
@@ -614,7 +613,8 @@ export function AudioPage({
     async (target: SendTarget, clip: AudioGalleryClip, name: string) => {
       if (target.workflow === "clone") {
         if (!transitionWorkflow("clone")) return;
-        useAudioCloneStore.getState().setReference({
+        // Adopted like any other clip, so the old reference's transcript does not stay attached.
+        useAudioCloneStore.getState().adoptReference({
           kind: "clip",
           id: clip.id,
           name,

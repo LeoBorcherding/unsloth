@@ -214,6 +214,8 @@ def test_a_clone_run_hands_the_worker_an_account_path_and_saves_the_clip(stub, t
         {"options": {"voice_ref": "/etc/passwd"}},
         {"options": {"source_audio": "/etc/passwd"}},
         {"options": {"codec_model_path": "/etc/passwd"}},
+        {"options": {"video": "/etc/passwd"}},  # ControlFoley
+        {"options": {"reference_image": "/etc/passwd"}},
         {"options": {"nested": {"a": 1}}},
         {"workflow": "music"},
         {"workflow": "transcribe"},
@@ -232,6 +234,7 @@ def test_client_paths_and_unknown_fields_are_422(stub, body):
         {"min_new_audio_steps": 10, "max_new_audio_steps": 900},  # FireRedAudio
         {"no_ref": True},  # Irodori
         {"audio_chunk_threshold_sec": 30, "audio_chunk_duration_sec": 20},  # DramaBox
+        {"use_video": True},
     ],
 )
 def test_settings_named_after_audio_are_not_file_options(options):
@@ -968,3 +971,29 @@ def test_the_worker_keeps_run_fields_off_a_backend_without_them():
     error = replies.get_nowait()
     assert error["type"] == "audio_error" and error["status"] == 400
     assert seen == ["hi"]
+
+
+def test_a_float_wav_separation_source_is_probed_through_ffmpeg(tmp_path):
+    import struct
+
+    import numpy as np
+
+    from routes.inference import _probe_audio_with_av
+
+    frames = np.zeros((22050, 2), dtype = np.float32).tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 2, 44100, 44100 * 8, 8, 32)
+    path = tmp_path / "stem.wav"
+    path.write_bytes(
+        b"RIFF"
+        + struct.pack("<I", 36 + len(frames))
+        + b"WAVEfmt "
+        + struct.pack("<I", 16)
+        + fmt
+        + b"data"
+        + struct.pack("<I", len(frames))
+        + frames
+    )
+    channels, seconds = _probe_audio_with_av(path)
+    assert channels == 2 and abs(seconds - 0.5) < 0.01
+    (tmp_path / "junk.wav").write_bytes(b"not audio")
+    assert _probe_audio_with_av(tmp_path / "junk.wav") is None
