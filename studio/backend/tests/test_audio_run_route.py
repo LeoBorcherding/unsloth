@@ -871,3 +871,15 @@ def test_the_worker_and_orchestrator_carry_convert_and_the_running_task(monkeypa
     assert cmd["convert"] == convert and cmd["audio_inputs"] == {"source": "/abs/s.wav"}
     # The status mirror follows the server the run left running.
     assert orchestrator.models["m"]["audio_server_task"] == "vc"
+
+
+def test_a_convert_expiry_names_the_side_that_expired():
+    """Both uploads shared "This reference expired", so the page marked both cards when one went."""
+    from core.inference.audio_inputs import AudioInputError
+    from routes.inference import CONVERT_EXPIRED_DETAIL, _convert_role_error
+
+    gone = AudioInputError(404, "This reference expired. Add it again.")
+    assert _convert_role_error(gone, "source").detail == CONVERT_EXPIRED_DETAIL["source"]
+    assert _convert_role_error(gone, "target").detail == CONVERT_EXPIRED_DETAIL["target"]
+    other = AudioInputError(404, "That clip is gone.")
+    assert _convert_role_error(other, "target") is other
