@@ -102,8 +102,9 @@ test("an undefined rowFilter leaves the picker rows untouched", () => {
     "features/model-picker/components/model-selector/pickers.tsx",
   );
   const guards = pickers.match(/\(!rowFilter \|\|\s*rowFilter\(\{/g) ?? [];
-  // Cached GGUF, cached repos, LM Studio, ./models and custom folders; Hub search rows stay unfiltered.
-  assert.equal(guards.length, 5);
+  // Cached GGUF, cached repos, LM Studio, ./models, custom folders and the Recommended rows; typed
+  // Hub search rows have their own.
+  assert.equal(guards.length, 6);
   // Each On Device list applies it, so a custom-folder speech model is not offered on the Music page.
   for (const list of [
     "sortedCachedGguf",
@@ -122,6 +123,18 @@ test("an undefined rowFilter leaves the picker rows untouched", () => {
     "features/model-picker/components/model-selector.tsx",
   );
   assert.match(selector, /rowFilter=\{rowFilter\}/);
+});
+
+test("Recommended rows are scoped to the page too", () => {
+  // Built from the broad text-to-speech + text-to-audio set, so without the page's filter a music
+  // model the Hub recommends lists on Speak, and picking it switches the user to Music.
+  const pickers = readSrc("features/model-picker/components/model-selector/pickers.tsx");
+  const body = pickers.slice(pickers.indexOf("const recommendedRows = useMemo("));
+  const block = body.slice(0, body.indexOf("\n  ]);"));
+  const keepCommon = block.slice(block.indexOf("const keepCommon ="), block.indexOf("const keep ="));
+  assert.match(keepCommon, /\(!rowFilter \|\| rowFilter\(\{ id: r\.id, task: r\.pipelineTag \}\)\)/);
+  // The memo's last dependency, so a rerender with a new filter rebuilds the rows.
+  assert.match(block, /\n\s+rowFilter,$/);
 });
 
 test("typed Hub search results are scoped to the page too", () => {

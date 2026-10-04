@@ -3767,6 +3767,9 @@ export function HubModelPicker({
     const keepCommon = (r: HfModelResult) => {
       const isCatalogSeed = catalogSeedIds.has(r.id.toLowerCase());
       return (
+        // The page's scope, as the typed search applies it: without it a music row the Hub
+        // recommends sits on Speak (and speech rows on Music) and loads into the other workflow.
+        (!rowFilter || rowFilter({ id: r.id, task: r.pipelineTag })) &&
         !isMobileVariant(r.id) &&
         taskPickerRowMatches({
           isCatalogSeed,
@@ -3861,6 +3864,7 @@ export function HubModelPicker({
     communityRecommendedEnabled,
     communityBrowse.results,
     isLoadableCommunityRepo,
+    rowFilter,
   ]);
 
   // Per-row meta and VRAM badge from the recommended listing's own metadata, with the curated
