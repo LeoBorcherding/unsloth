@@ -4,6 +4,7 @@
 """AudioCppServer against a real child process: a small fake ``audiocpp_server`` speaking the HTTP contract."""
 
 import io
+import json
 import sys
 import textwrap
 import threading
