@@ -248,6 +248,34 @@ def test_prepare_host_runs_only_the_steps_mxc_reports_missing(
     assert ran == [(host_prep, step) for step in expected]
 
 
+def test_prepare_host_probes_and_runs_under_one_cross_process_lock(monkeypatch, prepared_install):
+    # Two Studio processes clicking Prepare: the second waits, re-probes, and finds nothing left to run.
+    import contextlib
+
+    install_dir, ran = prepared_install
+    events = []
+
+    @contextlib.contextmanager
+    def lock(path, *, timeout = None):
+        events.append(("lock", Path(path).name, timeout))
+        yield
+        events.append("unlock")
+
+    monkeypatch.setattr(installer, "install_lock", lock)
+    monkeypatch.setattr(
+        installer.mxc_runtime,
+        "probe_host_prep_steps",
+        lambda **_kwargs: events.append("probe") or ("prepare-null-device",),
+    )
+    assert installer.prepare_host(install_dir) == ("prepare-null-device",)
+    assert events == [
+        ("lock", f".{install_dir.name}.host-prep.lock", installer.HOST_PREP_LOCK_SECONDS),
+        "probe",
+        "unlock",
+    ]
+    assert len(ran) == 1
+
+
 def test_prepare_host_refuses_a_tampered_binary_before_elevating(monkeypatch, prepared_install):
     install_dir, ran = prepared_install
     (install_dir / "wxc-host-prep.exe").write_bytes(b"x" * len(_HOST_PREP))

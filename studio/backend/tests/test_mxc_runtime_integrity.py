@@ -222,3 +222,37 @@ def test_host_prep_probe_timeout_is_not_a_verdict(runtime, monkeypatch):
 
     monkeypatch.setattr(mxc_runtime.subprocess, "run", run)
     assert mxc_runtime.probe_host_prep_steps(package_root = runtime) is None
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "expected"),
+    [
+        (json.dumps({"tier": "base-container", "warnings": []}), 0, ("base-container", ())),
+        (
+            json.dumps({"tier": "appcontainer-dacl", "warnings": _BOTH_WARNINGS[1:]}),
+            0,
+            ("appcontainer-dacl", ("prepare-null-device",)),
+        ),
+        (json.dumps({"tier": 3, "warnings": []}), 0, (None, ())),
+        ("not json", 0, (None, None)),
+        (json.dumps({"tier": "base-container", "warnings": []}), 1, (None, None)),
+    ],
+    ids = ["base_container", "dacl", "odd_tier", "garbage", "failed"],
+)
+def test_one_probe_reports_the_tier_and_the_missing_preparation(
+    monkeypatch, stdout, returncode, expected
+):
+    runs = []
+
+    def run(
+        package_root,
+        env,
+        *,
+        replay_journal = True,
+    ):
+        runs.append(replay_journal)
+        return subprocess.CompletedProcess([], returncode, stdout = stdout, stderr = "")
+
+    monkeypatch.setattr(mxc_runtime, "_run_wxc_probe", run)
+    assert mxc_runtime.probe_host_report(env = {}) == expected
+    assert runs == [True]
