@@ -16,6 +16,16 @@ import {
   Download01Icon,
   MoreVerticalIcon,
 } from "@hugeicons/core-free-icons";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -52,6 +62,9 @@ export function TranscriptGallery({
   const [archived, setArchived] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // In Unsloth Desktop, window.confirm is Tauri's async shim and its dialog command is off the
+  // ACL, so the call is truthy without ever asking. The dialog lives in state instead.
+  const [clearPending, setClearPending] = useState(false);
   const generation = useRef(0);
   const loadingRef = useRef(false);
   const currentIdRef = useRef(currentId);
@@ -174,14 +187,7 @@ export function TranscriptGallery({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              if (
-                window.confirm(
-                  "Delete all transcripts in history? Archived transcripts will be kept.",
-                )
-              )
-                void mutate(() => deleteTranscript(), null);
-            }}
+            onClick={() => setClearPending(true)}
           >
             Clear all
           </Button>
@@ -293,6 +299,27 @@ export function TranscriptGallery({
           </Button>
         )}
       </div>
+      <AlertDialog open={clearPending} onOpenChange={setClearPending}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete all transcripts in history?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Archived transcripts will be kept. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => void mutate(() => deleteTranscript(), null)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

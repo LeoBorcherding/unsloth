@@ -188,3 +188,15 @@ test("a failed view switch does not leave the other view's rows on screen", asyn
     "the History cursor must not survive into the Archived view, or Load more mixes them",
   );
 });
+
+test("Clear all asks through the app's own dialog, never window.confirm", () => {
+  // Unsloth Desktop replaces window.confirm with Tauri's async shim, and its dialog command is
+  // not on the ACL: the call returns a Promise (always truthy) and no dialog ever shows.
+  const source = readSrc("features/audio/transcript-gallery.tsx");
+  assert.doesNotMatch(source, /window\.confirm\(/);
+  assert.match(source, /onClick=\{\(\) => setClearPending\(true\)\}/);
+  assert.match(
+    source,
+    /<AlertDialog open=\{clearPending\}[\s\S]*<AlertDialogAction[\s\S]*onClick=\{\(\) => void mutate\(\(\) => deleteTranscript\(\), null\)\}/,
+  );
+});
