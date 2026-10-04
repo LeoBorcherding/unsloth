@@ -72,7 +72,12 @@ def _attention_dtype_expression():
 PREAMBLE, DTYPE_EXPR = _attention_dtype_expression()
 
 
-def _selected(dtype, do_forced_float32, correct_dtype, supports_bfloat16 = True):
+def _selected(
+    dtype,
+    do_forced_float32,
+    correct_dtype,
+    supports_bfloat16 = True,
+):
     namespace = {
         "torch": torch,
         "SUPPORTS_BFLOAT16": supports_bfloat16,
@@ -111,7 +116,9 @@ def _selected(dtype, do_forced_float32, correct_dtype, supports_bfloat16 = True)
         (torch.float32, False, torch.float16, torch.float16, True),
     ],
 )
-def test_attention_dtype_is_the_post_cast_dtype(dtype, do_forced_float32, correct_dtype, expected, supports_bfloat16):
+def test_attention_dtype_is_the_post_cast_dtype(
+    dtype, do_forced_float32, correct_dtype, expected, supports_bfloat16
+):
     assert _selected(dtype, do_forced_float32, correct_dtype, supports_bfloat16) is expected
 
 

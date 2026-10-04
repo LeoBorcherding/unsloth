@@ -35,6 +35,7 @@ torch = pytest.importorskip("torch")
 
 from unsloth.models._utils import SUPPORTS_BFLOAT16, force_float32_dtype
 from unsloth import device_type
+from real_accelerator import has_real_cuda
 
 
 def test_bfloat16_is_still_chosen_wherever_it_works():
@@ -57,16 +58,16 @@ def test_float16_is_never_the_answer():
 @pytest.mark.parametrize(
     "arch, lacks_bf16",
     [
-        ("gfx1010", True),    # RDNA1
-        ("gfx1030", True),    # RDNA2, RX 6800
-        ("gfx1034", True),    # RDNA2, RX 6500 XT -- the card in unslothai/unsloth#7922
-        ("gfx1034:sramecc-:xnack-", True),   # the suffixed form torch reports
-        ("gfx1100", False),   # RDNA3 has bf16
-        ("gfx1151", False),   # RDNA3.5, Strix Halo
-        ("gfx1201", False),   # RDNA4
-        ("gfx90a", False),    # CDNA, MI210
-        ("gfx942", False),    # CDNA3, MI300
-        ("", False),          # unreadable: must fail OPEN, never assume gfx10
+        ("gfx1010", True),  # RDNA1
+        ("gfx1030", True),  # RDNA2, RX 6800
+        ("gfx1034", True),  # RDNA2, RX 6500 XT -- the card in unslothai/unsloth#7922
+        ("gfx1034:sramecc-:xnack-", True),  # the suffixed form torch reports
+        ("gfx1100", False),  # RDNA3 has bf16
+        ("gfx1151", False),  # RDNA3.5, Strix Halo
+        ("gfx1201", False),  # RDNA4
+        ("gfx90a", False),  # CDNA, MI210
+        ("gfx942", False),  # CDNA3, MI300
+        ("", False),  # unreadable: must fail OPEN, never assume gfx10
         (None, False),
     ],
 )
@@ -88,7 +89,6 @@ def test_both_call_sites_use_the_shared_helper():
     and vision.py re-promoted float16 to bfloat16 in an `elif` that skipped the
     bfloat16-unsupported downgrade underneath it. One helper, two callers."""
     from unsloth.models import loader, vision
-
     for module in (loader, vision):
         source = inspect.getsource(module)
         assert "force_float32_dtype(SUPPORTS_BFLOAT16)" in source, (
@@ -116,9 +116,7 @@ def _gemma3_270m_cached():
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available()
-    or SUPPORTS_BFLOAT16
-    or not _gemma3_270m_cached(),
+    not has_real_cuda() or SUPPORTS_BFLOAT16 or not _gemma3_270m_cached(),
     reason = "needs a GPU without bfloat16 and unsloth/gemma-3-270m-it in the HF cache",
 )
 def test_no_bfloat16_device_never_holds_a_bfloat16_weight(monkeypatch):
