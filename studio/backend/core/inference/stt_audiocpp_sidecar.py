@@ -890,11 +890,13 @@ class AudioCppSttSidecar:
         self,
         model: Optional[str],
         on_phase: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
-        """Runs before the load so a 1.1 GB download holds neither the load lock nor dictation."""
+        """Runs before the load so a 1.1 GB download holds neither the load lock nor dictation.
+        Takes the request's cancel event: this is the call that does the first download."""
         entry = resolve_audio_cpp_stt_model(self.keep_loaded_variant(model))
         if entry.family in _ALIGNED_FAMILIES:
-            self._ensure_aligner_downloaded(entry, on_phase)
+            self._ensure_aligner_downloaded(entry, on_phase, cancel_event)
 
     def transcribe_path(
         self,
