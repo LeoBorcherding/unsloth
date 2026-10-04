@@ -18,11 +18,13 @@ AUDIO_UNSUPPORTED_CODE = "audio_unsupported_backend"
 AUDIO_RUNTIME_ERROR_CODE = "audio_runtime_error"
 
 _MAX_RUNTIME_DETAIL_CHARS = 300
-# A POSIX, drive-letter, UNC, ``~/`` or ``./`` path, with or without a ``file:`` scheme. Not after a
-# word character, ':' or '/', so a URL's "//host" and a "family:name" pair stay as written. A space
-# is part of the path when the next word still carries a separator ("C:\Users\John Smith\x.wav").
+# A network URL (kept: its tokens are redact_log_text's job), else an absolute POSIX, drive-letter,
+# UNC, ``~/`` or ``./`` path, with or without a ``file:`` scheme, also after a ':' ("path:/home/...").
+# A "family:name" pair has no slash. A space is part of the path when the next word still carries a
+# separator ("C:\Users\John Smith\x.wav").
 _ABSOLUTE_PATH_RE = re.compile(
-    r"(?<![\w:/])(?:file:(?://)?)?(?:~|\.{1,2})?(?:/|[A-Za-z]:[\\/]|\\\\)"
+    r"(?P<url>\b(?:https?|wss?|ftp)://[^\s\"'`,;]+)"
+    r"|(?<![\w/])(?:file:(?://)?)?(?:~|\.{1,2})?(?:/|[A-Za-z]:[\\/]|\\\\)"
     r"(?:[^\s\"'`,;]|[ ](?=[^\s\"'`,;\\/]*[\\/]))+"
 )
 
@@ -101,6 +103,8 @@ def sanitize_runtime_tail(text: str, limit: int = 280) -> str:
 
 
 def _path_tail(match: "re.Match[str]") -> str:
+    if match.group("url"):
+        return match.group("url")
     tail = match.group(0).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     return tail or "..."
 
