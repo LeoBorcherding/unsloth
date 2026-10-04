@@ -11,6 +11,7 @@ Dumb storage: the route owns the schema, this reads, writes and sorts.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -78,6 +79,44 @@ def save(
                 pass
         raise
     _prune_to_cap()
+    return _record(audio_id, meta)
+
+
+def save_file(
+    src: Path,
+    meta: dict[str, Any],
+    *,
+    prune: bool = True,
+) -> dict[str, Any]:
+    """Move a WAV on disk into the gallery with its sidecar; all or nothing.
+
+    Multi-file runs pass ``prune=False`` and prune once at the end, so a cap never splits a run.
+    """
+    audio_id = uuid.uuid4().hex
+    directory = gallery_dir()
+    wav_path = directory / f"{audio_id}.wav"
+    wav_tmp = directory / f".{audio_id}.wav.tmp"
+    sidecar = directory / f"{audio_id}.json"
+    sidecar_tmp = directory / f".{audio_id}.json.tmp"
+    try:
+        try:
+            os.replace(src, wav_path)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(src, wav_tmp)
+            os.replace(wav_tmp, wav_path)
+        sidecar_tmp.write_text(json.dumps(meta), encoding = "utf-8")
+        os.replace(sidecar_tmp, sidecar)
+    except BaseException:
+        for path in (wav_tmp, sidecar_tmp, wav_path, sidecar):
+            try:
+                path.unlink(missing_ok = True)
+            except OSError:
+                pass
+        raise
+    if prune:
+        _prune_to_cap()
     return _record(audio_id, meta)
 
 
@@ -156,6 +195,8 @@ def _prune_to_cap() -> int:
                     if running > byte_cap and index > 0:
                         keep = index
                         break
+            # A run's clips (a separation's stems) go together: a kept clip keeps its siblings.
+            kept_groups = {r["group_id"] for r, _ in entries[:keep] if r.get("group_id")}
             if keep >= len(entries):
                 return 0
 
@@ -163,12 +204,17 @@ def _prune_to_cap() -> int:
             # parse, which here would drop the clips the shelf exists to keep. It also covers filesystems where the
             # cross-process lock degrades to a no-op.
             flags = gallery_flags.read_trusted(directory)
+            victims = [
+                record["id"]
+                for record, _cursor in entries[keep:]
+                if record.get("group_id") not in kept_groups
+                and not gallery_flags.is_archived(flags, record["id"])
+                and gallery_flags.pin_rank(flags, record["id"]) == float("-inf")
+            ]
+            in_use = _sources_in_use(directory, set(victims))
             pruned: list[str] = []
-            for record, _cursor in entries[keep:]:
-                audio_id = record["id"]
-                if gallery_flags.is_archived(flags, audio_id) or gallery_flags.pin_rank(
-                    flags, audio_id
-                ) > float("-inf"):
+            for audio_id in victims:
+                if audio_id in in_use:
                     continue
                 path = audio_path(audio_id)
                 if path is None or _read_meta(_sidecar_path(audio_id)) is None:
@@ -225,7 +271,7 @@ def _record(
 
 def _workflow(meta: dict[str, Any]) -> str:
     workflow = meta.get("workflow")
-    if workflow in ("speak", "clone", "convert", "music"):
+    if workflow in ("speak", "clone", "edit", "convert", "music", "separate"):
         return workflow
     return workflow_for_audio_type(meta.get("audio_type"))
 
@@ -259,6 +305,25 @@ def _remove_source(audio_id: str) -> None:
 
 def _clip_wavs(directory: Path) -> list[Path]:
     return [p for p in directory.glob("*.wav") if _ID_RE.match(p.stem)]
+
+
+def _sources_in_use(directory: Path, leaving: set[str]) -> set[str]:
+    """Hidden Edit sources that a clip staying in the gallery still plays as its Original."""
+    try:
+        paths = list(directory.glob("*.wav"))
+    except OSError:
+        return set()
+    sources: set[str] = set()
+    used: set[str] = set()
+    for path in paths:
+        meta = _read_meta(_sidecar_path(path.stem))
+        if meta is None:
+            continue
+        if meta.get("role") == "source":
+            sources.add(path.stem)
+        if path.stem not in leaving and meta.get("source_clip_id"):
+            used.add(str(meta["source_clip_id"]))
+    return used & sources
 
 
 # Key-presence ownership test: a hand-dropped wav with a partial sidecar is neither counted as ours nor destroyed.
@@ -473,8 +538,8 @@ def clear(include_archived: bool = False, workflow: Optional[str] = None) -> int
     orphan WAVs are preserved, since list_audio already hides them.
 
     Archived clips are spared unless ``include_archived``, and sparing them raises
-    FlagsUnavailable when the flag store cannot be read. A ``workflow`` (speak, clone, convert or
-    music) spares the other workflows' clips."""
+    FlagsUnavailable when the flag store cannot be read. A ``workflow`` (speak, clone, edit,
+    convert, music or separate) spares the other workflows' clips."""
     removed = 0
     directory = gallery_dir()
     with gallery_flags.exclusive(directory, require_file_lock = not include_archived):
@@ -483,7 +548,7 @@ def clear(include_archived: bool = False, workflow: Optional[str] = None) -> int
             paths = _clip_wavs(directory)
         except OSError:
             return 0
-        cleared: list[str] = []
+        doomed = []
         for path in paths:
             meta = _read_meta(_sidecar_path(path.stem))
             if meta is None:
@@ -491,6 +556,12 @@ def clear(include_archived: bool = False, workflow: Optional[str] = None) -> int
             if workflow is not None and _workflow(meta) != workflow:
                 continue
             if not include_archived and gallery_flags.is_archived(flags, path.stem):
+                continue
+            doomed.append(path)
+        in_use = _sources_in_use(directory, {path.stem for path in doomed})
+        cleared: list[str] = []
+        for path in doomed:
+            if path.stem in in_use:
                 continue
             try:
                 path.unlink()

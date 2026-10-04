@@ -25,6 +25,7 @@ export interface AudioModelContext {
   referenceTextMode?: AudioReferenceTextMode | null;
   convert?: AudioConvertCaps | null;
   convertMode?: ConvertMode;
+  audioMusic?: boolean;
   /** Ids of the saved voices, once the list has loaded. */
   savedVoiceIds?: readonly string[] | null;
 }
@@ -46,6 +47,15 @@ export interface CoreInputs {
   text: string;
   referenceText?: string;
   hasReference?: boolean;
+  edit?: EditCoreInputs;
+}
+
+export interface EditCoreInputs {
+  transcript: string;
+  edited: string;
+  mode: "words" | "delivery";
+  speed: number;
+  pitchSteps: number;
 }
 
 export interface AudioToolPanelProps<V> {

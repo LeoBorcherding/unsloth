@@ -1387,6 +1387,15 @@ class _InferenceRuntimeFields(BaseModel):
             "description sent as instructions)."
         ),
     )
+    audio_music: Optional[Dict[str, Any]] = Field(
+        None,
+        description = (
+            "Music studio capabilities of an audio.cpp music model: {modes: [{id: song|sfx|edit, "
+            "...}]} with lyrics, description, instrumental, section_case, duration and "
+            "variations for song and sfx, and actions, max_ranges and max_source_s for edit. "
+            "None for a model the Music studio does not drive (and native MiniMax)."
+        ),
+    )
     audio_options_by_workflow: Optional[Dict[str, List[Dict[str, Any]]]] = Field(
         None, description = "Options per Audio workflow where they differ from audio_options."
     )
@@ -5155,12 +5164,14 @@ class AudioGalleryItem(BaseModel):
     pinned: bool = Field(False, description = "Pinned to the top of history")
     archived: bool = Field(False, description = "Moved to the archived shelf, hidden from history")
     workflow: Optional[str] = Field(
-        None, description = "Audio page workflow that made the clip: speak, clone, convert or music"
+        None,
+        description = "Audio page workflow that made the clip: speak, clone, edit, convert, music or separate",
     )
     order_at: Optional[float] = Field(
         None,
         description = "Unpinned sort key (epoch-second scale): the manual key once dragged, else the file mtime",
     )
+    group_id: Optional[str] = Field(None, description = "Clips made by one run share this id")
     role: Optional[str] = Field(None, description = "The clip's part in its run, e.g. output")
     source_clip_id: Optional[str] = Field(
         None, description = "History clip the run took its reference from"
@@ -5224,9 +5235,9 @@ class AudioRunInputs(BaseModel):
     model_config = ConfigDict(extra = "forbid")
 
     reference: Optional[AudioSourceRef] = None
+    source: Optional[AudioSourceRef] = None
     reference_text: Optional[str] = Field(None, max_length = 4000)
     emotion: Optional[AudioSourceRef] = None
-    source: Optional[AudioSourceRef] = None
     target: Optional[AudioSourceRef] = None
     # A 5 minute source (CONVERT_SOURCE_MAX_SECONDS) runs well past 4000 characters of speech.
     source_text: Optional[str] = Field(None, max_length = 16000)
@@ -5242,16 +5253,61 @@ class AudioConvertParams(BaseModel):
     voice: Optional[Literal["default", "manthos", "chocola", "fraise"]] = None
 
 
+class AudioRunEdit(BaseModel):
+    """Words: client-rendered DotTTS markup or FireRedAudio instructions, checked against both
+    transcripts. Delivery (FireRedAudio): numbers only."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    mode: Literal["words", "delivery"] = "words"
+    markup: Optional[str] = Field(None, max_length = 8000)
+    instructions: Optional[List[Annotated[str, Field(min_length = 1, max_length = 300)]]] = Field(
+        None, max_length = 8
+    )
+    speed: Optional[float] = Field(None, ge = 0.5, le = 2.0)
+    pitch_steps: Optional[int] = Field(None, ge = 1, le = 12)
+
+
+class AudioMusicRange(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    start_s: float = Field(..., ge = 0, le = 24 * 3600)
+    end_s: float = Field(..., gt = 0, le = 24 * 3600)
+
+    @model_validator(mode = "after")
+    def _ordered(self):
+        if self.end_s <= self.start_s:
+            raise ValueError("A range must end after it starts.")
+        return self
+
+
+class AudioMusicEdit(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    action: Literal["repaint", "extend", "cover", "continue", "inpaint", "restyle"]
+    ranges: List[AudioMusicRange] = Field(default_factory = list, max_length = 8)
+    strength: Optional[float] = Field(None, ge = 0, le = 1)
+    extend_s: Optional[float] = Field(None, gt = 0, le = 600)
+
+
 class AudioRunRequest(BaseModel):
     """``POST /audio/run``: one Audio page run. Audio is named by id; the server picks the files."""
 
     model_config = ConfigDict(extra = "forbid")
 
-    workflow: Literal["clone", "speak", "convert"]
-    text: Optional[str] = Field(None, min_length = 1)
+    workflow: Literal["clone", "speak", "edit", "convert", "music", "separate"]
+    # Required except for a conversion or a separation (the routes answer those given text with a 400).
+    text: Optional[str] = None
     language: Optional[str] = Field(None, max_length = 64)
     instructions: Optional[str] = Field(None, max_length = 4000)
     inputs: AudioRunInputs = Field(default_factory = AudioRunInputs)
+    mode: Optional[Literal["song", "sfx", "edit"]] = None
+    lyrics: Optional[str] = Field(None, max_length = 20000)
+    instrumental: bool = False
+    duration_s: Optional[float] = Field(None, ge = 0.5, le = 600)
+    variations: int = Field(1, ge = 1, le = 4)
+    # Music edits carry an action; speech edits (workflow edit) never do.
+    edit: Optional[Union[AudioMusicEdit, AudioRunEdit]] = None
     options: Optional[Dict[str, Any]] = Field(
         None, description = "Per-model options, as listed in audio_options or by a tool panel"
     )
@@ -5271,12 +5327,25 @@ class AudioRunRequest(BaseModel):
             if self.convert is None:
                 self.convert = AudioConvertParams()
             return self
-        if self.text is None:
+        if self.text is None and self.workflow != "separate":
             raise ValueError("text is required.")
+        # inputs.source also carries a Music edit's clip; the route refuses it elsewhere.
         if self.convert is not None or any(
-            v is not None for v in (inputs.source, inputs.target, inputs.source_text)
+            v is not None for v in (inputs.target, inputs.source_text)
         ):
-            raise ValueError("convert and the source and target inputs are for workflow convert.")
+            raise ValueError("convert and the target inputs are for workflow convert.")
+        return self
+
+    @model_validator(mode = "after")
+    def _edit_fields(self):
+        if self.workflow == "edit" and not isinstance(self.edit, AudioRunEdit):
+            raise ValueError("Send edit with workflow edit.")
+        if isinstance(self.edit, AudioRunEdit) and self.workflow != "edit":
+            raise ValueError("A speech edit is for workflow edit.")
+        if self.workflow == "edit" and (
+            self.inputs.reference is not None or self.inputs.emotion is not None
+        ):
+            raise ValueError("An edit takes inputs.source, not a reference or emotion clip.")
         return self
 
     @field_validator("options")
@@ -5290,6 +5359,17 @@ class AudioRunRequest(BaseModel):
             if isinstance(option, (dict, list)):
                 raise ValueError(f"Option '{name}' must be a single value.")
         return value
+
+    @model_validator(mode = "after")
+    def _workflow_fields(self):
+        if self.workflow == "music":
+            if self.mode is None:
+                raise ValueError("Pick a music mode: song, sfx or edit.")
+            if self.text is None:
+                raise ValueError("text is required for music.")
+        elif self.workflow not in ("convert", "separate") and not self.text:
+            raise ValueError("text must not be empty.")
+        return self
 
 
 class AudioRunClip(BaseModel):
@@ -5309,6 +5389,8 @@ class AudioRunAudio(BaseModel):
 
 class AudioRunResponse(BaseModel):
     clips: List[AudioRunClip] = Field(default_factory = list)
+    # One separation's stems share it; None for a single clip.
+    group_id: Optional[str] = None
     model: str
     audio: Optional[AudioRunAudio] = Field(
         None, description = "The audio inline, only when saving it to history failed"
