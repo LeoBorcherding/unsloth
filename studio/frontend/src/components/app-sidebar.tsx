@@ -5173,7 +5173,8 @@ export function AppSidebar() {
       <SidebarGroup
         data-tour="navbar"
         className={cn(
-          "group-data-[collapsible=icon]:px-0 pt-0 shrink-0 transition-[padding]",
+          // Shrinks and scrolls on its own once a short window can't fit every row, so none is clipped.
+          "group-data-[collapsible=icon]:px-0 pt-0 min-h-0 shrink overflow-y-auto overflow-x-hidden overscroll-contain transition-[padding]",
           rowPadding,
           // Scrolled: the nav stays above the list, give a little gap below it.
           scrolled ? "pb-[calc(5px*var(--ui-space-scale,1))]" : "pb-0",

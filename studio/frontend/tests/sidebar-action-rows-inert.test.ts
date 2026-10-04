@@ -181,3 +181,9 @@ test("Tauri chat Recents label takes the shared header inset, not a shift", asyn
   assert.match(source, /headerInset,\s*scrolled && "is-scrolled",\s*!chatOpen/);
   assert.doesNotMatch(source, /translate-x-\[2px\]/);
 });
+
+test("the pinned nav scrolls itself when the window is too short for it", async () => {
+  const group = APP_SIDEBAR.split('data-tour="navbar"')[1].split("<SidebarGroupContent")[0];
+  assert.match(group, /min-h-0 shrink overflow-y-auto/);
+  assert.doesNotMatch(group, /\bshrink-0\b/);
+});
