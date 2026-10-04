@@ -128,7 +128,7 @@ test("a group cut by the page boundary waits for the next page, which the page l
   );
   assert.match(
     page,
-    /if \(tailHidden\) void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
+    /if \(!tailHidden\) return;[\s\S]*askedRef\.current\.set\(tail\.groupId, tail\.stems\.length\);\s*void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
   );
 });
 
@@ -320,4 +320,29 @@ test("a stem sent to Clone is adopted, so the old reference's transcript goes wi
     send,
     /if \(!transitionWorkflow\("clone"\)\) return;[\s\S]{0,160}?useAudioCloneStore\.getState\(\)\.adoptReference\(\{/,
   );
+});
+
+test("a run the next page added nothing to is shown short, not hidden for the whole gallery", () => {
+  // Three of four stems, oldest on the page: cut by the boundary, or a deleted stem? Only the
+  // next page can tell. Once it arrives with nothing for the run, the run shows as it is,
+  // otherwise the page would keep asking for more until the gallery ran out.
+  const clips = [
+    clip("n", "vocals", { group_id: "new", settings: { stems: ["vocals"] } }),
+    ...["vocals", "drums", "bass"].map((role) =>
+      clip(`o-${role}`, role, {
+        group_id: "old",
+        settings: { stems: ["vocals", "drums", "bass", "other"] },
+      }),
+    ),
+  ];
+  assert.deepEqual(
+    groupSeparationClips(clips, true).map((group) => group.groupId),
+    ["new"],
+  );
+  assert.deepEqual(
+    groupSeparationClips(clips, true, new Set(["old"])).map((group) => group.groupId),
+    ["new", "old"],
+  );
+  const page = readSrc("features/audio/pages/separate-page.tsx");
+  assert.match(page, /askedRef\.current\.get\(tail\.groupId\) === tail\.stems\.length/);
 });
