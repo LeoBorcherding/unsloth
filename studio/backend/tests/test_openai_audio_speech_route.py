@@ -242,12 +242,110 @@ def test_only_resident_requests_use_the_pre_switch_budget(monkeypatch, named):
     assert str(error.value) == "reached the switch" if named else error.value.status_code == 400
 
 
+@pytest.mark.parametrize("named", [False, True])
+def test_a_loaded_voice_slot_serves_only_the_resident_model_form(monkeypatch, named):
+    """The voice slot owns speech when the caller names no model, which is what the
+    conversation loop sends. A caller that names one keeps main's switch path exactly,
+    voice slot or not: the switch is that request, so it must be reached."""
+
+    async def _switch(_model, *_a, **kw):
+        assert kw["require_speech"] is True
+        raise RuntimeError("reached the switch")
+
+    def _picked_voice(_backend):
+        raise RuntimeError("reached the voice slot")
+
+    voice_backend = SimpleNamespace(is_loaded = True, _is_audio = True, _audio_type = "snac")
+    monkeypatch.setattr(routes_module, "get_voice_llama_backend", lambda: voice_backend)
+    monkeypatch.setattr(routes_module, "_maybe_auto_switch_model", _switch)
+    monkeypatch.setattr(routes_module, "_llama_public_model_id", _picked_voice)
+    monkeypatch.setattr(routes_module, "_monitor_context_length", lambda: 2048)
+    monkeypatch.setattr(routes_module, "_prompt_token_estimate", lambda _t: 8)
+    payload = SimpleNamespace(audio_instructions = None, audio_language = None)
+    request = SimpleNamespace(state = SimpleNamespace(skip_api_monitor = True))
+    model = "org/B-GGUF" if named else routes_module._RELOAD_ONLY_MODEL
+    with pytest.raises(RuntimeError) as error:
+        asyncio.run(
+            routes_module._generate_tts_wav(
+                "hi",
+                payload,
+                request,
+                "tester",
+                requested_model = model,
+            )
+        )
+    assert str(error.value) == ("reached the switch" if named else "reached the voice slot")
+
+
+def test_the_voice_slot_budgets_speech_against_its_own_context(monkeypatch):
+    """The chat slot can hold a far larger context than the voice server; budgeting against
+    it admits text the voice server would then truncate or reject."""
+
+    def _picked_voice(_backend):
+        raise RuntimeError("reached the voice slot")
+
+    voice_backend = SimpleNamespace(
+        is_loaded = True, _is_audio = True, _audio_type = "snac", context_length = 512
+    )
+    monkeypatch.setattr(routes_module, "get_voice_llama_backend", lambda: voice_backend)
+    monkeypatch.setattr(routes_module, "_llama_public_model_id", _picked_voice)
+    monkeypatch.setattr(routes_module, "_monitor_context_length", lambda: 32768)
+    monkeypatch.setattr(routes_module, "_prompt_token_estimate", lambda _t: 600)
+    payload = SimpleNamespace(audio_instructions = None, audio_language = None)
+    request = SimpleNamespace(state = SimpleNamespace(skip_api_monitor = True))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes_module._generate_tts_wav("long text", payload, request, "tester"))
+    assert error.value.status_code == 400 and "512-token context" in error.value.detail
+    budget = routes_module._tts_max_new_tokens(
+        SimpleNamespace(max_completion_tokens = 8192, max_tokens = None), "x", context_length = 512
+    )
+    assert budget < 512
+
+
+@pytest.mark.parametrize("prompt_tokens, refused", [(100, False), (600, True)])
+def test_streaming_speech_fits_the_voice_servers_context(monkeypatch, prompt_tokens, refused):
+    """No max_new_tokens used to send the 8192 ceiling into a 4096 voice server, which ended
+    the stream early after a 200 had already gone out."""
+    seen = {}
+
+    def _stream(**kwargs):
+        seen.update(kwargs)
+        yield b"\x00\x00"
+
+    voice_backend = SimpleNamespace(
+        is_loaded = True,
+        _audio_type = "snac",
+        context_length = 512,
+        _orpheus_voice_prefix_ok = lambda: True,
+        generate_audio_response_stream = _stream,
+    )
+    monkeypatch.setattr(routes_module, "get_voice_llama_backend", lambda: voice_backend)
+    monkeypatch.setattr(routes_module, "_prompt_token_estimate", lambda _t: prompt_tokens)
+    request = SimpleNamespace(state = SimpleNamespace(skip_api_monitor = True))
+
+    async def _run():
+        response = await routes_module.openai_audio_speech_stream(
+            AudioSpeechRequest(input = "hello"), request, "tester"
+        )
+        return [chunk async for chunk in response.body_iterator]
+
+    if refused:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(_run())
+        assert error.value.status_code == 400 and "512-token context" in error.value.detail
+        assert seen == {}
+    else:
+        asyncio.run(_run())
+        reserve = routes_module._TTS_PROMPT_FORMAT_RESERVE
+        assert seen["max_new_tokens"] == 512 - prompt_tokens - reserve
+
+
 def test_the_shared_core_guards_before_generating():
     """Wired in _generate_tts_wav so /audio/generate inherits it, not only /audio/speech."""
     import inspect
 
     source = inspect.getsource(routes_module._generate_tts_wav)
-    assert "_raise_if_prompt_leaves_no_speech_budget(text)" in source
+    assert "_raise_if_prompt_leaves_no_speech_budget(text," in source
 
 
 def test_the_budget_is_rechecked_after_an_idle_model_is_restored():
@@ -261,7 +359,7 @@ def test_the_budget_is_rechecked_after_an_idle_model_is_restored():
     guards = [
         i
         for i, line in enumerate(source.splitlines())
-        if "_raise_if_prompt_leaves_no_speech_budget(text)" in line
+        if "_raise_if_prompt_leaves_no_speech_budget(text," in line
     ]
     restore = next(
         i for i, line in enumerate(source.splitlines()) if "await _maybe_auto_switch_model(" in line
@@ -1002,6 +1100,78 @@ def test_an_ordinary_model_id_is_still_recorded_verbatim(monkeypatch):
             == 400
         )
         assert api_monitor.snapshot(include_details = False)[0]["model"] == requested
+
+
+def test_voice_load_applies_the_managed_account_gate_before_resolving(monkeypatch):
+    """A managed account may only load a model within its grants, and an absent token is
+    the account's own, never the installation's ambient Hub credential. /load and
+    /validate apply both before resolving; /voice/load resolved the caller's identifier
+    with the caller's token first, which made the voice slot a second door past both."""
+    from hub.services.models import account_access
+    from utils import models as models_module
+
+    monkeypatch.setattr(account_access, "managed_account", lambda: True)
+
+    def _resolve_before_gate(*_a, **_k):
+        raise AssertionError("resolved the model before the access check")
+
+    monkeypatch.setattr(models_module.ModelConfig, "from_identifier", _resolve_before_gate)
+
+    def _deny(reference, repo_type = "model"):
+        raise HTTPException(status_code = 403, detail = f"no grant for {reference}")
+
+    monkeypatch.setattr(account_access, "require_model_access", _deny)
+    monkeypatch.setattr(account_access, "account_hf_token", lambda token: "account-token")
+    request = routes_module._VoiceLoadRequest(model_path = "org/private-voice-GGUF")
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(routes_module.voice_load_model(request, "tester"))
+    assert denied.value.status_code == 403
+
+
+def test_voice_load_resolves_with_the_account_token_not_the_callers(monkeypatch):
+    from hub.services.models import account_access
+    from utils import models as models_module
+
+    seen = {}
+
+    def _resolve(**kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop after resolve")
+
+    monkeypatch.setattr(account_access, "managed_account", lambda: True)
+    monkeypatch.setattr(account_access, "require_model_access", lambda *a, **k: None)
+    monkeypatch.setattr(account_access, "account_hf_token", lambda token: "account-token")
+    monkeypatch.setattr(models_module.ModelConfig, "from_identifier", staticmethod(_resolve))
+    request = routes_module._VoiceLoadRequest(
+        model_path = "org/voice-GGUF", hf_token = "callers-own-token"
+    )
+    with pytest.raises(HTTPException) as failed:
+        asyncio.run(routes_module.voice_load_model(request, "tester"))
+    assert failed.value.status_code == 400  # the route wraps the resolve failure
+    assert seen["hf_token"] == "account-token"
+
+
+def test_voice_load_rejects_a_context_above_the_requestable_ceiling():
+    """/voice/load models its load as a chat LoadRequest for the training-coexistence
+    guard, and that model caps max_seq_length at MAX_REQUESTABLE_CONTEXT. Without the
+    same bound on n_ctx, an oversized value passed validation and then blew up inside
+    the handler as a 500, after the HF resolve, instead of a 422 up front."""
+    from pydantic import ValidationError
+
+    from core.inference.runtime_context import MAX_REQUESTABLE_CONTEXT
+
+    with pytest.raises(ValidationError):
+        routes_module._VoiceLoadRequest(
+            model_path = "unsloth/orpheus-3b-0.1-ft-GGUF", n_ctx = MAX_REQUESTABLE_CONTEXT + 1
+        )
+    assert (
+        routes_module._VoiceLoadRequest(
+            model_path = "unsloth/orpheus-3b-0.1-ft-GGUF", n_ctx = MAX_REQUESTABLE_CONTEXT
+        ).n_ctx
+        == MAX_REQUESTABLE_CONTEXT
+    )
+    # 0 keeps meaning "model default".
+    assert routes_module._VoiceLoadRequest(model_path = "x.gguf", n_ctx = 0).n_ctx == 0
 
 
 def test_audio_generate_answers_with_the_text_the_clip_speaks(monkeypatch):
