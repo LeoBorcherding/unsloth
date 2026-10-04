@@ -52,6 +52,37 @@ def test_runtime_text_is_one_bounded_line_without_paths_or_tokens():
 
 
 @pytest.mark.parametrize(
+    "text, expected",
+    [
+        # a space inside a path, the common Windows profile name
+        ("loading C:\\Users\\John Smith\\.unsloth\\voice.wav failed", "loading voice.wav failed"),
+        ("\\\\server\\share\\John Smith\\x.wav end", "x.wav end"),
+        ("see file:///home/alice/.cache/x/blob.bin now", "see blob.bin now"),
+        ("see file:/home/alice/x.wav now", "see x.wav now"),
+        ("open ~/.unsloth/audio/clip.wav or ./out/c2.wav or ../up/c3.wav", "open clip.wav or c2.wav or c3.wav"),
+        # a space before a word with no separator ends the path
+        ("/home/alice/x.wav in /tmp then", "x.wav in tmp then"),
+        ("e.g. 10/20 ratio and a/b", "e.g. 10/20 ratio and a/b"),
+    ],
+)
+def test_paths_with_spaces_schemes_and_home_prefixes_are_cut_to_their_tail(text, expected):
+    assert sanitize_runtime_detail(text) == expected
+
+
+def test_the_last_output_is_cut_at_a_line_before_it_is_sanitized():
+    from core.inference.audio_cpp_server import _last_output
+
+    # Cutting 280 characters from the end lands inside the path, after its leading "/",
+    # and "home/alice/..." without that head is not a path to the sanitizer.
+    filler = "x" * 250
+    log = f"{filler}\nfailed on /home/alice/.cache/huggingface/hub/models--x/blobs/0f3a here\n"
+    message = _last_output(log)
+    assert "alice" not in message and "huggingface" not in message
+    assert message.endswith("failed on 0f3a here")
+    assert _last_output("a\nb\nc") == "a b c"
+
+
+@pytest.mark.parametrize(
     "status, expected",
     [(500, 500), (None, 500), (502, 500), (422, 400), (404, 400), (401, 400), (503, 503)],
 )

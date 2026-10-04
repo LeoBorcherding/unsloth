@@ -36,6 +36,15 @@ test("generation renders one accessible indeterminate task indicator", () => {
     source,
     /<output[\s\S]*aria-live="polite"[\s\S]*aria-atomic="true"[\s\S]*generationPresentation\.status[\s\S]*<\/output>/,
   );
+  // The live region carries the phase alone; a timer ticking inside it is announced every second.
+  assert.match(
+    source,
+    /<output aria-live="polite" aria-atomic="true">\s*\{generationPresentation\.status\}\s*<\/output>/,
+  );
+  assert.match(
+    source,
+    /aria-hidden="true"[^>]*>\s*\{formatClipDuration\(elapsedSeconds\)\}/,
+  );
   assert.doesNotMatch(
     source,
     /<Progress[\s\S]{0,300}aria-valuenow|<Progress[\s\S]{0,300}value=/,

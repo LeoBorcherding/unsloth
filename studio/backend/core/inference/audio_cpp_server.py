@@ -349,6 +349,20 @@ def _abort_connection(connection: http.client.HTTPConnection) -> None:
         pass
 
 
+def _last_output(tail: str, limit: int = 280) -> str:
+    """The end of a log, cut at a line boundary and sanitized after the cut. Cutting first can
+    drop the leading "/" or "C:\\" of a path, and a path without its head is not a path to the
+    sanitizer."""
+    kept: list[str] = []
+    size = 0
+    for line in reversed(tail.splitlines()):
+        if kept and size + len(line) > limit:
+            break
+        kept.append(line)
+        size += len(line) + 1
+    return sanitize_runtime_detail("\n".join(reversed(kept)))
+
+
 class AudioCppServer:
     """One running ``audiocpp_server`` bound to one model. Not thread-safe; owners serialise."""
 
@@ -491,7 +505,7 @@ class AudioCppServer:
                 raise AudioCppUnavailableError(
                     "The audio runtime exited before becoming ready; the model file may be "
                     "incomplete or unsupported by this build."
-                    + (f" Last output: {sanitize_runtime_detail(tail[-280:])}" if tail else "")
+                    + (f" Last output: {_last_output(tail)}" if tail else "")
                 )
             if self._probe():
                 return
@@ -578,7 +592,7 @@ class AudioCppServer:
                 raise AudioCppUnavailableError(
                     "The audio runtime stopped while serving the request."
                     + (
-                        f" Last output: {sanitize_runtime_detail(self.log_tail()[-280:])}"
+                        f" Last output: {_last_output(self.log_tail())}"
                         if self.log_tail()
                         else ""
                     )

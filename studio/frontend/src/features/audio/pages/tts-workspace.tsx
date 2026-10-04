@@ -327,18 +327,20 @@ export function TtsFooter({
     <div className="flex w-full max-w-sm flex-col gap-2">
       {busy === "generating" && generationPresentation ? (
         <>
-          <output
-            aria-live="polite"
-            aria-atomic="true"
-            className="text-center text-ui-12 text-muted-foreground"
-          >
-            {generationPresentation.status}
+          <p className="text-center text-ui-12 text-muted-foreground">
+            <output aria-live="polite" aria-atomic="true">
+              {generationPresentation.status}
+            </output>
+            {/* The timer sits outside the live region: announced every second, it is noise. */}
             {elapsedSeconds !== null ? (
-              <span className="ml-1.5 font-mono tabular-nums">
+              <span
+                aria-hidden="true"
+                className="ml-1.5 font-mono tabular-nums"
+              >
                 {formatClipDuration(elapsedSeconds)}
               </span>
             ) : null}
-          </output>
+          </p>
           <Progress
             indeterminate
             aria-label="Audio task in progress"

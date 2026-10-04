@@ -86,7 +86,12 @@ export function ClipCard({
 }) {
   const focusPlay = (element: HTMLDivElement | null) => {
     if (!(element && focusOnMount && src)) return;
-    element.querySelector<HTMLButtonElement>("button")?.focus();
+    // A clip finishing while the user types the next prompt must not pull the caret out of it.
+    const active = document.activeElement;
+    const typing =
+      active instanceof HTMLElement &&
+      active.matches("input, textarea, [contenteditable='true']");
+    if (!typing) element.querySelector<HTMLButtonElement>("button")?.focus();
     onFocused?.();
   };
   return (

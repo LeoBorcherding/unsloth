@@ -137,6 +137,11 @@ test("results show as a clip card with a waveform, never autoplaying", () => {
   );
   assert.match(host, /onStop: handleStopGeneration,/);
   assert.doesNotMatch(card, /aria-live/);
+  // A clip landing while the user types the next prompt leaves the caret where it is.
+  assert.match(
+    card,
+    /active\.matches\("input, textarea, \[contenteditable='true'\]"\)[\s\S]*if \(!typing\) element\.querySelector<HTMLButtonElement>\("button"\)\?\.focus\(\)/,
+  );
 });
 
 test("Send to lists the other Audio pages from the shared workflow list", () => {
