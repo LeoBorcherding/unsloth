@@ -126,3 +126,24 @@ def test_deleting_a_voice_drops_its_prepared_copies():
     assert prepared.is_file() and prepared.name.startswith(f"v-{voice['id']}.")
     assert audio_voices.delete(voice["id"])
     assert not prepared.exists()
+
+
+def test_deleting_a_voice_keeps_going_past_a_copy_that_will_not_unlink(monkeypatch):
+    # Windows refuses to unlink a copy a run still reads; the other copies must still go.
+    from pathlib import Path
+
+    voice = audio_voices.create(audio_inputs.input_path(_input(1.0)), {"name": "v"})
+    _s, clone_copy = audio_inputs.prepare_reference({"voice_id": voice["id"]})
+    source = audio_inputs.resolve_source({"voice_id": voice["id"]})
+    stt_copy = audio_inputs.prepared_path(source, 16000, max_seconds = 30.0)
+    assert clone_copy != stt_copy and clone_copy.is_file() and stt_copy.is_file()
+    real_unlink = Path.unlink
+
+    def _stubborn(self, missing_ok = False):
+        if self == sorted((clone_copy, stt_copy))[0]:
+            raise PermissionError("in use")
+        return real_unlink(self, missing_ok = missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _stubborn)
+    assert audio_voices.delete(voice["id"])
+    assert not sorted((clone_copy, stt_copy))[1].exists()

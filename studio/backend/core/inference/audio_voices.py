@@ -185,9 +185,10 @@ def delete(voice_id: str) -> bool:
         _sidecar(voice_id).unlink(missing_ok = True)
     except OSError:
         pass
-    try:
-        for copy in inputs_dir().glob(f"v-{voice_id}.*.wav"):
+    # One copy that will not unlink (open for a run on Windows) must not keep the others.
+    for copy in inputs_dir().glob(f"v-{voice_id}.*.wav"):
+        try:
             copy.unlink(missing_ok = True)
-    except OSError:
-        pass
+        except OSError as exc:
+            logger.warning("audio_voices.copy_delete_failed: %s", exc)
     return True

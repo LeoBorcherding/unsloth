@@ -411,6 +411,15 @@ def sweep(
                 path.unlink(missing_ok = True)
             elif name.startswith(("c-", "v-")) and name.endswith(".wav") and age > ttl:
                 path.unlink(missing_ok = True)
+            elif (
+                name.endswith(".wav")
+                and not name.startswith(("c-", "v-"))
+                and age > _STALE_TMP_SECONDS
+                and not _sidecar(directory, path.stem).is_file()
+            ):
+                # A WAV with no sidecar is an upload that died before its commit marker, or a
+                # delete that lost the sidecar first; nothing lists it, so nothing else removes it.
+                path.unlink(missing_ok = True)
         return removed
     except Exception as exc:  # noqa: BLE001 - housekeeping never fails a request
         logger.warning("audio_inputs.sweep_failed: %s", exc)
@@ -464,6 +473,13 @@ def resolve_source(ref: dict[str, Any]) -> Source:
         if path is None:
             raise AudioInputError(404, "This reference expired. Add it again.")
         meta = _read_sidecar(_sidecar(path.parent, source_id)) or {}
+        # A use restarts the TTL, so the sweeper cannot take a reference out from under a run
+        # that just resolved it, and "24 h" reads as since last use.
+        meta["touched_at"] = _now()
+        try:
+            _write_json(_sidecar(path.parent, source_id), meta)
+        except OSError:
+            pass
         return Source("input", source_id, path, meta.get("name") or "audio")
     if key == "clip_id":
         path = audio_gallery.owned_audio_path(source_id) if _valid_id(source_id) else None

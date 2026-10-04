@@ -222,6 +222,34 @@ def test_expired_inputs_are_swept_without_waiting_for_another_upload(monkeypatch
     assert not (tmp_path / "acct-b").exists()
 
 
+def test_the_sweep_drops_a_wav_that_lost_its_sidecar(monkeypatch):
+    # An upload that died between the transcode and its sidecar, or a delete that lost the
+    # sidecar first, left a WAV nothing listed and nothing removed.
+    directory = audio_inputs.inputs_dir()
+    input_id = _save(wav_bytes(0.5), "a.wav")["id"]
+    audio_inputs._sidecar(directory, input_id).unlink()
+    assert audio_inputs.delete(input_id) is False
+    wav = directory / f"{input_id}.wav"
+    assert audio_inputs.sweep() == 0 and wav.is_file()  # a fresh one may still be committing
+    old = time.time() - audio_inputs._STALE_TMP_SECONDS - 60
+    os.utime(wav, (old, old))
+    audio_inputs.sweep()
+    assert not wav.exists()
+
+
+def test_resolving_an_input_for_a_run_restarts_its_ttl(monkeypatch):
+    # Resolving the input for a run counts as a use, so the sweeper cannot take the reference
+    # out from under that run at the 24 h mark.
+    clock = [1_000_000.0]
+    monkeypatch.setattr(audio_inputs, "_now", lambda: clock[0])
+    first = _save(wav_bytes(0.5), "alice take.wav")
+    clock[0] += audio_inputs.TTL_SECONDS - 1
+    assert audio_inputs.resolve_source({"input_id": first["id"]}).name == "alice take.wav"
+    clock[0] += 2
+    assert audio_inputs.sweep() == 0
+    assert audio_inputs.input_path(first["id"]) is not None
+
+
 def test_a_prepared_reference_is_24k_mono_cut_to_thirty_seconds_and_cached():
     record = _save(wav_bytes(seconds = 31.0, rate = 8000), "long.wav")
     source, path = audio_inputs.prepare_reference({"input_id": record["id"]})
