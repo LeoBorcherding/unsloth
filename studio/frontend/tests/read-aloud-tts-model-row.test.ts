@@ -27,8 +27,8 @@ test("the row lands on the TTS selector, not the mode Audio was left in", () => 
     source,
     /to: "\/audio",\s*search: \{ task: "text-to-speech" \},/,
   );
-  // Audio ignored a task without a model, so the intent needs handling at the other end: the
-  // handoff hook maps the task (or an explicit workflow) to the page, text-to-audio to Music.
+  // Audio ignored a task without a model, so the intent needs handling at the other end:
+  // the task names the page, through the same busy gate as ?workflow=.
   assert.match(
     audioSource,
     /const routedWorkflow = audioRouteIntent\(routeSearch\);\s*if \(routedWorkflow === null\) return;/,
