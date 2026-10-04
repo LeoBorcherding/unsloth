@@ -126,6 +126,12 @@ test("results show as a clip card with a waveform, never autoplaying", () => {
   assert.doesNotMatch(output + card, /autoPlay/);
   assert.match(output, /<ClipCard\s+\/\/[^\n]*\n\s*key=\{selectedClip\.id\}/);
   assert.match(card, /<Waveform\s+peaks=\{peaks\}/);
+  // A slider that takes Home takes End.
+  const waveform = readSrc("features/audio/components/waveform.tsx");
+  assert.match(
+    waveform,
+    /event\.key === "Home"\) \{[\s\S]*?seekTo\(0\);[\s\S]*?event\.key === "End"\) \{[\s\S]*?seekTo\(duration\);/,
+  );
   // A run in progress stands where its clip will appear, with Stop, and no second live region.
   assert.match(
     output,

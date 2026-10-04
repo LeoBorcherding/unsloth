@@ -102,6 +102,9 @@ export function Waveform({
           } else if (event.key === "Home") {
             event.preventDefault();
             seekTo(0);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            seekTo(duration);
           }
         }}
         onClick={(event) => {
