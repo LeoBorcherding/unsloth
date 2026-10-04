@@ -392,6 +392,8 @@ def _mirrored_model_entry(model_info: dict, model_name: str) -> dict:
         "audio_required_inputs": model_info.get("audio_required_inputs"),
         "audio_clone": model_info.get("audio_clone"),
         "audio_edit": model_info.get("audio_edit"),
+        "audio_music": model_info.get("audio_music"),
+        "audio_cpp_backend": model_info.get("audio_cpp_backend"),
     }
 
 
@@ -3333,6 +3335,26 @@ class InferenceOrchestrator:
         except RuntimeError:
             self._teardown_not_sent()
 
+    def separate_audio_response(
+        self,
+        source_path: str,
+        output_dir: str,
+        audio_options: Optional[dict] = None,
+        cancel_event = None,
+    ) -> list[dict]:
+        """Split a prepared 44.1 kHz WAV into stems under ``output_dir``; the full token budget
+        gives the watchdog the same hour the runtime request has."""
+        outputs, _sample_rate = self.generate_audio_response(
+            text = "",
+            max_new_tokens = AUDIO_GENERATION_MAX_TOKENS,
+            cancel_event = cancel_event,
+            audio_options = audio_options,
+            workflow = "separate",
+            audio_inputs = {"source": source_path},
+            output_dir = output_dir,
+        )
+        return outputs
+
     def generate_audio_response(
         self,
         text: str,
@@ -3353,11 +3375,14 @@ class InferenceOrchestrator:
         reference_text: Optional[str] = None,
         speed: Optional[float] = None,
         edit: Optional[dict] = None,
+        music: Optional[dict] = None,
+        output_dir: Optional[str] = None,
         stats_holder: Optional[dict] = None,
     ) -> Tuple[bytes, int]:
         """Generate TTS audio. Returns (wav_bytes, sample_rate). Blocking: sends the command and
-        waits for the full audio response. ``audio_inputs`` maps a role (reference, emotion) to a
-        server-local WAV path; audio bytes never cross the queue."""
+        waits for the full audio response. ``audio_inputs`` maps a role (reference, emotion,
+        source) to a server-local WAV path; audio bytes never cross the queue. A separation
+        (``output_dir`` set) returns (outputs, sample_rate) instead, see ``separate_audio_response``."""
         if not self._ensure_subprocess_alive():
             raise RuntimeError("Inference subprocess is not running")
         if not self.active_model_name:
@@ -3436,6 +3461,16 @@ class InferenceOrchestrator:
                     cmd["speed"] = float(speed)
                 if edit is not None:
                     cmd["edit"] = dict(edit)
+                if music is not None:
+                    cmd["music"] = dict(music)
+                    try:
+                        music_wait = float(music.get("timeout_s") or 0.0)
+                    except (TypeError, ValueError):
+                        music_wait = 0.0
+                    # Outlast the worker's wait so its error, not the watchdog, reaches the caller.
+                    generation_timeout = max(generation_timeout, music_wait + 60.0)
+                if output_dir is not None:
+                    cmd["output_dir"] = str(output_dir)
 
                 # Same shared-queue hazard as _generate_inner: see _direct_reader.
                 read_one, _drain, release_mailbox = self._direct_reader(request_id, cancel_event)
@@ -3495,8 +3530,15 @@ class InferenceOrchestrator:
                         if rtype == "audio_done":
                             if cancel_event is not None and cancel_event.is_set():
                                 raise AudioGenerationCancelledError("Audio generation cancelled")
+                            if resp.get("outputs") is not None:
+                                return resp["outputs"], int(resp.get("sample_rate") or 0)
                             wav_bytes = base64.b64decode(resp["wav_base64"])
                             sample_rate = resp["sample_rate"]
+                            status_patch = resp.get("status_patch")
+                            if isinstance(status_patch, dict):
+                                live = self.models.get(expected_model)
+                                if live is not None and "audio_music" in status_patch:
+                                    live["audio_music"] = status_patch["audio_music"]
                             if stats_holder is not None:
                                 stats_holder["stats"] = resp.get("stats")
                             return wav_bytes, sample_rate
