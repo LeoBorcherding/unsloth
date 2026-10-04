@@ -648,3 +648,32 @@ def test_legacy_music_never_asks_past_the_page_maximum():
     medium = _backend(_model("stable_audio", "Stable-Audio-3-Medium-GGUF", strict = False))
     medium.generate_audio_response("ambient", instructions = "ambient", max_new_tokens = 4500)
     assert _request(medium)["duration_seconds"] == 180.0
+
+
+def test_only_the_first_take_of_a_batch_keeps_the_batch_seed(tmp_path):
+    """Every clip of a Stable Audio batch was stored with the batch seed, so replaying take 2
+    with "its" seed and one variation gave take 1."""
+    import json
+    import threading
+
+    model = _model("stable_audio")
+    server = _Server(model, replies = [_reply(3)])
+    backend = audio_cpp_backend.AudioCppBackend.__new__(audio_cpp_backend.AudioCppBackend)
+    backend._session_overrides = {"stable_audio.max_batch": "4"}
+    backend._status_patch = None
+    backend._server = server
+    backend._model = model
+    backend.active_model_name = model.id
+    backend.models = {model.id: {}}
+    backend._server_lock = threading.RLock()
+    backend._run_music(
+        model,
+        {"mode": "song", "text": "lofi", "duration_s": 10, "variations": 3},
+        None,
+        {},
+        7,
+        str(tmp_path),
+        None,
+    )
+    manifest = json.loads((tmp_path / "outputs.json").read_text())
+    assert [m["seed"] for m in manifest] == [7, None, None]

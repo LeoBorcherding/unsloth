@@ -690,9 +690,11 @@ class AudioCppBackend:
                     cancel_event = cancel_event,
                 )
                 take_seed = cm.take_seed(seed, index)
-                for output_id, wav in task_outputs(ctype, data):
+                for position, (output_id, wav) in enumerate(task_outputs(ctype, data)):
                     name = output_id if len(requests) == 1 else f"take_{index}"
-                    outputs.append((name, wav, take_seed))
+                    # A batch is one request with one seed: only its first take replays from
+                    # it alone, so the others carry no seed rather than one that gives take 1.
+                    outputs.append((name, wav, take_seed if position == 0 else None))
         except AudioCppRequestCancelledError:
             self._restart_after_cancel()
             _raise_if_cancelled(cancel_event)
