@@ -237,6 +237,22 @@ def test_the_sweep_drops_a_wav_that_lost_its_sidecar(monkeypatch):
     assert not wav.exists()
 
 
+def test_the_orphan_sweep_keeps_a_prepared_copy_whose_input_is_live():
+    # The prepared copy's stem is "{id}.24000.mono.m30", not the id, so a sidecar probe on the
+    # stem misses and an hour-old cache would be swept under a run that just resolved it.
+    directory = audio_inputs.inputs_dir()
+    record = _save(wav_bytes(1.0), "live.wav")
+    _source, copy = audio_inputs.prepare_reference({"input_id": record["id"]})
+    assert copy.name != f"{record['id']}.wav"
+    old = time.time() - audio_inputs._STALE_TMP_SECONDS - 60
+    os.utime(copy, (old, old))
+    audio_inputs.sweep()
+    assert copy.is_file()
+    audio_inputs._sidecar(directory, record["id"]).unlink()
+    audio_inputs.sweep()
+    assert not copy.exists()
+
+
 def test_resolving_an_input_for_a_run_restarts_its_ttl(monkeypatch):
     # Resolving the input for a run counts as a use, so the sweeper cannot take the reference
     # out from under that run at the 24 h mark.

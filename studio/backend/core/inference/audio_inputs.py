@@ -415,7 +415,9 @@ def sweep(
                 name.endswith(".wav")
                 and not name.startswith(("c-", "v-"))
                 and age > _STALE_TMP_SECONDS
-                and not _sidecar(directory, path.stem).is_file()
+                # Ids carry no dot, so the first segment is the input behind the canonical WAV
+                # and behind every prepared copy ({id}.24000.mono.m30.wav) alike.
+                and not _sidecar(directory, name.split(".", 1)[0]).is_file()
             ):
                 # A WAV with no sidecar is an upload that died before its commit marker, or a
                 # delete that lost the sidecar first; nothing lists it, so nothing else removes it.
