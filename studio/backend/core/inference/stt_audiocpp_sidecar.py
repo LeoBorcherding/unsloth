@@ -728,6 +728,7 @@ class AudioCppSttSidecar:
         self,
         entry: AudioCppModel,
         on_phase: Optional[Callable[[str], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
         from core.inference import audio_cpp_backend
 
@@ -740,7 +741,9 @@ class AudioCppSttSidecar:
         _notify(on_phase, "downloading_aligner")
         try:
             aligner = audio_cpp_backend._resolve_companion(entry, QWEN3_ALIGNER, network = True)
-            audio_cpp_backend.AudioCppBackend._download_missing(aligner, None)
+            audio_cpp_backend.AudioCppBackend._download_missing(aligner, None, cancel_event)
+        except AudioCppRequestCancelledError:
+            raise SttTranscriptionCancelledError("Transcription cancelled.") from None
         except Exception as exc:  # noqa: BLE001 - every failure reads the same to the user
             reason = sanitize_runtime_detail(str(exc)) or type(exc).__name__
             logger.warning("audio.cpp: timestamp aligner download failed: %s", reason)
@@ -825,7 +828,7 @@ class AudioCppSttSidecar:
             model_path = self._ensure_model_downloaded(entry)
             served = entry
             if aligned:
-                self._ensure_aligner_downloaded(entry, on_phase)
+                self._ensure_aligner_downloaded(entry, on_phase, request_cancel_event)
                 served = self._with_aligner(entry)
             cancel_event = (
                 request_cancel_event if request_cancel_event is not None else threading.Event()
