@@ -591,11 +591,7 @@ class AudioCppServer:
             if not self.alive():
                 raise AudioCppUnavailableError(
                     "The audio runtime stopped while serving the request."
-                    + (
-                        f" Last output: {_last_output(self.log_tail())}"
-                        if self.log_tail()
-                        else ""
-                    )
+                    + (f" Last output: {_last_output(self.log_tail())}" if self.log_tail() else "")
                 ) from exc
             raise AudioCppUnavailableError(f"The audio runtime did not answer: {exc}") from exc
         finally:

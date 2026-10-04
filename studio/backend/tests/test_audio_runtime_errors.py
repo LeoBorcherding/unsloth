@@ -59,7 +59,10 @@ def test_runtime_text_is_one_bounded_line_without_paths_or_tokens():
         ("\\\\server\\share\\John Smith\\x.wav end", "x.wav end"),
         ("see file:///home/alice/.cache/x/blob.bin now", "see blob.bin now"),
         ("see file:/home/alice/x.wav now", "see x.wav now"),
-        ("open ~/.unsloth/audio/clip.wav or ./out/c2.wav or ../up/c3.wav", "open clip.wav or c2.wav or c3.wav"),
+        (
+            "open ~/.unsloth/audio/clip.wav or ./out/c2.wav or ../up/c3.wav",
+            "open clip.wav or c2.wav or c3.wav",
+        ),
         # a space before a word with no separator ends the path
         ("/home/alice/x.wav in /tmp then", "x.wav in tmp then"),
         ("e.g. 10/20 ratio and a/b", "e.g. 10/20 ratio and a/b"),
