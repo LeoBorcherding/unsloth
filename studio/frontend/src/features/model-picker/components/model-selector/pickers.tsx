@@ -149,6 +149,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { audioWorkflowForPick } from "../../../audio/route-search.ts";
 import { useChatPickerInventory } from "../../inventory/use-chat-picker-inventory";
 import {
   type CommunityModelPolicy,
@@ -2897,6 +2898,13 @@ function localModelMatchesFormat(
   );
 }
 
+export type ModelPickerRowFilter = (row: {
+  id: string;
+  task?: string | null;
+  audioType?: string | null;
+  audioWorkflows?: readonly string[] | null;
+}) => boolean;
+
 export function HubModelPicker({
   models,
   additionalOnDeviceModels = [],
@@ -2920,6 +2928,7 @@ export function HubModelPicker({
   communityModelPolicy = "none",
   opaqueKind,
   npu,
+  rowFilter,
 }: {
   models: ModelOption[];
   /** Task-runtime downloads using a cache layout the shared Hub inventory cannot represent (for
@@ -2954,6 +2963,7 @@ export function HubModelPicker({
   communityModelPolicy?: CommunityModelPolicy;
   opaqueKind?: "diffusers_pipeline" | "diffusers_modular_pipeline";
   npu?: NpuPickerSource;
+  rowFilter?: ModelPickerRowFilter;
 }) {
   const gpu = useGpuInfo();
   const inferenceGpu = useInferenceGpuInfo();
@@ -4123,7 +4133,14 @@ export function HubModelPicker({
               // The task and codec both came from GGUF classification; codec provenance separates runnable
               // Orpheus from unsupported CSM.
               taskFromGgufArch: true,
-            }),
+            }) &&
+            (!rowFilter ||
+              rowFilter({
+                id: c.repo_id,
+                task: c.task,
+                audioType: c.audio_type,
+                audioWorkflows: c.audio_workflows,
+              })),
         ),
         downloadedSort,
         loadTimes,
@@ -4135,6 +4152,7 @@ export function HubModelPicker({
       task,
       catalog,
       activeCatalogArtifactIds,
+      rowFilter,
     ],
   );
   // Cached non-GGUF repos. In chat, passesTaskGate drops diffusers image repos; the Images
@@ -4189,7 +4207,14 @@ export function HubModelPicker({
                 ? artifactForRepoId(c.repo_id, catalog) !== null
                 : false) ||
               // A pinned snapshot admitted only by an explicit family.
-              (c.opaque === true && Boolean(c.load_id?.trim()) && c.load_id?.trim() !== c.repo_id.trim())),
+              (c.opaque === true && Boolean(c.load_id?.trim()) && c.load_id?.trim() !== c.repo_id.trim())) &&
+            (!rowFilter ||
+              rowFilter({
+                id: c.repo_id,
+                task: c.task,
+                audioType: c.audio_type,
+                audioWorkflows: c.audio_workflows,
+              })),
         ),
         downloadedSort,
         loadTimes,
@@ -4202,6 +4227,7 @@ export function HubModelPicker({
       catalog,
       activeCatalogArtifactIds,
       isMac,
+      rowFilter,
     ],
   );
   // Task-scoped loads put the whole pipeline on ONE device, so quant fit uses the device the
@@ -4258,7 +4284,16 @@ export function HubModelPicker({
               m,
             ) &&
             localModelMatchesFormat(m, formatFilter) &&
-            matchesLocalQuery(m),
+            matchesLocalQuery(m) &&
+            // A task page's own filter (the Audio page lists only its workflow's models) applies to local
+            // and LM Studio rows too, not just the cached Hub rows above.
+            (!rowFilter ||
+              rowFilter({
+                id: m.model_id ?? m.id,
+                task: m.task,
+                audioType: m.audio_type,
+                audioWorkflows: m.audio_workflows,
+              })),
         ),
         downloadedSort,
         loadTimes,
@@ -4273,6 +4308,7 @@ export function HubModelPicker({
       task,
       catalog,
       activeCatalogArtifactIds,
+      rowFilter,
     ],
   );
   // Local ./models entries. Chat-only Unsloth runs GGUF anywhere and MLX on Mac, so raw
@@ -4309,7 +4345,16 @@ export function HubModelPicker({
               localModelIsGguf(m) ||
               (isMac && localModelIsMlx(m))) &&
             localModelMatchesFormat(m, formatFilter) &&
-            matchesLocalQuery(m),
+            matchesLocalQuery(m) &&
+            // A task page's own filter (the Audio page lists only its workflow's models) applies to local
+            // and LM Studio rows too, not just the cached Hub rows above.
+            (!rowFilter ||
+              rowFilter({
+                id: m.model_id ?? m.id,
+                task: m.task,
+                audioType: m.audio_type,
+                audioWorkflows: m.audio_workflows,
+              })),
         ),
         downloadedSort,
         loadTimes,
@@ -4326,6 +4371,7 @@ export function HubModelPicker({
       task,
       catalog,
       activeCatalogArtifactIds,
+      rowFilter,
     ],
   );
   const sortedCustomFolderModels = useMemo(
@@ -4355,7 +4401,16 @@ export function HubModelPicker({
               m,
             ) &&
             localModelMatchesFormat(m, formatFilter) &&
-            matchesLocalQuery(m),
+            matchesLocalQuery(m) &&
+            // A task page's own filter (the Audio page lists only its workflow's models) applies to local
+            // and LM Studio rows too, not just the cached Hub rows above.
+            (!rowFilter ||
+              rowFilter({
+                id: m.model_id ?? m.id,
+                task: m.task,
+                audioType: m.audio_type,
+                audioWorkflows: m.audio_workflows,
+              })),
         ),
         customSort,
         loadTimes,
@@ -4370,6 +4425,7 @@ export function HubModelPicker({
       task,
       catalog,
       activeCatalogArtifactIds,
+      rowFilter,
     ],
   );
 
@@ -4461,6 +4517,12 @@ export function HubModelPicker({
                     task: pickedTask ?? undefined,
                     audioType: meta.audioType ?? undefined,
                     loadId: meta.loadId ?? undefined,
+                    workflow:
+                      audioWorkflowForPick({
+                        id,
+                        task: pickedTask,
+                        audioType: meta.audioType,
+                      }) ?? undefined,
                   }
                 : diffusionRouteSearch(id, meta),
           });
@@ -5049,6 +5111,7 @@ export function HubModelPicker({
       rows
         .filter(isChatSupported)
         .filter(isTaskRuntimeSupported)
+        .filter((r) => !rowFilter || rowFilter({ id: r.id, task: r.pipelineTag }))
         .filter(
           (r) =>
             !fitOnDeviceOnly ||
@@ -5084,6 +5147,7 @@ export function HubModelPicker({
       searchRowFits,
       isMac,
       curatedOfferable,
+      rowFilter,
     ],
   );
 
