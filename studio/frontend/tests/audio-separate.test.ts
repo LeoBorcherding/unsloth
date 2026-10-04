@@ -353,7 +353,7 @@ test("the host renders Separate's rail, footer and output and the page reuses th
   assert.match(page, /maxRecordSeconds=\{SEPARATE_MAX_SECONDS - 1\}/);
   assert.match(page, /recordHint="[^"]*track[^"]*"/);
   assert.match(page, /<StemMixer/);
-  assert.match(page, /groupSeparationClips\(clips, hasMore\)/);
+  assert.match(page, /groupSeparationClips\(clips, hasMore, settled\)/);
   assert.match(page, /aria-live="polite"/);
   // No inline fetch of the stems for playback: the mixer's own sources pin the group.
   assert.match(page, /useStemSources\(inputs, attempt\)/);
@@ -379,7 +379,7 @@ test("a cut oldest run loads the next page itself, since a short list never scro
   );
   assert.match(
     page,
-    /if \(tailHidden\) void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
+    /if \(!tailHidden\) return;[\s\S]*askedRef\.current\.set\(tail\.groupId, tail\.stems\.length\);\s*void loadMore\(\);\s*\}, \[tailHidden, clips, loadMore\]\)/,
   );
   // The same clips as the page-boundary case: one run hidden only while more pages exist.
   const clips = [
@@ -400,4 +400,31 @@ test("a cut oldest run loads the next page itself, since a short list never scro
     groupSeparationClips(clips).length >
       groupSeparationClips(clips, true).length,
   );
+});
+
+test("a run the next page added nothing to is shown short, not hidden for the whole gallery", () => {
+  // Three of four stems, oldest on the page: cut by the boundary, or a deleted stem? Only the
+  // next page can tell. Once it arrives with nothing for the run, the run shows as it is,
+  // otherwise the page would keep asking for more until the gallery ran out.
+  const clips = [
+    clip({ id: "n", group_id: "new", role: "vocals", settings: { stems: ["vocals"] } }),
+    ...["vocals", "drums", "bass"].map((role) =>
+      clip({
+        id: `o-${role}`,
+        group_id: "old",
+        role,
+        settings: { stems: ["vocals", "drums", "bass", "other"] },
+      }),
+    ),
+  ];
+  assert.deepEqual(
+    groupSeparationClips(clips, true).map((group) => group.groupId),
+    ["new"],
+  );
+  assert.deepEqual(
+    groupSeparationClips(clips, true, new Set(["old"])).map((group) => group.groupId),
+    ["new", "old"],
+  );
+  const page = readSrc("features/audio/pages/separate-page.tsx");
+  assert.match(page, /askedRef\.current\.get\(tail\.groupId\) === tail\.stems\.length/);
 });

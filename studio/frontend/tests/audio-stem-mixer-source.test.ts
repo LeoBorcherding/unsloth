@@ -112,3 +112,14 @@ test("a stem that failed to load is left out of playback, so the rest still play
   // The zip needs every stem, so Download all waits for all of them.
   assert.match(mixer, /disabled=\{stems\.some\(\(stem\) => !stem\.src\)\}/);
 });
+
+test("a stem that will not decode neither stops the others nor leads the clock", () => {
+  // Promise.all over play() rejected on one NotSupportedError and stopAll() silenced every stem;
+  // voices[0] drove the clock and the drift check even when it was the broken one.
+  assert.match(transport, /Promise\.allSettled\(\s*voices\.map\(\(voice\) => voice\.element\.play\(\)\)/);
+  assert.match(transport, /played\.every\(\(result\) => result\.status === "rejected"\)\) stopAll\(\)/);
+  assert.match(transport, /function leadOf\([\s\S]*!voice\.element\.error/);
+  assert.match(transport, /const lead = leadOf\(voices\);/);
+  assert.match(transport, /event\.currentTarget === leadOf\(voices\)\) onEnded\(\)/);
+  assert.doesNotMatch(transport, /voices\[0\]\?\.element/);
+});

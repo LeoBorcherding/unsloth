@@ -11,7 +11,7 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { AudioWave01Icon, Download01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { type ComponentProps, useEffect, useMemo, useState } from "react";
+import { type ComponentProps, useEffect, useMemo, useState, useRef } from "react";
 import {
   type AudioGalleryClip,
   addAudioClipToProject,
@@ -429,9 +429,21 @@ export function SeparateOutput({
       name: string,
     ) => void;
   }) {
+  // Stem counts of the oldest run as of the last page request: a run the next page did not
+  // grow is missing a deleted stem, not cut by the page boundary, so it shows as it is.
+  const askedRef = useRef(new Map<string, number>());
+  const settled = useMemo(() => {
+    const all = groupSeparationClips(clips);
+    const tail = all[all.length - 1];
+    return new Set(
+      tail && askedRef.current.get(tail.groupId) === tail.stems.length
+        ? [tail.groupId]
+        : [],
+    );
+  }, [clips]);
   const groups = useMemo(
-    () => groupSeparationClips(clips, hasMore),
-    [clips, hasMore],
+    () => groupSeparationClips(clips, hasMore, settled),
+    [clips, hasMore, settled],
   );
   // The hidden oldest run waits on the next page; a short list never scrolls, so fetch it here.
   const tailHidden = useMemo(
@@ -440,7 +452,11 @@ export function SeparateOutput({
   );
   // biome-ignore lint/correctness/useExhaustiveDependencies: each loaded page re-checks, in case the run is still cut.
   useEffect(() => {
-    if (tailHidden) void loadMore();
+    if (!tailHidden) return;
+    const all = groupSeparationClips(clips);
+    const tail = all[all.length - 1];
+    if (tail) askedRef.current.set(tail.groupId, tail.stems.length);
+    void loadMore();
   }, [tailHidden, clips, loadMore]);
   const selected =
     groups.find((group) =>

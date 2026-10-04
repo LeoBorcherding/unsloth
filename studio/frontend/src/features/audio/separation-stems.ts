@@ -79,6 +79,7 @@ function settingsStems(clip: AudioGalleryClip): string[] | null {
 export function groupSeparationClips(
   clips: readonly AudioGalleryClip[],
   hasMore = false,
+  settled?: ReadonlySet<string>,
 ): SeparationGroup[] {
   const byId = new Map<string, AudioGalleryClip[]>();
   const order: string[] = [];
@@ -116,7 +117,10 @@ export function groupSeparationClips(
     };
   });
   // The oldest group may continue on the next page: hide it until it has loaded, so its row
-  // never acts on part of the run.
+  // never acts on part of the run. A group the next page added nothing to is settled: it is
+  // short because a stem was deleted, and hiding it would page through the whole gallery.
   const tail = groups[groups.length - 1];
-  return hasMore && tail && !tail.complete ? groups.slice(0, -1) : groups;
+  return hasMore && tail && !tail.complete && !settled?.has(tail.groupId)
+    ? groups.slice(0, -1)
+    : groups;
 }

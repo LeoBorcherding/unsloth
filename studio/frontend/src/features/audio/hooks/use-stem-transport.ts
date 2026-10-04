@@ -48,6 +48,11 @@ function waitForCanPlay(element: HTMLAudioElement): Promise<void> {
   });
 }
 
+/** The first stem that can still decode drives the clock and the drift check. */
+function leadOf(voices: readonly StemVoice[]): HTMLAudioElement | undefined {
+  return voices.find((voice) => !voice.element.error)?.element;
+}
+
 function setGain(voice: StemVoice, value: number, context: AudioContext) {
   voice.gain?.gain.setTargetAtTime(value, context.currentTime, 0.015);
 }
@@ -108,7 +113,6 @@ export function useStemTransport({
     voicesRef.current = voices;
     updatePosition(0);
     setMediaDuration(0);
-    const first = voices[0]?.element;
     const onMetadata = () => {
       const lengths = voices
         .map((voice) => voice.element.duration)
@@ -123,16 +127,21 @@ export function useStemTransport({
       updatePosition(0);
       for (const voice of voices) voice.element.currentTime = 0;
     };
-    for (const voice of voices)
+    // Whichever stem leads the clock ends the run; a stem that errored never leads.
+    const onLeadEnded = (event: Event) => {
+      if (event.currentTarget === leadOf(voices)) onEnded();
+    };
+    for (const voice of voices) {
       voice.element.addEventListener("loadedmetadata", onMetadata);
-    first?.addEventListener("ended", onEnded);
+      voice.element.addEventListener("ended", onLeadEnded);
+    }
     return () => {
       startToken.current += 1;
       playingRef.current = false;
       setPlaying(false);
-      first?.removeEventListener("ended", onEnded);
       for (const voice of voices) {
         voice.element.removeEventListener("loadedmetadata", onMetadata);
+        voice.element.removeEventListener("ended", onLeadEnded);
         voice.element.pause();
         voice.source?.disconnect();
         voice.gain?.disconnect();
@@ -193,7 +202,12 @@ export function useStemTransport({
         await context.resume();
         await Promise.all(voices.map((voice) => waitForCanPlay(voice.element)));
         if (token !== startToken.current) return;
-        await Promise.all(voices.map((voice) => voice.element.play()));
+        // One stem that fetched but will not decode (a truncated WAV) must not stop the rest.
+        const played = await Promise.allSettled(
+          voices.map((voice) => voice.element.play()),
+        );
+        if (token !== startToken.current) return;
+        if (played.every((result) => result.status === "rejected")) stopAll();
       } catch {
         if (token === startToken.current) stopAll();
       }
@@ -212,7 +226,7 @@ export function useStemTransport({
 
   const pause = useCallback(() => {
     if (!playingRef.current) return;
-    const current = voicesRef.current[0]?.element.currentTime;
+    const current = leadOf(voicesRef.current)?.currentTime;
     stopAll();
     if (current !== undefined && Number.isFinite(current))
       updatePosition(current);
@@ -242,13 +256,14 @@ export function useStemTransport({
     if (!playing) return;
     const timer = window.setInterval(() => {
       const voices = voicesRef.current;
-      const lead = voices[0]?.element;
+      const lead = leadOf(voices);
       if (!lead || lead.paused || lead.seeking) return;
       const now = lead.currentTime;
       updatePosition(now);
-      for (const voice of voices.slice(1)) {
+      for (const voice of voices) {
         const element = voice.element;
-        if (element.seeking || element.ended) continue;
+        if (element === lead || element.seeking || element.ended || element.error)
+          continue;
         if (Math.abs(element.currentTime - now) > DRIFT_TOLERANCE_S)
           element.currentTime = now;
       }
