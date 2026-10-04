@@ -79,11 +79,11 @@ test("navigation rows align while the profile footer ignores the scroll rail", a
     source,
     /const unrailedRowPadding = usesDesktopTitlebar \? "px-\[5px\]" : "px-1\.5"/,
   );
-  // New Chat is the only outside row that aligns with the scroller's rail.
-  assert.equal(source.match(/(?<!const )rowPadding[,}]/g)?.length, 1);
-  // Nav rows, pinned chats, custom sections, Projects, Recents, and training runs sit
-  // inside the scroller; the footer is the seventh unrailed use outside it.
-  assert.equal(source.match(/unrailedRowPadding[,}]/g)?.length, 7);
+  // New Chat and the nav rows sit above the scroller and align with its rail.
+  assert.equal(source.match(/(?<!const )rowPadding[,}]/g)?.length, 2);
+  // Pinned chats, custom sections, Projects, Recents, and training runs sit
+  // inside the scroller; the footer is the sixth unrailed use outside it.
+  assert.equal(source.match(/unrailedRowPadding[,}]/g)?.length, 6);
 
   const footer = source
     .split("<SidebarFooter")[1]
@@ -93,6 +93,14 @@ test("navigation rows align while the profile footer ignores the scroll rail", a
   assert.match(footerProps, /unrailedRowPadding/);
   assert.doesNotMatch(footerProps, /var\(--sidebar-rail/);
   assert.equal(source.match(/"pl-2 pr-\[5px\]"/g), null);
+});
+
+test("the nav rows stay put while the chat list scrolls", async () => {
+  const source = APP_SIDEBAR;
+  const nav = source.indexOf('data-tour="navbar"');
+  const scroller = source.indexOf("<SidebarContent");
+  assert.ok(nav > 0 && scroller > 0);
+  assert.ok(nav < scroller, "nav group must sit above the list scroller, not inside it");
 });
 
 test("the sidebar list measures its scroll rail", async () => {
@@ -172,4 +180,10 @@ test("Tauri chat Recents label takes the shared header inset, not a shift", asyn
   const source = APP_SIDEBAR;
   assert.match(source, /headerInset,\s*scrolled && "is-scrolled",\s*!chatOpen/);
   assert.doesNotMatch(source, /translate-x-\[2px\]/);
+});
+
+test("the pinned nav scrolls itself when the window is too short for it", async () => {
+  const group = APP_SIDEBAR.split('data-tour="navbar"')[1].split("<SidebarGroupContent")[0];
+  assert.match(group, /min-h-0 shrink overflow-y-auto/);
+  assert.doesNotMatch(group, /\bshrink-0\b/);
 });
