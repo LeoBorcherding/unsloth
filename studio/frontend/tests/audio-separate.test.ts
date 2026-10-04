@@ -299,7 +299,7 @@ test("host and page wiring for Separate", () => {
   // A stem sent to Transcribe mid-run would be dropped when the run stops.
   assert.match(
     host,
-    /target\.workflow === "transcribe"\) \{[\s\S]*?busyRef\.current === null[\s\S]*?fetchAudioBlob\(clip\.url\)[\s\S]*?if \(busyNow\(\)\) return;\s*if \(!transitionWorkflow\("transcribe"\)\)/,
+    /target\.workflow === "transcribe"\) \{[\s\S]*?busyRef\.current === null[\s\S]*?if \(busyNow\(\)\) return;\s*if \(!transitionWorkflow\("transcribe"\)\)/,
   );
   // A separation that a refresh missed falls back on the Separate page.
   const generation = readSrc("features/audio/hooks/use-separate-generation.ts");
@@ -339,6 +339,17 @@ test("a run the next page added nothing to is shown short, not hidden for the wh
   );
   const page = readSrc("features/audio/pages/separate-page.tsx");
   assert.match(page, /askedRef\.current\.get\(tail\.groupId\) === tail\.stems\.length/);
+});
+
+test("a stem sent to Transcribe goes in by clip id, as a sent clip does", () => {
+  // The merge of main dropped useTranscription's handleTranscribeFile; the stem path still called it.
+  const host = readSrc("features/audio/audio-page.tsx");
+  const send = host.slice(host.indexOf("const handleSendStem = useCallback("));
+  assert.doesNotMatch(send, /handleTranscribeFile/);
+  assert.match(
+    send,
+    /if \(!transitionWorkflow\("transcribe"\)\) return;[\s\S]{0,240}?useAudioTranscribeStore\.setState\(\{\s*source: \{\s*kind: "clip",\s*id: clip\.id,/,
+  );
 });
 
 test("a stem sent to Clone is adopted, so the old reference's transcript goes with it", () => {

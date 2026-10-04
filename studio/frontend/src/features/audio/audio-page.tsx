@@ -31,11 +31,7 @@ import { cn } from "@/lib/utils";
 import { useIsMobileShell } from "@/hooks/use-mobile";
 import { useShallow } from "zustand/react/shallow";
 
-import {
-  type AudioGalleryClip,
-  fetchAudioBlob,
-  fetchClipBlob,
-} from "./api";
+import { type AudioGalleryClip, fetchClipBlob } from "./api";
 import {
   type AudioBusy,
   type AudioGenerationPhase,
@@ -615,27 +611,22 @@ export function AudioPage({
           return true;
         };
         if (busyNow()) return;
-        let file: File;
-        try {
-          const blob = await fetchAudioBlob(clip.url);
-          file = new File([blob], `${name}.wav`, { type: "audio/wav" });
-        } catch {
-          toast.error("Could not load the stem.");
-          return;
-        }
-        // Checked again: a run started while the stem downloaded would be stopped the same way.
-        if (busyNow()) return;
         if (!transitionWorkflow("transcribe")) return;
-        if (!sttSelected) {
-          toast.info(
-            "Choose a speech-to-text model above, then send the stem again.",
-          );
-          return;
-        }
-        handleTranscribeFile(file);
+        // A stem is a gallery clip: it goes in by id like a sent clip, and the page's own
+        // blocker asks for a speech-to-text model if none is picked.
+        useAudioTranscribeStore.setState({
+          source: {
+            kind: "clip",
+            id: clip.id,
+            name,
+            durationS: clip.duration_s,
+            transcript: null,
+            language: null,
+          },
+        });
       }
     },
-    [transitionWorkflow, sttSelected, handleTranscribeFile],
+    [transitionWorkflow, busyRef],
   );
 
   const pageModelLoaded =
