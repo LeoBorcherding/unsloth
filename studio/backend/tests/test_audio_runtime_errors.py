@@ -72,19 +72,6 @@ def test_paths_with_spaces_schemes_and_home_prefixes_are_cut_to_their_tail(text,
     assert sanitize_runtime_detail(text) == expected
 
 
-def test_the_last_output_is_cut_at_a_line_before_it_is_sanitized():
-    from core.inference.audio_cpp_server import _last_output
-
-    # Cutting 280 characters from the end lands inside the path, after its leading "/",
-    # and "home/alice/..." without that head is not a path to the sanitizer.
-    filler = "x" * 250
-    log = f"{filler}\nfailed on /home/alice/.cache/huggingface/hub/models--x/blobs/0f3a here\n"
-    message = _last_output(log)
-    assert "alice" not in message and "huggingface" not in message
-    assert message.endswith("failed on 0f3a here")
-    assert _last_output("a\nb\nc") == "a b c"
-
-
 @pytest.mark.parametrize(
     "status, expected",
     [(500, 500), (None, 500), (502, 500), (422, 400), (404, 400), (401, 400), (503, 503)],
@@ -312,3 +299,27 @@ def test_a_runtime_that_dies_at_load_reports_its_last_line_sanitized(tmp_path):
     message = str(excinfo.value)
     assert message.endswith("audiocpp_server failed: unsupported model family hint: crisperwhisper")
     assert "/home/alice" not in message and "hf_AbCdEf" not in message and "\n" not in message
+
+
+def test_runtime_tail_redacts_before_the_cut():
+    from core.inference.audio_errors import sanitize_runtime_tail
+
+    secret = "/home/someone/private/models/voice.gguf"
+    text = "x" * 400 + " failed to open " + secret + " " + "y" * 250
+    out = sanitize_runtime_tail(text)
+    assert len(out) <= 280
+    assert "someone" not in out and "private" not in out
+    # Cutting the raw text first left the path without its leading "/".
+    raw = text[-280:]
+    assert "private" in raw
+
+
+def test_log_tail_drops_the_partial_first_line(tmp_path):
+    from core.inference.audio_cpp_server import AudioCppServer
+
+    server = AudioCppServer.__new__(AudioCppServer)
+    server._config_dir = tmp_path
+    (tmp_path / "server.log").write_bytes(b"/home/someone/secret/path.gguf\n" * 100 + b"last line")
+    tail = server.log_tail(limit = 50)
+    assert tail.endswith("last line")
+    assert tail.split("\n")[0] in ("/home/someone/secret/path.gguf", "last line")
