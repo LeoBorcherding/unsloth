@@ -428,3 +428,10 @@ def test_request_problem_per_style():
     )
     assert problem(firered, {"mode": "delivery", "pitch_steps": 3}, ORIGINAL, ORIGINAL, "x") is None
     assert problem(firered, {"mode": "words"}, EDITED, ORIGINAL, "x") == audio_edit.NO_CHANGE
+    # Every word deleted: the page holds Generate, and a raw request is refused the same way.
+    every = "<del>" + ORIGINAL + "</del>"
+    assert problem(dots, {"mode": "words", "markup": every}, " ", ORIGINAL, "x") == audio_edit.EMPTY_TARGET
+    assert problem(vevo, {"mode": "words"}, "", ORIGINAL, "x") == audio_edit.EMPTY_TARGET
+    assert problem(firered, {"mode": "words", "instructions": ["Delete 'a'."]}, "  ", ORIGINAL, "x") == (
+        audio_edit.EMPTY_TARGET
+    )

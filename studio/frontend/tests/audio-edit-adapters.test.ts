@@ -12,6 +12,7 @@ registerBundlerResolver();
 const {
   DOTS_ANGLE_BRACKETS,
   DOTS_BAD_CHARACTERS,
+  DOTS_MARKUP_TOO_LONG,
   EDIT_ADAPTERS,
   EDIT_TOO_LONG,
   FIRERED_INSERT_AT_END,
@@ -128,6 +129,22 @@ test("DotTTS refuses quotes and angle brackets the markup cannot carry", () => {
   );
   const quoted = S2.replace("human", '"robot"');
   assert.equal(EDIT_ADAPTERS.firered_audio.validateWords(S2, quoted), null);
+});
+
+test("DotTTS says so before its markup would outgrow the backend cap", () => {
+  // 400 words with every other one changed builds about 8.4k chars of markup, past the 8000 the
+  // backend accepts, so the page used to let Generate through to a raw 422.
+  const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+  const original = words.join(" ");
+  const edited = words.map((w, i) => (i % 2 ? `${w}x` : w)).join(" ");
+  assert.equal(
+    EDIT_ADAPTERS.dots_tts.validateWords(original, edited),
+    DOTS_MARKUP_TOO_LONG,
+  );
+  assert.equal(
+    EDIT_ADAPTERS.dots_tts.validateWords(original, original.replace("word1 ", "word1x ")),
+    null,
+  );
 });
 
 test("past the word cap every adapter says so", () => {
