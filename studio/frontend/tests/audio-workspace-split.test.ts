@@ -146,7 +146,7 @@ test("results show as a clip card with a waveform, never autoplaying", () => {
   // A clip landing while the user types the next prompt leaves the caret where it is.
   assert.match(
     card,
-    /active\.matches\("input, textarea, \[contenteditable='true'\]"\)[\s\S]*if \(!typing\) element\.querySelector<HTMLButtonElement>\("button"\)\?\.focus\(\)/,
+    /\(active\.matches\("input, textarea"\) \|\| active\.isContentEditable\)[\s\S]*if \(!typing\) element\.querySelector<HTMLButtonElement>\("button"\)\?\.focus\(\)/,
   );
 });
 

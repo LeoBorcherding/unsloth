@@ -90,7 +90,7 @@ export function ClipCard({
     const active = document.activeElement;
     const typing =
       active instanceof HTMLElement &&
-      active.matches("input, textarea, [contenteditable='true']");
+      (active.matches("input, textarea") || active.isContentEditable);
     if (!typing) element.querySelector<HTMLButtonElement>("button")?.focus();
     onFocused?.();
   };
