@@ -672,6 +672,37 @@ def test_a_launch_holds_the_read_grants_until_its_last_cleanup(
     assert released == (["hold", "build", "workload", "grants"] if held else ["build", "workload"])
 
 
+def test_a_launch_whose_tier_turns_on_while_it_builds_still_holds_the_grants(monkeypatch, tmp_path):
+    # Another Studio process turns the DACL tier on between hold_if_needed and the request's fresh read.
+    from core.inference import sandbox_windows_mxc
+
+    released = []
+    lease = type("Lease", (), {"release": lambda self: released.append("grants")})()
+    monkeypatch.setattr(sandbox_windows_mxc.mxc_policy, "dacl_fallback_enabled", lambda: False)
+    monkeypatch.setattr(mxc_read_grants, "enabled", lambda: True)
+    monkeypatch.setattr(mxc_read_grants, "hold", lambda: released.append("hold") or lease)
+
+    def build(_plan, **_kw):
+        released.append("build")
+        return {
+            "policyHash": "sha256:controlled",
+            "config": {"fallback": {"allowDaclMutation": True}},
+        }
+
+    monkeypatch.setattr(sandbox_windows_mxc.mxc_policy, "build_launch_request", build)
+    capability = os_sandbox.SandboxCapability(
+        backend = "mxc-processcontainer",
+        available = True,
+        reason = "qualified",
+        environment = "win32",
+        profile_id = mxc_runtime.PROFILE_ID,
+    )
+    prepared = sandbox_windows_mxc.prepare(_plan(tmp_path), capability)
+    prepared.cleanup_callbacks.append(lambda: released.append("workload"))
+    prepared.cleanup()
+    assert released == ["build", "hold", "workload", "grants"]
+
+
 def test_a_launch_that_fails_to_build_gives_its_grant_lease_back(monkeypatch, tmp_path):
     from core.inference import sandbox_windows_mxc
 

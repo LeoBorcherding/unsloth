@@ -253,6 +253,7 @@ def _probe(
                 if lease
                 else mxc_policy.build_launch_request(probe_plan)
             )
+            grant_lease = mxc_read_grants.hold_if_launch_may_use(request, grant_lease)
             proc = mxc_adapter.spawn(
                 request,
                 cancel_event = cancel_event,

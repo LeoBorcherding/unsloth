@@ -549,6 +549,19 @@ def hold_if_needed() -> WorkloadLease | None:
     return hold()
 
 
+def hold_if_launch_may_use(request: dict, lease: WorkloadLease | None) -> WorkloadLease | None:
+    """``lease``, or a new one when the built request still runs the DACL tier.
+
+    The request's fresh settings read can turn the tier on after ``hold_if_needed`` said no, and
+    wxc-exec then skips any root a persistent grant already covers.
+    """
+    if lease is not None or not request.get("config", {}).get("fallback", {}).get(
+        "allowDaclMutation"
+    ):
+        return lease
+    return hold()
+
+
 def refresh_saved_switches() -> None:
     """Drop this process's 1 s settings cache: another Studio process may have just turned a switch off."""
     try:

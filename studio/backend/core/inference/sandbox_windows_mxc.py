@@ -159,6 +159,7 @@ def prepare(plan, capability):
             if lease
             else mxc_policy.build_launch_request(plan)
         )
+        grant_lease = mxc_read_grants.hold_if_launch_may_use(request, grant_lease)
     except Exception as exc:
         if lease is not None:
             lease.release()

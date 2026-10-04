@@ -287,6 +287,10 @@ _HOST_PREP_SCRIPT_ERRORS = {
 }
 
 
+# A step measured up to 7 minutes on CI; a waiter must outlast both.
+HOST_PREP_LOCK_SECONDS = 30 * 60
+
+
 def _run_host_prep(executable: Path, step: str) -> int:
     arguments = [step, "--quiet"] if step == "prepare-null-device" else [step]
     system = _system_directory()
@@ -315,18 +319,21 @@ def prepare_host(install_dir: Path) -> tuple[str, ...]:
     if sys.platform != "win32":
         raise MxcInstallError("MXC host preparation is Windows-only")
     install_dir = install_dir.expanduser().resolve()
-    steps = mxc_runtime.probe_host_prep_steps(
-        package_root = install_dir, replay_journal = not _is_elevated()
-    )
-    if steps is None:
-        steps = mxc_runtime.HOST_PREP_STEPS
-    if not steps:
-        return ()
-    with mxc_runtime.acquire_host_prep(package_root = install_dir) as lease:
-        for step in steps:
-            code = _run_host_prep(lease.info.path, step)
-            if code != 0:
-                raise MxcInstallError(f"wxc-host-prep {step} failed with exit code {code}")
+    # Another Studio process on this install may be mid-run: wait, then re-probe, so one UAC prompt runs.
+    lock = install_dir.parent / f".{install_dir.name}.host-prep.lock"
+    with install_lock(lock, timeout = HOST_PREP_LOCK_SECONDS):
+        steps = mxc_runtime.probe_host_prep_steps(
+            package_root = install_dir, replay_journal = not _is_elevated()
+        )
+        if steps is None:
+            steps = mxc_runtime.HOST_PREP_STEPS
+        if not steps:
+            return ()
+        with mxc_runtime.acquire_host_prep(package_root = install_dir) as lease:
+            for step in steps:
+                code = _run_host_prep(lease.info.path, step)
+                if code != 0:
+                    raise MxcInstallError(f"wxc-host-prep {step} failed with exit code {code}")
     return tuple(steps)
 
 
