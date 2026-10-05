@@ -47,6 +47,17 @@ PROFILES = {
             {"version": "0.30.0", "torch": "2.13.0", "lock": "vllm-linux-cu130-torch213"},
             {"version": "0.26.0", "torch": "2.11.0", "lock": "vllm-linux-cu130"},
         ),
+        # AMD: vLLM publishes ROCm builds only on its own index, for cp312 on manylinux_2_39.
+        "rocm": {
+            "cuda": "rocm723",
+            "python": (3, 12),
+            "glibc": (2, 39),
+            "index": "https://wheels.vllm.ai/rocm/0.30.0/rocm723",
+            "omit": (),
+            "releases": (
+                {"version": "0.30.0", "torch": "2.12.0", "lock": "vllm-linux-rocm723"},
+            ),
+        },
     },
     "sglang": {
         "module": "sglang",
@@ -126,11 +137,18 @@ def engine_root() -> Path:
     return studio_root() / "engines"
 
 
+def _rocm() -> bool:
+    from utils.hardware import hardware
+    return hardware.IS_ROCM
+
+
 def _release(engine: str) -> dict:
     """The release built on Studio's own torch, so the engine can share it; otherwise the newest,
     which then gets an isolated environment of its own."""
     from . import wsl_host
 
+    if _rocm() and "rocm" in PROFILES[engine]:
+        return PROFILES[engine]["rocm"]["releases"][0]
     releases = PROFILES[engine]["releases"]
     if wsl_host.active():
         # The WSL guest has no Studio torch to share, so it always gets the newest.
@@ -145,7 +163,15 @@ def _release(engine: str) -> dict:
 def profile(engine: str) -> dict:
     if engine not in PROFILES:
         raise ValueError("Unknown inference engine")
-    return {**PROFILES[engine], **_release(engine)}
+    base = {**PROFILES[engine]}
+    if _rocm():
+        base.update(base.pop("rocm", {}))
+    base.pop("rocm", None)
+    return {**base, **_release(engine)}
+
+
+def python_version(engine: str) -> tuple[int, int]:
+    return profile(engine).get("python", PYTHON)
 
 
 def requirements(engine: str) -> Path:
@@ -360,7 +386,8 @@ def install_plan(engine: str) -> dict:
         )
 
     shared = (
-        sys.implementation.name == "cpython"
+        not _rocm()
+        and sys.implementation.name == "cpython"
         and sys.version_info[:2] == PYTHON
         and "torch" in studio
         and all(fits(name) for name in runtime - _TOOLCHAIN)
@@ -568,6 +595,8 @@ def support_reason(
 ) -> str | None:
     from . import wsl_host
 
+    if _rocm():
+        return _rocm_support_reason(engine)
     if wsl_host.active():
         # WSL itself is not a prerequisite: installing the engine sets it up.
         reason = wsl_host.support_reason()
@@ -592,6 +621,24 @@ def support_reason(
     except ValueError:
         pass
     return f"Requires an NVIDIA GPU with compute capability 8.0 or newer and driver {profile(engine)['driver']} or newer."
+
+
+def _rocm_support_reason(engine: str) -> str | None:
+    from . import wsl_host
+
+    if "rocm" not in PROFILES[engine]:
+        return f"{engine} does not support AMD GPUs yet."
+    # WSL has no /dev/kfd, so ROCm engines run on native Linux only.
+    if wsl_host.active() or platform.system() != "Linux" or platform.machine() != "x86_64":
+        return "On AMD GPUs, managed engines require native Linux x86_64."
+    glibc = profile(engine)["glibc"]
+    if tuple(int(x) for x in (platform.libc_ver()[1] or "0.0").split(".")[:2]) < glibc:
+        return f"{engine} requires glibc {glibc[0]}.{glibc[1]} or newer."
+    from utils.hardware.amd import amd_kfd_gpu_node_count, amd_node_permission_hint
+
+    if not amd_kfd_gpu_node_count():
+        return amd_node_permission_hint() or "No AMD GPU is visible through /dev/kfd."
+    return None
 
 
 def _atomic_json(path: Path, data: dict) -> None:
@@ -992,8 +1039,9 @@ def _install(
                 if plan["shared"]
                 else "Preparing an isolated Python environment",
             )
+            version = python_version(engine)
             interpreter = (
-                sys.executable if sys.version_info[:2] == PYTHON else "{}.{}".format(*PYTHON)
+                sys.executable if sys.version_info[:2] == version else "{}.{}".format(*version)
             )
             _run(engine, [uv, "venv", "--python", interpreter, str(destination)], cancel)
             python = str(destination / "bin" / "python")
@@ -1015,8 +1063,19 @@ def _install(
                     "--require-hashes",
                     "--only-binary",
                     ":all:",
-                    "--index-url",
-                    "https://pypi.org/simple",
+                    *(
+                        [
+                            "--index-url",
+                            profile(engine)["index"],
+                            "--extra-index-url",
+                            "https://pypi.org/simple",
+                            # The lock was compiled this way: torch and vLLM from the ROCm index, the rest from PyPI.
+                            "--index-strategy",
+                            "unsafe-best-match",
+                        ]
+                        if "index" in profile(engine)
+                        else ["--index-url", "https://pypi.org/simple"]
+                    ),
                     str(packages),
                 ],
                 cancel,
@@ -1028,7 +1087,8 @@ def _install(
                     _STUDIO_BASE_SOURCE.format(paths = _studio_site()), encoding = "utf-8"
                 )
                 (site / _BASE_PTH).write_text(f"import {_BASE_MODULE}\n", encoding = "utf-8")
-            link_cuda_home(destination, plan["shared"])
+            if not _rocm():
+                link_cuda_home(destination, plan["shared"])
             _update(engine, phase = "checking", message = "Checking the installed engine")
             _run(
                 engine,
@@ -1051,7 +1111,9 @@ def _install(
                     python,
                     "-I",
                     "-c",
-                    f"import {profile(engine)['module']}; import torch; import bitsandbytes; import torchao; assert torch.__version__.split('+')[0] == {torch_version!r}; assert torch.version.cuda == '13.0'",
+                    f"import {profile(engine)['module']}; import torch; assert torch.__version__.split('+')[0] == {torch_version.split('+')[0]!r}; assert torch.version.hip"
+                    if _rocm()
+                    else f"import {profile(engine)['module']}; import torch; import bitsandbytes; import torchao; assert torch.__version__.split('+')[0] == {torch_version!r}; assert torch.version.cuda == '13.0'",
                 ],
                 cancel,
             )

@@ -22,6 +22,12 @@ byte totals; Studio does not invent a percentage, transfer speed or ETA.
 This experimental profile requires Linux x86_64, glibc 2.34 or newer, an NVIDIA
 GPU with compute capability 8.0 or newer, and driver 580 or newer. It uses
 the model's standard chat template and each engine's native model loaders.
+
+On AMD GPUs, vLLM (not SGLang) installs from vLLM's ROCm 7.2.3 wheels on native
+Linux x86_64 with glibc 2.39 or newer and a GPU visible through `/dev/kfd`. It is
+always a separate Python 3.12 environment, never shared with Studio's PyTorch, and
+WSL is refused because it has no `/dev/kfd`. The ROCm lock has no TorchAO or
+bitsandbytes, so only Model default, BF16 and FP16 precision are offered.
 Select one or more GPUs in the model settings. With multiple GPUs, choose
 **Multi-GPU mode**:
 

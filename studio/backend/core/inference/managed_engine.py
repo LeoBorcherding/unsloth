@@ -85,9 +85,16 @@ def validate_load(engine: str, request) -> list[int]:
     if getattr(request, "chat_template_override", None):
         raise ValueError("Optional engines do not yet support template overrides.")
     from .engine_adapters import _release_at_least
+    from utils.hardware import hardware
 
     # Refused here, before the resident model is unloaded, not when the engine command is built.
     precision = getattr(request, "engine_precision", "auto")
+    if hardware.IS_ROCM and precision not in ("auto", "bf16", "fp16"):
+        # The ROCm lock has no TorchAO or bitsandbytes, which every load-time conversion uses.
+        raise ValueError(
+            f"{engine} on AMD GPUs cannot convert weights to {precision.upper()} when loading. "
+            "Choose Model default, BF16 or FP16."
+        )
     if (
         engine == "sglang"
         and precision in ("int8", "int4")
@@ -186,7 +193,9 @@ def validate_model(
         or (engine == "vllm" and precision == "int4" and parallelism != "pipeline")
         else "auto",
     }
-    if precision == "fp8":
+    from utils.hardware import hardware
+
+    if precision == "fp8" and not hardware.IS_ROCM:
         # Eager TorchAO FP8 on Ampere: Triton cannot compile its casts, SGLang online FP8 is invalid.
         from utils.hardware.nvidia import _nvidia_smi_executable
         result = subprocess.run(
@@ -361,7 +370,15 @@ class ManagedEngine:
                             child_env.get("PATH", os.defpath),
                         ]
                     )
-                    child_env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in (gpu_ids or [0]))
+                    from utils.hardware import hardware
+
+                    visible = ",".join(str(i) for i in (gpu_ids or [0]))
+                    if hardware.IS_ROCM:
+                        # ROCm narrows by HIP ids; a leftover CUDA mask would be applied on top.
+                        child_env.pop("CUDA_VISIBLE_DEVICES", None)
+                        child_env["HIP_VISIBLE_DEVICES"] = visible
+                    else:
+                        child_env["CUDA_VISIBLE_DEVICES"] = visible
                     child_env["PYTHONNOUSERSITE"] = "1"
                     from .engine_install import engine_root
 

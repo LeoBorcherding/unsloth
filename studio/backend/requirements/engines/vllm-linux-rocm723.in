@@ -1,0 +1,4 @@
+# Optional Linux x86_64, Python 3.12, ROCm 7.2.3 serving environment for AMD GPUs. vLLM publishes
+# its ROCm builds only at wheels.vllm.ai, for cp312 on manylinux_2_39, each with the torch it was built on.
+vllm==0.30.0+rocm723
+torch==2.12.0+git6bbd260

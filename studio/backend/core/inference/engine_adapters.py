@@ -294,27 +294,15 @@ def gpu_memory_fraction(
     engine does not budget. An unreadable
     device is an actionable failure, never permission to fall back to a larger engine default.
     """
+    from utils.hardware import hardware
     from utils.hardware.nvidia import _nvidia_smi_executable
     from utils.vram_budget_settings import get_vram_budget_fraction
 
     try:
-        result = subprocess.run(
-            [
-                _nvidia_smi_executable(),
-                "--id",
-                ",".join(str(gpu_id) for gpu_id in gpu_ids),
-                "--query-gpu=memory.total,memory.free",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output = True,
-            **windows_hidden_subprocess_kwargs(),
-            text = True,
-            encoding = "utf-8",
-            errors = "replace",
-            timeout = 60,
-            check = True,
-        )
-        rows = result.stdout.strip().splitlines()
+        if hardware.IS_ROCM:
+            rows = _amd_memory_rows(gpu_ids)
+        else:
+            rows = _nvidia_memory_rows(gpu_ids, _nvidia_smi_executable())
         if len(rows) != len(gpu_ids):
             raise ValueError("Could not measure every selected GPU")
         fraction = get_vram_budget_fraction()
@@ -332,3 +320,37 @@ def gpu_memory_fraction(
         raise RuntimeError(
             "Could not reserve memory on every selected GPU. Free GPU memory or select fewer GPUs and retry."
         ) from exc
+
+
+def _nvidia_memory_rows(gpu_ids: list[int], smi: str) -> list[str]:
+    result = subprocess.run(
+        [
+            smi,
+            "--id",
+            ",".join(str(gpu_id) for gpu_id in gpu_ids),
+            "--query-gpu=memory.total,memory.free",
+            "--format=csv,noheader,nounits",
+        ],
+        capture_output = True,
+        **windows_hidden_subprocess_kwargs(),
+        text = True,
+        encoding = "utf-8",
+        errors = "replace",
+        timeout = 60,
+        check = True,
+    )
+    return result.stdout.strip().splitlines()
+
+
+def _amd_memory_rows(gpu_ids: list[int]) -> list[str]:
+    """Same "total, free" rows from amd-smi. Its gpu ids are not HIP's, which gpu_ids are."""
+    from utils.hardware.amd import get_gpu_vram_report, get_hip_id_by_gpu_index
+
+    vram, enumerated = get_gpu_vram_report()
+    hip = get_hip_id_by_gpu_index()
+    if hip is None and len(enumerated) == 1:
+        hip = {enumerated[0]: 0}
+    if hip is None:
+        return []
+    by_hip = {hip[idx]: vram[idx] for idx in vram if idx in hip}
+    return [f"{by_hip[g][1]}, {by_hip[g][0]}" for g in gpu_ids if g in by_hip]
