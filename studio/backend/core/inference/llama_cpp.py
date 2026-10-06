@@ -8737,33 +8737,12 @@ class LlamaCppBackend:
         rather than proving a regex cannot match. ``-ot`` and ``-otd`` are separate
         tables upstream.
         """
-        argv = [str(a) for a in extra_args or ()]
-        values: list[str] = []
-        flags = (
-            ("-otd", "--override-tensor-draft", "--spec-draft-override-tensor")
-            if draft_model
-            else ("-ot", "--override-tensor")
+        return any(
+            buft.upper() != "CPU"
+            for _pattern, buft in LlamaCppBackend._tensor_override_mappings(
+                extra_args, env, draft_model = draft_model
+            )
         )
-        for i, tok in enumerate(argv):
-            base, _, inline = tok.partition("=")
-            if _flag_name(base) in flags:
-                value = inline if inline else (argv[i + 1] if i + 1 < len(argv) else "")
-                if value:
-                    values.append(value)
-        inherited = (
-            None
-            if draft_model
-            else (os.environ if env is None else env).get("LLAMA_ARG_OVERRIDE_TENSOR")
-        )
-        if inherited:
-            values.append(str(inherited))
-        for spec in values:
-            for mapping in spec.split(","):
-                pattern, sep, buft = mapping.rpartition("=")
-                if not sep or not pattern or buft.strip().upper() == "CPU":
-                    continue
-                return True
-        return False
 
     def _host_pinned_floor_bytes(
         self,
