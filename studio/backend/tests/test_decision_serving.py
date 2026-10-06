@@ -108,7 +108,11 @@ def test_hidden_and_staged_folders_are_not_models(home, client):
 @pytest.mark.parametrize("folder", ["ft\x001", "loop"])
 def test_unusable_fine_tune_names_are_unknown_models(home, client, folder):
     # outputs/loop -> loop
-    os.symlink("loop", home / "loop")
+    try:
+        os.symlink("loop", home / "loop")
+    except OSError as exc:  # Windows without Developer Mode has no symlink privilege
+        if folder == "loop":
+            pytest.skip(f"cannot create a symlink here: {exc}")
     name = catalog.FINE_TUNE_PREFIX + folder
     assert _put(client, enabled = True).status_code == 200
     assert _post(client, name).status_code == 400
