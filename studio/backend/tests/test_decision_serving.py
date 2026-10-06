@@ -362,6 +362,24 @@ def test_a_clef_fine_tune_serves_through_its_worker(home, client, clef):
     assert clef.agents[1].closed
 
 
+def test_a_truncated_clef_request_names_clefs_context_window(home, client, clef, monkeypatch):
+    from core.systemone import clef_runtime
+
+    served = _clef_fine_tune(home, "clef_long_1")
+    assert _put(client, enabled = True, model = served).status_code == 200
+    real = clef_runtime.ClefAgent
+
+    class Long(real):
+        def decide(self, state_, questions):
+            return {**super().decide(state_, questions), "truncated": True}
+
+    monkeypatch.setattr(clef_runtime, "ClefAgent", Long)
+    response = _post(client)
+    assert response.status_code == 422
+    message = response.json()["detail"]["message"]
+    assert "Clef context window" in message and "Laya" not in message
+
+
 def test_a_clef_load_that_training_overtakes_frees_the_gpu(home, clef, monkeypatch):
     from core.systemone import clef_runtime
 

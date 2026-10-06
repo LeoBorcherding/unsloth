@@ -200,10 +200,11 @@ async def _decide(
     except laya_runtime.Unavailable as exc:
         raise _error(exc.status, exc.error_type, exc.message, exc.retry_after) from None
     if result.pop("truncated"):
+        family = "Clef" if checkpoint.layout == "clef" else "Laya"
         raise _error(
             422,
             "invalid_request_error",
-            "State and questions exceed the Laya context window. "
+            f"State and questions exceed the {family} context window. "
             "Shorten the state or use fewer/shorter criteria.",
         )
     return result
