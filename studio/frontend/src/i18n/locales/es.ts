@@ -3375,6 +3375,8 @@ export const es = {
       stopTitle: "Detener entrenamiento",
       stopDescription:
         "Elige cómo quieres detener la ejecución de entrenamiento actual. «Detener y guardar» crea un punto de control desde el que podrás reanudarla más adelante; si la detienes sin guardar, no podrás reanudarla.",
+      stopDescriptionNoResume:
+        "Elige cómo quieres detener la ejecución de entrenamiento actual. «Detener y guardar» conserva el modelo entrenado hasta ahora; una ejecución de decisiones no se puede reanudar después.",
       stopAction: "Detener",
       stopping: "Deteniendo...",
       stopAndSave: "Detener y guardar",

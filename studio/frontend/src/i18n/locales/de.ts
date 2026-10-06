@@ -3381,6 +3381,8 @@ export const de = {
       stopTitle: "Training stoppen",
       stopDescription:
         "Wählen Sie, wie Sie den aktuellen Trainingslauf stoppen möchten. „Stoppen und speichern“ schreibt einen Checkpoint, von dem aus Sie später fortsetzen können; ein einfach gestopptes Training kann nicht fortgesetzt werden.",
+      stopDescriptionNoResume:
+        "Wählen Sie, wie Sie den aktuellen Trainingslauf stoppen möchten. „Stoppen und speichern“ behält das bisher trainierte Modell; ein Entscheidungslauf kann danach nicht fortgesetzt werden.",
       stopAction: "Stoppen",
       stopping: "Wird gestoppt...",
       stopAndSave: "Stoppen und speichern",

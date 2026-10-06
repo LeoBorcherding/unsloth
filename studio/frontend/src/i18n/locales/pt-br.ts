@@ -3345,6 +3345,8 @@ export const ptBR = {
       stopTitle: "Interromper Treinamento",
       stopDescription:
         "Escolha como interromper a execução de treino atual. Interromper e Salvar cria um checkpoint que poderá ser retomado mais tarde; se interromper sem salvar, não será possível retomar o treino.",
+      stopDescriptionNoResume:
+        "Escolha como interromper a execução de treino atual. Interromper e Salvar mantém o modelo treinado até agora; uma execução de decisões não pode ser retomada depois.",
       stopAction: "Interromper",
       stopping: "Interrompendo...",
       stopAndSave: "Interromper e Salvar",

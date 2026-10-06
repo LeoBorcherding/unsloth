@@ -3382,6 +3382,8 @@ export const it = {
       stopTitle: "Ferma l'addestramento",
       stopDescription:
         "Scegli come fermare il run di addestramento in corso. «Ferma e salva» crea un checkpoint da cui potrai riprendere più tardi; se lo fermi senza salvare non potrai riprendere l'addestramento.",
+      stopDescriptionNoResume:
+        "Scegli come fermare il run di addestramento in corso. «Ferma e salva» conserva il modello addestrato finora; un run decisionale non può essere ripreso in seguito.",
       stopAction: "Ferma",
       stopping: "Arresto in corso...",
       stopAndSave: "Ferma e salva",

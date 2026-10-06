@@ -3391,6 +3391,8 @@ export const fr = {
       stopTitle: "Arrêter l'entraînement",
       stopDescription:
         "Choisissez comment arrêter l’entraînement en cours. « Arrêter et enregistrer » crée un point de contrôle qui permettra de le reprendre plus tard ; un entraînement simplement arrêté ne peut pas être repris.",
+      stopDescriptionNoResume:
+        "Choisissez comment arrêter l’entraînement en cours. « Arrêter et enregistrer » conserve le modèle entraîné jusqu’ici ; un entraînement de décision ne peut pas être repris ensuite.",
       stopAction: "Arrêter",
       stopping: "Arrêt...",
       stopAndSave: "Arrêter et enregistrer",

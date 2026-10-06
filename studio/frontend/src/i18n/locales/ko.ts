@@ -3312,6 +3312,8 @@ export const ko = {
       stopTitle: "학습 중지",
       stopDescription:
         "현재 학습 실행을 중지하는 방법을 선택하세요. '중지 후 저장'은 나중에 재개할 수 있는 체크포인트를 저장하지만, '학습 취소'는 재개할 수 없습니다.",
+      stopDescriptionNoResume:
+        "현재 학습 실행을 중지하는 방법을 선택하세요. '중지 후 저장'은 지금까지 학습된 모델을 유지하지만, 판단 모델 실행은 이후에 재개할 수 없습니다.",
       stopAction: "중지",
       stopping: "중지 중...",
       stopAndSave: "중지 후 저장",

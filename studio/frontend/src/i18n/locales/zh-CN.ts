@@ -3230,6 +3230,8 @@ export const zhCN = {
       stopTitle: "停止训练",
       stopDescription:
         "选择如何停止当前训练运行。“停止并保存”会写入检查点，之后可从该处恢复；不保存直接停止则无法恢复。",
+      stopDescriptionNoResume:
+        "选择如何停止当前训练运行。“停止并保存”会保留目前已训练的模型；决策模型的运行之后无法恢复。",
       stopAction: "停止",
       stopping: "停止中...",
       stopAndSave: "停止并保存",
