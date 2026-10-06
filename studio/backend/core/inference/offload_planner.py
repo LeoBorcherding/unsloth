@@ -1988,8 +1988,15 @@ def _plan_at(
         taken = taken + attn
 
     if opts.allow_kv_host_fallback and not opts.kv_on_host:
-        cache = cache_bytes(layout, n_ctx, kv_quantised = quantised, kv_bytes_floor = kv_bytes_floor)
-        if freed + cache + layout.recurrent_bytes >= deficit:
+        # Priced exactly as ``needed`` charged it, or the rung credits bytes the cache never held.
+        cache = cache_bytes(
+            layout,
+            n_ctx,
+            kv_quantised = quantised,
+            kv_bytes_floor = kv_bytes_floor,
+            trust_floor = opts.kv_bytes_at is not None,
+        )
+        if freed + cache + layout.recurrent_bytes * knobs.n_parallel >= deficit:
             return attempt(
                 taken,
                 opts.allow_lm_head_spill and bool(layout.lm_head_bytes),
@@ -2428,7 +2435,13 @@ def _finish(
             spill_lm_head,
             opts.host,
             kv_host_bytes = (
-                cache_bytes(layout, n_ctx, kv_quantised = quantised, kv_bytes_floor = kv_bytes_floor)
+                cache_bytes(
+                    layout,
+                    n_ctx,
+                    kv_quantised = quantised,
+                    kv_bytes_floor = kv_bytes_floor,
+                    trust_floor = opts.kv_bytes_at is not None,
+                )
                 if kv_on_host_rung
                 else 0
             ),

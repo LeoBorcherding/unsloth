@@ -17,6 +17,7 @@ so the ladder is complete and a benchmark can reach the bottom of it.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 import pytest
@@ -276,6 +277,29 @@ def test_the_cache_is_the_last_rung_of_all_and_emits_nkvo():
     if plan.kv_spilled_to_host:
         assert "--no-kv-offload" in plan_to_args(plan)
         assert any("attn_" in p for p in plan.ot_patterns), "attention goes first"
+
+
+def test_the_cache_rung_credits_the_measured_cache_not_the_product():
+    """With ``kv_bytes_at`` set, moving the cache frees the measured bytes. Crediting the larger
+    product let a plan through whose resident lm_head alone was over the card."""
+    layout = dataclasses.replace(
+        graded_moe(n_blocks = 8, attn = 0.4), kv_bytes_per_token_f16 = 4 * GIB / 8192
+    )
+    plan = plan_placement(
+        layout,
+        [int(1.7 * GIB)],
+        94 * GIB,
+        8192,
+        opts = opts(
+            allow_attention_spill = True,
+            allow_kv_host_fallback = True,
+            allow_lm_head_spill = False,
+            require_cost_win = False,
+            kv_bytes_at = lambda n_ctx, slots: 1 * GIB,
+        ),
+    )
+    assert not plan.kv_spilled_to_host
+    assert plan.insufficient
 
 
 def test_load_mode_is_none_when_the_host_side_fits_and_mmap_when_it_does_not():
