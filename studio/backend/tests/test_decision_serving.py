@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import sys
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -319,8 +320,12 @@ def clef(home, monkeypatch):
     class Agent:
         device = "cuda"
 
-        def __init__(self, folder):
-            self.folder, self.closed = folder, False
+        def __init__(
+            self,
+            folder,
+            cancelled = None,
+        ):
+            self.folder, self.closed, self.cancelled = folder, False, cancelled
             state.agents.append(self)
 
         def decide(self, state_, questions):
@@ -388,8 +393,8 @@ def test_a_clef_load_that_training_overtakes_frees_the_gpu(home, clef, monkeypat
     checkpoint = catalog.resolve(_clef_fine_tune(home, "clef_overtaken_1"))
     real = clef_runtime.ClefAgent
 
-    def overtaken(folder):
-        agent = real(folder)
+    def overtaken(folder, cancelled = None):
+        agent = real(folder, cancelled)
         clef.training = True
         return agent
 
@@ -397,6 +402,8 @@ def test_a_clef_load_that_training_overtakes_frees_the_gpu(home, clef, monkeypat
     laya_runtime._load(checkpoint)
     assert clef.agents[0].closed
     assert laya_runtime._agent is None and laya_runtime._device_name is None
+    # The loader also stops the worker mid-load, not only once it reports ready.
+    assert clef.agents[0].cancelled is laya_runtime._training_active
 
 
 def test_a_clef_worker_that_never_reports_ready_is_stopped(monkeypatch):
@@ -412,15 +419,10 @@ def test_a_clef_worker_that_never_reports_ready_is_stopped(monkeypatch):
 
         def start(self):
             # A live child holds its own end of the pipe, so the parent sees silence, not EOF.
-            # On Windows fileno() is a pipe HANDLE, which os.dup cannot take.
-            if os.name == "nt":
-                import _winapi
-                me = _winapi.GetCurrentProcess()
-                self.handle = _winapi.DuplicateHandle(
-                    me, self.child.fileno(), me, 0, False, _winapi.DUPLICATE_SAME_ACCESS
-                )
-            else:
-                self.fd = os.dup(self.child.fileno())
+            # Keeping the parent's close from releasing it works on Windows too, where a pipe
+            # end is a handle os.dup cannot copy.
+            held.append(self.child)
+            self.child.close = lambda: None
 
         def join(self, timeout = None):
             calls.append("join")
@@ -431,10 +433,58 @@ def test_a_clef_worker_that_never_reports_ready_is_stopped(monkeypatch):
         def kill(self):
             calls.append("kill")
 
+    held = []
     monkeypatch.setattr(clef_runtime._CTX, "Process", Process)
     monkeypatch.setattr(clef_runtime, "LOAD_TIMEOUT_S", 0.01)
-    with pytest.raises(clef_runtime.ClefWorkerError, match = "did not answer"):
-        clef_runtime.ClefAgent("unused")
+    try:
+        with pytest.raises(clef_runtime.ClefWorkerError, match = "did not answer"):
+            clef_runtime.ClefAgent("unused")
+    finally:
+        for child in held:
+            del child.close
+            child.close()
+    assert "kill" in calls
+
+
+def test_a_training_run_stops_a_clef_worker_still_loading(monkeypatch):
+    from core.systemone import clef_runtime
+
+    calls = []
+
+    class Process:
+        exitcode = None
+
+        def __init__(self, **kwargs):
+            self.child = kwargs["args"][0]
+
+        def start(self):
+            # A live child holds its own end of the pipe, so the parent sees silence, not EOF.
+            # Keeping the parent's close from releasing it works on Windows too, where a pipe
+            # end is a handle os.dup cannot copy.
+            held.append(self.child)
+            self.child.close = lambda: None
+
+        def join(self, timeout = None):
+            calls.append("join")
+
+        def is_alive(self):
+            return "kill" not in calls
+
+        def kill(self):
+            calls.append("kill")
+
+    held = []
+    monkeypatch.setattr(clef_runtime._CTX, "Process", Process)
+    monkeypatch.setattr(clef_runtime, "LOAD_TIMEOUT_S", 600)
+    try:
+        started = time.monotonic()
+        with pytest.raises(clef_runtime.ClefWorkerError, match = "training run"):
+            clef_runtime.ClefAgent("unused", cancelled = lambda: True)
+        assert time.monotonic() - started < 30
+    finally:
+        for child in held:
+            del child.close
+            child.close()
     assert "kill" in calls
 
 
