@@ -152,7 +152,6 @@ class ModelLayout:
     recurrent_bytes: int = 0
     n_ctx_train: int = 0
     is_moe: bool = False
-    # offloaded experts move only expert_used/expert_count per token, a dense FFN all of it
     # Sparse-MoE routing: experts read per token is expert_used/expert_count. Offloaded experts move only that fraction
     # per token, a dense FFN all of it.
     n_expert: int = 0
@@ -170,7 +169,6 @@ class ModelLayout:
     # from n_layer_all (llama-model.cpp:1449) puts those blocks on a GPU FIRST. llama.cpp's own fitter widens its
     # offloadable-layer count the same way (common/fit.cpp:139-142). Zero when nothing was dropped.
     excluded_block_bytes: int = 0
-    # sliding-window attention interleaves window-sized and full-context caches per layer
     # Sliding-window attention: some layers keep a window-sized cache, some the full context
     # (llama-kv-cache-iswa.cpp:69-104 builds two caches and filters each by hparams.is_swa(il)), interleaved per layer.
     # Every layer is still an attention layer, so n_attention_layers does NOT reveal this. A
@@ -590,7 +588,6 @@ def _layout_from_readers(readers) -> ModelLayout:
         # ``token_embd`` ONLY, never the per-layer embeddings.
         other_resident += token_embd
 
-    # trailing nextn/MTP blocks are not loaded unless a draft is engaged
     # Trailing nextn/MTP blocks are NOT part of the target model and are not loaded unless a draft is engaged, so an -ot
     # naming them moves nothing: measured, spilling only blk.<nextn> leaves the host buffer at exactly token_embd and
     # the device buffer unchanged. Counting them spillable would credit bytes that can never be freed. Unsloth prices
