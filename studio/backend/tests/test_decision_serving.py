@@ -396,7 +396,6 @@ def test_a_clef_worker_that_never_reports_ready_is_stopped(monkeypatch):
             # On Windows fileno() is a pipe HANDLE, which os.dup cannot take.
             if os.name == "nt":
                 import _winapi
-
                 me = _winapi.GetCurrentProcess()
                 self.handle = _winapi.DuplicateHandle(
                     me, self.child.fileno(), me, 0, False, _winapi.DUPLICATE_SAME_ACCESS
