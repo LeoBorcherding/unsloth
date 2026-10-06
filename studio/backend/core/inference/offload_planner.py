@@ -2045,9 +2045,10 @@ def _cost_gate(
     host_ram_bytes: Optional[int] = None,
     knobs: Optional[_Knobs] = None,
     kv_layer_weights: Sequence[int] = (),
+    kv_host_bytes: int = 0,
 ) -> tuple[Optional[Plan], float, float]:
     """An abstaining Plan when ``--fit on`` is as good as this spill, else None."""
-    plan = _spill_placement(layout, units, spill_lm_head)
+    plan = _spill_placement(layout, units, spill_lm_head, kv_host_bytes)
     if not plan.host_groups:
         return None, 0.0, 0.0
 
@@ -2318,6 +2319,19 @@ def _finish(
     gave_up_a_knob = knobs is not None and (
         knobs.mmproj_to_host or knobs.draft_dropped or knobs.n_parallel < max(1, opts.n_parallel)
     )
+    # The cache the bottom rung moved, priced in the gate and the penalty alike; a -nkvo the caller
+    # typed is on the host in the fallback too, so it is no cost of this plan.
+    rung_kv_host_bytes = (
+        cache_bytes(
+            layout,
+            n_ctx,
+            kv_quantised = quantised,
+            kv_bytes_floor = kv_bytes_floor,
+            trust_floor = opts.kv_bytes_at is not None,
+        )
+        if kv_on_host_rung
+        else 0
+    )
     plan_ms = fit_ms = 0.0
     if opts.require_cost_win and budget is not None and (units or spill_lm_head):
         declined, plan_ms, fit_ms = _cost_gate(
@@ -2333,6 +2347,7 @@ def _finish(
             host_ram_bytes = host_ram_bytes,
             knobs = knobs,
             kv_layer_weights = kv_layer_weights,
+            kv_host_bytes = rung_kv_host_bytes,
         )
         if declined is not None:
             return declined
@@ -2434,17 +2449,7 @@ def _finish(
             units,
             spill_lm_head,
             opts.host,
-            kv_host_bytes = (
-                cache_bytes(
-                    layout,
-                    n_ctx,
-                    kv_quantised = quantised,
-                    kv_bytes_floor = kv_bytes_floor,
-                    trust_floor = opts.kv_bytes_at is not None,
-                )
-                if kv_on_host_rung
-                else 0
-            ),
+            kv_host_bytes = rung_kv_host_bytes,
         ),
         predicted_request_ms = plan_ms,
         predicted_fit_request_ms = fit_ms,

@@ -302,6 +302,28 @@ def test_the_cache_rung_credits_the_measured_cache_not_the_product():
     assert plan.insufficient
 
 
+def test_the_cost_gate_prices_the_cache_the_bottom_rung_moves():
+    """Ranked on the spilled weights alone, a ``--no-kv-offload`` plan looked several times faster
+    than the fitter it is far slower than."""
+    layout = dataclasses.replace(
+        graded_moe(n_blocks = 8, attn = 0.4), kv_bytes_per_token_f16 = 4 * GIB / 8192
+    )
+    plan = plan_placement(
+        layout,
+        [int(2.5 * GIB)],
+        94 * GIB,
+        8192,
+        opts = opts(
+            allow_attention_spill = True,
+            allow_kv_host_fallback = True,
+            require_cost_win = True,
+        ),
+    )
+    assert not plan.kv_spilled_to_host
+    assert plan.declined_by_gate
+    assert plan.predicted_request_ms > plan.predicted_fit_request_ms
+
+
 def test_load_mode_is_none_when_the_host_side_fits_and_mmap_when_it_does_not():
     """``--load-mode none`` beats mmap on host-resident weights, but only while those bytes
     really are in RAM; past that, mmap is the only thing making an over-commit pageable."""
