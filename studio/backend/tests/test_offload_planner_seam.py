@@ -652,6 +652,18 @@ def test_a_multi_device_plan_emits_the_split_it_was_budgeted_on():
     assert re.fullmatch(r"\d+(,\d+)+", flags[-1])
 
 
+def test_a_cache_rung_plan_emits_no_kv_offload_before_the_split():
+    """The rung was priced with the cache off the cards; launched without the flag it is not."""
+    from dataclasses import replace
+
+    flags = LlamaCppBackend._spill_plan_flags_for(
+        replace(_multi_device_plan(), kv_spilled_to_host = True)
+    )
+    assert "--no-kv-offload" in flags
+    # The split stays last, where the revocation's retry expects it.
+    assert flags[-2:] == ["--tensor-split", "46,19"]
+
+
 def test_one_device_and_a_user_ratio_both_emit_no_split():
     """Two ways the plan must keep its hands off the split.
 

@@ -324,6 +324,27 @@ def test_the_cost_gate_prices_the_cache_the_bottom_rung_moves():
     assert plan.predicted_request_ms > plan.predicted_fit_request_ms
 
 
+def test_the_cache_rung_checks_each_card_without_the_cache_it_moved():
+    """Device by device, the rung was charged the very cache --no-kv-offload takes off the cards,
+    so it abstained on every multi-GPU load it exists for."""
+    layout = dataclasses.replace(
+        graded_moe(n_blocks = 8, attn = 0.4), kv_bytes_per_token_f16 = 4 * GIB / 8192
+    )
+    plan = plan_placement(
+        layout,
+        [2 * GIB, 2 * GIB],
+        94 * GIB,
+        8192,
+        opts = opts(
+            allow_attention_spill = True,
+            allow_kv_host_fallback = True,
+            require_cost_win = False,
+        ),
+    )
+    assert plan.kv_spilled_to_host, plan.reason
+    assert "--no-kv-offload" in plan_to_args(plan)
+
+
 def test_load_mode_is_none_when_the_host_side_fits_and_mmap_when_it_does_not():
     """``--load-mode none`` beats mmap on host-resident weights, but only while those bytes
     really are in RAM; past that, mmap is the only thing making an over-commit pageable."""

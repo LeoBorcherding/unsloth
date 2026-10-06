@@ -1856,7 +1856,8 @@ def _plan_at(
             )
         uneven = _per_device_shortfall(
             layout,
-            opts,
+            # The cache rung moves the cache and the recurrent state off every card.
+            replace(opts, kv_on_host = True) if kv_host else opts,
             n_ctx,
             moved,
             spill_lm_head,

@@ -29904,6 +29904,9 @@ class LlamaCppBackend:
         # A plan that spilled nothing but reshaped the launch is still Unsloth's placement, so it
         # takes the same pin the proved arm does.
         flags = ["-ngl", "-1", "--fit", "off", *tokens]
+        # The cache rung's feasibility assumed the cache off the cards, as plan_to_args emits it.
+        if plan.kv_spilled_to_host:
+            flags.append("--no-kv-offload")
         # ...and the pin is exactly why the split has to go with it. --fit off skips
         # common/fit.cpp, so llama.cpp falls back to its default split, the free VRAM
         # ggml_backend_dev_memory reads IN THE CHILD (llama-model.cpp:1462-1477), not the
