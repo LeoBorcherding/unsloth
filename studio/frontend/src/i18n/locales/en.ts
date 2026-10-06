@@ -3340,6 +3340,8 @@ export const en = {
       stopTitle: "Stop Training",
       stopDescription:
         "Choose how you want to stop the current training run. Stop and Save writes a checkpoint you can resume from later; stopping without saving cannot be resumed.",
+      stopDescriptionNoResume:
+        "Choose how you want to stop the current training run. Stop and Save keeps the model trained so far; a decision run cannot be resumed afterwards.",
       stopAction: "Stop",
       stopping: "Stopping...",
       stopAndSave: "Stop and Save",

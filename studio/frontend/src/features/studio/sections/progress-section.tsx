@@ -313,6 +313,7 @@ export function ProgressSection({
           ) : (
             <LiveTrainingHeaderActions
               configItems={configItems}
+              isDecision={!!data.isDecision}
               isTrainingRunning={data.isTrainingRunning}
               onOpenStopDialog={setStopDialogOpen}
               stopDialogOpen={stopDialogOpen}
@@ -547,6 +548,7 @@ function LiveGpuPanel({
 
 function LiveTrainingHeaderActions({
   configItems,
+  isDecision,
   isTrainingRunning,
   onOpenStopDialog,
   stopDialogOpen,
@@ -554,6 +556,7 @@ function LiveTrainingHeaderActions({
   onSetStopRequested,
 }: {
   configItems: ConfigGroup[];
+  isDecision: boolean;
   isTrainingRunning: boolean;
   onOpenStopDialog: (open: boolean) => void;
   stopDialogOpen: boolean;
@@ -579,6 +582,7 @@ function LiveTrainingHeaderActions({
   return (
     <TrainingHeaderActions
       configItems={configItems}
+      isDecision={isDecision}
       isTrainingRunning={isTrainingRunning}
       onOpenStopDialog={onOpenStopDialog}
       onRequestStop={requestStop}
@@ -633,6 +637,7 @@ function ConfigPopoverButton({
 
 function TrainingHeaderActions({
   configItems,
+  isDecision,
   isTrainingRunning,
   onOpenStopDialog,
   onRequestStop,
@@ -640,6 +645,7 @@ function TrainingHeaderActions({
   stopRequested,
 }: {
   configItems: ConfigGroup[];
+  isDecision: boolean;
   isTrainingRunning: boolean;
   onOpenStopDialog: (open: boolean) => void;
   onRequestStop: (saveCheckpoint: boolean) => Promise<void>;
@@ -673,7 +679,12 @@ function TrainingHeaderActions({
           <AlertDialogHeader>
             <AlertDialogTitle>{t("studio.training.stopTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t("studio.training.stopDescription")}
+              {/* Decision runs refuse resume_from_checkpoint (routes/training.py). */}
+              {t(
+                isDecision
+                  ? "studio.training.stopDescriptionNoResume"
+                  : "studio.training.stopDescription",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
