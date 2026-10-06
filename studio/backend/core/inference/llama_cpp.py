@@ -22259,6 +22259,11 @@ class LlamaCppBackend:
                     _target_device_is_cpu = _device_selection_is_cpu(
                         _placement_extras, _placement_env
                     )
+                    if _target_device_is_cpu:
+                        # Output lands in token_embd's buffer context, where llama.cpp
+                        # reuses the tensor instead of duplicating it.
+                        weights_size -= _tied_output_charge
+                        _tied_output_charge = 0
                     _host_pinned = (
                         0 if (_shared_memory or _target_device_is_cpu) else _host_pinned_candidate
                     )

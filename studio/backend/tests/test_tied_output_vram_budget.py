@@ -1087,6 +1087,20 @@ def test_a_cpu_pinned_drafter_is_not_charged_the_tied_duplicate(backend, mib_emb
     assert priced[0] == priced[1], "the tied drafter is charged a duplicate it never allocates"
 
 
+def test_a_cpu_device_target_is_not_charged_the_tied_duplicate(backend):
+    """--device none keeps output in token_embd's CPU buffer context, where llama.cpp
+    reuses the tensor (llama-model-loader.cpp, TENSOR_DUPLICATED), the same reuse the
+    CPU-pinned drafter above gets. Source-checked for the reason given above."""
+    import inspect
+
+    src = inspect.getsource(backend.load_model)
+    cpu = src.index("if _target_device_is_cpu:\n")
+    assert src.index("_target_device_is_cpu = _device_selection_is_cpu(") < cpu
+    branch = src[cpu : src.index("_model_weight_vram_bytes = max(0, weights_size - _host_pinned)")]
+    assert "weights_size -= _tied_output_charge" in branch
+    assert "_tied_output_charge = 0" in branch
+
+
 def test_an_unclassified_vulkan_device_is_shared_for_the_host_pool_too(backend):
     """Two different questions, and an unreadable type answers no to both.
 
