@@ -1094,11 +1094,18 @@ def test_a_cpu_device_target_is_not_charged_the_tied_duplicate(backend):
     import inspect
 
     src = inspect.getsource(backend.load_model)
-    cpu = src.index("if _target_device_is_cpu:\n")
+    cpu = src.index("if _target_device_is_cpu and not self._override_moves_host_pinned(")
     assert src.index("_target_device_is_cpu = _device_selection_is_cpu(") < cpu
     branch = src[cpu : src.index("_model_weight_vram_bytes = max(0, weights_size - _host_pinned)")]
     assert "weights_size -= _tied_output_charge" in branch
     assert "_tied_output_charge = 0" in branch
+
+
+def test_a_gpu_override_keeps_the_cpu_target_tied_charge(backend):
+    # -ot token_embd.weight=CUDA0 moves the embedding out of the CPU context, so the
+    # output is duplicated again and the CPU exemption above must not apply.
+    assert backend._override_moves_host_pinned(["-ot", "token_embd.weight=CUDA0"], {})
+    assert not backend._override_moves_host_pinned(["-ot", "token_embd.weight=CPU"], {})
 
 
 def test_an_unclassified_vulkan_device_is_shared_for_the_host_pool_too(backend):

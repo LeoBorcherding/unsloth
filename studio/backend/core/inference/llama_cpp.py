@@ -22259,9 +22259,12 @@ class LlamaCppBackend:
                     _target_device_is_cpu = _device_selection_is_cpu(
                         _placement_extras, _placement_env
                     )
-                    if _target_device_is_cpu:
+                    if _target_device_is_cpu and not self._override_moves_host_pinned(
+                        extra_args, os.environ
+                    ):
                         # Output lands in token_embd's buffer context, where llama.cpp
-                        # reuses the tensor instead of duplicating it.
+                        # reuses the tensor instead of duplicating it; a GPU override
+                        # can move token_embd out of it.
                         weights_size -= _tied_output_charge
                         _tied_output_charge = 0
                     _host_pinned = (
