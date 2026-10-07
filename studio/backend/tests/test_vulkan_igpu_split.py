@@ -211,3 +211,5 @@ def test_the_launch_passes_the_flat_buffer_and_extras():
     arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
     for term in ("compute_buffer_flat", "soft_overhead", "extra_gpu_bytes"):
         assert term in arm, term
+    # layered_mib comes from model_size, which already holds a GPU-resident projector.
+    assert '_spill_inputs["extra_gpu_bytes"] - (mmproj_size or 0)' in arm

@@ -28094,7 +28094,8 @@ class LlamaCppBackend:
                             (
                                 _spill_inputs["compute_buffer_flat"]
                                 + _spill_inputs["soft_overhead"]
-                                + _spill_inputs["extra_gpu_bytes"]
+                                # model_size already carries a GPU projector.
+                                + max(0, _spill_inputs["extra_gpu_bytes"] - (mmproj_size or 0))
                             )
                             / (1024 * 1024),
                         )
