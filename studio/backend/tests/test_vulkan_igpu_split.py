@@ -40,7 +40,10 @@ def _build_loggers_stub():
 _maybe_stub("loggers", _build_loggers_stub)
 _maybe_stub("structlog", lambda: _types.ModuleType("structlog"))
 
-from core.inference.llama_cpp import LlamaCppBackend  # noqa: E402
+from core.inference.llama_cpp import (  # noqa: E402
+    LlamaCppBackend,
+    _inherited_layer_tensor_split,
+)
 
 MIB = 1024 * 1024
 
@@ -128,3 +131,25 @@ def test_the_launch_emits_it_only_where_nothing_else_owns_the_split():
     assert "not tensor_parallel" in arm
     assert "_TENSOR_SPLIT_FLAGS" in arm
     assert "_spill_inputs is not None" in arm
+    assert "_inherited_layer_tensor_split(os.environ)" in arm
+
+
+def test_an_inherited_layer_split_keeps_its_env_share():
+    # The launch only scrubs LLAMA_ARG_TENSOR_SPLIT with a non-layer split mode, so in
+    # layer mode (or unset) it reaches the child, and a CLI --tensor-split would win.
+    assert _inherited_layer_tensor_split({"LLAMA_ARG_TENSOR_SPLIT": "3,1"})
+    assert _inherited_layer_tensor_split(
+        {"LLAMA_ARG_SPLIT_MODE": " Layer ", "LLAMA_ARG_TENSOR_SPLIT": "3,1"}
+    )
+    assert not _inherited_layer_tensor_split(
+        {"LLAMA_ARG_SPLIT_MODE": "row", "LLAMA_ARG_TENSOR_SPLIT": "3,1"}
+    )
+    assert not _inherited_layer_tensor_split({"LLAMA_ARG_SPLIT_MODE": "layer"})
+    assert not _inherited_layer_tensor_split({"LLAMA_ARG_TENSOR_SPLIT": "  "})
+
+
+def test_auto_context_ranks_the_igpu_after_the_discrete_card():
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    auto = src[src.index("# Auto context: prefer fewer GPUs") :]
+    ranked = auto[auto.index("ranked = sorted(") : auto.index("_pipeline_overhead_mib")]
+    assert "not in _shared_gpu_ids" in ranked

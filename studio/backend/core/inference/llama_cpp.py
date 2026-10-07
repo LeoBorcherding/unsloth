@@ -7474,6 +7474,14 @@ def _extra_args_have_tensor_split(
     return bool(str((env or {}).get("LLAMA_ARG_TENSOR_SPLIT", "")).strip())
 
 
+def _inherited_layer_tensor_split(env: Mapping[str, str]) -> bool:
+    """An inherited LLAMA_ARG_TENSOR_SPLIT the child keeps: the launch only scrubs it with
+    a non-layer LLAMA_ARG_SPLIT_MODE, and a CLI --tensor-split would silently override it."""
+    if not str(env.get("LLAMA_ARG_TENSOR_SPLIT") or "").strip():
+        return False
+    return (env.get("LLAMA_ARG_SPLIT_MODE") or "layer").strip().lower() in ("", "layer")
+
+
 @functools.lru_cache(maxsize = 1)
 def _local_ssl_context() -> ssl.SSLContext:
     # httpx loads CA certificates even for loopback HTTP. Share that setup, not streaming sockets.
@@ -26639,9 +26647,15 @@ class LlamaCppBackend:
                             # Auto context: prefer fewer GPUs, cap to fit. Same
                             # headroom threshold as _select_gpus (#5106). Rank by the
                             # active pin fraction so the order matches the fit budget.
+                            # Shared-memory iGPUs last, as in _select_gpus.
                             pin_fraction = _pin_fraction
                             ranked = sorted(
-                                gpus, key = lambda g: _gpu_usable(g, pin_fraction), reverse = True
+                                gpus,
+                                key = lambda g: (
+                                    g[0] not in _shared_gpu_ids,
+                                    _gpu_usable(g, pin_fraction),
+                                ),
+                                reverse = True,
                             )
                             # Skips _select_gpus, so apply its cap: count only cards
                             # whose usable VRAM clears the per-device layer overhead.
@@ -28066,6 +28080,7 @@ class LlamaCppBackend:
                         and _spill_inputs is not None
                         and not tensor_parallel
                         and not _extra_args_set_any_flag(extra_args, _TENSOR_SPLIT_FLAGS)
+                        and not _inherited_layer_tensor_split(os.environ)
                         else None
                     )
                     if _mixed_split is not None:
