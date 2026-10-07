@@ -153,3 +153,17 @@ def test_auto_context_ranks_the_igpu_after_the_discrete_card():
     auto = src[src.index("# Auto context: prefer fewer GPUs") :]
     ranked = auto[auto.index("ranked = sorted(") : auto.index("_pipeline_overhead_mib")]
     assert "not in _shared_gpu_ids" in ranked
+
+
+def test_a_second_discrete_card_keeps_the_layer_split_overhead():
+    # _select_gpus charges the per-device pipeline overhead for every card after the
+    # first, so the share must leave it free on the second discrete card.
+    shares = LlamaCppBackend._discrete_first_split(
+        [0, 1, 2],
+        {0: 10000.0, 1: 8000.0, 2: 12000.0},
+        {2},
+        layered_mib = 20000.0,
+        per_device_mib = 300.0,
+        pipeline_mib = 1024.0,
+    )
+    assert shares == [9700.0, 6676.0, 3624.0]
