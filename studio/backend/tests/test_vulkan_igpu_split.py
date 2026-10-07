@@ -241,3 +241,15 @@ def test_a_split_that_overflows_the_igpu_rooms_is_declined():
         )
         is None
     )
+
+
+def test_an_igpu_that_holds_it_alone_is_used_when_the_card_cannot_join():
+    # 500 + 10000 MiB is short of 9500 + the 1024 MiB split overhead; the iGPU alone fits.
+    picked, use_fit = LlamaCppBackend._select_gpus(
+        9500 * MIB,
+        [(DGPU, 500), (IGPU, 10000)],
+        usable_fraction = 1.0,
+        per_device_overhead_bytes = 1024 * MIB,
+        shared_gpu_ids = SHARED,
+    )
+    assert (picked, use_fit) == ([IGPU], False)

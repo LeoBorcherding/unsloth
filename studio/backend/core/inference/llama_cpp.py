@@ -16371,16 +16371,26 @@ class LlamaCppBackend:
 
         # Try N GPUs (most-free first); each past the first adds per-device overhead.
         # Require at least min_gpus devices before accepting a fit.
-        cumulative = 0.0
-        selected = []
-        for idx, free_mib in ranked:
-            selected.append(idx)
-            cumulative += _usable(idx, free_mib)
-            if (
-                len(selected) >= min_gpus
-                and cumulative >= model_size_mib + (len(selected) - 1) * overhead_mib
-            ):
-                return sorted(selected), False
+        def _prefix_fit(order: list[tuple[int, int]]) -> Optional[list[int]]:
+            cumulative = 0.0
+            selected = []
+            for idx, free_mib in order:
+                selected.append(idx)
+                cumulative += _usable(idx, free_mib)
+                if (
+                    len(selected) >= min_gpus
+                    and cumulative >= model_size_mib + (len(selected) - 1) * overhead_mib
+                ):
+                    return sorted(selected)
+            return None
+
+        selected = _prefix_fit(ranked)
+        # A discrete card too small to cover its split overhead can sink every prefix
+        # that leads with it while the iGPU(s) alone still hold the model.
+        if selected is None and _shared and not all(g[0] in _shared for g in ranked):
+            selected = _prefix_fit([g for g in ranked if g[0] in _shared])
+        if selected is not None:
+            return selected, False
 
         # Too large even for all GPUs; let --fit handle it
         logger.debug(
