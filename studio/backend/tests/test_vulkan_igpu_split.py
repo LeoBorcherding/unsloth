@@ -167,3 +167,25 @@ def test_a_second_discrete_card_keeps_the_layer_split_overhead():
         pipeline_mib = 1024.0,
     )
     assert shares == [9700.0, 6676.0, 3624.0]
+
+
+def test_igpu_overflow_is_apportioned_after_their_reserves():
+    # Each iGPU is an extra device: weighting by raw usable left the small one 540 MiB
+    # short of the 1324 MiB the selector charged it.
+    shares = LlamaCppBackend._discrete_first_split(
+        [0, 1, 2],
+        {0: 10000.0, 1: 8000.0, 2: 2000.0},
+        {1, 2},
+        layered_mib = 17000.0,
+        per_device_mib = 300.0,
+        pipeline_mib = 1024.0,
+    )
+    assert shares[0] == 9700.0
+    assert shares[2] <= 2000.0 - 1324.0
+    assert abs(sum(shares) - 17000.0) < 1e-6
+
+
+def test_the_mtp_preflight_ranks_the_igpu_last_too():
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    probe = src[src.index("def _probe_rank(") : src.index("_probe_overhead_mib =")]
+    assert "not in _shared_gpu_ids" in probe

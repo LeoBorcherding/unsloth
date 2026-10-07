@@ -9040,8 +9040,8 @@ class LlamaCppBackend:
         to top up (a 27B on a 12 GB card plus a Ryzen iGPU: 4.8 GB on the card,
         8.3 GB on the iGPU, 1 t/s). ``layered_mib`` is what the split divides
         (weights + KV); ``per_device_mib`` is held back on each card for its own
-        compute buffer, and ``pipeline_mib`` on every discrete card after the first,
-        as ``_select_gpus`` charges it. None unless the pin mixes both kinds.
+        compute buffer, and ``pipeline_mib`` on every card after the first discrete
+        one, as ``_select_gpus`` charges it. None unless the pin mixes both kinds.
         """
         shared = set(shared_gpu_ids)
         discrete = [i for i in gpu_indices if i not in shared]
@@ -9059,7 +9059,10 @@ class LlamaCppBackend:
         for i in order:
             shares[i] = min(caps[i], left)
             left -= shares[i]
-        igpu_room = {i: max(0.0, usable_mib.get(i, 0.0)) for i in igpus}
+        # Every iGPU is an extra device, so it keeps both reserves too.
+        igpu_room = {
+            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib) for i in igpus
+        }
         room_total = sum(igpu_room.values())
         for i in igpus:
             shares[i] = left * igpu_room[i] / room_total if room_total > 0 else left / len(igpus)
@@ -26121,7 +26124,10 @@ class LlamaCppBackend:
                         def _probe_rank(drafter: bool) -> list:
                             return sorted(
                                 gpus,
-                                key = lambda g: _gpu_usable(g, _probe_frac(drafter)),
+                                key = lambda g: (
+                                    g[0] not in _shared_gpu_ids,
+                                    _gpu_usable(g, _probe_frac(drafter)),
+                                ),
                                 reverse = True,
                             )
 
