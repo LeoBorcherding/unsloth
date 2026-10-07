@@ -9045,8 +9045,8 @@ class LlamaCppBackend:
         compute buffer, ``pipeline_mib`` on every card after the first discrete one,
         and ``first_mib`` (the flat buffer and resident extras the fit counts once) on
         that first one, as ``_select_gpus`` charges them. ``shared_pool_mib`` (a
-        CPU-pinned projector in host RAM) comes off every iGPU's room. None unless the
-        pin mixes both kinds.
+        CPU-pinned projector in host RAM) comes off the iGPUs' combined room once. None
+        unless the pin mixes both kinds, or when the rest overflows those rooms.
         """
         shared = set(shared_gpu_ids)
         discrete = [i for i in gpu_indices if i not in shared]
@@ -9067,10 +9067,14 @@ class LlamaCppBackend:
             left -= shares[i]
         # Every iGPU is an extra device, so it keeps both reserves too.
         igpu_room = {
-            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib - shared_pool_mib)
-            for i in igpus
+            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib) for i in igpus
         }
-        room_total = sum(igpu_room.values())
+        reserved = sum(igpu_room.values())
+        room_total = max(0.0, reserved - shared_pool_mib)
+        if left > room_total + 1e-6:
+            return None
+        if reserved > 0:
+            igpu_room = {i: room * room_total / reserved for i, room in igpu_room.items()}
         for i in igpus:
             shares[i] = left * igpu_room[i] / room_total if room_total > 0 else left / len(igpus)
         return [shares[i] for i in gpu_indices]

@@ -216,8 +216,8 @@ def test_the_launch_passes_the_flat_buffer_and_extras():
     assert "(_shared_pool_mmproj or 0) / (1024 * 1024)," in arm
 
 
-def test_a_shared_pool_projector_comes_off_the_igpu_room():
-    # A CPU-pinned projector sits in the host pool the iGPU allocates from.
+def test_a_shared_pool_projector_comes_off_the_igpu_room_once():
+    # A CPU-pinned projector sits once in the host pool the iGPUs allocate from.
     shares = LlamaCppBackend._discrete_first_split(
         [0, 1, 2],
         {0: 4000.0, 1: 3000.0, 2: 3000.0},
@@ -226,11 +226,18 @@ def test_a_shared_pool_projector_comes_off_the_igpu_room():
         shared_pool_mib = 1000.0,
     )
     assert shares == [4000.0, 2000.0, 2000.0]
-    shares = LlamaCppBackend._discrete_first_split(
-        [0, 1, 2],
-        {0: 4000.0, 1: 3000.0, 2: 1500.0},
-        {1, 2},
-        layered_mib = 6500.0,
-        shared_pool_mib = 1000.0,
+
+
+def test_a_split_that_overflows_the_igpu_rooms_is_declined():
+    # 1976 MiB of iGPU room after reserves and the projector, 3000 MiB left to place.
+    assert (
+        LlamaCppBackend._discrete_first_split(
+            [0, 1, 2],
+            {0: 4000.0, 1: 3000.0, 2: 3000.0},
+            {1, 2},
+            layered_mib = 7000.0,
+            pipeline_mib = 1024.0,
+            shared_pool_mib = 1000.0,
+        )
+        is None
     )
-    assert shares == [4000.0, 2000.0, 500.0]
