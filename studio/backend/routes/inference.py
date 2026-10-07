@@ -8131,6 +8131,23 @@ def _inside_hf_cache(path) -> bool:
     return False
 
 
+def _refuse_decision_model(*names: Optional[str], hf_token: Optional[str] = None) -> None:
+    """Laya and Clef checkpoints score options and never generate, so a chat load can only fail
+    deep in transformers with an "update transformers" hint that does not help."""
+    from utils.models.model_config import decision_layout
+
+    for name in dict.fromkeys(n for n in names if n):
+        if decision_layout(name, hf_token, local_files_only = True) is not None:
+            raise HTTPException(
+                status_code = 400,
+                detail = (
+                    f"{name} is a decision model, so it cannot be loaded for chat. Serve it "
+                    "through the Decision API: turn it on in Settings > API and pick it under "
+                    "Decision API > Model."
+                ),
+            )
+
+
 def _refuse_managed_custom_projector(
     extra_args: Optional[list[str]],
     identifier: Optional[str] = None,
@@ -18116,6 +18133,9 @@ async def _load_model_impl(
         _refuse_managed_custom_projector(
             extra_llama_args, request.model_path, request._override_alias_id, request.gguf_variant
         )
+        await asyncio.to_thread(
+            _refuse_decision_model, request.model_path, hf_token = request.hf_token
+        )
 
         _reasoning_updates = {}
         _reasoning_budget_override = parse_reasoning_budget_override(extra_llama_args)
@@ -19591,6 +19611,12 @@ async def validate_model(
         )
         if native_access_deferred:
             await asyncio.to_thread(account_access.require_model_access, model_identifier)
+        await asyncio.to_thread(
+            _refuse_decision_model,
+            request.model_path,
+            model_identifier,
+            hf_token = request.hf_token,
+        )
 
         # Same roots /load will use, or a sibling-revision projector reads as text-only here
         # and the load then serves vision.
