@@ -55,6 +55,7 @@ import {
   shSingle,
   statusGgufVerdict,
 } from "./agent-command";
+import { TRAIN } from "./training-example-defaults";
 import {
   keylessBaseEligible,
   keylessCoversTraining,
@@ -143,17 +144,6 @@ const ADV = {
   min_p: 0.05,
   repetition_penalty: 1.1,
   max_tokens: 1024,
-} as const;
-
-const TRAIN = {
-  model: "unsloth/Llama-3.2-1B-Instruct",
-  dataset: "mlabonne/FineTome-100k",
-  maxSteps: 60,
-  imageBase: "stabilityai/stable-diffusion-xl-base-1.0",
-  imageData: "my-images",
-  imageOut: "my-images-lora",
-  imagePrompt: "a photo of sks cat",
-  imageSteps: 500,
 } as const;
 
 const DOC_LINKS = [

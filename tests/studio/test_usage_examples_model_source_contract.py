@@ -47,8 +47,10 @@ def test_examples_never_print_a_hardcoded_model_id():
     assert "useState<OpenAIModel[] | null>(null)" in src
     # Nothing servable means nothing is built, so there is nothing to copy.
     assert "(model ? buildSnippets(base, key, toolsKey, model, os) : null)" in src
-    assert "if (!snippets) return;" in src
-    assert "{snippets ? (" in src
+    # Training tabs name a hub repo to train from, not a served model, so only chat tabs go null.
+    assert ": (snippets?.[lang] ?? null);" in src
+    assert "if (!snippet) return;" in src
+    assert "{snippet ? (" in src
     assert 't("settings.apiKeys.usageNoModel")' in src
 
     en = EN_TS.read_text(encoding = "utf-8")
