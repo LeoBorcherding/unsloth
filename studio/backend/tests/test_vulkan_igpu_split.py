@@ -212,4 +212,25 @@ def test_the_launch_passes_the_flat_buffer_and_extras():
     for term in ("compute_buffer_flat", "soft_overhead", "extra_gpu_bytes"):
         assert term in arm, term
     # layered_mib comes from model_size, which already holds a GPU-resident projector.
-    assert '_spill_inputs["extra_gpu_bytes"] - (mmproj_size or 0)' in arm
+    assert "- (mmproj_size or 0)" in arm
+    assert "(_shared_pool_mmproj or 0) / (1024 * 1024)," in arm
+
+
+def test_a_shared_pool_projector_comes_off_the_igpu_room():
+    # A CPU-pinned projector sits in the host pool the iGPU allocates from.
+    shares = LlamaCppBackend._discrete_first_split(
+        [0, 1, 2],
+        {0: 4000.0, 1: 3000.0, 2: 3000.0},
+        {1, 2},
+        layered_mib = 8000.0,
+        shared_pool_mib = 1000.0,
+    )
+    assert shares == [4000.0, 2000.0, 2000.0]
+    shares = LlamaCppBackend._discrete_first_split(
+        [0, 1, 2],
+        {0: 4000.0, 1: 3000.0, 2: 1500.0},
+        {1, 2},
+        layered_mib = 6500.0,
+        shared_pool_mib = 1000.0,
+    )
+    assert shares == [4000.0, 2000.0, 500.0]

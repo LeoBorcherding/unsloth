@@ -9032,6 +9032,7 @@ class LlamaCppBackend:
         per_device_mib: float = 0.0,
         pipeline_mib: float = 0.0,
         first_mib: float = 0.0,
+        shared_pool_mib: float = 0.0,
     ) -> Optional[List[float]]:
         """``--tensor-split`` shares, positional over ``gpu_indices``, that fill the
         discrete cards before any shared-memory iGPU.
@@ -9043,8 +9044,9 @@ class LlamaCppBackend:
         (weights + KV); ``per_device_mib`` is held back on each card for its own
         compute buffer, ``pipeline_mib`` on every card after the first discrete one,
         and ``first_mib`` (the flat buffer and resident extras the fit counts once) on
-        that first one, as ``_select_gpus`` charges them. None unless the pin mixes
-        both kinds.
+        that first one, as ``_select_gpus`` charges them. ``shared_pool_mib`` (a
+        CPU-pinned projector in host RAM) comes off every iGPU's room. None unless the
+        pin mixes both kinds.
         """
         shared = set(shared_gpu_ids)
         discrete = [i for i in gpu_indices if i not in shared]
@@ -9065,7 +9067,8 @@ class LlamaCppBackend:
             left -= shares[i]
         # Every iGPU is an extra device, so it keeps both reserves too.
         igpu_room = {
-            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib) for i in igpus
+            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib - shared_pool_mib)
+            for i in igpus
         }
         room_total = sum(igpu_room.values())
         for i in igpus:
@@ -28094,10 +28097,17 @@ class LlamaCppBackend:
                             (
                                 _spill_inputs["compute_buffer_flat"]
                                 + _spill_inputs["soft_overhead"]
-                                # model_size already carries a GPU projector.
-                                + max(0, _spill_inputs["extra_gpu_bytes"] - (mmproj_size or 0))
+                                # model_size already carries a GPU projector, and the
+                                # shared-pool one sits in the iGPUs' room instead.
+                                + max(
+                                    0,
+                                    _spill_inputs["extra_gpu_bytes"]
+                                    - (mmproj_size or 0)
+                                    - (_shared_pool_mmproj or 0),
+                                )
                             )
                             / (1024 * 1024),
+                            (_shared_pool_mmproj or 0) / (1024 * 1024),
                         )
                         if _shared_gpu_ids
                         and _spill_inputs is not None
