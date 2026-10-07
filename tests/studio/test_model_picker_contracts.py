@@ -2147,7 +2147,7 @@ def test_staged_downloads_use_one_actionable_download_surface():
     assert 'job.variant?.startsWith("@")' in panel
     assert '"Model file"' in panel
     # A companion row names what it fetches; "Required assets" only when the files say nothing.
-    assert 'assetLabel(' in panel and '"Required assets"' in panel
+    assert "assetLabel(" in panel and '"Required assets"' in panel
 
 
 def test_staged_plans_label_the_checkpoint_without_guessing_from_the_extension():
