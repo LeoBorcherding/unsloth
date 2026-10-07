@@ -27,6 +27,11 @@ import {
   type GpuDevice,
   type SystemGpuInfo,
 } from "@/hooks/use-system";
+import {
+  useGpuBreakdown,
+  type GpuBreakdownDevice,
+  type GpuBreakdownItem,
+} from "@/hooks/use-gpu-breakdown";
 import { isTauri } from "@/lib/api-base";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { toast } from "@/lib/toast";
@@ -47,7 +52,7 @@ import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 import { useMonitorOverlayStore } from "../stores/monitor-overlay-store";
 import { useSettingsPanelPrefsStore } from "../stores/settings-panel-prefs-store";
-import { Copy01Icon } from "@hugeicons/core-free-icons";
+import { ArrowDown01Icon, Copy01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { FolderOpenIcon, LayersIcon } from "lucide-react";
 
@@ -242,6 +247,96 @@ type GpuPhysicalInventory = SystemGpuInfo & {
   mismatch?: GpuTorchMismatch | null;
 };
 
+// Keeps the existing tone (accent / amber / red by total use); other apps are the same hue, faded.
+function SplitMeter({
+  label,
+  total,
+  unslothGb,
+  otherGb,
+  toneClass,
+}: {
+  label: string;
+  total: number;
+  unslothGb: number;
+  otherGb: number;
+  toneClass: string;
+}) {
+  const t = useT();
+  const pct = (gb: number) => clampPercent((gb / total) * 100);
+  return (
+    <div
+      role="img"
+      aria-label={`${label}: ${t("settings.resources.gpu.unslothUsage", {
+        value: formatGiB(unslothGb),
+      })}, ${t("settings.resources.gpu.otherApps")} ${formatGiB(otherGb)}`}
+      className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted dark:bg-[rgb(0_0_0_/_calc(0.4*var(--contrast-wash-gain,1)))]"
+    >
+      <div
+        className={cn("h-full transition-all", toneClass)}
+        style={{ width: `${pct(unslothGb)}%` }}
+      />
+      <div
+        className={cn("h-full opacity-35 transition-all", toneClass)}
+        style={{ width: `${pct(otherGb)}%` }}
+      />
+    </div>
+  );
+}
+
+function GpuBreakdownList({
+  split,
+  toneClass,
+}: {
+  split: GpuBreakdownDevice;
+  toneClass: string;
+}) {
+  const t = useT();
+  const label = (item: GpuBreakdownItem): string => {
+    if (item.kind === "runtime") return t("settings.resources.gpu.runtime");
+    if (item.kind === "training")
+      return t("settings.resources.gpu.kindTraining");
+    const kind =
+      item.kind === "image"
+        ? t("settings.resources.gpu.kindImage")
+        : t("settings.resources.gpu.kindChat");
+    return [`${kind}: ${item.model ?? ""}`, item.part]
+      .filter(Boolean)
+      .join(" · ");
+  };
+  const rows = [
+    ...split.items.map((item) => ({
+      text: label(item),
+      gb: item.gb,
+      faded: false,
+    })),
+    {
+      text: t("settings.resources.gpu.otherApps"),
+      gb: split.other_gb ?? 0,
+      faded: true,
+    },
+  ];
+  return (
+    <ul className="basis-full space-y-1 font-mono text-ui-11 tabular-nums text-muted-foreground">
+      {rows.map((row) => (
+        <li key={row.text} className="flex min-w-0 items-center gap-2">
+          <span
+            aria-hidden
+            className={cn(
+              "size-2 shrink-0 rounded-full",
+              toneClass,
+              row.faded && "opacity-35",
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate" title={row.text}>
+            {row.text}
+          </span>
+          <span className="shrink-0">{formatGiB(row.gb)}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function ResourcesTab() {
   const t = useT();
   const liveUpdates = useSettingsPanelPrefsStore((s) => s.resourcesLiveUpdates);
@@ -254,6 +349,8 @@ export function ResourcesTab() {
   const systemInfo = useSystemInfo({
     pollMs: liveUpdates ? POLL_MS : undefined,
   });
+  const gpuBreakdown = useGpuBreakdown(liveUpdates ? POLL_MS : undefined);
+  const [openGpu, setOpenGpu] = useState<number | null>(null);
   const storageSectionRef = useRef<HTMLElement | null>(null);
   const scrollTarget = useSettingsDialogStore((s) => s.scrollTarget);
   const consumeScrollTarget = useSettingsDialogStore(
@@ -758,6 +855,17 @@ export function ResourcesTab() {
             const percentText = isFiniteNumber(percent)
               ? formatPercent(safePercent)
               : unknownLabel;
+            const split = gpuBreakdown.find(
+              (b) => b.index === (device.index ?? null),
+            );
+            const splitKnown =
+              split !== undefined &&
+              isFiniteNumber(split.unsloth_gb) &&
+              isFiniteNumber(split.other_gb) &&
+              isFiniteNumber(total) &&
+              total > 0;
+            const rowKey = device.index ?? index;
+            const expanded = splitKnown && openGpu === rowKey;
             return (
               // Name over backend on the left, figures over the meter on the
               // right. The meter tracks the figures' width rather than the
@@ -767,9 +875,31 @@ export function ResourcesTab() {
                 className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3 max-[992px]:flex-col max-[992px]:items-stretch"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-foreground">
-                    {device.name ?? t("settings.resources.gpu.unknownDevice")}
-                  </div>
+                  {splitKnown ? (
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-label={t("settings.resources.gpu.showBreakdown")}
+                      onClick={() => setOpenGpu(expanded ? null : rowKey)}
+                      className="flex max-w-full items-center gap-1 text-left text-sm font-medium text-foreground"
+                    >
+                      <span className="truncate">
+                        {device.name ??
+                          t("settings.resources.gpu.unknownDevice")}
+                      </span>
+                      <HugeiconsIcon
+                        icon={ArrowDown01Icon}
+                        className={cn(
+                          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                          expanded && "rotate-180",
+                        )}
+                      />
+                    </button>
+                  ) : (
+                    <div className="truncate text-sm font-medium text-foreground">
+                      {device.name ?? t("settings.resources.gpu.unknownDevice")}
+                    </div>
+                  )}
                   <div className="mt-1 flex min-w-0 items-center gap-2">
                     <span className="truncate text-xs text-muted-foreground">
                       {ordinal === undefined
@@ -834,13 +964,29 @@ export function ResourcesTab() {
                         })}
                       </span>
                     </div>
-                    <Progress
-                      value={safePercent}
-                      aria-label={device.name ?? "GPU"}
-                      className="h-1.5 w-full rounded-full bg-muted dark:bg-[rgb(0_0_0_/_calc(0.4*var(--contrast-wash-gain,1)))]"
-                      indicatorClassName={usageIndicatorClass(safePercent)}
-                    />
+                    {splitKnown ? (
+                      <SplitMeter
+                        label={device.name ?? "GPU"}
+                        total={total}
+                        unslothGb={split.unsloth_gb!}
+                        otherGb={split.other_gb!}
+                        toneClass={usageIndicatorClass(safePercent)}
+                      />
+                    ) : (
+                      <Progress
+                        value={safePercent}
+                        aria-label={device.name ?? "GPU"}
+                        className="h-1.5 w-full rounded-full bg-muted dark:bg-[rgb(0_0_0_/_calc(0.4*var(--contrast-wash-gain,1)))]"
+                        indicatorClassName={usageIndicatorClass(safePercent)}
+                      />
+                    )}
                   </div>
+                )}
+                {expanded && (
+                  <GpuBreakdownList
+                    split={split}
+                    toneClass={usageIndicatorClass(safePercent)}
+                  />
                 )}
               </div>
             );

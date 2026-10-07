@@ -2013,6 +2013,13 @@ export const ru = {
         used: "{value} использовано",
         free: "{value} свободно",
         total: "{value} всего",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Другие приложения",
+        runtime: "Среда Unsloth",
+        kindChat: "Чат",
+        kindImage: "Изображения",
+        kindTraining: "Обучение",
+        showBreakdown: "Показать, что использует этот GPU",
       },
       llamaBackend: {
         title: "Движок инференса GGUF",

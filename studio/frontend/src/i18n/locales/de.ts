@@ -2035,6 +2035,13 @@ export const de = {
         used: "{value} belegt",
         free: "{value} frei",
         total: "{value} gesamt",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Andere Apps",
+        runtime: "Unsloth-Laufzeit",
+        kindChat: "Chat",
+        kindImage: "Bild",
+        kindTraining: "Training",
+        showBreakdown: "Anzeigen, was diese GPU nutzt",
       },
       llamaBackend: {
         title: "GGUF-Inferenz-Engine",

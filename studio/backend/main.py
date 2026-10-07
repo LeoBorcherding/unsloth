@@ -2695,6 +2695,79 @@ def get_system_info(
     }
 
 
+_gpu_breakdown_cache: Optional[tuple[float, dict[str, Any]]] = None
+
+
+def _gpu_process_owners() -> dict[int, tuple[str, str]]:
+    """{pid: (kind, model)} for the child processes that hold a known model."""
+    owners: dict[int, tuple[str, str]] = {}
+
+    def add(proc: Any, kind: str, model: Any) -> None:
+        pid = getattr(proc, "pid", None)
+        if isinstance(pid, int) and model:
+            owners[pid] = (kind, str(model).rsplit("/", 1)[-1])
+
+    try:
+        from core.inference import model_slots
+        from routes.inference import _llama_cpp_backend
+        from core.inference.orchestrator import _inference_backend
+
+        llamas = [_llama_cpp_backend, *(s.llama for s in model_slots.resident())]
+        orchestrators = [_inference_backend, *(s.orchestrator for s in model_slots.resident())]
+        for llama in llamas:
+            if llama is not None:
+                add(getattr(llama, "_process", None), "chat", llama.model_identifier)
+        for orch in orchestrators:
+            if orch is not None:
+                add(getattr(orch, "_proc", None), "chat", orch.active_model_name)
+    except Exception as e:
+        logger.debug("GPU breakdown: inference owners unavailable: %s", e)
+    try:
+        from core.training.training import get_training_backend
+
+        training = get_training_backend()
+        add(getattr(training, "_proc", None), "training", "Training")
+    except Exception as e:
+        logger.debug("GPU breakdown: training owner unavailable: %s", e)
+    return owners
+
+
+@app.get("/api/system/gpu-breakdown")
+def get_gpu_breakdown(current_subject: str = Depends(get_current_subject)):
+    """Per GPU: Unsloth's measured VRAM, what inside Unsloth holds it, and other apps.
+
+    Separate from /api/system because the per-process probe costs a PowerShell call on
+    Windows, and only the System page's device rows read it.
+    """
+    import os
+    import time
+    from utils.hardware import gpu_breakdown
+
+    global _gpu_breakdown_cache
+    now = time.monotonic()
+    if _gpu_breakdown_cache is not None and now - _gpu_breakdown_cache[0] < 2.0:
+        return _gpu_breakdown_cache[1]
+    gpu_info, _ = _get_cached_system_gpu_info(logger)
+    devices = list(gpu_info.get("devices") or [])
+    process_bytes = gpu_breakdown.process_vram_by_device(
+        devices, str(gpu_info.get("backend") or "")
+    )
+    components = (
+        gpu_breakdown.diffusion_components(os.getpid(), devices) if process_bytes else []
+    )
+    payload = {
+        "devices": gpu_breakdown.build_breakdown(
+            devices,
+            process_bytes,
+            gpu_breakdown.unsloth_pids(),
+            _gpu_process_owners() if process_bytes else {},
+            components,
+        )
+    }
+    _gpu_breakdown_cache = (now, payload)
+    return payload
+
+
 @app.get("/api/system/disk")
 def get_disk_space(
     current_subject: str = Depends(get_current_subject),

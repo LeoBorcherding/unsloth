@@ -1977,6 +1977,13 @@ export const zhCN = {
         used: "已用 {value}",
         free: "{value} 可用",
         total: "共 {value}",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "其他应用",
+        runtime: "Unsloth 运行时",
+        kindChat: "聊天",
+        kindImage: "图像",
+        kindTraining: "训练",
+        showBreakdown: "查看占用此 GPU 的内容",
       },
       llamaBackend: {
         title: "GGUF 推理引擎",

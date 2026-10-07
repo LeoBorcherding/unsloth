@@ -1986,6 +1986,13 @@ export const ja = {
         used: "{value} 使用中",
         free: "{value} 空き",
         total: "{value} 合計",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "その他のアプリ",
+        runtime: "Unsloth ランタイム",
+        kindChat: "チャット",
+        kindImage: "画像",
+        kindTraining: "トレーニング",
+        showBreakdown: "この GPU の使用内訳を表示",
       },
       llamaBackend: {
         title: "GGUF 推論エンジン",

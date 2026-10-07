@@ -2006,6 +2006,13 @@ export const ar = {
         used: "{value} مستخدم",
         free: "{value} متاح",
         total: "{value} إجمالي",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "تطبيقات أخرى",
+        runtime: "وقت تشغيل Unsloth",
+        kindChat: "الدردشة",
+        kindImage: "الصور",
+        kindTraining: "التدريب",
+        showBreakdown: "عرض ما يستخدم وحدة GPU هذه",
       },
       llamaBackend: {
         title: "محرك استدلال GGUF",

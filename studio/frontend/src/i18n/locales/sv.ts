@@ -2158,6 +2158,13 @@ export const sv = {
         used: "{value} används",
         free: "{value} ledigt",
         total: "{value} totalt",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Andra appar",
+        runtime: "Unsloth-körmiljö",
+        kindChat: "Chatt",
+        kindImage: "Bild",
+        kindTraining: "Träning",
+        showBreakdown: "Visa vad som använder den här GPU:n",
       },
       llamaBackend: {
         title: "GGUF-inferensmotor",

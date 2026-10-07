@@ -2030,6 +2030,13 @@ export const es = {
         used: "{value} en uso",
         free: "Libre: {value}",
         total: "{value} en total",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Otras apps",
+        runtime: "Entorno de Unsloth",
+        kindChat: "Chat",
+        kindImage: "Imagen",
+        kindTraining: "Entrenamiento",
+        showBreakdown: "Ver qué usa esta GPU",
       },
       llamaBackend: {
         title: "Motor de inferencia GGUF",

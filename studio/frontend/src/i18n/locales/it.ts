@@ -1994,6 +1994,13 @@ export const it = {
         used: "In uso: {value}",
         free: "Disponibili: {value}",
         total: "Totale: {value}",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Altre app",
+        runtime: "Runtime di Unsloth",
+        kindChat: "Chat",
+        kindImage: "Immagine",
+        kindTraining: "Addestramento",
+        showBreakdown: "Mostra cosa usa questa GPU",
       },
       llamaBackend: {
         title: "Motore di inferenza GGUF",

@@ -2088,6 +2088,13 @@ export const he = {
         used: "{value} בשימוש",
         free: "{value} פנוי",
         total: "{value} סה״כ",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "אפליקציות אחרות",
+        runtime: "זמן הריצה של Unsloth",
+        kindChat: "צ׳אט",
+        kindImage: "תמונה",
+        kindTraining: "אימון",
+        showBreakdown: "הצג מה משתמש ב-GPU הזה",
       },
       llamaBackend: {
         title: "מנוע הסקה GGUF",

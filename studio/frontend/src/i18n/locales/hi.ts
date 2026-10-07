@@ -2009,6 +2009,13 @@ export const hi = {
         used: "{value} उपयोग में",
         free: "{value} खाली",
         total: "{value} कुल",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "अन्य ऐप्स",
+        runtime: "Unsloth रनटाइम",
+        kindChat: "चैट",
+        kindImage: "इमेज",
+        kindTraining: "ट्रेनिंग",
+        showBreakdown: "देखें कि यह GPU क्या उपयोग कर रहा है",
       },
       llamaBackend: {
         title: "GGUF इनफ़रेंस इंजन",

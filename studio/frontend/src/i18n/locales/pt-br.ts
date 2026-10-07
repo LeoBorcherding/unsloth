@@ -2018,6 +2018,13 @@ export const ptBR = {
         used: "{value} usados",
         free: "{value} livres",
         total: "{value} total",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "Outros apps",
+        runtime: "Runtime do Unsloth",
+        kindChat: "Chat",
+        kindImage: "Imagem",
+        kindTraining: "Treinamento",
+        showBreakdown: "Mostrar o que está usando esta GPU",
       },
       llamaBackend: {
         title: "GGUF inference engine",

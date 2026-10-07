@@ -2002,6 +2002,13 @@ export const ko = {
         used: "{value} 사용 중",
         free: "{value} 여유",
         total: "총 {value}",
+        unslothUsage: "Unsloth {value}",
+        otherApps: "기타 앱",
+        runtime: "Unsloth 런타임",
+        kindChat: "채팅",
+        kindImage: "이미지",
+        kindTraining: "학습",
+        showBreakdown: "이 GPU를 사용하는 항목 보기",
       },
       llamaBackend: {
         title: "GGUF 추론 엔진",
