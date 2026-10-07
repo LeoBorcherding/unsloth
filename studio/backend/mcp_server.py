@@ -72,11 +72,28 @@ def _dump(value: Any) -> Any:
     return value
 
 
+# Diffusion adapter files: absolute paths that host_paths' shared field lists do not name.
+_DIFFUSION_FILE_FIELDS = frozenset({"lora_path", "ema_path", "catalog_path"})
+
+
 def _dump_redacted(value: Any) -> Any:
-    """Diffusion status and run records name absolute output and checkpoint paths. A remote MCP
-    caller is shown them the way an API-key caller is on the HTTP routes: as opaque references."""
-    from hub.utils.host_paths import redact_host_paths
-    return redact_host_paths(_dump(value), via_api_key = True)
+    """Diffusion status and run records name absolute output, checkpoint and adapter paths. A remote
+    MCP caller is shown them the way an API-key caller is on the HTTP routes: as opaque references."""
+    from hub.utils.host_paths import cache_reference, redact_host_paths
+
+    def adapter_files(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {
+                k: (cache_reference(v) or v)
+                if k in _DIFFUSION_FILE_FIELDS and isinstance(v, str)
+                else adapter_files(v)
+                for k, v in node.items()
+            }
+        if isinstance(node, list):
+            return [adapter_files(item) for item in node]
+        return node
+
+    return adapter_files(redact_host_paths(_dump(value), via_api_key = True))
 
 
 def _clamp(value: int, low: int, high: int) -> int:

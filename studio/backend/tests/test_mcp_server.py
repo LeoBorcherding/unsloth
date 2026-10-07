@@ -405,15 +405,25 @@ def test_stop_diffusion_training_forwards_save(monkeypatch):
 
 def test_diffusion_status_and_runs_hide_host_paths(monkeypatch):
     """The HTTP routes take no via_api_key and return absolute paths; a remote MCP caller is an
-    API-key caller, so output_dir and checkpoint_path come back as opaque references."""
+    API-key caller, so every path field, adapter files included, comes back as an opaque reference."""
     status = {
         "active": True,
         "output_dir": "/home/leo/.unsloth/outputs/cats-lora",
-        "lora_path": None,
+        "lora_path": "/home/leo/.unsloth/outputs/cats-lora/pytorch_lora_weights.safetensors",
+        "ema_path": None,
+        "catalog_path": "/home/leo/.unsloth/loras/cats-lora.safetensors",
         "checkpoint_path": "C:\\Users\\leo\\.unsloth\\outputs\\cats-lora\\checkpoint-100",
         "data_dir": "cats",
     }
-    runs = {"runs": [{"job_id": "diff-1", "output_dir": "/home/leo/.unsloth/outputs/cats-lora"}]}
+    runs = {
+        "runs": [
+            {
+                "job_id": "diff-1",
+                "output_dir": "/home/leo/.unsloth/outputs/cats-lora",
+                "catalog_path": "/home/leo/.unsloth/loras/cats-lora.safetensors",
+            }
+        ]
+    }
 
     async def fake_status(current_subject):
         return dict(status)
@@ -430,12 +440,13 @@ def test_diffusion_status_and_runs_hide_host_paths(monkeypatch):
     )
 
     seen = asyncio.run(_get_tool("get_diffusion_training_status").fn())
-    assert seen["active"] is True and seen["data_dir"] == "cats" and seen["lora_path"] is None
-    for key in ("output_dir", "checkpoint_path"):
+    assert seen["active"] is True and seen["data_dir"] == "cats" and seen["ema_path"] is None
+    for key in ("output_dir", "checkpoint_path", "lora_path", "catalog_path"):
         assert seen[key].startswith("ref:") and "leo" not in seen[key], (key, seen[key])
     listed = asyncio.run(_get_tool("list_diffusion_training_runs").fn())
     assert listed["runs"][0]["job_id"] == "diff-1"
-    assert listed["runs"][0]["output_dir"].startswith("ref:")
+    for key in ("output_dir", "catalog_path"):
+        assert listed["runs"][0][key].startswith("ref:"), (key, listed["runs"][0][key])
 
 
 def test_list_diffusion_training_runs_clamps_limit(monkeypatch):
