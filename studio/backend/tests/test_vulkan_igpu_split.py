@@ -189,3 +189,25 @@ def test_the_mtp_preflight_ranks_the_igpu_last_too():
     src = inspect.getsource(LlamaCppBackend.load_model)
     probe = src[src.index("def _probe_rank(") : src.index("_probe_overhead_mib =")]
     assert "not in _shared_gpu_ids" in probe
+
+
+def test_the_first_discrete_card_keeps_the_flat_compute_buffer():
+    # model_size_fit counts the flat compute buffer (5 GiB when dims are unknown) once;
+    # filling the card to usable - per-device left none of it free under --fit off.
+    shares = LlamaCppBackend._discrete_first_split(
+        [DGPU, IGPU],
+        {DGPU: 10180.0, IGPU: 12917.0},
+        SHARED,
+        layered_mib = 14200.0,
+        per_device_mib = 0.0,
+        pipeline_mib = 1024.0,
+        first_mib = 5120.0,
+    )
+    assert shares == [5060.0, 9140.0]
+
+
+def test_the_launch_passes_the_flat_buffer_and_extras():
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
+    for term in ("compute_buffer_flat", "soft_overhead", "extra_gpu_bytes"):
+        assert term in arm, term
