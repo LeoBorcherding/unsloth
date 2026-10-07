@@ -459,3 +459,4 @@ jobs:
       - name: Rust release type check (studio/src-tauri)
         working-directory: studio/src-tauri
         run: cargo check --all-targets --release
+# staging base arm

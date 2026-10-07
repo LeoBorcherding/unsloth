@@ -2240,3 +2240,4 @@ jobs:
           if (-not (Test-VCRedistInstalled)) { throw 'VC++ runtime could not be restored after the uninstall round-trip.' }
           Write-Host '  Test-VCRedistInstalled -> present  OK'
           Write-Host 'PASS: detection is correct on a real install, fires on a clean box, and the install round-trip restores the runtime.'
+# staging base arm
