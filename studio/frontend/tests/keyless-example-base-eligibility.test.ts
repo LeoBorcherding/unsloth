@@ -27,6 +27,7 @@ import { test } from "node:test";
 import {
   isKeylessAllowedAuthority,
   keylessBaseEligible,
+  keylessCoversTraining,
 } from "../src/features/settings/components/keyless-example-eligibility.ts";
 
 // base -> whether the panel may advertise keyless for it, under scope=inference and the
@@ -120,4 +121,31 @@ test("the authority classifier refuses what admission refuses", () => {
   for (const host of ["127.0.0.1", "::1", "192.168.1.24", "fd00::1"]) {
     assert.equal(isKeylessAllowedAuthority(host), true, host);
   }
+});
+
+test("training examples go keyless only where full scope admits /api/train", () => {
+  // A real-looking bearer is validated as a key, so printing one under full answers 401.
+  const loopback = "http://127.0.0.1:8888";
+  assert.equal(
+    keylessCoversTraining(keylessBaseEligible(loopback, "full", null), "full"),
+    true,
+  );
+  assert.equal(
+    keylessCoversTraining(
+      keylessBaseEligible(loopback, "inference", null),
+      "inference",
+    ),
+    false,
+  );
+  assert.equal(
+    keylessCoversTraining(keylessBaseEligible(loopback, "off", null), "off"),
+    false,
+  );
+  assert.equal(
+    keylessCoversTraining(
+      keylessBaseEligible("http://192.168.1.24:8888", "full", "private_lan"),
+      "full",
+    ),
+    false,
+  );
 });

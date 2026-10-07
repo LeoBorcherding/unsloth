@@ -55,7 +55,10 @@ import {
   shSingle,
   statusGgufVerdict,
 } from "./agent-command";
-import { keylessBaseEligible } from "./keyless-example-eligibility";
+import {
+  keylessBaseEligible,
+  keylessCoversTraining,
+} from "./keyless-example-eligibility";
 
 type ExampleType =
   | "curl"
@@ -984,8 +987,12 @@ export function UsageExamples({
   const toolsKey =
     apiKey ||
     (keylessBase && keylessTools ? KEYLESS_KEY_PLACEHOLDER : KEY_PLACEHOLDER);
-  // keyless "inference" scope never reaches /api/train, so always name a real key
-  const trainKey = apiKey || KEY_PLACEHOLDER;
+  // a non-dummy bearer opts out of keyless admission, so full scope must print the dummy
+  const trainKey =
+    apiKey ||
+    (keylessCoversTraining(keylessBase, keylessScope)
+      ? KEYLESS_KEY_PLACEHOLDER
+      : KEY_PLACEHOLDER);
   // agent tools are client-side schemas sent through the admitted inference routes.
   const agentKey =
     apiKey || (keylessBase ? KEYLESS_KEY_PLACEHOLDER : KEY_PLACEHOLDER);

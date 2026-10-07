@@ -92,3 +92,11 @@ export function keylessBaseEligible(
     return false;
   }
 }
+
+// Only `full` admits a keyless caller to /api/train; `inference` names its routes one by one.
+export function keylessCoversTraining(
+  keylessBase: boolean,
+  scope: KeylessApiAccessScope,
+): boolean {
+  return keylessBase && scope === "full";
+}
