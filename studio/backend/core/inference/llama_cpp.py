@@ -16347,14 +16347,23 @@ class LlamaCppBackend:
     ) -> list[list[tuple]]:
         """GPU subsets a placement may try, in preference order.
 
-        Prefixes of ``ranked`` (discrete cards first), then prefixes of its shared
-        GPUs alone: a discrete card too small to cover its split overhead sinks every
-        prefix it leads, while the iGPU may hold the model by itself."""
-        orders = [ranked]
+        Fewest devices first, each a prefix of the discrete cards plus a prefix of the
+        shared GPUs, more discrete first at equal size; then the shared GPUs alone. A
+        discrete card too small to cover its split overhead would otherwise sink every
+        later subset: the full prefix behind it, and the iGPU it was meant to join.
+        Without shared GPUs this is just the prefixes of ``ranked``."""
+        lo = max(1, min_gpus)
+        discrete = [g for g in ranked if g[0] not in shared_gpu_ids]
         shared = [g for g in ranked if g[0] in shared_gpu_ids]
-        if shared and len(shared) < len(ranked):
-            orders.append(shared)
-        return [order[:n] for order in orders for n in range(max(1, min_gpus), len(order) + 1)]
+        mixed = [
+            discrete[:k] + shared[:j]
+            for j in range(len(shared) + 1)
+            for k in range(1, len(discrete) + 1)
+        ]
+        alone = [shared[:j] for j in range(1, len(shared) + 1)]
+        return sorted((s for s in mixed if len(s) >= lo), key = len) + [
+            s for s in alone if len(s) >= lo
+        ]
 
     @staticmethod
     def _shared_heap_once(usable: Iterable[tuple[int, float]], shared_gpu_ids) -> float:

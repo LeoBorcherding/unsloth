@@ -344,6 +344,9 @@ def test_every_selector_tries_the_same_subsets():
     subsets = LlamaCppBackend._placement_subsets
     assert subsets([D, I1], {1}) == [[D], [D, I1], [I1]]
     assert subsets([D, I1, I2], {1, 2}, 2) == [[D, I1], [D, I1, I2], [I1, I2]]
+    # A second card can be skipped: the first card plus the iGPU is its own subset.
+    D2 = (3, 400)
+    assert subsets([D, D2, I1], {1}) == [[D], [D, D2], [D, I1], [D, D2, I1], [I1]]
     assert subsets([I1, I2], {1, 2}) == [[I1], [I1, I2]]
     assert subsets([D], set()) == [[D]]
     assert LlamaCppBackend._shared_heap_once([(0, 4096.0), (1, 8192.0), (2, 8192.0)], {1, 2}) == (
@@ -406,3 +409,31 @@ def test_every_launch_split_holds_what_lands_on_each_device():
             landed = weights * share / sum(shares)
             landed += per_dev + (on_first if i == pin[0] else pipe)
             assert landed <= usable[i] + 1e-6, (pin, i, landed, usable[i], spill)
+
+
+# (gpus as (idx, free MiB), shared ids, model MiB, split overhead MiB, expected pick).
+# Every selector case raised against the mixed-pin ranking so far.
+_SELECT_CASES = [
+    # Either device holds it: the discrete card.
+    ([(0, 11313), (1, 14352)], {1}, 6000, 0, [0]),
+    # The card can't cover its own split overhead; the iGPU alone holds it.
+    ([(0, 500), (1, 10000)], {1}, 9500, 1024, [1]),
+    # Two iGPUs reporting one 8 GiB heap: 12 GiB with the card, not 20.
+    ([(0, 4096), (1, 8192), (2, 8192)], {1, 2}, 16000, 0, None),
+    # A near-full second card sinks the full prefix (17945 usable for 18448); the big
+    # card plus the iGPU fit (17460 for 17424).
+    ([(0, 10000), (1, 500), (2, 8000)], {2}, 16400, 1024, [0, 2]),
+]
+
+
+def test_every_selector_case_picks_the_placement_that_fits():
+    for gpus, shared, model, overhead, expected in _SELECT_CASES:
+        picked, use_fit = LlamaCppBackend._select_gpus(
+            model * MIB,
+            gpus,
+            usable_fraction = 1.0,
+            total_by_idx = {idx: free for idx, free in gpus},
+            per_device_overhead_bytes = overhead * MIB,
+            shared_gpu_ids = shared,
+        )
+        assert (picked, use_fit) == (expected, expected is None), (gpus, model)
