@@ -253,3 +253,15 @@ def test_an_igpu_that_holds_it_alone_is_used_when_the_card_cannot_join():
         shared_gpu_ids = SHARED,
     )
     assert (picked, use_fit) == ([IGPU], False)
+
+
+def test_the_flat_buffer_is_reserved_on_the_pins_first_device():
+    # llama.cpp books the flat buffer on device 0, here the iGPU the pin lists first.
+    shares = LlamaCppBackend._discrete_first_split(
+        [IGPU, DGPU],
+        {DGPU: 4000.0, IGPU: 4000.0},
+        SHARED,
+        layered_mib = 7000.0,
+        first_mib = 1000.0,
+    )
+    assert shares == [3000.0, 4000.0]

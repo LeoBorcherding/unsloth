@@ -9042,9 +9042,9 @@ class LlamaCppBackend:
         to top up (a 27B on a 12 GB card plus a Ryzen iGPU: 4.8 GB on the card,
         8.3 GB on the iGPU, 1 t/s). ``layered_mib`` is what the split divides
         (weights + KV); ``per_device_mib`` is held back on each card for its own
-        compute buffer, ``pipeline_mib`` on every card after the first discrete one,
-        and ``first_mib`` (the flat buffer and resident extras the fit counts once) on
-        that first one, as ``_select_gpus`` charges them. ``shared_pool_mib`` (a
+        compute buffer, ``pipeline_mib`` on every other card, and ``first_mib`` (the flat
+        buffer and resident extras the fit counts once) on ``gpu_indices[0]``, the
+        child's device 0, where they are booked. ``shared_pool_mib`` (a
         CPU-pinned projector in host RAM) comes off the iGPUs' combined room once. None
         unless the pin mixes both kinds, or when the rest overflows those rooms.
         """
@@ -9055,9 +9055,13 @@ class LlamaCppBackend:
             return None
         caps = {i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib) for i in discrete}
         order = sorted(discrete, key = lambda d: caps[d], reverse = True)
-        caps[order[0]] = max(0.0, caps[order[0]] - first_mib)
-        for i in order[1:]:
-            caps[i] = max(0.0, caps[i] - pipeline_mib)
+        first = gpu_indices[0]
+        lead = first if first in caps else order[0]
+        if first in caps:
+            caps[first] = max(0.0, caps[first] - first_mib)
+        for i in order:
+            if i != lead:
+                caps[i] = max(0.0, caps[i] - pipeline_mib)
         if sum(caps.values()) <= 0:
             return None
         left = layered_mib
@@ -9069,6 +9073,8 @@ class LlamaCppBackend:
         igpu_room = {
             i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib) for i in igpus
         }
+        if first in igpu_room:
+            igpu_room[first] = max(0.0, igpu_room[first] - first_mib)
         reserved = sum(igpu_room.values())
         room_total = max(0.0, reserved - shared_pool_mib)
         if left > room_total + 1e-6:
