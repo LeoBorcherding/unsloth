@@ -1204,7 +1204,9 @@ class TestExtraArgsMtpDetection:
         # agree. Whitespace-stripped for formatter.
         compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
         assert "def_pool_budget_mib(subset,frac):" in compact
-        assert "sum(max(0.0,_gpu_usable(g,frac))forginsubset)" in compact
+        # Each GPU's own usable, with the host heap shared rows all report counted once.
+        assert "(g[0],max(0.0,_gpu_usable(g,frac)))forginsubset" in compact
+        assert "self._shared_heap_once(" in compact
         # No revert to the pooled free/total form.
         assert "def_pool_total(" not in compact
         assert "budget_frac=1.0" in compact

@@ -16305,6 +16305,32 @@ class LlamaCppBackend:
             env.pop(name, None)
 
     @staticmethod
+    def _placement_subsets(
+        ranked: list[tuple], shared_gpu_ids: Collection[int], min_gpus: int = 1
+    ) -> list[list[tuple]]:
+        """GPU subsets a placement may try, in preference order.
+
+        Prefixes of ``ranked`` (discrete cards first), then prefixes of its shared
+        GPUs alone: a discrete card too small to cover its split overhead sinks every
+        prefix it leads, while the iGPU may hold the model by itself."""
+        orders = [ranked]
+        shared = [g for g in ranked if g[0] in shared_gpu_ids]
+        if shared and len(shared) < len(ranked):
+            orders.append(shared)
+        return [order[:n] for order in orders for n in range(max(1, min_gpus), len(order) + 1)]
+
+    @staticmethod
+    def _shared_heap_once(usable: Iterable[tuple[int, float]], shared_gpu_ids) -> float:
+        """Pooled usable MiB, with the host heap every shared row reports counted once."""
+        pool = heap = 0.0
+        for idx, mib in usable:
+            if idx in shared_gpu_ids:
+                heap = max(heap, mib)
+            else:
+                pool += mib
+        return pool + heap
+
+    @staticmethod
     def _select_gpus(
         model_size_bytes: int,
         gpus: list[tuple[int, int]],
@@ -16368,38 +16394,13 @@ class LlamaCppBackend:
         usable_count = sum(1 for idx, free_mib in ranked if _usable(idx, free_mib) > overhead_mib)
         min_gpus = max(1, min(min_gpus, usable_count or 1))
 
-        # Try 1 GPU at the usable-VRAM threshold (only when one device is allowed).
-        if min_gpus <= 1 and _usable(ranked[0][0], ranked[0][1]) >= model_size_mib:
-            return [ranked[0][0]], False
-
-        # Try N GPUs (most-free first); each past the first adds per-device overhead.
-        # Require at least min_gpus devices before accepting a fit.
-        # Shared rows report one overlapping host heap, so only the largest is credited.
-        def _prefix_fit(order: list[tuple[int, int]]) -> Optional[list[int]]:
-            cumulative = 0.0
-            shared_pool = 0.0
-            selected = []
-            for idx, free_mib in order:
-                selected.append(idx)
-                if idx in _shared:
-                    shared_pool = max(shared_pool, _usable(idx, free_mib))
-                else:
-                    cumulative += _usable(idx, free_mib)
-                if (
-                    len(selected) >= min_gpus
-                    and cumulative + shared_pool
-                    >= model_size_mib + (len(selected) - 1) * overhead_mib
-                ):
-                    return sorted(selected)
-            return None
-
-        selected = _prefix_fit(ranked)
-        # A discrete card too small to cover its split overhead can sink every prefix
-        # that leads with it while the iGPU(s) alone still hold the model.
-        if selected is None and _shared and not all(g[0] in _shared for g in ranked):
-            selected = _prefix_fit([g for g in ranked if g[0] in _shared])
-        if selected is not None:
-            return selected, False
+        # Fewest GPUs first; each past the first adds per-device overhead.
+        for subset in LlamaCppBackend._placement_subsets(ranked, _shared, min_gpus):
+            budget = LlamaCppBackend._shared_heap_once(
+                ((idx, _usable(idx, free_mib)) for idx, free_mib in subset), _shared
+            )
+            if budget >= model_size_mib + (len(subset) - 1) * overhead_mib:
+                return sorted(idx for idx, _ in subset), False
 
         # Too large even for all GPUs; let --fit handle it
         logger.debug(
@@ -25278,7 +25279,10 @@ class LlamaCppBackend:
                         # Sum each GPU's own usable budget. Pooling free and total
                         # separately would let an unknown-total GPU (MIG/vGPU/N/A)
                         # add full free with no cushion among known-total GPUs.
-                        return sum(max(0.0, _gpu_usable(g, frac)) for g in subset)
+                        return self._shared_heap_once(
+                            ((g[0], max(0.0, _gpu_usable(g, frac))) for g in subset),
+                            _shared_gpu_ids,
+                        )
 
                     # Resolve effective context: 0 means let llama-server use
                     # the model's native length. Only expand to a known native
@@ -26200,8 +26204,10 @@ class LlamaCppBackend:
                             if _both_fit_somewhere:
                                 break
                             _probe_min_gpus = _probe_floor(_probe_ranked, False)
-                            for _n in range(_probe_min_gpus, len(_probe_ranked) + 1):
-                                _subset = _probe_ranked[:_n]
+                            for _subset in self._placement_subsets(
+                                _probe_ranked, _shared_gpu_ids, _probe_min_gpus
+                            ):
+                                _n = len(_subset)
                                 _cc_n = lambda c, _k = _n: _cc_bytes(c, _k)
                                 _base_wo = _probe_base(False, _n)
                                 _budget_wo = _pool_budget_mib(_subset, _probe_frac(False))
@@ -26713,8 +26719,10 @@ class LlamaCppBackend:
                                     or 1,
                                 ),
                             )
-                            for n_gpus in range(_auto_min_gpus, len(ranked) + 1):
-                                subset = ranked[:n_gpus]
+                            for subset in self._placement_subsets(
+                                ranked, _shared_gpu_ids, _auto_min_gpus
+                            ):
+                                n_gpus = len(subset)
                                 pool_budget = _pool_budget_mib(subset, pin_fraction)
                                 _ms = _subset_model_size(n_gpus)
                                 # Compute buffer is replicated per device in a layer
@@ -26785,8 +26793,10 @@ class LlamaCppBackend:
                                 # handing placement to --fit on and host offload.
                                 effective_ctx = min(_AUTO_OFFLOAD_CTX, effective_ctx)
                                 if effective_ctx > 0:
-                                    for n_gpus in range(_auto_min_gpus, len(ranked) + 1):
-                                        subset = ranked[:n_gpus]
+                                    for subset in self._placement_subsets(
+                                        ranked, _shared_gpu_ids, _auto_min_gpus
+                                    ):
+                                        n_gpus = len(subset)
                                         kv = _kv_bytes(effective_ctx)
                                         footprint_mib = (
                                             _subset_model_size(n_gpus)

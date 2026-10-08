@@ -300,3 +300,57 @@ def test_an_inherited_projector_is_reserved_on_the_first_device():
     arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
     assert '_spill_inputs.get("env_mmproj_bytes")' in arm
     assert 'not _spill_inputs.get("env_mmproj_unsized")' in arm
+
+
+# Every pin order and reserve kind the split has been reviewed against. Invariants, not
+# exact shares: each discrete card holds its share plus its reserve, the iGPUs' shares
+# plus every iGPU reserve and the shared-pool projector fit the one heap they report,
+# and the shares add up to what was asked.
+_SPLIT_CASES = [
+    # (pin, usable, shared, layered, per_device, pipeline, first, shared_pool)
+    ([0, 1], {0: 4000.0, 1: 4000.0}, {1}, 7000.0, 0.0, 0.0, 1000.0, 0.0),
+    ([1, 0], {0: 4000.0, 1: 4000.0}, {1}, 7000.0, 0.0, 0.0, 1000.0, 0.0),
+    ([1, 0], {0: 4000.0, 1: 4000.0}, {1}, 6000.0, 0.0, 1024.0, 0.0, 0.0),
+    ([0, 1], {0: 10180.0, 1: 12917.0}, {1}, 14200.0, 300.0, 1024.0, 5120.0, 0.0),
+    ([0, 1, 2], {0: 10000.0, 1: 8000.0, 2: 12000.0}, {2}, 20000.0, 300.0, 1024.0, 0.0, 0.0),
+    ([2, 0, 1], {0: 10000.0, 1: 8000.0, 2: 12000.0}, {2}, 18000.0, 300.0, 1024.0, 500.0, 0.0),
+    ([1, 0, 2], {0: 10000.0, 1: 8000.0, 2: 12000.0}, {2}, 18000.0, 300.0, 1024.0, 500.0, 0.0),
+    ([0, 1, 2], {0: 4096.0, 1: 8192.0, 2: 8192.0}, {1, 2}, 9000.0, 0.0, 0.0, 0.0, 0.0),
+    ([1, 0, 2], {0: 4000.0, 1: 3000.0, 2: 3000.0}, {1, 2}, 5000.0, 0.0, 0.0, 200.0, 1000.0),
+    ([0, 1, 2], {0: 10000.0, 1: 8000.0, 2: 2000.0}, {1, 2}, 14000.0, 300.0, 1024.0, 0.0, 0.0),
+]
+
+
+def test_every_split_leaves_each_devices_reserve_free():
+    for pin, usable, shared, layered, per_dev, pipe, first, pool in _SPLIT_CASES:
+        shares = LlamaCppBackend._discrete_first_split(
+            pin, usable, shared, layered, per_dev, pipe, first, pool
+        )
+        assert shares is not None, pin
+        by_id = dict(zip(pin, shares))
+        reserve = {i: per_dev + (first if i == pin[0] else pipe) for i in pin}
+        for i in pin:
+            if i not in shared:
+                assert by_id[i] + reserve[i] <= usable[i] + 1e-6, (pin, i)
+        igpus = [i for i in pin if i in shared]
+        heap = max(usable[i] for i in igpus)
+        assert sum(by_id[i] + reserve[i] for i in igpus) + pool <= heap + 1e-6, pin
+        assert abs(sum(shares) - layered) < 1e-6, pin
+
+
+def test_every_selector_tries_the_same_subsets():
+    D, I1, I2 = (0, 500), (1, 10000), (2, 10000)
+    subsets = LlamaCppBackend._placement_subsets
+    assert subsets([D, I1], {1}) == [[D], [D, I1], [I1]]
+    assert subsets([D, I1, I2], {1, 2}, 2) == [[D, I1], [D, I1, I2], [I1, I2]]
+    assert subsets([I1, I2], {1, 2}) == [[I1], [I1, I2]]
+    assert subsets([D], set()) == [[D]]
+    assert LlamaCppBackend._shared_heap_once([(0, 4096.0), (1, 8192.0), (2, 8192.0)], {1, 2}) == (
+        12288.0
+    )
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    # The MTP preflight and both Auto-context loops, alongside _select_gpus.
+    assert src.count("self._placement_subsets(") == 3
+    assert "ranked[:n_gpus]" not in src and "_probe_ranked[:_n]" not in src
+    pool = src[src.index("def _pool_budget_mib(") : src.index("# Resolve effective context")]
+    assert "_shared_heap_once" in pool
