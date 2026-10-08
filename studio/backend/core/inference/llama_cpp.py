@@ -9083,6 +9083,41 @@ class LlamaCppBackend:
         return [shares[i] for i in gpu_indices]
 
     @staticmethod
+    def _mixed_split_terms(
+        spill_inputs: Mapping,
+        mmproj_bytes: int,
+        shared_pool_mmproj_bytes: int,
+        mtp_reserve_bytes: int,
+    ) -> tuple[float, float, float, float, float]:
+        """``_discrete_first_split``'s sizes in MiB, from the launch's spill inputs.
+
+        Returns (layered, per_device, pipeline, first, shared_pool). A separate GPU
+        drafter inherits the emitted ``--tensor-split`` (``common_base_params_to_
+        speculative`` copies the main params), so its reserve is split with the layers
+        rather than held on device 0; an embedded head's stays in ``first``.
+        ``model_size`` already carries a GPU projector, and the shared-pool one sits
+        in the iGPUs' room, so neither is charged again."""
+        mib = 1024 * 1024
+        draft = mtp_reserve_bytes if spill_inputs.get("separate_draft_on_gpu") else 0
+        extras = max(
+            0,
+            spill_inputs["extra_gpu_bytes"] - mmproj_bytes - shared_pool_mmproj_bytes - draft,
+        )
+        first = (
+            spill_inputs["compute_buffer_flat"]
+            + spill_inputs["soft_overhead"]
+            + extras
+            + int(spill_inputs.get("env_mmproj_bytes") or 0)
+        )
+        return (
+            (spill_inputs["model_size"] + spill_inputs["kv_cache_bytes"] + draft) / mib,
+            spill_inputs["ctx_compute_per_device"] / mib,
+            float(LlamaCppBackend._PIPELINE_PER_DEVICE_OVERHEAD_MIB),
+            first / mib,
+            shared_pool_mmproj_bytes / mib,
+        )
+
+    @staticmethod
     def _auto_split_fingerprint(tensor_split: Optional[List[float]]) -> Optional[tuple[float, ...]]:
         """What an auto-mode load ASKED for, as a comparable ratio.
 
@@ -16306,7 +16341,9 @@ class LlamaCppBackend:
 
     @staticmethod
     def _placement_subsets(
-        ranked: list[tuple], shared_gpu_ids: Collection[int], min_gpus: int = 1
+        ranked: list[tuple],
+        shared_gpu_ids: Collection[int],
+        min_gpus: int = 1,
     ) -> list[list[tuple]]:
         """GPU subsets a placement may try, in preference order.
 
@@ -28123,26 +28160,12 @@ class LlamaCppBackend:
                             list(gpu_indices),
                             _spill_inputs["gpu_usable_mib"],
                             _shared_gpu_ids,
-                            (_spill_inputs["model_size"] + _spill_inputs["kv_cache_bytes"])
-                            / (1024 * 1024),
-                            _spill_inputs["ctx_compute_per_device"] / (1024 * 1024),
-                            self._PIPELINE_PER_DEVICE_OVERHEAD_MIB,
-                            (
-                                _spill_inputs["compute_buffer_flat"]
-                                + _spill_inputs["soft_overhead"]
-                                # model_size already carries a GPU projector, and the
-                                # shared-pool one sits in the iGPUs' room instead.
-                                + max(
-                                    0,
-                                    _spill_inputs["extra_gpu_bytes"]
-                                    - (mmproj_size or 0)
-                                    - (_shared_pool_mmproj or 0),
-                                )
-                                # An inherited LLAMA_ARG_MMPROJ, weights plus allowance.
-                                + int(_spill_inputs.get("env_mmproj_bytes") or 0)
-                            )
-                            / (1024 * 1024),
-                            (_shared_pool_mmproj or 0) / (1024 * 1024),
+                            *self._mixed_split_terms(
+                                _spill_inputs,
+                                mmproj_size or 0,
+                                _shared_pool_mmproj or 0,
+                                _mtp_reserve_bytes,
+                            ),
                         )
                         if _shared_gpu_ids
                         and _spill_inputs is not None

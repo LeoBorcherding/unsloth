@@ -209,11 +209,12 @@ def test_the_first_discrete_card_keeps_the_flat_compute_buffer():
 def test_the_launch_passes_the_flat_buffer_and_extras():
     src = inspect.getsource(LlamaCppBackend.load_model)
     arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
-    for term in ("compute_buffer_flat", "soft_overhead", "extra_gpu_bytes"):
+    # The sizes come from one helper; test_every_launch_split_holds_what_lands_on_each_device
+    # checks what it does with them.
+    assert "self._mixed_split_terms(" in arm
+    for term in ("_spill_inputs,", "mmproj_size or 0,", "_shared_pool_mmproj or 0,"):
         assert term in arm, term
-    # layered_mib comes from model_size, which already holds a GPU-resident projector.
-    assert "- (mmproj_size or 0)" in arm
-    assert "(_shared_pool_mmproj or 0) / (1024 * 1024)," in arm
+    assert "_mtp_reserve_bytes," in arm
 
 
 def test_a_shared_pool_projector_comes_off_the_igpu_room_once():
@@ -298,8 +299,8 @@ def test_an_inherited_projector_is_reserved_on_the_first_device():
     # LLAMA_ARG_MMPROJ loads a projector the spill planner books on device 0.
     src = inspect.getsource(LlamaCppBackend.load_model)
     arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
-    assert '_spill_inputs.get("env_mmproj_bytes")' in arm
     assert 'not _spill_inputs.get("env_mmproj_unsized")' in arm
+    assert '"env_mmproj_bytes"' in inspect.getsource(LlamaCppBackend._mixed_split_terms)
 
 
 # Every pin order and reserve kind the split has been reviewed against. Invariants, not
@@ -354,3 +355,54 @@ def test_every_selector_tries_the_same_subsets():
     assert "ranked[:n_gpus]" not in src and "_probe_ranked[:_n]" not in src
     pool = src[src.index("def _pool_budget_mib(") : src.index("# Resolve effective context")]
     assert "_shared_heap_once" in pool
+
+
+def _spill(
+    model,
+    kv,
+    draft,
+    separate,
+    flat = 256,
+    mmproj = 0,
+    env_mmproj = 0,
+):
+    return {
+        "model_size": model * MIB,
+        "kv_cache_bytes": kv * MIB,
+        "ctx_compute_per_device": 0,
+        "compute_buffer_flat": flat * MIB,
+        "soft_overhead": 0,
+        "extra_gpu_bytes": (mmproj + draft) * MIB,
+        "env_mmproj_bytes": env_mmproj * MIB,
+        "separate_draft_on_gpu": separate,
+        "_mmproj": mmproj,
+    }
+
+
+# (pin, usable, spill inputs, mtp reserve MiB). A separate GPU drafter inherits the
+# emitted --tensor-split, so its bytes land by ratio; an embedded head's reserve and
+# the flat buffer and projectors land on device 0.
+_LAUNCH_CASES = [
+    ([0, 1], {0: 8192.0, 1: 8192.0}, _spill(11520, 1024, 2048, True), 2048),
+    ([1, 0], {0: 8192.0, 1: 8192.0}, _spill(11520, 1024, 2048, True), 2048),
+    ([0, 1], {0: 8192.0, 1: 8192.0}, _spill(12288, 1024, 512, False), 512),
+    ([1, 0], {0: 8192.0, 1: 8192.0}, _spill(12288, 1024, 512, False), 512),
+    ([0, 1], {0: 8192.0, 1: 8192.0}, _spill(11264, 1024, 0, False, mmproj = 1024), 0),
+    ([1, 0], {0: 8192.0, 1: 8192.0}, _spill(11264, 1024, 0, False, env_mmproj = 768), 0),
+]
+
+
+def test_every_launch_split_holds_what_lands_on_each_device():
+    for pin, usable, spill, mtp in _LAUNCH_CASES:
+        terms = LlamaCppBackend._mixed_split_terms(spill, spill["_mmproj"] * MIB, 0, mtp * MIB)
+        shares = LlamaCppBackend._discrete_first_split(pin, usable, {1}, *terms)
+        assert shares is not None, (pin, spill)
+        _, per_dev, pipe, _, _ = terms
+        draft = mtp if spill["separate_draft_on_gpu"] else 0
+        on_first = (spill["compute_buffer_flat"] + spill["env_mmproj_bytes"]) / MIB + (mtp - draft)
+        weights = (spill["model_size"] + spill["kv_cache_bytes"]) / MIB + draft
+        for i, share in zip(pin, shares):
+            # What llama.cpp actually places: the ratio over everything it splits.
+            landed = weights * share / sum(shares)
+            landed += per_dev + (on_first if i == pin[0] else pipe)
+            assert landed <= usable[i] + 1e-6, (pin, i, landed, usable[i], spill)
