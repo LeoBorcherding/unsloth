@@ -9058,12 +9058,8 @@ class LlamaCppBackend:
         caps = {i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib) for i in discrete}
         order = sorted(discrete, key = lambda d: caps[d], reverse = True)
         first = gpu_indices[0]
-        lead = first if first in caps else order[0]
-        if first in caps:
-            caps[first] = max(0.0, caps[first] - first_mib)
-        for i in order:
-            if i != lead:
-                caps[i] = max(0.0, caps[i] - pipeline_mib)
+        for i in discrete:
+            caps[i] = max(0.0, caps[i] - (first_mib if i == first else pipeline_mib))
         if sum(caps.values()) <= 0:
             return None
         left = layered_mib
@@ -9071,12 +9067,9 @@ class LlamaCppBackend:
         for i in order:
             shares[i] = min(caps[i], left)
             left -= shares[i]
-        # Every iGPU is an extra device, so it keeps both reserves too.
-        igpu_room = {
-            i: max(0.0, usable_mib.get(i, 0.0) - per_device_mib - pipeline_mib) for i in igpus
-        }
-        if first in igpu_room:
-            igpu_room[first] = max(0.0, igpu_room[first] - first_mib)
+        # first_mib on the pin's device 0, the pipeline reserve on every device after it.
+        reserve = {i: per_device_mib + (first_mib if i == first else pipeline_mib) for i in igpus}
+        igpu_room = {i: max(0.0, usable_mib.get(i, 0.0) - reserve[i]) for i in igpus}
         reserved = sum(igpu_room.values())
         heap = max(usable_mib.get(i, 0.0) for i in igpus)
         held = sum(usable_mib.get(i, 0.0) - igpu_room[i] for i in igpus)
@@ -28135,12 +28128,15 @@ class LlamaCppBackend:
                                     - (mmproj_size or 0)
                                     - (_shared_pool_mmproj or 0),
                                 )
+                                # An inherited LLAMA_ARG_MMPROJ, weights plus allowance.
+                                + int(_spill_inputs.get("env_mmproj_bytes") or 0)
                             )
                             / (1024 * 1024),
                             (_shared_pool_mmproj or 0) / (1024 * 1024),
                         )
                         if _shared_gpu_ids
                         and _spill_inputs is not None
+                        and not _spill_inputs.get("env_mmproj_unsized")
                         and not tensor_parallel
                         and not _extra_args_set_any_flag(extra_args, _TENSOR_SPLIT_FLAGS)
                         and not _inherited_layer_tensor_split(os.environ)

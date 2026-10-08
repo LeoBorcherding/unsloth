@@ -280,3 +280,23 @@ def test_two_igpus_reporting_one_shared_heap_are_credited_once():
         )
         is None
     )
+
+
+def test_a_dgpu_after_a_leading_igpu_keeps_its_pipeline_reserve():
+    # Pipeline scratch lands on every device after the pin's first, here the dGPU.
+    shares = LlamaCppBackend._discrete_first_split(
+        [IGPU, DGPU],
+        {DGPU: 4000.0, IGPU: 4000.0},
+        SHARED,
+        layered_mib = 6000.0,
+        pipeline_mib = 1024.0,
+    )
+    assert shares == [3024.0, 2976.0]
+
+
+def test_an_inherited_projector_is_reserved_on_the_first_device():
+    # LLAMA_ARG_MMPROJ loads a projector the spill planner books on device 0.
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    arm = src[src.index("_mixed_split = (") : src.index("if _mixed_split is not None:")]
+    assert '_spill_inputs.get("env_mmproj_bytes")' in arm
+    assert 'not _spill_inputs.get("env_mmproj_unsized")' in arm
