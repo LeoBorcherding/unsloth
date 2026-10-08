@@ -437,3 +437,15 @@ def test_every_selector_case_picks_the_placement_that_fits():
             shared_gpu_ids = shared,
         )
         assert (picked, use_fit) == (expected, expected is None), (gpus, model)
+
+
+def test_the_emitted_mixed_split_is_what_status_reports():
+    src = inspect.getsource(LlamaCppBackend.load_model)
+    start = src.index("if _mixed_split is not None:")
+    arm = src[start : src.index('server_caps.get("supports_metrics")')]
+    assert "self._auto_tensor_split_emitted = self._auto_split_fingerprint(_mixed_split)" in arm
+    # /status reads the fingerprint back as the normalized ratio the child runs.
+    backend = LlamaCppBackend.__new__(LlamaCppBackend)
+    backend._tensor_split = None
+    backend._auto_tensor_split_emitted = LlamaCppBackend._auto_split_fingerprint([7936.0, 6656.0])
+    assert backend.tensor_split == [round(7936 / 14592, 6), round(6656 / 14592, 6)]

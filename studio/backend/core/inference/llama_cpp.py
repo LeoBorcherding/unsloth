@@ -28186,6 +28186,8 @@ class LlamaCppBackend:
                     )
                     if _mixed_split is not None:
                         cmd.extend(["--tensor-split", self._format_tensor_split(_mixed_split)])
+                        # /status reports it; the reload check compares the request.
+                        self._auto_tensor_split_emitted = self._auto_split_fingerprint(_mixed_split)
                         logger.info(
                             "Filling discrete GPU(s) before the shared-memory iGPU: "
                             "--tensor-split %s over %s",
