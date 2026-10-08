@@ -113,9 +113,9 @@ def test_the_split_is_positional_over_the_pin_order():
 
 def test_overflow_is_shared_across_igpus_by_room():
     shares = LlamaCppBackend._discrete_first_split(
-        [0, 1, 2], {0: 4000.0, 1: 3000.0, 2: 1000.0}, {1, 2}, layered_mib = 8000.0
+        [0, 1, 2], {0: 4000.0, 1: 3000.0, 2: 1000.0}, {1, 2}, layered_mib = 6000.0
     )
-    assert shares == [4000.0, 3000.0, 1000.0]
+    assert shares == [4000.0, 1500.0, 500.0]
 
 
 def test_only_a_mixed_pin_gets_a_split():
@@ -176,13 +176,13 @@ def test_igpu_overflow_is_apportioned_after_their_reserves():
         [0, 1, 2],
         {0: 10000.0, 1: 8000.0, 2: 2000.0},
         {1, 2},
-        layered_mib = 17000.0,
+        layered_mib = 14000.0,
         per_device_mib = 300.0,
         pipeline_mib = 1024.0,
     )
     assert shares[0] == 9700.0
     assert shares[2] <= 2000.0 - 1324.0
-    assert abs(sum(shares) - 17000.0) < 1e-6
+    assert abs(sum(shares) - 14000.0) < 1e-6
 
 
 def test_the_mtp_preflight_ranks_the_igpu_last_too():
@@ -222,10 +222,10 @@ def test_a_shared_pool_projector_comes_off_the_igpu_room_once():
         [0, 1, 2],
         {0: 4000.0, 1: 3000.0, 2: 3000.0},
         {1, 2},
-        layered_mib = 8000.0,
+        layered_mib = 6000.0,
         shared_pool_mib = 1000.0,
     )
-    assert shares == [4000.0, 2000.0, 2000.0]
+    assert shares == [4000.0, 1000.0, 1000.0]
 
 
 def test_a_split_that_overflows_the_igpu_rooms_is_declined():
@@ -265,3 +265,18 @@ def test_the_flat_buffer_is_reserved_on_the_pins_first_device():
         first_mib = 1000.0,
     )
     assert shares == [3000.0, 4000.0]
+
+
+def test_two_igpus_reporting_one_shared_heap_are_credited_once():
+    # A 4 GiB card plus two iGPUs that each report the same 8 GiB pool: 12 GiB, not 20.
+    gpus = [(0, 4096), (1, 8192), (2, 8192)]
+    picked, use_fit = LlamaCppBackend._select_gpus(
+        16000 * MIB, gpus, usable_fraction = 1.0, shared_gpu_ids = {1, 2}
+    )
+    assert (picked, use_fit) == (None, True)
+    assert (
+        LlamaCppBackend._discrete_first_split(
+            [0, 1, 2], {0: 4096.0, 1: 8192.0, 2: 8192.0}, {1, 2}, layered_mib = 16000.0
+        )
+        is None
+    )

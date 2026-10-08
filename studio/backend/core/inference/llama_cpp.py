@@ -9045,8 +9045,10 @@ class LlamaCppBackend:
         compute buffer, ``pipeline_mib`` on every other card, and ``first_mib`` (the flat
         buffer and resident extras the fit counts once) on ``gpu_indices[0]``, the
         child's device 0, where they are booked. ``shared_pool_mib`` (a
-        CPU-pinned projector in host RAM) comes off the iGPUs' combined room once. None
-        unless the pin mixes both kinds, or when the rest overflows those rooms.
+        CPU-pinned projector in host RAM) comes off the iGPUs' combined room once. That
+        room is one heap the iGPUs all report, so it is the largest pool less every
+        iGPU's reserves. None unless the pin mixes both kinds, or when the rest
+        overflows that room.
         """
         shared = set(shared_gpu_ids)
         discrete = [i for i in gpu_indices if i not in shared]
@@ -9076,7 +9078,9 @@ class LlamaCppBackend:
         if first in igpu_room:
             igpu_room[first] = max(0.0, igpu_room[first] - first_mib)
         reserved = sum(igpu_room.values())
-        room_total = max(0.0, reserved - shared_pool_mib)
+        heap = max(usable_mib.get(i, 0.0) for i in igpus)
+        held = sum(usable_mib.get(i, 0.0) - igpu_room[i] for i in igpus)
+        room_total = max(0.0, min(reserved, heap - held) - shared_pool_mib)
         if left > room_total + 1e-6:
             return None
         if reserved > 0:
@@ -16377,15 +16381,21 @@ class LlamaCppBackend:
 
         # Try N GPUs (most-free first); each past the first adds per-device overhead.
         # Require at least min_gpus devices before accepting a fit.
+        # Shared rows report one overlapping host heap, so only the largest is credited.
         def _prefix_fit(order: list[tuple[int, int]]) -> Optional[list[int]]:
             cumulative = 0.0
+            shared_pool = 0.0
             selected = []
             for idx, free_mib in order:
                 selected.append(idx)
-                cumulative += _usable(idx, free_mib)
+                if idx in _shared:
+                    shared_pool = max(shared_pool, _usable(idx, free_mib))
+                else:
+                    cumulative += _usable(idx, free_mib)
                 if (
                     len(selected) >= min_gpus
-                    and cumulative >= model_size_mib + (len(selected) - 1) * overhead_mib
+                    and cumulative + shared_pool
+                    >= model_size_mib + (len(selected) - 1) * overhead_mib
                 ):
                     return sorted(selected)
             return None
