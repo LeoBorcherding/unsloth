@@ -333,8 +333,7 @@ def test_a_weights_only_drafter_reserve_counts_as_unsized():
 
     compact = "".join(inspect.getsource(B.load_model).split())
     assert (
-        "mtp_unsized=bool(_flat_mtp_engagesor_cpu_draft_fit_bytesisNone"
-        "or_draft_split_across_host)"
+        "mtp_unsized=bool(_flat_mtp_engagesor_cpu_draft_fit_bytesisNoneor_draft_split_across_host)"
     ) in compact
     assert "_flat_mtp_engagesandmtp_overhead_fnisNone" not in compact
 
@@ -2409,3 +2408,21 @@ def test_the_reserve_holds_for_a_placement_the_fitter_will_not_move():
     assert _placement_is_fitter_proof(["-ngl", "auto"], env = {}) is False
     assert _placement_is_fitter_proof(None, gpu_layers = 0, env = {}) is True
     assert _placement_is_fitter_proof(None, env = {}) is False
+
+
+def test_the_prompt_cache_is_in_the_footprint_it_is_subtracted_from():
+    """The prompt cache is host-only but absent from the footprint, so subtracting it credited
+    VRAM that was never charged and faked a fit."""
+    avail_mib = 16 * 1024
+
+    def _fit(cache):
+        return LlamaCppBackend._fit_derived_load_mode(
+            _Stub(avail_mib),
+            model_size = 20 * GIB,
+            prompt_cache_bytes = cache,
+            gpus = [(0, 12 * 1024)],
+            avail_mib = avail_mib,
+        )
+
+    assert _fit(0) == FIT_MODE
+    assert _fit(8 * GIB) is None
