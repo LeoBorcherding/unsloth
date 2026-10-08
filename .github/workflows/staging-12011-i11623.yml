@@ -1,0 +1,29 @@
+name: "staging-12011 i11623-repro"
+on:
+  push:
+    branches: ["pr-12011-i11623-ci"]
+  workflow_dispatch:
+jobs:
+  repro:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['windows-latest', 'windows-11-arm', 'macos-15', 'macos-15-intel', 'ubuntu-latest']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/i11623
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install uvicorn psutil==7.2.2
+      - name: Repro (base vs heads, real sockets)
+        run: python -I .github/i11623/i11623_repro.py --variants .github/i11623/variants --host-policy .github/i11623/host_policy.py --out i11623_${{ matrix.os }}.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: i11623_${{ matrix.os }}
+          path: i11623_${{ matrix.os }}.json
