@@ -1,0 +1,31 @@
+name: "staging-12011 i11623-base-tests"
+on:
+  push:
+    branches: ["pr-12011-i11623base-ci"]
+  workflow_dispatch:
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ['windows-latest']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Before tree (upstream main a13d3a50d)
+        run: git worktree add --detach ../before a13d3a50d908abb135704d2415848033a743fb21 && git -C ../before log --oneline -1 && git log --oneline -1
+      - name: Install test deps
+        run: python -m pip install -r studio/backend/requirements/studio.txt pytest pytest-asyncio pytest-timeout python-multipart psutil
+      - name: Port + sibling tests on BEFORE (upstream main)
+        run: cd ../before && python -m pytest studio/backend/tests/test_studio_pid_files.py -q -p no:cacheprovider -k "unreaped_child or port or listener or backlog" 2>&1 | tail -15 || true
+      - name: Port + sibling tests on AFTER (main + PR)
+        run: python -m pytest studio/backend/tests/test_studio_pid_files.py -q -p no:cacheprovider -k "unreaped_child or port or listener or backlog" 2>&1 | tail -15 || true
