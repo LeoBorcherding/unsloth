@@ -131,11 +131,23 @@ def test_unset_fields_stay_out_of_the_merge():
     assert payload.model_dump(exclude_unset = True) == {"ragTopK": 5}
 
 
+@pytest.mark.parametrize("level", ["high", "low"])
+def test_sandbox_level_survives_the_payload(level):
+    payload = ChatSettingsPayload.model_validate({"sandboxLevel": level})
+    assert payload.model_dump(exclude_unset = True) == {"sandboxLevel": level}
+
+
+def test_max_tool_calls_off_survives_the_payload():
+    payload = ChatSettingsPayload.model_validate({"maxToolCallsPerMessage": 0})
+    assert payload.model_dump(exclude_unset = True) == {"maxToolCallsPerMessage": 0}
+
+
 @pytest.mark.parametrize(
     "payload",
     [
         # Full access disables the sandbox, so it is re-accepted each session.
         {"permissionMode": "full"},
+        {"sandboxLevel": "medium"},
         {"ragTopK": 0},
         {"ragTopK": 51},
         {"ragAutoInjectMinScore": 2},
@@ -150,8 +162,12 @@ def test_unset_fields_stay_out_of_the_merge():
         {"researchModelTimeoutSeconds": 9},
         {"researchModelTimeoutSeconds": -1},
         {"researchModelTimeoutSeconds": 365 * 24 * 3600 + 1},
-        # bool subclasses int, so False would persist as the 0 "unlimited" sentinel.
+        # bool subclasses int, so False would persist as the 0 sentinel.
         {"researchModelTimeoutSeconds": False},
+        {"maxToolCallsPerMessage": False},
+        {"maxToolCallsPerMessage": True},
+        {"maxToolCallsPerMessage": -1},
+        {"toolCallTimeout": 0},
         {"unknownSetting": True},
     ],
 )

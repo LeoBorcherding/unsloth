@@ -32,28 +32,23 @@ const DIST = resolve(HERE, "..", "dist");
  * machine.
  */
 export const BUDGET = {
-  // Measured 1,496.2 KB transfer / 5,207.2 KB raw at 17363f8a2. Raised for the audio placement control: same
-  // build both sides, merge base 1,560.9 KB transfer against branch 1,562.6 KB, so it crossed the old 1,562.5 KB
-  // ceiling by a tenth of a kilobyte.
-  //
-  // Raised again because main crossed 1,582.0 KB and stayed there. Four builds on
-  // one machine, same toolchain, transfer / raw / chunks:
-  //
-  //   3f2c89537  #10629's parent          1,574.7 / 5,260.1 / 91
-  //   e3e457a7d  #10629 eager Settings    1,579.9 / 5,288.8 / 82
-  //   19c86b3cc  last green Frontend CI   1,576.5 / 5,267.6 / 91
-  //   7436c103e  main                     1,585.6 / 5,306.4 / 82
-  //
-  // No single change is over the line. #10629 is the largest contributor at
-  // +5.2 KB -- it statically imports SettingsDialog and FloatingMonitor to make
-  // Settings eager again, which is the fix it shipped, and which is what folds
-  // nine chunks into the eager graph and takes settings-*.js from 158.0 KB raw to
-  // 208.2 KB. It left 2.1 KB of headroom; the ~40 commits after it spent that.
-  // So this is a deliberate raise, not a regression to lazy-load away.
-  //
-  // Raw is untouched: 5,306.4 KB still has 64.7 KB to spare under 5,500,000.
-  transferBytes: 1_645_000,
-  rawBytes: 5_500_000,
+  // Re-measured together on one machine and build: 6,023.4 KB raw / 1,802.1 KB transfer at 5b78bafd04,
+  // plus the margin the previous raises chose (210.8 KB raw, 65.1 KB transfer). The growth since is
+  // the vLLM / SGLang engine options inside the model config page and Resources tab (#11491), which
+  // live inline in the chat and settings chunks: lazy-loading the separable inference-engines
+  // module recovers only 0.6 KB transfer, so what ran out is headroom, not laziness.
+  // The browser panel's bookmarks, tab dragging and page zoom then added 2.8 KB raw / 1.0 KB
+  // transfer (6,231.7 -> 6,234.5 KB raw, 1,865.0 -> 1,866.0 KB transfer, one machine and build),
+  // inside the already-eager chat chunk; raw is raised by that so the margin stays where it was.
+  // Re-measured again at cc84c7dc7a: 6,278.6 KB raw / 1,879.0 KB transfer, 11.8 KB transfer over.
+  // Measured commit by commit from the browser panel (#12347), no single import did it: the panel
+  // itself left 2.9 KB transfer over, the Sandbox settings tab (#12215) added 16.4 KB raw / 4.5 KB
+  // transfer (its strings in every eager locale and the sandbox pick in the chat adapter), the
+  // message action bar rework (#12735) 2.9 KB raw, and the other merges in that range the rest,
+  // all in the eager chat, index and settings chunks. Headroom ran out, so the same margin is put
+  // back.
+  transferBytes: 1_991_000,
+  rawBytes: 6_646_000,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
@@ -475,7 +470,9 @@ function main(): number {
       "Something is now imported statically that the first screen does not need. " +
         "Either load it on use (React.lazy, lazyRouteComponent, or a dynamic import " +
         "at the point of use), or raise BUDGET in this file in the same PR, with the " +
-        "measurement that justifies it.",
+        "measurement that justifies it. If the chunk count above went up, check the " +
+        "opposite first: a dynamic import of a module the startup set already carries " +
+        "loads nothing later, and splits that module's graph into extra startup chunks.",
     );
     return 1;
   }

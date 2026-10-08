@@ -118,8 +118,19 @@ class LlamaServerStatsLogger:
         interval_s = 10.0,
         stall_timeout_s = 600.0,
         sysmem_watch = None,
+        headers = None,
     ):
         self._url = f"{base_url.rstrip('/')}/metrics"
+        self._headers = dict(headers or {})
+        # No HTTPSHandler: it builds an SSL context this loopback scrape never needs.
+        self._opener = urllib.request.OpenerDirector()
+        for handler in (
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPHandler(),
+            urllib.request.HTTPDefaultErrorHandler(),
+            urllib.request.HTTPErrorProcessor(),
+        ):
+            self._opener.add_handler(handler)
         self._log = logger
         self._interval = max(1.0, float(interval_s))
         self._stop = threading.Event()
@@ -143,7 +154,10 @@ class LlamaServerStatsLogger:
 
     def _scrape(self):
         try:
-            with urllib.request.urlopen(self._url, timeout = 3) as r:
+            # No proxy: the bearer must only ever go to the loopback server.
+            with self._opener.open(
+                urllib.request.Request(self._url, headers = self._headers), timeout = 3
+            ) as r:
                 if r.status != 200:
                     return None
                 body = r.read().decode("utf-8", "replace")
@@ -347,6 +361,7 @@ def maybe_start_stats_logger(
     base_url,
     logger,
     sysmem_watch = None,
+    headers = None,
 ):
     """Start a stats logger unless UNSLOTH_STUDIO_ENGINE_STATS disables it.
 
@@ -363,6 +378,7 @@ def maybe_start_stats_logger(
         interval,
         stall_timeout_s = stall_timeout,
         sysmem_watch = sysmem_watch,
+        headers = headers,
     )
     sl.start()
     return sl

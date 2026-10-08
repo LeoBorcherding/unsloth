@@ -3,6 +3,14 @@
 
 """Export API routes: checkpoint discovery and model export operations."""
 
+from core.training.account_jobs import (
+    account_event_stream,
+    account_path,
+    job_busy,
+    job_is_foreign,
+    require_job_owner,
+    validate_job_paths,
+)
 import asyncio
 import json
 import os
@@ -21,6 +29,7 @@ if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
 from auth.authentication import allow_ambient_hf_token, get_current_subject
+from hub.services.models import account_access
 from hub.utils.hf_tokens import HfTokenArg, hf_token_arg
 
 from utils.utils import safe_error_detail
@@ -41,6 +50,9 @@ from models import (
     ExportBaseModelRequest,
     ExportGGUFRequest,
     ExportLoRAAdapterRequest,
+    ConvertQ4NXRequest,
+    LlmCompressorExportProbeResponse,
+    ExportDecisionInfoResponse,
 )
 
 router = APIRouter()
@@ -91,6 +103,18 @@ def _resolve_export_hf_token(
     return hf_token_arg(token, allow_ambient_token = allow_ambient)
 
 
+def _authorized_adapter_base(checkpoint_path: str) -> Optional[str]:
+    """The adapter's config names the base the worker loads, so it is authorized like the checkpoint."""
+    if not account_access.managed_account():
+        return None
+    from utils.models import get_base_model_from_lora
+
+    base = get_base_model_from_lora(checkpoint_path)
+    if base:
+        account_access.require_model_access(base)
+    return base or None
+
+
 @router.post("/load-checkpoint", response_model = ExportOperationResponse)
 async def load_checkpoint(
     request: LoadCheckpointRequest,
@@ -104,19 +128,25 @@ async def load_checkpoint(
     chat model here -- if the GPU runs out of memory the load/export fails with
     a clear error instead of tearing down the user's other running workloads.
     """
+    validate_job_paths(request.model_dump())
+    base_model = await asyncio.to_thread(_authorized_adapter_base, request.checkpoint_path)
     try:
         await _ensure_export_supported()
+        export_hf_token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient)
+        # Unset lets the backend pick 16-bit for a full fine-tune.
+        load_in_4bit = request.load_in_4bit if "load_in_4bit" in request.model_fields_set else None
         backend = get_export_backend()
         # Run in a worker thread (spawns and waits on a subprocess, can take
         # minutes) so the event loop stays free to serve the live log SSE stream.
         success, message = await asyncio.to_thread(
             backend.load_checkpoint,
             checkpoint_path = request.checkpoint_path,
+            base_model = base_model,
             max_seq_length = request.max_seq_length,
-            load_in_4bit = request.load_in_4bit,
+            load_in_4bit = load_in_4bit,
             trust_remote_code = request.trust_remote_code,
             approved_remote_code_fingerprint = request.approved_remote_code_fingerprint,
-            hf_token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient),
+            hf_token = export_hf_token,
             # A supplied token cannot say whether it came from a session or an API key.
             allow_ambient = allow_ambient,
             subject = current_subject,
@@ -175,6 +205,7 @@ async def cancel_export(current_subject: str = Depends(get_current_subject)):
     Only the export subprocess is killed; training and inference run in their
     own subprocesses and keep going.
     """
+    require_job_owner(get_export_backend())
     try:
         backend = get_export_backend()
         cancelled = await asyncio.to_thread(backend.cancel_export)
@@ -193,6 +224,14 @@ async def cancel_export(current_subject: str = Depends(get_current_subject)):
 @router.get("/status", response_model = ExportStatusResponse)
 async def get_export_status(current_subject: str = Depends(get_current_subject)):
     """Get export backend status (loaded checkpoint, model type, PEFT flag)."""
+    if job_is_foreign(get_export_backend()):
+        return ExportStatusResponse(
+            current_checkpoint = None,
+            is_vision = False,
+            is_peft = False,
+            is_export_active = bool(get_export_backend().is_export_active()),
+            active_op_kind = "busy" if job_busy(get_export_backend()) else None,
+        )
     try:
         backend = get_export_backend()
         last_op = backend.get_last_op()
@@ -200,8 +239,11 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
         # does, so the success banner shows an identical path on either route.
         last_op_output_path = None
         if last_op and last_op.get("output_path"):
-            details = await asyncio.to_thread(_export_details, last_op["output_path"])
-            last_op_output_path = (details or {}).get("output_path")
+            if getattr(backend, "decision", None):
+                last_op_output_path = last_op["output_path"]
+            else:
+                details = await asyncio.to_thread(_export_details, last_op["output_path"])
+                last_op_output_path = (details or {}).get("output_path")
         return ExportStatusResponse(
             current_checkpoint = backend.current_checkpoint,
             is_vision = bool(getattr(backend, "is_vision", False)),
@@ -213,6 +255,7 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
             last_op_status = last_op.get("status") if last_op else None,
             last_op_output_path = last_op_output_path,
             last_op_error = last_op.get("error") if last_op else None,
+            decision = getattr(backend, "decision", None),
         )
     except Exception as e:
         logger.error(f"Error getting export status: {e}", exc_info = True)
@@ -320,6 +363,38 @@ def _export_details(
         return {"output_path": output_path}
 
 
+def _decision_export_details(output_path: Optional[str]) -> Optional[Dict[str, Any]]:
+    """A decision GGUF lands in the run folder's gguf/; not registered as a chat model folder."""
+    if not output_path:
+        return None
+    from core.export.decision import read_existing_export
+
+    # output_path is <run folder>/gguf; the contract reads from the run folder.
+    export = read_existing_export(Path(output_path).parent)
+    return {
+        "output_path": str(output_path),
+        "decision_export": export,
+        "quantizations": (export or {}).get("quantizations") or [],
+    }
+
+
+@router.get("/decision-info", response_model = ExportDecisionInfoResponse)
+async def get_decision_export_info(
+    checkpoint_path: str = Query(..., description = "Local checkpoint folder"),
+    current_subject: str = Depends(get_current_subject),
+):
+    """GGUF export options for a decision model checkpoint (Clef / Laya); decision is null otherwise."""
+    validate_job_paths({"checkpoint_path": checkpoint_path})
+    from core.export.decision import decision_preview
+
+    try:
+        decision = await asyncio.to_thread(decision_preview, checkpoint_path)
+    except Exception as e:
+        logger.warning(f"Could not inspect {checkpoint_path} for decision export: {e}")
+        decision = None
+    return ExportDecisionInfoResponse(checkpoint_path = checkpoint_path, decision = decision)
+
+
 @router.post("/export/merged", response_model = ExportOperationResponse)
 async def export_merged_model(
     request: ExportMergedModelRequest,
@@ -330,6 +405,7 @@ async def export_merged_model(
 
     Wraps ExportBackend.export_merged_model.
     """
+    validate_job_paths(request.model_dump())
     try:
         await _ensure_export_supported()
         backend = get_export_backend()
@@ -346,6 +422,7 @@ async def export_merged_model(
             ),
             private = request.private,
             compressed_method = request.compressed_method,
+            install_missing_dependencies = request.install_missing_dependencies,
         )
 
         if not success:
@@ -370,6 +447,15 @@ async def export_merged_model(
         )
 
 
+@router.get("/llm-compressor-probe", response_model = LlmCompressorExportProbeResponse)
+async def probe_llm_compressor_export(current_subject: str = Depends(get_current_subject)):
+    del current_subject
+    from utils.llm_compressor_export import probe_llm_compressor_for_compressed_export
+    return LlmCompressorExportProbeResponse(
+        **probe_llm_compressor_for_compressed_export(),
+    )
+
+
 @router.post("/export/base", response_model = ExportOperationResponse)
 async def export_base_model(
     request: ExportBaseModelRequest,
@@ -380,6 +466,7 @@ async def export_base_model(
 
     Wraps ExportBackend.export_base_model.
     """
+    validate_job_paths(request.model_dump())
     try:
         await _ensure_export_supported()
         backend = get_export_backend()
@@ -429,6 +516,7 @@ async def export_gguf(
 
     Wraps ExportBackend.export_gguf.
     """
+    validate_job_paths(request.model_dump())
     try:
         await _ensure_export_supported()
         backend = get_export_backend()
@@ -447,17 +535,17 @@ async def export_gguf(
             ),
             imatrix_file = imatrix_file,
             private = request.private,
-            gguf_shard_size = request.gguf_shard_size,
+            npu_q4nx = request.npu_q4nx,
         )
 
         if not success:
             raise HTTPException(status_code = 400, detail = message)
 
-        return ExportOperationResponse(
-            success = True,
-            message = message,
-            details = await asyncio.to_thread(_export_details, output_path, refresh_index = True),
-        )
+        if getattr(backend, "decision", None):
+            details = await asyncio.to_thread(_decision_export_details, output_path)
+        else:
+            details = await asyncio.to_thread(_export_details, output_path, refresh_index = True)
+        return ExportOperationResponse(success = True, message = message, details = details)
     except HTTPException:
         raise
     except Exception as e:
@@ -472,6 +560,65 @@ async def export_gguf(
         )
 
 
+@router.post("/convert/q4nx", response_model = ExportOperationResponse)
+async def convert_q4nx(
+    request: ConvertQ4NXRequest,
+    current_subject: str = Depends(get_current_subject),
+    allow_ambient: bool = Depends(allow_ambient_hf_token),
+):
+    """Convert an existing GGUF (local file or Hub repo) to FastFlowLM Q4NX for the AMD NPU.
+
+    Needs no loaded checkpoint or GPU, so it runs here rather than in the export worker.
+    """
+    validate_job_paths(request.model_dump())
+    # A managed account may only read a GGUF inside its own workspace.
+    account_path(request.gguf_path)
+    if bool(request.gguf_path) == bool(request.repo_id and request.filename):
+        raise HTTPException(
+            status_code = 400,
+            detail = "Give either a local gguf_path or a repo_id with a filename.",
+        )
+    token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient)
+    base_model = request.base_model.strip()
+    # The shared HF cache can hold another account's private repo: check this caller's access.
+    hub_repos = [request.repo_id] if request.repo_id else []
+    if not Path(base_model).expanduser().is_dir():
+        hub_repos.append(base_model)
+    for repo in hub_repos:
+        await asyncio.to_thread(account_access.authorize_download, repo, "model", token)
+
+    def run() -> str:
+        from core.export import q4nx
+        from utils.paths import resolve_export_write_dir
+
+        q4nx.require_converter_deps()
+        if request.gguf_path:
+            source = Path(request.gguf_path)
+            if not source.is_file() or source.suffix.lower() != ".gguf":
+                raise ValueError(f"{source} is not a .gguf file.")
+        else:
+            from huggingface_hub import hf_hub_download
+            source = Path(hf_hub_download(request.repo_id, request.filename, token = token))
+        out = q4nx.convert_existing_gguf(
+            source,
+            base_model,
+            Path(resolve_export_write_dir(request.save_directory)),
+            token = token,
+        )
+        return str(out.resolve())
+
+    try:
+        output_path = await asyncio.to_thread(run)
+    except Exception as e:
+        logger.error(f"Q4NX conversion failed: {e}", exc_info = True)
+        raise HTTPException(status_code = 400, detail = f"Q4NX conversion failed: {e}")
+    return ExportOperationResponse(
+        success = True,
+        message = "Converted to Q4NX for the AMD NPU",
+        details = await asyncio.to_thread(_export_details, output_path, refresh_index = True),
+    )
+
+
 @router.post("/export/lora", response_model = ExportOperationResponse)
 async def export_lora_adapter(
     request: ExportLoRAAdapterRequest,
@@ -482,6 +629,7 @@ async def export_lora_adapter(
 
     Wraps ExportBackend.export_lora_adapter.
     """
+    validate_job_paths(request.model_dump())
     try:
         await _ensure_export_supported()
         backend = get_export_backend()
@@ -498,6 +646,7 @@ async def export_lora_adapter(
             private = request.private,
             gguf = request.gguf,
             gguf_outtype = request.gguf_outtype,
+            adapter_format = request.adapter_format,
         )
 
         if not success:
@@ -591,6 +740,9 @@ async def stream_export_logs(
         idle_since: Optional[float] = None
         try:
             while True:
+                if job_is_foreign(backend):
+                    yield _format_sse('{"status":"busy"}', event = "busy")
+                    return
                 if await request.is_disconnected():
                     return
 
@@ -647,7 +799,7 @@ async def stream_export_logs(
                 pass
 
     return StreamingResponse(
-        event_generator(),
+        account_event_stream(get_export_backend(), event_generator()),
         media_type = "text/event-stream",
         headers = {
             "Cache-Control": "no-cache",
