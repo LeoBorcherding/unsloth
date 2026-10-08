@@ -2171,6 +2171,7 @@ def test_inherited_linux_arm_cpu_affinity_declines_spill_pricing(monkeypatch):
 
 
 def test_oversubscribed_decode_threads_decline_spill_planning(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psutil", _SmtHost)
     monkeypatch.setattr(llama_mod, "_linux_math_core_count", lambda: 8)
     monkeypatch.setattr(llama_mod.sys, "platform", "linux")
     monkeypatch.setattr(
