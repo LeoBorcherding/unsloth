@@ -7,8 +7,11 @@ import type {
   DatasetSource,
   GradientCheckpointing,
   ModelType,
+  GrpoRewardSelection,
+  GrpoVariant,
   S3Config,
   TrainingMethod,
+  TrainingObjective,
 } from "@/types/training";
 import type {
   BackendModelConfig,
@@ -24,8 +27,7 @@ export interface ModelCacheReferenceOptions {
   modelFormat?: ModelInventoryFormat | null;
 }
 
-export interface TrainingModelSelectionOptions
-  extends ModelCacheReferenceOptions {
+export interface TrainingModelSelectionOptions extends ModelCacheReferenceOptions {
   isEmbedding?: boolean | null;
   isAudio?: boolean | null;
   isVision?: boolean | null;
@@ -62,6 +64,10 @@ export interface TrainingMethodProvenance {
 
 /** Column-to-role mapping, e.g. { "problem": "user", "solution": "assistant", "context": "system" } */
 export type DatasetManualMapping = Record<string, string>;
+
+/** Decoder layers kept in host RAM during LoRA training: a count (0 = off) or "auto". */
+export type OffloadLayers = number | "auto";
+export type PrefetchDepth = number | "auto";
 
 export interface TrainingConfigState {
   userEditRevision: number;
@@ -122,6 +128,11 @@ export interface TrainingConfigState {
   packing: boolean;
   trainOnCompletions: boolean;
   gradientCheckpointing: GradientCheckpointing;
+  offloadLayers: OffloadLayers;
+  offloadVramGb: number | null;
+  /** Per-GPU budget in GiB keyed by the GPU index /api/system reports; used when several GPUs are visible. */
+  offloadVramGbPerDevice: Record<string, number | null>;
+  prefetchDepth: PrefetchDepth;
   randomSeed: number;
   enableWandb: boolean;
   wandbToken: string;
@@ -153,6 +164,20 @@ export interface TrainingConfigState {
   maxPositionEmbeddings: number | null;
   visionImageSize: number | null;
   s3Config: S3Config | null;
+  trainingObjective: TrainingObjective;
+  rlBeta: number | null;
+  rlMaxPromptLength: number | null;
+  /** dataset column -> RL role (prompt, answer, chosen, rejected, system). */
+  rlRoleMapping: Record<string, string>;
+  grpoNumGenerations: number;
+  grpoMaxCompletionLength: number | null;
+  grpoTemperature: number;
+  grpoSystemPrompt: string;
+  grpoEnableThinking: boolean;
+  grpoVariant: GrpoVariant;
+  grpoMaskTruncatedCompletions: boolean;
+  grpoEpsilonHigh: number | null;
+  grpoRewards: GrpoRewardSelection[];
 }
 
 export type AdvancedSettingsBaseline = Partial<
@@ -258,6 +283,10 @@ export interface TrainingConfigActions {
   setPacking: (value: boolean) => void;
   setTrainOnCompletions: (value: boolean) => void;
   setGradientCheckpointing: (value: GradientCheckpointing) => void;
+  setOffloadLayers: (value: OffloadLayers) => void;
+  setOffloadVramGb: (value: number | null) => void;
+  setOffloadVramGbForDevice: (gpuIndex: number, value: number | null) => void;
+  setPrefetchDepth: (value: PrefetchDepth) => void;
   setRandomSeed: (value: number) => void;
   setEnableWandb: (value: boolean) => void;
   setWandbToken: (value: string) => void;
@@ -271,6 +300,19 @@ export interface TrainingConfigActions {
   setFinetuneMLPModules: (value: boolean) => void;
   setTargetModules: (value: string[]) => void;
   setS3Config: (value: S3Config | null) => void;
+  setTrainingObjective: (value: TrainingObjective) => void;
+  setRlBeta: (value: number | null) => void;
+  setRlMaxPromptLength: (value: number | null) => void;
+  setRlRoleMapping: (value: Record<string, string>) => void;
+  setGrpoNumGenerations: (value: number) => void;
+  setGrpoMaxCompletionLength: (value: number | null) => void;
+  setGrpoTemperature: (value: number) => void;
+  setGrpoSystemPrompt: (value: string) => void;
+  setGrpoEnableThinking: (value: boolean) => void;
+  setGrpoVariant: (value: GrpoVariant) => void;
+  setGrpoMaskTruncatedCompletions: (value: boolean) => void;
+  setGrpoEpsilonHigh: (value: number | null) => void;
+  setGrpoRewards: (value: GrpoRewardSelection[]) => void;
   restoreRunConfig: (config: Record<string, unknown>) => void;
   reset: () => void;
   resetToModelDefaults: () => void;

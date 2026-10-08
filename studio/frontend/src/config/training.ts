@@ -148,6 +148,33 @@ export const CPT_LORA_HYPERPARAMS = {
   loraVariant: "rslora",
 } as const;
 
+// The answer format every Unsloth GRPO notebook puts in the system prompt; the default rewards grade it.
+export const GRPO_DEFAULT_SYSTEM_PROMPT =
+  "Respond in the following format:\n<reasoning>\n...\n</reasoning>\n<answer>\n...\n</answer>";
+
+// Kept out of DEFAULT_HYPERPARAMS so the advanced-settings summary does not count them.
+export const DEFAULT_RL_SETTINGS = {
+  trainingObjective: "sft" as import("@/types/training").TrainingObjective,
+  rlBeta: null as number | null,
+  rlMaxPromptLength: null as number | null,
+  rlRoleMapping: {} as Record<string, string>,
+  grpoNumGenerations: 4,
+  grpoMaxCompletionLength: null as number | null,
+  grpoTemperature: 1.0,
+  grpoSystemPrompt: GRPO_DEFAULT_SYSTEM_PROMPT,
+  grpoEnableThinking: false,
+  grpoVariant: "dapo" as import("@/types/training").GrpoVariant,
+  grpoMaskTruncatedCompletions: false,
+  grpoEpsilonHigh: null as number | null,
+  grpoRewards: [
+    { name: "strict-xml-format", weight: 1 },
+    { name: "exact-answer", weight: 1 },
+  ] as import("@/types/training").GrpoRewardSelection[],
+};
+
+// Learning rates the TRL notebooks use for each objective; SFT keeps the method default.
+export const RL_LEARNING_RATES = { dpo: 5e-6, orpo: 8e-6, grpo: 5e-6 } as const;
+
 export const DEFAULT_HYPERPARAMS = {
   epochs: 3,
   contextLength: 2048,
@@ -171,6 +198,10 @@ export const DEFAULT_HYPERPARAMS = {
   packing: false,
   trainOnCompletions: false,
   gradientCheckpointing: "unsloth" as const,
+  offloadLayers: 0 as number | "auto",
+  offloadVramGb: null as number | null,
+  offloadVramGbPerDevice: {} as Record<string, number | null>,
+  prefetchDepth: 2 as number | "auto",
   randomSeed: 3407,
   enableWandb: false,
   wandbToken: "",

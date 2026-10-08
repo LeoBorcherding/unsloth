@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Union
 from datasets import Dataset
 from core.training.eval_dataset import evaluation_enabled
+from core.training.rl import rl_log_metrics
 from utils.datasets.audio_decode import ensure_audio_decoding
 from utils.datasets.cache_safe import load_dataset_cache_safe as load_dataset
 from utils.hf_dataset_options import hf_dataset_split_instruction_names
@@ -339,6 +340,16 @@ def normalize_gradient_checkpointing(value) -> Union[str, bool]:
     return "unsloth"
 
 
+def grpo_completion_rows(prompts: int, rl_args) -> int:
+    """Completion rows one GRPO epoch trains: TRL's sampler drops a trailing partial group of
+    prompts, and each kept prompt becomes num_generations rows."""
+    generations = int(getattr(rl_args, "num_generations", 1) or 1)
+    group = (getattr(rl_args, "generation_batch_size", None) or 0) // generations
+    if group > 0:
+        prompts -= prompts % group
+    return prompts * generations
+
+
 class UnslothTrainer:
     def __new__(cls, *args, **kwargs):
         if cls is UnslothTrainer and should_use_mlx_training_backend():
@@ -363,6 +374,11 @@ class UnslothTrainer:
         self.is_audio_vlm = False
         self._audio_type = None
         self._use_gradient_checkpointing = "unsloth"
+        self._offload_layers = 0
+        self._prefetch_depth = 2
+        self._gpu_ids = None
+        self._offload_layer_devices = None
+        self._offload_plan_shape = {}
         # True until a probe says otherwise, so a path that never probes cannot trip the inconclusive-detection guard.
         self._audio_type_known = True
         self._is_dataset_audio = False
@@ -571,6 +587,96 @@ class UnslothTrainer:
                 except Exception as e:
                     logger.error(f"Error in progress callback: {e}")
 
+    def _offload_load_kwargs(self, device_map = None) -> dict:
+        # Loading the offloaded layers straight into host RAM is what lets a model larger than the card load at all.
+        if not self._offload_layers:
+            return {}
+        # A fixed count loads to host only onto one card (core raises on a multi-GPU map); get_peft_model swaps it there.
+        if self._offload_layers != "auto" and device_map in ("unsloth_balanced", "balanced"):
+            return {}
+        return {
+            "offload_layers": self._offload_layers,
+            # Auto plans at load; without the run's batch and rank it sizes for batch 1, rank 16.
+            "device_map_planner_kwargs": {
+                "prefetch_depth": self._prefetch_depth,
+                **self._offload_plan_shape,
+            },
+        }
+
+    def _offload_peft_kwargs(self) -> dict:
+        if not self._offload_layers:
+            return {}
+        return {"offload_layers": self._offload_layers, "prefetch_depth": self._prefetch_depth}
+
+    def _offload_snapshot(self) -> Optional[dict]:
+        """Where each decoder layer is and what the last steps' copies cost, for the live panel."""
+        swapper = (
+            getattr(self.model, "_unsloth_block_swap", None) if self.model is not None else None
+        )
+        stats = getattr(swapper, "stats", None)
+        if stats is None:
+            return None
+        try:
+            snap = stats()
+            # JSON object keys must be strings.
+            snap["state"] = {str(k): v for k, v in snap["state"].items()}
+            if torch.cuda.is_available():
+                device = getattr(swapper, "device", None)
+                snap["vram_allocated_bytes"] = torch.cuda.memory_allocated(device)
+                snap["vram_peak_bytes"] = torch.cuda.max_memory_allocated(device)
+                snap["vram_total_bytes"] = torch.cuda.get_device_properties(device).total_memory
+                get_fraction = getattr(torch.cuda, "get_per_process_memory_fraction", None)
+                if get_fraction is not None:
+                    snap["vram_fraction"] = get_fraction(device)
+                snap["vram_devices"] = self._offload_vram_devices()
+                snap["layer_device"] = self._offload_layer_device_map(swapper)
+            return snap
+        except Exception as exc:
+            logger.debug("offload stats unavailable: %s", exc)
+            return None
+
+    def _offload_vram_devices(self) -> list:
+        gpu_ids = getattr(self, "_gpu_ids", None)
+        get_fraction = getattr(torch.cuda, "get_per_process_memory_fraction", None)
+        devices = []
+        for i in range(torch.cuda.device_count()):
+            entry = {
+                "index": i,
+                "gpu_id": gpu_ids[i] if gpu_ids and i < len(gpu_ids) else i,
+                "name": torch.cuda.get_device_properties(i).name,
+                "allocated_bytes": torch.cuda.memory_allocated(i),
+                "peak_bytes": torch.cuda.max_memory_allocated(i),
+                "total_bytes": torch.cuda.get_device_properties(i).total_memory,
+            }
+            if get_fraction is not None:
+                entry["fraction"] = get_fraction(i)
+            devices.append(entry)
+        return devices
+
+    def _offload_layer_device_map(self, swapper) -> dict:
+        """Torch ordinal of every decoder layer: an offloaded one's home card, a resident one's weights."""
+        key = (id(swapper), tuple(getattr(swapper, "indices", ())))
+        cached = getattr(self, "_offload_layer_devices", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        devices = {}
+        for li, block in zip(getattr(swapper, "indices", ()), getattr(swapper, "blocks", ())):
+            home = getattr(block, "home", None)
+            if home is not None and home.type == "cuda" and home.index is not None:
+                devices[str(li)] = home.index
+        try:
+            from unsloth_zoo.block_swap import find_decoder_layers
+            for li, layer in enumerate(find_decoder_layers(self.model)):
+                if str(li) in devices:
+                    continue
+                p = next(layer.parameters(), None)
+                if p is not None and p.device.type == "cuda" and p.device.index is not None:
+                    devices[str(li)] = p.device.index
+        except Exception as exc:
+            logger.debug("offload layer devices unavailable: %s", exc)
+        self._offload_layer_devices = (key, devices)
+        return devices
+
     def _create_progress_callback(self):
         """Create a TrainerCallback for progress tracking. Reused by all training branches."""
         from transformers import TrainerCallback
@@ -688,7 +794,9 @@ class UnslothTrainer:
                     grad_norm = grad_norm,
                     num_tokens = num_tokens,
                     eval_loss = logs.get("eval_loss", None),
+                    rl_metrics = rl_log_metrics(logs),
                     is_run_summary = is_run_summary,
+                    offload = trainer_ref._offload_snapshot(),
                     status_message = "",
                 )
 
@@ -902,8 +1010,17 @@ class UnslothTrainer:
         model_revision: Optional[str] = None,
         use_gradient_checkpointing: Union[str, bool] = "unsloth",
         on_model_resolved: Optional[Callable[[str], None]] = None,
+        offload_layers: Union[int, str] = 0,
+        prefetch_depth: Union[int, str] = 2,
+        offload_plan_shape: Optional[dict] = None,
     ) -> bool:
         """Load model for training (supports both text and vision models)"""
+        # Offloading streams frozen base weights, so it has nothing to do in a full finetune.
+        self._offload_layers = 0 if full_finetuning else (offload_layers or 0)
+        self._prefetch_depth = prefetch_depth or 2
+        # Physical ids behind each torch ordinal, so the panel names cards as the settings do.
+        self._gpu_ids = list(gpu_ids) if gpu_ids else None
+        self._offload_plan_shape = {k: v for k, v in (offload_plan_shape or {}).items() if v}
         self.load_in_4bit = load_in_4bit
         self.trust_remote_code = trust_remote_code
         # The loader installs the checkpointing implementation; a full finetune never reinstalls it.
@@ -1123,6 +1240,7 @@ class UnslothTrainer:
                     use_exact_model_name = model_revision is not None,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    **self._offload_load_kwargs(device_map),
                 )
                 logger.info(f"Loaded {self._audio_type} audio model (FastLanguageModel)")
 
@@ -1199,6 +1317,7 @@ class UnslothTrainer:
                     use_exact_model_name = model_revision is not None,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    **self._offload_load_kwargs(device_map),
                 )
                 logger.info("Loaded audio VLM model (FastModel)")
 
@@ -1216,6 +1335,7 @@ class UnslothTrainer:
                     use_exact_model_name = model_revision is not None,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    **self._offload_load_kwargs(device_map),
                 )
                 logger.info("Loaded vision model")
 
@@ -1245,6 +1365,7 @@ class UnslothTrainer:
                     use_exact_model_name = model_revision is not None,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    **self._offload_load_kwargs(device_map),
                 )
                 logger.info("Loaded text model")
 
@@ -1297,6 +1418,9 @@ class UnslothTrainer:
                     model_revision = model_revision,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                     on_model_resolved = on_model_resolved,
+                    offload_layers = offload_layers,
+                    prefetch_depth = prefetch_depth,
+                    offload_plan_shape = offload_plan_shape,
                 )
             error_msg = str(e)
             error_lower = error_msg.lower()
@@ -1447,6 +1571,7 @@ class UnslothTrainer:
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
+                    **self._offload_peft_kwargs(),
                 )
                 if self.is_audio_vlm:
                     peft_kwargs.update(
@@ -1524,6 +1649,7 @@ class UnslothTrainer:
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
                     modules_to_save = modules_to_save,
+                    **self._offload_peft_kwargs(),
                 )
             else:
                 logger.info(f"Text model LoRA configuration:")
@@ -1544,6 +1670,7 @@ class UnslothTrainer:
                     use_dora = use_dora,
                     loftq_config = {"loftq_bits": 4, "loftq_iter": 1} if use_loftq else None,
                     modules_to_save = modules_to_save,
+                    **self._offload_peft_kwargs(),
                 )
 
             if self.should_stop:
@@ -2701,6 +2828,9 @@ class UnslothTrainer:
         hf_token: Optional[str] = None,
         max_train_rows: Optional[int] = None,
         max_train_rows_seed: int = 3407,
+        objective: str = "sft",
+        rl_keep_columns: tuple = (),
+        rl_system_prompt: Optional[str] = None,
     ) -> Optional[tuple]:
         """Load and prepare a dataset for training.
 
@@ -2740,7 +2870,8 @@ class UnslothTrainer:
             has_separate_eval_source = False
             # Not `eval_steps > 0`: inf and NaN pass that and codec-encode a split later discarded.
             eval_enabled = evaluation_enabled(eval_steps)
-            raw_text_mode = is_cpt or format_type == "raw"
+            # RL rows are built from column roles, whatever format the SFT settings name.
+            raw_text_mode = objective == "sft" and (is_cpt or format_type == "raw")
             dataset_loaded_from_cache = False
 
             def _load_selected_cached_dataset(
@@ -3323,6 +3454,17 @@ class UnslothTrainer:
 
             _raise_if_empty_train_split(dataset, "")
 
+            if objective != "sft":
+                return self._format_rl_dataset(
+                    dataset,
+                    eval_dataset,
+                    objective = objective,
+                    custom_format_mapping = custom_format_mapping,
+                    keep_columns = rl_keep_columns,
+                    system_prompt = rl_system_prompt,
+                    split_eval = eval_enabled and not has_separate_eval_source,
+                )
+
             # ========== FORMAT FIRST ==========
             logger.info(f"Formatting dataset with format_type='{format_type}'...\n")
 
@@ -3404,6 +3546,45 @@ class UnslothTrainer:
         finally:
             if s3_download is not None:
                 s3_download.cleanup()
+
+    def _format_rl_dataset(
+        self,
+        dataset,
+        eval_dataset,
+        *,
+        objective: str,
+        custom_format_mapping: Optional[Dict[str, Any]],
+        keep_columns: tuple,
+        split_eval: bool,
+        system_prompt: Optional[str] = None,
+    ) -> tuple:
+        """Shape rows for DPO/ORPO/GRPO; TRL applies the chat template itself."""
+        from core.training.rl import format_rl_dataset
+
+        num_proc = dataset_map_num_proc(None)
+        formatted, roles = format_rl_dataset(
+            dataset, objective, custom_format_mapping, keep_columns, num_proc, system_prompt
+        )
+        if eval_dataset is not None:
+            eval_dataset, _ = format_rl_dataset(
+                eval_dataset,
+                objective,
+                custom_format_mapping,
+                keep_columns,
+                num_proc,
+                system_prompt,
+            )
+        elif split_eval:
+            split_result = self._resolve_eval_split_from_dataset(formatted)
+            if split_result is not None:
+                formatted, eval_dataset = split_result
+        _raise_if_empty_train_split(formatted, "after formatting")
+        mapped = ", ".join(f"{column} -> {role}" for role, column in roles.items())
+        self._update_progress(
+            status_message = f"Dataset ready ({len(formatted):,} samples, {objective.upper()}: {mapped})"
+        )
+        logger.info(f"{objective.upper()} dataset ready ({len(formatted)} rows; {mapped})\n")
+        return ({"dataset": formatted, "detected_format": objective, "success": True}, eval_dataset)
 
     def _auto_detect_eval_split_from_hf(
         self,
@@ -4184,7 +4365,8 @@ class UnslothTrainer:
                 "output_dir": output_dir,
                 "report_to": _build_report_targets(training_args),
                 "disable_tqdm": _hf_stdout_progress_disabled(),
-                "include_num_input_tokens_seen": True,
+                # DPO/ORPO/GRPO batches have no input_ids, so token tracking only warns every step.
+                "include_num_input_tokens_seen": training_args.get("objective", "sft") == "sft",
                 # serial_as_none = False: this is a config boundary, not a map() call site. The audio paths ask for 1
                 # to keep dataset workers off a process holding audio/CUDA state; pass None otherwise, so the shared
                 # policy sizes it from CPU affinity and cgroup quota rather than host os.cpu_count().
@@ -4326,22 +4508,60 @@ class UnslothTrainer:
             # Plain-text single-pass runs tokenize in the DataLoader workers instead of a blocking .map(); everything
             # else stays eager.
             self._online_prewarm_batches = 0
-            online_decision = self._configure_online_tokenization(
-                config_args = config_args,
-                dataset = dataset,
-                eval_dataset = eval_dataset,
-                training_args = training_args,
-                data_collator = data_collator,
-                raw_text_mode = raw_text_mode,
-                is_deepseek_ocr = is_deepseek_ocr,
-            )
-            if online_decision.enabled:
-                eval_dataset = self._online_eval_dataset
+            objective = training_args.get("objective", "sft")
+            self.training_objective = objective
+            if objective == "sft":
+                online_decision = self._configure_online_tokenization(
+                    config_args = config_args,
+                    dataset = dataset,
+                    eval_dataset = eval_dataset,
+                    training_args = training_args,
+                    data_collator = data_collator,
+                    raw_text_mode = raw_text_mode,
+                    is_deepseek_ocr = is_deepseek_ocr,
+                )
+                if online_decision.enabled:
+                    eval_dataset = self._online_eval_dataset
 
             logger.info(f"The configuration is: {config_args}")
 
             logger.info("Training configuration prepared\n")
-            if self.is_audio_vlm and not raw_text_mode:
+            if objective != "sft":
+                from core.training.rl import build_rl_trainer
+                from transformers import ProcessorMixin
+
+                rl_tokenizer = self.tokenizer
+                if isinstance(rl_tokenizer, ProcessorMixin) and hasattr(rl_tokenizer, "tokenizer"):
+                    rl_tokenizer = rl_tokenizer.tokenizer
+                # RL rows are conversations and TRL applies the chat template: base models need one.
+                templated = get_training_chat_template(
+                    rl_tokenizer, self.model_name, "chatml_messages"
+                )
+                if templated is not rl_tokenizer:
+                    if rl_tokenizer is self.tokenizer:
+                        self.tokenizer = templated
+                    rl_tokenizer = templated
+                # GRPO renders prompts through processing_class, which is the processor restored below.
+                if (
+                    rl_tokenizer is not self.tokenizer
+                    and not getattr(self.tokenizer, "chat_template", None)
+                    and getattr(rl_tokenizer, "chat_template", None)
+                ):
+                    self.tokenizer.chat_template = rl_tokenizer.chat_template
+                logger.info(f"Configuring {objective.upper()} trainer\n")
+                self.trainer = build_rl_trainer(
+                    objective,
+                    model = self.model,
+                    tokenizer = rl_tokenizer,
+                    train_dataset = dataset["dataset"] if isinstance(dataset, dict) else dataset,
+                    eval_dataset = eval_dataset,
+                    config_args = config_args,
+                    settings = training_args.get("rl_settings") or {},
+                    reward_specs = training_args.get("reward_specs") or [],
+                )
+                if rl_tokenizer is not self.tokenizer:
+                    self.trainer.processing_class = self.tokenizer
+            elif self.is_audio_vlm and not raw_text_mode:
                 # Image VLM: dict wrapper from format_and_template_dataset (raw-text uses the text path). Audio VLM
                 # (e.g. Gemma 3N + audio): raw Dataset from _format_audio_vlm_dataset, and the notebook uses
                 # processing_class=processor.tokenizer; raw-text runs use the text path.
@@ -4440,7 +4660,7 @@ class UnslothTrainer:
             is_cpt = training_args.get("is_cpt", False)
             train_on_responses_enabled = (
                 False
-                if (is_cpt or raw_text_mode)
+                if (is_cpt or raw_text_mode or objective != "sft")
                 else training_args.get("train_on_completions", False)
             )
 
@@ -4566,17 +4786,24 @@ class UnslothTrainer:
                 if num_samples is None:
                     num_samples = len(train_dataset_obj)
                 batch_size = training_args.get("batch_size", 2)
+                grad_accum = training_args.get("gradient_accumulation_steps", 4)
+                if objective == "grpo":
+                    # Unsloth may resize the batch for num_generations: read the trainer's args.
+                    rl_args = self.trainer.args
+                    num_samples = grpo_completion_rows(num_samples, rl_args)
+                    batch_size = rl_args.per_device_train_batch_size
+                    grad_accum = rl_args.gradient_accumulation_steps
                 total_steps = self._calculate_total_steps(
                     num_samples,
                     batch_size,
-                    training_args.get("gradient_accumulation_steps", 4),
+                    grad_accum,
                     training_args.get("num_epochs", 3),
                     max_steps,
                 )
 
             self._update_progress(total_steps = total_steps)
             # Fail fast on an invalid first batch (empty/float input_ids) vs a step-1 crash.
-            preflight_error = self._preflight_first_batch()
+            preflight_error = self._preflight_first_batch() if objective == "sft" else None
             if preflight_error:
                 logger.error(preflight_error)
                 self._update_progress(error = preflight_error, is_training = False)
@@ -4636,6 +4863,10 @@ class UnslothTrainer:
 
             config["unsloth_training_method"] = method
             config["unsloth_load_in_4bit"] = trained_in_4bit
+            # Separate key: readers infer 4-bit loading from unsloth_training_method.
+            objective = getattr(self, "training_objective", "sft")
+            if objective != "sft":
+                config["unsloth_training_objective"] = objective.upper()
             logger.info(f"Patching adapter_config.json with unsloth_training_method='{method}'")
 
             with open(config_path, "w", encoding = "utf-8") as f:
