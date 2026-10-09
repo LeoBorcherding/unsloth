@@ -23466,14 +23466,7 @@ class LlamaCppBackend:
                 # would run tensor unbudgeted otherwise). The duplicate-load matchers
                 # use the same helper so a healthy env-driven tensor server matches.
                 split_mode_override = parse_split_mode_override(extra_args)
-                # Manual mode scrubs the split env from the child, so resolve against that.
-                _tp_env = None
-                if gpu_memory_mode == "manual":
-                    _tp_env = dict(os.environ)
-                    self._clear_manual_placement_env(_tp_env)
-                tensor_parallel = _effective_tensor_parallel(
-                    extra_args, tensor_parallel, _tp_env
-                )
+                tensor_parallel = _effective_tensor_parallel(extra_args, tensor_parallel)
                 # gpu_layers=0 leaves nothing to split, yet --split-mode tensor or
                 # a per-GPU ratio still launches tensor mode -- and under the
                 # CPU-only mask below (no visible devices) that aborts the server
