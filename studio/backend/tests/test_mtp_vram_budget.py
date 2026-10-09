@@ -698,9 +698,12 @@ class TestExtraArgsMtpDetection:
         # flat MTP reserve), not a hard-coded 0.95, so the ranking order matches
         # the fit budget that is then tested (Finding G4). _vram_frac is that
         # fraction resolved once per load: the user's budget, else the constant.
+        # Ranking goes through _gpu_rank (iGPUs after discrete cards), which must
+        # still score each GPU by _gpu_usable at the fraction it is handed.
         compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
-        assert "_gpu_usable(g,pin_fraction)" in compact
-        assert "_gpu_usable(g,_vram_frac-_flat_mtp_reserve)" in compact
+        assert "usable=_gpu_usable(g,frac)" in compact
+        assert "_gpu_rank(g,pin_fraction,_rank_floor_mib)" in compact
+        assert "_gpu_rank(g,_vram_frac-_flat_mtp_reserve," in compact
         # Resolved once, so a mid-load save cannot split ranking from fitting.
         assert "_vram_frac=_active_vram_fraction()" in compact
 
