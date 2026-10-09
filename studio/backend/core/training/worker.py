@@ -4373,6 +4373,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
     trainer = UnslothTrainer()
 
     trainer.add_progress_callback(_create_trainer_progress_callback(event_queue))
+    trainer.add_sample_callback(
+        lambda samples: event_queue.put({"type": "samples", **samples, "ts": time.time()})
+    )
 
     def _apply_stop(save: bool) -> None:
         trainer.should_stop = True
@@ -4415,9 +4418,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 is_cpt = is_cpt_for_dataset,
                 objective = config.get("objective", "sft"),
                 rl_keep_columns = tuple(
-                    spec["rule"].get("compare_to")
+                    "*" if spec.get("kind") == "python" else spec["rule"]["compare_to"]
                     for spec in config.get("reward_specs") or []
-                    if spec.get("rule", {}).get("compare_to")
+                    if spec.get("kind") == "python" or (spec.get("rule") or {}).get("compare_to")
                 ),
                 rl_system_prompt = (config.get("rl_settings") or {}).get("system_prompt"),
                 s3_config = config.get("s3_config"),

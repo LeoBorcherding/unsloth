@@ -6,9 +6,9 @@ import type {
   DatasetFormat,
   DatasetSource,
   GradientCheckpointing,
-  ModelType,
   GrpoRewardSelection,
   GrpoVariant,
+  ModelType,
   S3Config,
   TrainingMethod,
   TrainingObjective,
@@ -177,6 +177,8 @@ export interface TrainingConfigState {
   grpoVariant: GrpoVariant;
   grpoMaskTruncatedCompletions: boolean;
   grpoEpsilonHigh: number | null;
+  grpoReasoningFormat: boolean;
+  grpoFormatWarmupSteps: number;
   grpoRewards: GrpoRewardSelection[];
 }
 
@@ -312,6 +314,8 @@ export interface TrainingConfigActions {
   setGrpoVariant: (value: GrpoVariant) => void;
   setGrpoMaskTruncatedCompletions: (value: boolean) => void;
   setGrpoEpsilonHigh: (value: number | null) => void;
+  setGrpoReasoningFormat: (value: boolean) => void;
+  setGrpoFormatWarmupSteps: (value: number) => void;
   setGrpoRewards: (value: GrpoRewardSelection[]) => void;
   restoreRunConfig: (config: Record<string, unknown>) => void;
   reset: () => void;

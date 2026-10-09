@@ -3,6 +3,7 @@
 
 """Pydantic schemas for Training API"""
 
+from core.training.rl_format import WARMUP_MIN_SEQ_LENGTH
 import math
 import re
 from pathlib import Path, PureWindowsPath
@@ -706,6 +707,16 @@ class TrainingStartRequest(BaseModel):
         allow_inf_nan = False,
         description = "Upper clip bound (DAPO clip-higher). Null uses epsilon.",
     )
+    grpo_reasoning_format: bool = Field(
+        False,
+        description = "Use the GRPO notebooks' reasoning chat template and answer format (for base models)",
+    )
+    grpo_format_warmup_steps: int = Field(
+        0,
+        ge = 0,
+        le = 1000,
+        description = "SFT steps on formatted examples before GRPO, so the model already writes the tags. 0 skips it.",
+    )
     grpo_rewards: List[RewardSelection] = Field(
         default_factory = list, max_length = 16, description = "Library rewards for GRPO"
     )
@@ -803,6 +814,13 @@ class TrainingStartRequest(BaseModel):
             {_normalized_reward_name(r.name) for r in self.grpo_rewards}
         ) != len(self.grpo_rewards):
             raise ValueError("Each GRPO reward can only be selected once.")
+        if self.grpo_format_warmup_steps and not (objective == "grpo" and self.grpo_reasoning_format):
+            raise ValueError("The format warm-up needs GRPO with the reasoning format on.")
+        if self.grpo_format_warmup_steps and self.max_seq_length < WARMUP_MIN_SEQ_LENGTH:
+            raise ValueError(
+                f"The format warm-up needs a max sequence length of {WARMUP_MIN_SEQ_LENGTH} or more; "
+                "its examples are 800+ tokens and only those under half the context are used."
+            )
         return self
 
     @model_validator(mode = "after")
@@ -1460,3 +1478,24 @@ class DiffusionDatasetImportResponse(BaseModel):
     imported: int
     license: str
     source_repo: str
+
+
+class RlSampleItem(BaseModel):
+    completion: str
+    rewards: Dict[str, Optional[float]]
+    total: float
+
+
+class RlSampleGroup(BaseModel):
+    """One prompt's GRPO completions and what each reward gave them."""
+
+    seq: int
+    step: Optional[int] = None
+    prompt: str
+    answer: Optional[str] = None
+    items: List[RlSampleItem]
+
+
+class RlSamplesResponse(BaseModel):
+    job_id: str
+    samples: List[RlSampleGroup]

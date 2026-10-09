@@ -13,11 +13,14 @@ export interface RewardRecord {
   shadowed: boolean;
   error: string | null;
   rule: Record<string, unknown> | null;
+  entry?: string | null;
+  code?: string | null;
 }
 
 export interface RewardPreviewResponse {
-  scores: { name: string; score: number; weighted: number }[];
+  scores: { name: string; score: number | null; weighted: number | null }[];
   total: number;
+  isolation: { backend: string; os_isolation: boolean } | null;
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -72,12 +75,40 @@ export async function previewRewards(
   rewards: GrpoRewardSelection[],
   completion: string,
   reference: string | null,
+  row: Record<string, string> | null = null,
+  prompt: string | null = null,
 ): Promise<RewardPreviewResponse> {
   return readJson(
     await authFetch("/api/rewards/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rewards, completion, reference }),
+      body: JSON.stringify({ rewards, completion, reference, row, prompt }),
     }),
   );
+}
+
+export interface RlSampleGroup {
+  seq: number;
+  step: number | null;
+  prompt: string;
+  answer: string | null;
+  items: {
+    completion: string;
+    rewards: Record<string, number | null>;
+    total: number;
+  }[];
+}
+
+export async function getRlSamples(
+  jobId: string,
+  after: number,
+): Promise<RlSampleGroup[]> {
+  const params = new URLSearchParams({
+    after: String(after),
+    expected_job_id: jobId,
+  });
+  const body = await readJson<{ samples: RlSampleGroup[] }>(
+    await authFetch(`/api/train/rl-samples?${params}`),
+  );
+  return body.samples;
 }

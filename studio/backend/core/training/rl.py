@@ -10,9 +10,12 @@ GRPO runs without vLLM: Unsloth only switches TRL to vLLM rollouts when the mode
 from __future__ import annotations
 
 import dataclasses
+import logging
 import math
 import os
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 OBJECTIVES = ("sft", "dpo", "orpo", "grpo")
 PREFERENCE_OBJECTIVES = ("dpo", "orpo")
@@ -170,11 +173,14 @@ def format_rl_dataset(
     if not columns:
         raise ValueError(f"{objective.upper()} training needs a dataset with known columns.")
     roles = resolve_role_columns(columns, objective, mapping)
-    # Rewards read their compare_to column by name, so keep it even when it also fills a role.
-    extra = [c for c in keep_columns if c in columns and c not in _RL_OUTPUT_COLUMNS[objective]]
+    # "*": Python rewards can read any column, so keep them all. Rewards read their compare_to
+    # column by name, so keep it even when it also fills a role.
+    # The columns that fill a role are already there under the role's name.
+    wanted = [c for c in columns if c not in roles.values()] if "*" in keep_columns else keep_columns
+    extra = [c for c in wanted if c in columns and c not in _RL_OUTPUT_COLUMNS[objective]]
     if objective == "grpo":
         present = set(extra) | {"prompt"} | ({"answer"} if "answer" in roles else set())
-        absent = sorted({c for c in keep_columns if c not in present})
+        absent = sorted({c for c in keep_columns if c != "*" and c not in present})
         if absent:
             raise ValueError(
                 f"A selected reward compares against {', '.join(absent)}, which this dataset does "
@@ -250,6 +256,20 @@ def rl_lengths(objective: str, max_seq_length: int, settings: dict) -> tuple[int
     return prompt, max(16, min(completion, max_seq_length - prompt))
 
 
+def _reward_funcs(reward_specs, worker_cls, make_python, make_rule) -> list:
+    """In ``reward_specs`` order, since TRL pairs ``reward_weights`` with them by position."""
+    python = [s for s in reward_specs if s.get("kind") == "python"]
+    python_funcs = {}
+    if python:
+        worker = worker_cls(python).start()
+        logger.info("Python rewards run with %s", worker.isolation)
+        python_funcs = dict(zip((s["name"] for s in python), make_python(python, worker)))
+    return [
+        python_funcs[s["name"]] if s.get("kind") == "python" else make_rule(s)
+        for s in reward_specs
+    ]
+
+
 def build_rl_trainer(
     objective: str,
     *,
@@ -260,9 +280,10 @@ def build_rl_trainer(
     config_args: dict,
     settings: dict,
     reward_specs: Optional[list[dict]] = None,
+    sample_sink: Optional[Callable[[dict], None]] = None,
 ):
     """Construct the TRL trainer for a non-SFT objective. Unsloth's PatchFastRL has already
-    swapped these classes for its own on import."""
+    swapped these classes for its own on import. ``sample_sink`` receives GRPO sample answers."""
     import trl
 
     max_seq_length = int(config_args.get("max_seq_length") or 2048)
@@ -310,7 +331,9 @@ def build_rl_trainer(
         if objective == "dpo":
             kwargs["ref_model"] = None
     elif objective == "grpo":
+        from core.training.python_rewards import RewardWorker, make_python_reward_funcs
         from core.training.rewards import make_reward_func
+        from core.training.rl_samples import record_samples
 
         if not reward_specs:
             raise ValueError("GRPO needs at least one reward selected.")
@@ -380,7 +403,12 @@ def build_rl_trainer(
             "args": args,
             "train_dataset": train_dataset,
             "processing_class": tokenizer,
-            "reward_funcs": [make_reward_func(s) for s in reward_specs],
+            "reward_funcs": record_samples(
+                _reward_funcs(reward_specs, RewardWorker, make_python_reward_funcs, make_reward_func),
+                reward_specs,
+                sample_sink,
+                args.num_generations,
+            ),
         }
         trainer_cls = trl.GRPOTrainer
     else:

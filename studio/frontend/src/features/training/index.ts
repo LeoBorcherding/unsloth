@@ -66,11 +66,16 @@ export type {
 export {
   deleteReward,
   exportReward,
+  getRlSamples,
   importReward,
   listRewards,
   previewRewards,
 } from "./api/rewards-api";
-export type { RewardRecord } from "./api/rewards-api";
+export type {
+  RewardPreviewResponse,
+  RewardRecord,
+  RlSampleGroup,
+} from "./api/rewards-api";
 export { previewCell, useRlWorkspaceStore } from "./stores/rl-workspace-store";
 export { rlChartKeys } from "./lib/rl-chart-keys";
 export {

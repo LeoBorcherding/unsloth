@@ -363,6 +363,7 @@ class UnslothTrainer:
         self.training_thread = None
         self.training_progress = TrainingProgress()
         self.progress_callbacks = []
+        self.sample_callbacks: list[Callable[[dict], None]] = []
         self.is_training = False
         self.should_stop = False
         self.save_on_stop = True
@@ -558,6 +559,17 @@ class UnslothTrainer:
 
     def add_progress_callback(self, callback: Callable[[TrainingProgress], None]):
         self.progress_callbacks.append(callback)
+
+    def add_sample_callback(self, callback: Callable[[dict], None]):
+        """GRPO sample answers (one prompt's completions and their reward scores)."""
+        self.sample_callbacks.append(callback)
+
+    def _emit_samples(self, samples: dict) -> None:
+        for callback in self.sample_callbacks:
+            try:
+                callback(samples)
+            except Exception:  # noqa: BLE001 - display only
+                logger.debug("Sample callback failed", exc_info = True)
 
     def _update_progress(self, **kwargs):
         """Update training progress and notify callbacks"""
@@ -4231,6 +4243,11 @@ class UnslothTrainer:
             self.tokenizer = get_training_chat_template(
                 self.tokenizer, self.model_name, dataset_final_format
             )
+            rl_settings = training_args.get("rl_settings") or {}
+            if training_args.get("objective") == "grpo" and rl_settings.get("reasoning_format"):
+                from core.training.rl_format import apply_reasoning_template
+
+                apply_reasoning_template(self.tokenizer)
 
             data_collator = None
             if is_deepseek_ocr:
@@ -4548,6 +4565,21 @@ class UnslothTrainer:
                     and getattr(rl_tokenizer, "chat_template", None)
                 ):
                     self.tokenizer.chat_template = rl_tokenizer.chat_template
+                warmup_steps = int(rl_settings.get("format_warmup_steps") or 0)
+                if objective == "grpo" and warmup_steps > 0:
+                    from core.training.rl_format import run_format_warmup
+
+                    self._update_progress(status_message = f"Format warm-up ({warmup_steps} SFT steps)...")
+                    run_format_warmup(
+                        self.model,
+                        rl_tokenizer,
+                        config_args,
+                        warmup_steps,
+                        should_stop = lambda: self.should_stop,
+                    )
+                    if self.should_stop:
+                        self._update_progress(is_training = False, status_message = "Training cancelled.")
+                        return
                 logger.info(f"Configuring {objective.upper()} trainer\n")
                 self.trainer = build_rl_trainer(
                     objective,
@@ -4556,8 +4588,9 @@ class UnslothTrainer:
                     train_dataset = dataset["dataset"] if isinstance(dataset, dict) else dataset,
                     eval_dataset = eval_dataset,
                     config_args = config_args,
-                    settings = training_args.get("rl_settings") or {},
+                    settings = rl_settings,
                     reward_specs = training_args.get("reward_specs") or [],
+                    sample_sink = self._emit_samples if self.sample_callbacks else None,
                 )
                 if rl_tokenizer is not self.tokenizer:
                     self.trainer.processing_class = self.tokenizer

@@ -15,6 +15,7 @@ from core.training.account_jobs import (
     require_job_owner,
     validate_job_paths,
 )
+from core.training.rl_format import SYSTEM_PROMPT as REASONING_SYSTEM_PROMPT
 import contextlib
 import json
 import os
@@ -135,6 +136,7 @@ from models.training import (
     DiffusionTrainingStartResponse,
     DiffusionTrainingStatusResponse,
     DiffusionTrainingStopRequest,
+    RlSamplesResponse,
     TRAINING_REQUEST_ID_PATTERN,
 )
 from models.responses import TrainingStopResponse, TrainingMetricsResponse
@@ -2060,7 +2062,10 @@ async def start_training(
                 "temperature": request.grpo_temperature,
                 "variant": request.grpo_variant,
                 "enable_thinking": request.grpo_enable_thinking,
-                "system_prompt": (request.rl_system_prompt or "").strip() or None,
+                "system_prompt": (request.rl_system_prompt or "").strip()
+                or (REASONING_SYSTEM_PROMPT if request.grpo_reasoning_format else None),
+                "reasoning_format": request.grpo_reasoning_format,
+                "format_warmup_steps": request.grpo_format_warmup_steps,
                 "mask_truncated_completions": request.grpo_mask_truncated_completions,
                 "epsilon_high": request.grpo_epsilon_high,
             },
@@ -2710,6 +2715,23 @@ async def get_training_metrics(
             event = "training.metrics_failed",
             log = logger,
         )
+
+
+@router.get("/rl-samples", response_model = RlSamplesResponse)
+async def get_rl_samples(
+    after: int = 0,
+    expected_job_id: Optional[str] = None,
+    current_subject: str = Depends(get_current_subject),
+):
+    """GRPO sample answers newer than ``after`` (a ``seq``), for the Current Run tab."""
+    backend = get_training_backend()
+    if job_is_foreign(backend):
+        return RlSamplesResponse(job_id = "", samples = [])
+    job_id = getattr(backend, "current_job_id", "") or ""
+    if expected_job_id is not None and expected_job_id != job_id:
+        raise HTTPException(status_code = 409, detail = "Training job was superseded")
+    samples = [s for s in list(getattr(backend, "rl_samples", [])) if s["seq"] > after]
+    return RlSamplesResponse(job_id = job_id, samples = samples)
 
 
 # POST too: quick tunnels hold a streamed GET until it closes. The hidden GET keeps old clients.
