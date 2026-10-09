@@ -88,6 +88,26 @@ export function estimateQuantBytes(params: number): number {
   return params * MIN_QUANT_BYTES_PER_PARAM;
 }
 
+// Measured smallest-quant bytes for repos whose `gguf.total` is mostly a lookup table, keyed by
+// architecture and that exact total. Qwen3.8-Flash-Next (qwen4exp) counts a 51.2B-param ngram
+// table, `per_layer_token_embd`, that llama.cpp keeps in the CPU file mapping and reads a few
+// rows of per token, so it costs disk, not VRAM or RAM. Priced as dense weights it hid the
+// model on boxes that run it. Bytes are UD-IQ1_S minus that table (28.8 GB IQ4_NL).
+const GGUF_MIN_QUANT_OVERRIDES: Readonly<
+  Record<string, { totalParams: number; bytes: number }>
+> = {
+  qwen4exp: { totalParams: 176_943_899_520, bytes: 43_746_323_104 },
+};
+
+/** Smallest-quant bytes the fit check should use, or undefined to fall back to the estimate. */
+export function minQuantBytesOverride(
+  totalParams?: number,
+  architecture?: string,
+): number | undefined {
+  const entry = architecture ? GGUF_MIN_QUANT_OVERRIDES[architecture] : undefined;
+  return entry && entry.totalParams === totalParams ? entry.bytes : undefined;
+}
+
 /** A model fits when it can run at all: `classifyGgufFit` short of `oom`, so a partial CPU
  *  offload counts. Shares the loader's formula with the Hub badge and the quant rows, since
  *  this predicate ALSO gates the "Fits on device" filter. Unknown device means we cannot
@@ -159,6 +179,7 @@ export function hfModelFitsDevice(
   model: {
     id: string;
     totalParams?: number;
+    ggufArchitecture?: string;
     estimatedSizeBytes?: number;
     curatedSizeBytes?: number;
     isGguf?: boolean;
@@ -185,7 +206,9 @@ export function hfModelFitsDevice(
   )
     return true;
   const params = model.totalParams ?? paramsFromId(model.id);
-  const quantBytes = params ? estimateQuantBytes(params) : undefined;
+  const quantBytes =
+    minQuantBytesOverride(model.totalParams, model.ggufArchitecture) ??
+    (params ? estimateQuantBytes(params) : undefined);
   const sizeBytes =
     model.curatedSizeBytes ??
     (isGgufId(model.id, model.isGguf)

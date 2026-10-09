@@ -177,6 +177,7 @@ export function toHfModelResult(raw: unknown): HfModelResult | null {
     gated: model.gated,
     totalParams:
       finiteNumber(model.safetensors?.total) ?? finiteNumber(model.gguf?.total),
+    ggufArchitecture: model.gguf?.architecture,
     estimatedSizeBytes: estimateSizeFromDtypes(model.safetensors?.parameters),
     isGguf,
     baseModel: detectBaseModel(model.tags),

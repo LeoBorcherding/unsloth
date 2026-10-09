@@ -85,6 +85,8 @@ export interface HfModelResult {
   private?: boolean;
   gated?: false | "auto" | "manual";
   totalParams?: number;
+  /** `gguf.architecture` from the listing; the fit estimate keys lookup tables on it. */
+  ggufArchitecture?: string;
   estimatedSizeBytes?: number;
   /** Catalog size for a row painted before the listing reports it, never from a Hub response. */
   curatedSizeBytes?: number;
@@ -237,6 +239,7 @@ function makeMapModel(
       private: m.private,
       gated: m.gated,
       totalParams: m.safetensors?.total ?? m.gguf?.total,
+      ggufArchitecture: m.gguf?.architecture,
       estimatedSizeBytes: estimateSizeFromDtypes(m.safetensors?.parameters),
       isGguf,
       baseModel: detectBaseModel(m.tags),
