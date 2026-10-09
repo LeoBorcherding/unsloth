@@ -63,3 +63,9 @@ def test_build_breakdown_names_components_and_never_exceeds_measured():
 def test_build_breakdown_unknown_without_process_reading():
     out = gb.build_breakdown(DEVICES, None, {1}, {}, [])
     assert all(d["unsloth_gb"] is None and d["items"] == [] for d in out)
+
+
+def test_short_model_name_handles_windows_paths_and_repo_ids():
+    assert gb.short_model_name(r"L:\hub\snapshots\abc\gemma-4-12B-it-qat-UD-Q4_K_XL.gguf") == "gemma-4-12B-it-qat-UD-Q4_K_XL"
+    assert gb.short_model_name("/models/q.GGUF") == "q"
+    assert gb.short_model_name("unsloth/Qwen-Image-2.1-GGUF") == "Qwen-Image-2.1-GGUF"

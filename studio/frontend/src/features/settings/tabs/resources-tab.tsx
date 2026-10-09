@@ -316,7 +316,7 @@ function GpuBreakdownList({
     },
   ];
   return (
-    <ul className="basis-full space-y-1 font-mono text-ui-11 tabular-nums text-muted-foreground">
+    <ul className="w-full min-w-0 basis-full space-y-1 font-mono text-ui-11 tabular-nums text-muted-foreground">
       {rows.map((row) => (
         <li key={row.text} className="flex min-w-0 items-center gap-2">
           <span

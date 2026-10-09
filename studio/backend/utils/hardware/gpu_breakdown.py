@@ -23,6 +23,12 @@ _GIB = 1024**3
 _PID_RE = re.compile(r"pid_(\d+)_", re.IGNORECASE)
 
 
+def short_model_name(model: Any) -> str:
+    """Repo id or local path -> what a person calls it: last segment, no .gguf."""
+    name = re.split(r"[\\/]", str(model).rstrip("\\/"))[-1]
+    return name[: -len(".gguf")] if name.lower().endswith(".gguf") else name
+
+
 def unsloth_pids() -> set[int]:
     import os
 
@@ -243,7 +249,7 @@ def diffusion_components(
     if pipe is None:
         return []
     model = getattr(state, "display_repo_id", None) or getattr(state, "repo_id", None) or "Image model"
-    model = str(model).rsplit("/", 1)[-1]
+    model = short_model_name(model)
     index_by_ordinal = {
         d["visible_ordinal"]: d["index"]
         for d in devices

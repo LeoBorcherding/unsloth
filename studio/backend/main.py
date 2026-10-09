@@ -2700,12 +2700,14 @@ _gpu_breakdown_cache: Optional[tuple[float, dict[str, Any]]] = None
 
 def _gpu_process_owners() -> dict[int, tuple[str, str]]:
     """{pid: (kind, model)} for the child processes that hold a known model."""
+    from utils.hardware import gpu_breakdown
+
     owners: dict[int, tuple[str, str]] = {}
 
     def add(proc: Any, kind: str, model: Any) -> None:
         pid = getattr(proc, "pid", None)
         if isinstance(pid, int) and model:
-            owners[pid] = (kind, str(model).rsplit("/", 1)[-1])
+            owners[pid] = (kind, gpu_breakdown.short_model_name(model))
 
     try:
         from core.inference import model_slots
