@@ -598,6 +598,14 @@ export const sv = {
     queueingOnHint: "Nya meddelanden väntar på sin tur.",
     queueingHintShared: "Kön behålls.",
   },
+  turns: {
+    label: "Omgång {number}",
+    bookmarkedLabel: "Omgång {number}, bokmärkt",
+    bookmarked: "Bokmärkt",
+    bookmark: "Bokmärk omgång",
+    removeBookmark: "Ta bort bokmärke",
+    navigator: "Omgångar",
+  },
   chatMenu: {
     more: "Chattalternativ",
     copy: "Kopiera",
@@ -2648,6 +2656,9 @@ export const sv = {
       inlineEditResponse: "Redigera svar på svaren",
       inlineEditResponseDescription:
         "Visa Redigera svar på varje svar i stället för i menyn Mer.",
+      turnNavigation: "Omgångsnavigering",
+      turnNavigationDescription:
+        "Numrera varje omgång, bokmärk omgångar och hoppa mellan dem från en list bredvid långa chattar.",
       modelDisclaimer: "Modellfriskrivning",
       modelDisclaimerDescription:
         "Visa ”LLM:er kan göra misstag” under chattrutan.",

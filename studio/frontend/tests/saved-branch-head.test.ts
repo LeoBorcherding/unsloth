@@ -99,6 +99,9 @@ function sidebar(deleteResult: () => Promise<string[]>) {
         CHAT_HISTORY_UPDATED_EVENT: "chat-history-updated",
         notifyChatHistoryUpdated: () => {},
       },
+      "../stores/bookmarked-turns-store": {
+        useBookmarkedTurnsStore: { getState: () => ({ forgetThreads: () => {} }) },
+      },
       "../stores/chat-runtime-store": {
         useChatRuntimeStore: { getState: () => ({ setActiveThreadId: () => {} }) },
       },
