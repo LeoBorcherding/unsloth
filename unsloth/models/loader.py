@@ -41,6 +41,7 @@ from .mistral_format import (
     mistral_format_redirect,
     prepare_mistral_format_checkpoint,
 )
+from .lora_init import adapter_used_fast_pissa, fast_lora_init, record_fast_pissa
 from .loader_utils import (
     DEFAULT_DEVICE_MAP,
     OFFLOAD_EMBEDDING_AUTO,
@@ -55,6 +56,7 @@ from .loader_utils import (
     prepare_device_map,
     requested_device_map,
     _offline_aware_load,
+    _restore_load_scoped_env,
     _resolve_checkpoint_tokenizer_name,
     _is_offline_related_error,
 )
@@ -120,6 +122,7 @@ from ._utils import (
     _mark_full_finetuning,
     _get_text_only_config,
     resolve_model_class,
+    _is_seq2seq_lm_config,
     _is_family_text_decoder,
     _apply_text_only_key_mapping,
     _get_remote_composite_text_only,
@@ -133,6 +136,7 @@ from ._utils import (
 
 # Source of truth is unsloth_zoo.model_lists, re-exported for callers importing FORCE_FLOAT32 from here. The fallback list is unioned in so a newer unsloth still forces float32 for these archs against an older zoo.
 _FORCE_FLOAT32_FALLBACK = [
+    "embedding_gemma2",  # EmbeddingGemma 2: text-only loads have no gemma4 sub-config to match
     "gemma3,",
     "gemma3text",  # Gemma3TextModel (EmbeddingGemma, standalone text-only Gemma3)
     "gemma3n",
@@ -618,6 +622,13 @@ def _built_by_unsloth_compiler(cls):
     return False
 
 
+def _has_vision_config(config):
+    # Qwen2.5-Omni checkpoints name `Qwen2_5OmniModel` (no ForConditionalGeneration) and nest vision under thinker_config.
+    return any(
+        hasattr(sub, "vision_config") for sub in (config, getattr(config, "thinker_config", None))
+    )
+
+
 def _resolve_omni_auto_model(
     model_config,
     trust_remote_code = None,
@@ -648,6 +659,25 @@ def _resolve_omni_auto_model(
             continue
     # Falling back to the concrete class the checkpoint names is WRONG: it is in no
     # auto mapping, so it leaves the processor set and downgrades to AutoTokenizer.
+    return None
+
+
+def _resolve_speech_seq2seq_auto_model(
+    model_config,
+    trust_remote_code = None,
+    **hub_kwargs,
+):
+    """AutoModelForSpeechSeq2Seq when it maps this config (Whisper, Moonshine), else None."""
+    import transformers
+
+    auto_class = getattr(transformers, "AutoModelForSpeechSeq2Seq", None)
+    try:
+        if auto_class is not None and resolve_model_class(
+            auto_class, model_config, trust_remote_code = trust_remote_code, **hub_kwargs
+        ):
+            return auto_class
+    except Exception:
+        pass
     return None
 
 
@@ -854,6 +884,31 @@ def _fix_rope_inv_freq(model):
     return model
 
 
+def _patch_from_pretrained_rope_fix():
+    """pre_patch swaps Unsloth's rotary classes into transformers, so a plain from_pretrained after an Unsloth load (a reward model TRL loads by name) also gets the corrupted inv_freq (#1494)."""
+    if not _NEEDS_ROPE_FIX:
+        return
+    import functools
+    from transformers import PreTrainedModel
+
+    original = PreTrainedModel.from_pretrained.__func__
+    if getattr(original, "_unsloth_rope_fix", False):
+        return
+
+    @functools.wraps(original)
+    def wrapped(cls, *args, **kwargs):
+        output = original(cls, *args, **kwargs)
+        # output_loading_info = True returns (model, info).
+        _fix_rope_inv_freq(output[0] if isinstance(output, tuple) else output)
+        return output
+
+    wrapped._unsloth_rope_fix = True
+    PreTrainedModel.from_pretrained = classmethod(wrapped)
+
+
+_patch_from_pretrained_rope_fix()
+
+
 def _vllm_unavailable_error():
     # vLLM installed but disabled at import (ABI break, needs transformers 5) is not "not installed".
     from unsloth import import_fixes
@@ -996,6 +1051,10 @@ class FastLanguageModel(FastLlamaModel):
             or dtype == torch.float32
         )
 
+        # Same fallback as FastModel, before requiring vLLM: it cannot run below compute capability 7.
+        if fast_inference and DEVICE_TYPE == "cuda" and torch.cuda.get_device_capability()[0] < 7:
+            print("Unsloth: vLLM does not work on older GPUs - will switch to Unsloth inference!")
+            fast_inference = False
         if fast_inference:
             if importlib.util.find_spec("vllm") is None:
                 raise _vllm_unavailable_error()
@@ -1619,16 +1678,27 @@ class FastLanguageModel(FastLlamaModel):
                     local_files_only = local_files_only,
                     cache_dir = kwargs.get("cache_dir"),
                 )
-            model = PeftModel.from_pretrained(
-                model,
+            # PEFT re-runs PiSSA at load: rebuild the residual with the algorithm that made the adapter.
+            fast_pissa = adapter_used_fast_pissa(
                 old_model_name,
                 token = token,
                 revision = revision,
                 local_files_only = local_files_only,
-                is_trainable = True,
-                trust_remote_code = trust_remote_code,
-                **peft_load_kwargs,
+                cache_dir = kwargs.get("cache_dir"),
             )
+            with fast_lora_init(force = True) if fast_pissa else contextlib.nullcontext():
+                model = PeftModel.from_pretrained(
+                    model,
+                    old_model_name,
+                    token = token,
+                    revision = revision,
+                    local_files_only = local_files_only,
+                    is_trainable = True,
+                    trust_remote_code = trust_remote_code,
+                    **peft_load_kwargs,
+                )
+            if fast_pissa:
+                record_fast_pissa(model)
             model = dispatch_model.patch_peft_model(model, use_gradient_checkpointing)
             try:
                 from .vision import _lift_endpoint_hooks_onto_adapters
@@ -1707,6 +1777,7 @@ class FastModel(FastBaseModel):
         return FastBaseModel.for_training(model, use_gradient_checkpointing)
 
     @staticmethod
+    @_restore_load_scoped_env
     @_offline_aware_load
     @mistral_format_redirect
     @track_explicit_4bit_request
@@ -1869,6 +1940,10 @@ class FastModel(FastBaseModel):
                 # One whole model per rank; sharding one across the ranks' GPUs too would have every rank fighting for the same cards.
                 device_map = distributed_device_map
 
+        # Same fallback as FastLanguageModel, before requiring vLLM: zoo's vLLM loader raises on compute capability < 7.
+        if fast_inference and DEVICE_TYPE == "cuda" and torch.cuda.get_device_capability()[0] < 7:
+            print("Unsloth: vLLM does not work on older GPUs - will switch to Unsloth inference!")
+            fast_inference = False
         if fast_inference:
             if importlib.util.find_spec("vllm") is None:
                 raise _vllm_unavailable_error()
@@ -2421,9 +2496,9 @@ class FastModel(FastBaseModel):
 
         # Keep the local checkpoint dir as tokenizer when self-sufficient; a VLM also needs local processor files, else fall back to the base repo so its cached processor loads.
         _ckpt_arch = getattr(model_config, "architectures", None) or []
-        _ckpt_is_vlm = any(x.endswith("ForConditionalGeneration") for x in _ckpt_arch) or hasattr(
-            model_config, "vision_config"
-        )
+        _ckpt_is_vlm = any(
+            x.endswith("ForConditionalGeneration") for x in _ckpt_arch
+        ) or _has_vision_config(model_config)
         # T5 / BART end in ForConditionalGeneration too but ship a tokenizer, not a processor.
         _ckpt_is_vlm = _ckpt_is_vlm and not _is_text_seq2seq_config(model_config)
         tokenizer_name = _resolve_checkpoint_tokenizer_name(
@@ -2455,7 +2530,7 @@ class FastModel(FastBaseModel):
         if architectures is None:
             architectures = []
         is_vlm = any(x.endswith("ForConditionalGeneration") for x in architectures)
-        is_vlm = is_vlm or hasattr(model_config, "vision_config")
+        is_vlm = is_vlm or _has_vision_config(model_config)
         if (
             is_peft
             and not text_only
@@ -2576,7 +2651,13 @@ class FastModel(FastBaseModel):
             if _num_labels is not None:
                 from transformers import AutoModelForSequenceClassification
                 auto_model = AutoModelForSequenceClassification
-            elif _is_text_seq2seq_config(model_config):
+            elif _is_text_seq2seq_config(model_config) or (
+                # SeamlessM4T: Seq2SeqLM-mapped (text-to-text) beside its speech classes, no causal-LM class.
+                not is_vlm
+                and _is_seq2seq_lm_config(model_config)
+                and resolve_model_class(AutoModelForCausalLM, model_config, **_probe_hub_kwargs)
+                is None
+            ):
                 if fast_inference:
                     raise NotImplementedError(
                         "Unsloth: fast_inference (vLLM) does not support encoder-decoder models "
@@ -2627,6 +2708,7 @@ class FastModel(FastBaseModel):
                     if resolve_model_class(auto_model, model_config, **_probe_hub_kwargs) is None:
                         auto_model = (
                             _resolve_omni_auto_model(model_config, **_probe_hub_kwargs)
+                            or _resolve_speech_seq2seq_auto_model(model_config, **_probe_hub_kwargs)
                             or auto_model
                         )
             else:
@@ -2855,17 +2937,25 @@ class FastModel(FastBaseModel):
                     local_files_only = local_files_only,
                     cache_dir = kwargs.get("cache_dir"),
                 )
+            fast_pissa = adapter_used_fast_pissa(
+                old_model_name,
+                token = token,
+                revision = revision,
+                local_files_only = local_files_only,
+                cache_dir = kwargs.get("cache_dir"),
+            )
             try:
-                model = PeftModel.from_pretrained(
-                    model,
-                    old_model_name,
-                    token = token,
-                    revision = revision,
-                    local_files_only = local_files_only,
-                    is_trainable = True,
-                    trust_remote_code = trust_remote_code,
-                    **peft_load_kwargs,
-                )
+                with fast_lora_init(force = True) if fast_pissa else contextlib.nullcontext():
+                    model = PeftModel.from_pretrained(
+                        model,
+                        old_model_name,
+                        token = token,
+                        revision = revision,
+                        local_files_only = local_files_only,
+                        is_trainable = True,
+                        trust_remote_code = trust_remote_code,
+                        **peft_load_kwargs,
+                    )
             finally:
                 # Always restore the original PEFT method, even if loading fails.
                 if _clippable_linear_cls is not None:
@@ -2874,6 +2964,8 @@ class FastModel(FastBaseModel):
             model = FastBaseModel.post_patch_model(
                 model, use_gradient_checkpointing, trust_remote_code = trust_remote_code
             )
+            if fast_pissa:
+                record_fast_pissa(model)
             try:
                 from .vision import _lift_endpoint_hooks_onto_adapters
                 _lift_endpoint_hooks_onto_adapters(model)
