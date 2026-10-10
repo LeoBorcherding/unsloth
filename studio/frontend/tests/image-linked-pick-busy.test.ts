@@ -23,3 +23,10 @@ test("a download-only pick of a linked model is refused before it reaches this m
   const switchMachine = body.indexOf("setImagesMachine(machine)");
   assert.ok(refuse >= 0 && refuse < switchMachine);
 });
+
+test("a deleted Images machine falls back to this machine once the linked list refreshes", () => {
+  const effect = page.slice(page.indexOf("A machine removed since it was picked"));
+  const resetAt = effect.indexOf("setImagesMachine(null)");
+  assert.ok(resetAt > 0 && resetAt < effect.indexOf("}, [imagesMachine, refreshStatus]);"));
+  assert.ok(effect.indexOf("instances.some((i) => i.id === imagesMachine)") < resetAt);
+});

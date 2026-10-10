@@ -2545,10 +2545,6 @@ export function ImagesPage({
       ? state.instances.find((i) => i.id === imagesMachine)?.name
       : undefined,
   );
-  useEffect(() => {
-    if (imagesMachine) void refreshLinkedMachines();
-  }, [imagesMachine]);
-
   const refreshStatus = useCallback(async () => {
     const ticket = ++statusTicket.current;
     try {
@@ -2557,6 +2553,18 @@ export function ImagesPage({
       // Status is best-effort; a failed poll should not surface an error toast.
     }
   }, [setStatusIfNewest]);
+
+  // A machine removed since it was picked would leave every Images request on a 404 proxy.
+  useEffect(() => {
+    if (!imagesMachine) return;
+    void refreshLinkedMachines().then(() => {
+      const { instances, loadedAt } = useLinkedMachinesStore.getState();
+      if (loadedAt === 0 || instances.some((i) => i.id === imagesMachine)) return;
+      setImagesMachine(null);
+      setImagesMachineState(null);
+      void refreshStatus();
+    });
+  }, [imagesMachine, refreshStatus]);
 
   // Track mount so a long generate run stops issuing GPU work only on a true unmount; the page
   // stays mounted across tab switches, so a batch keeps generating off-tab.
