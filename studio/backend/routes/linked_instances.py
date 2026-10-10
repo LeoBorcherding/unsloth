@@ -5,7 +5,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth.authentication import authenticated_via_api_key, get_current_subject
 from core.inference import linked_instances
@@ -128,3 +128,18 @@ async def test_linked_instance(instance_id: str):
         raise HTTPException(status_code = 404, detail = "Linked instance not found")
     linked_instances.forget(instance_id)
     return await _status(instance)
+
+
+@router.api_route(
+    "/{name}/proxy/{path:path}",
+    methods = ["GET", "POST", "DELETE"],
+    dependencies = [Depends(_require_owner_ui)],
+)
+async def proxy_linked_instance(name: str, path: str, request: Request):
+    """Run this page's Benchmarks against a linked instance; see linked_instances._PROXY_PATHS."""
+    instance = await asyncio.to_thread(linked_instances_db.get_instance_by_name, name.lower())
+    if instance is None:
+        raise HTTPException(status_code = 404, detail = f"No linked instance named '{name}'.")
+    return await linked_instances.proxy(
+        instance, request.method, path, request.url.query, await request.body()
+    )

@@ -72,7 +72,8 @@ class BenchmarkRun(BaseModel):
     model_config = ConfigDict(extra = "ignore")
 
     id: str = Field(max_length = 128)
-    kind: Literal["sweep"] = "sweep"
+    # "llama-bench" arrives when a linked instance's run is copied home.
+    kind: Literal["sweep", "llama-bench"] = "sweep"
     sweep: str = Field(max_length = 64)
     model: str = Field(max_length = 1000)
     ggufVariant: Optional[str] = Field(default = None, max_length = 200)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import socket
 import time
 from typing import Optional
@@ -371,6 +372,36 @@ async def catalog_objects(request: Optional[Request]) -> list[dict]:
     instances = await asyncio.to_thread(linked_instances_db.list_instances)
     results = await asyncio.gather(*(_instance_catalog(i) for i in instances))
     return [model for models in results for model in models]
+
+
+# Owner-UI routes a linked instance's Benchmarks page needs. Anything else stays local-only.
+_PROXY_PATHS = re.compile(
+    r"^api/(benchmarks/llama-bench/(status|run)|system|system/hardware)$"
+)
+_PROXY_TIMEOUT = httpx.Timeout(60.0, connect = 5.0)
+
+
+async def proxy(instance: dict, method: str, path: str, query: str, body: bytes) -> Response:
+    """Pass one allowlisted owner request through to ``instance``, with its key added here."""
+    if not _PROXY_PATHS.match(path):
+        raise HTTPException(status_code = 404, detail = f"/{path} is not reachable on a linked instance")
+    headers = await asyncio.to_thread(_auth_headers, instance)
+    if body:
+        headers["Content-Type"] = "application/json"
+    url = f"{instance['base_url']}/{path}" + (f"?{query}" if query else "")
+    try:
+        upstream = await _client().request(
+            method, url, headers = headers, content = body or None, timeout = _PROXY_TIMEOUT
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code = 502, detail = f"Linked instance '{instance['name']}' did not answer: {exc}"
+        ) from exc
+    return Response(
+        content = upstream.content,
+        status_code = upstream.status_code,
+        media_type = upstream.headers.get("content-type", "application/json"),
+    )
 
 
 def forget(instance_id: str) -> None:

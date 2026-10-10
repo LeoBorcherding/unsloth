@@ -194,3 +194,50 @@ def test_a_non_executable_llama_bench_is_not_offered(tmp_path, monkeypatch):
     assert llama_bench.find_llama_bench() is None
     bench_bin.chmod(0o755)
     assert llama_bench.find_llama_bench() == bench_bin
+
+
+def test_upstream_build_runs_the_configured_binary_or_409s(bench, tmp_path, monkeypatch):
+    client, _, unloads = bench
+    monkeypatch.delenv("UNSLOTH_LLAMA_BENCH_UPSTREAM", raising = False)
+    assert client.get("/api/benchmarks/llama-bench/status").json()["upstreamAvailable"] is False
+    res = client.post("/api/benchmarks/llama-bench/run", json = {"build": "upstream"})
+    assert res.status_code == 409
+    assert res.json()["detail"]["error"] == "llama_bench_upstream_missing"
+    assert unloads == []
+
+    upstream = tmp_path / ("llama-bench.exe" if sys.platform == "win32" else "llama-bench")
+    upstream.write_text("", encoding = "utf-8")
+    upstream.chmod(0o755)
+    monkeypatch.setenv("UNSLOTH_LLAMA_BENCH_UPSTREAM", str(upstream))
+    used = []
+    real = llama_bench._command
+    monkeypatch.setattr(
+        llama_bench, "_command", lambda binary, gguf, request: used.append(binary) or real(binary, gguf, request)
+    )
+    monkeypatch.setattr(
+        llama_bench.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(OSError("not run"))
+    )
+    assert client.get("/api/benchmarks/llama-bench/status").json()["upstreamAvailable"] is True
+    assert client.post("/api/benchmarks/llama-bench/run", json = {"build": "upstream"}).status_code == 200
+    _wait(client)
+    assert used == [upstream]
+
+
+def test_a_linked_instances_run_can_be_copied_home_with_its_machine(bench):
+    client, _, _ = bench
+    run = {
+        "id": "llama-bench-remote1",
+        "kind": "llama-bench",
+        "sweep": "llama-bench",
+        "model": "unsloth/Qwen3-4B-GGUF",
+        "ggufVariant": "Q4_K_M",
+        "config": {"build": "unsloth"},
+        "meta": {"machine": "colab", "gpu_info": "NVIDIA L4"},
+        "outcomes": [{"test": "tg128", "avg_ts": 40.0}],
+        "createdAt": 1,
+        "finishedAt": 2,
+    }
+    assert client.put(f"/api/benchmarks/runs/{run['id']}", json = run).status_code == 200
+    saved = client.get("/api/benchmarks/runs", params = {"kind": "llama-bench"}).json()["runs"]
+    assert [(r["id"], r["meta"]["machine"]) for r in saved] == [("llama-bench-remote1", "colab")]
+    assert client.get("/api/benchmarks/runs").json()["runs"] == []

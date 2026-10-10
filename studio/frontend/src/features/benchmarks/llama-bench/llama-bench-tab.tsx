@@ -8,6 +8,13 @@ import { SectionCard } from "@/components/section-card";
 import { SegmentedTabsList } from "@/components/segmented-tabs";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs } from "@/components/ui/tabs";
 import { useLocale } from "@/i18n";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
@@ -38,6 +45,7 @@ import type {
   LlamaBenchMeta,
   LlamaBenchRow,
 } from "./llama-bench-api";
+import { compareTables, toCompareMarkdown } from "./llama-bench-compare";
 import { toLlamaBenchMarkdown } from "./llama-bench-markdown";
 import { useLlamaBenchStore } from "./llama-bench-store";
 
@@ -49,6 +57,11 @@ const FA_OPTIONS = [
   { value: "on", label: "On" },
   { value: "off", label: "Off" },
 ] as const;
+const BUILD_OPTIONS = [
+  { value: "unsloth", label: "Unsloth" },
+  { value: "upstream", label: "Upstream" },
+] as const;
+const HERE = "__this_machine__";
 
 const tokens = (n: number) => (n >= 1024 ? `${n / 1024}K` : String(n));
 const rate = (n: number) =>
@@ -115,8 +128,14 @@ function LlamaBenchSetup({
   const available = useLlamaBenchStore((s) => s.available);
   const phase = useLlamaBenchStore((s) => s.phase);
   const start = useLlamaBenchStore((s) => s.start);
+  const machine = useLlamaBenchStore((s) => s.machine);
+  const machines = useLlamaBenchStore((s) => s.machines);
+  const setMachine = useLlamaBenchStore((s) => s.setMachine);
+  const upstreamAvailable = useLlamaBenchStore((s) => s.upstreamAvailable);
   const busy = phase !== "idle";
   const count = testCount(config);
+  const build = config.build ?? "unsloth";
+  const hasModel = Boolean(machine) || Boolean(model ?? loaded);
 
   return (
     <fieldset
@@ -129,6 +148,54 @@ function LlamaBenchSetup({
       <span className="text-ui-11 font-medium tracking-nav text-muted-foreground">
         Setup
       </span>
+      {machines.length > 0 && (
+        <Field
+          label="Machine"
+          hint="A linked instance runs llama-bench on its own GPU, on the model its chat has loaded. The result is saved here too."
+        >
+          <Select
+            value={machine ?? HERE}
+            onValueChange={(v) => setMachine(v === HERE ? null : v)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={HERE}>This machine</SelectItem>
+              {machines.map((m) => (
+                <SelectItem key={m} value={m}>
+                  @{m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      )}
+      <Field
+        label="llama.cpp"
+        hint="Upstream runs the ggml-org llama-bench named by UNSLOTH_LLAMA_BENCH_UPSTREAM on that machine, so the same GGUF can be compared against Unsloth's build."
+      >
+        <Tabs
+          value={build}
+          onValueChange={(v) =>
+            setConfig({ build: v as LlamaBenchConfig["build"] })
+          }
+          className="contents"
+        >
+          <SegmentedTabsList
+            value={build}
+            options={BUILD_OPTIONS}
+            ariaLabel="llama.cpp build"
+            size="compact"
+            className="w-full"
+          />
+        </Tabs>
+        {build === "upstream" && !upstreamAvailable && (
+          <p className="text-ui-11p5 leading-relaxed text-muted-foreground">
+            No upstream build set on this machine.
+          </p>
+        )}
+      </Field>
       <Field
         label="Prompt sizes"
         hint="Prompt processing (pp): how fast the model reads a prompt this many tokens long."
@@ -203,7 +270,11 @@ function LlamaBenchSetup({
           size="lg"
           className={RUN_BUTTON}
           disabled={
-            busy || available === false || !(model ?? loaded) || count === 0
+            busy ||
+            available === false ||
+            !hasModel ||
+            count === 0 ||
+            (build === "upstream" && !upstreamAvailable)
           }
           onClick={() => void start(model, variant)}
         >
@@ -212,12 +283,14 @@ function LlamaBenchSetup({
             strokeWidth={1.75}
             className="size-4"
           />
-          {(model ?? loaded)
+          {hasModel
             ? `Run ${count} test${count === 1 ? "" : "s"}`
             : "Pick a model"}
         </Button>
         <p className="text-center text-ui-11 leading-relaxed text-muted-foreground">
-          Chat's model is unloaded during the run and loaded back after.
+          {machine
+            ? `Runs on @${machine}'s loaded model. Its chat is unloaded for the run.`
+            : "Chat's model is unloaded during the run and loaded back after."}
         </p>
       </div>
     </fieldset>
@@ -455,6 +528,89 @@ function LiveCard(): ReactElement | null {
   );
 }
 
+/** Same GGUF across machines and builds, once there are two to compare. */
+function CompareRuns(): ReactElement | null {
+  const runs = useLlamaBenchStore((s) => s.runs);
+  const tables = useMemo(() => compareTables(runs), [runs]);
+  if (tables.length === 0) return null;
+  return (
+    <>
+      {tables.map((t) => (
+        <section
+          key={`${t.model}|${t.variant ?? ""}`}
+          className={cn(BENCH_CARD, "flex flex-col gap-3 p-4 sm:p-5")}
+        >
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-ui-13 font-medium text-foreground">
+              Compare
+            </span>
+            <span className="min-w-0 truncate text-ui-11 text-muted-foreground">
+              {modelShort(t.model)}
+              {t.variant ? ` · ${t.variant}` : ""} · t/s
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-7 rounded-full px-2.5 text-ui-12"
+              onClick={async () => {
+                if (await copyToClipboard(toCompareMarkdown(t)))
+                  toast.success("Copied the comparison as markdown");
+              }}
+            >
+              <HugeiconsIcon
+                icon={Copy01Icon}
+                strokeWidth={1.75}
+                className="size-3.5"
+              />
+              Copy as markdown
+            </Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-ui-12 tabular-nums">
+              <thead>
+                <tr className="text-left text-muted-foreground">
+                  <th className="py-1.5 pr-4 font-medium">Test</th>
+                  {t.columns.map((c) => (
+                    <th
+                      key={c.key}
+                      className="py-1.5 pr-4 text-right font-medium"
+                      title={c.detail}
+                    >
+                      {c.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {t.rows.map((r) => (
+                  <tr key={r.test} className="border-t border-border/50">
+                    <td className="py-1.5 pr-4 text-muted-foreground">
+                      {r.test}
+                    </td>
+                    {r.cells.map((c, i) => (
+                      <td
+                        key={t.columns[i].key}
+                        className={cn(
+                          "py-1.5 pr-4 text-right",
+                          c?.best
+                            ? "font-semibold text-foreground"
+                            : "text-foreground/80",
+                        )}
+                      >
+                        {c ? `${rate(c.avg)} ± ${rate(c.sd)}` : "—"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
+    </>
+  );
+}
+
 function SavedRuns(): ReactElement | null {
   const runs = useLlamaBenchStore((s) => s.runs);
   const shownId = useLlamaBenchStore((s) => s.shownId);
@@ -487,6 +643,8 @@ function SavedRuns(): ReactElement | null {
               <span className="min-w-0 flex-1 truncate text-foreground">
                 {modelShort(r.model)}
                 {r.ggufVariant ? ` · ${r.ggufVariant}` : ""}
+                {r.meta.machine ? ` · @${r.meta.machine}` : ""}
+                {r.meta.build === "upstream" ? " · upstream" : ""}
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {[
@@ -589,6 +747,7 @@ export function LlamaBenchTab({
               </div>
             )
           )}
+          <CompareRuns />
           <SavedRuns />
         </div>
       </div>

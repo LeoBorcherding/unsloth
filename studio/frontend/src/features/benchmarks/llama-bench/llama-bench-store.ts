@@ -21,7 +21,9 @@ import {
   deleteLlamaBenchRun,
   getLlamaBenchJob,
   getLlamaBenchStatus,
+  listLinkedMachines,
   listLlamaBenchRuns,
+  saveRemoteLlamaBenchRun,
   startLlamaBench,
 } from "./llama-bench-api";
 
@@ -39,6 +41,11 @@ const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 interface LlamaBenchState {
   config: LlamaBenchConfig;
   available: boolean | null;
+  upstreamAvailable: boolean;
+  /** A linked instance's name, or null for this machine. */
+  machine: string | null;
+  machines: string[];
+  setMachine: (machine: string | null) => void;
   job: LlamaBenchJob | null;
   /** Client-side phase around the server job: swapping the model in, or putting it back. */
   phase: "idle" | "loading" | "running" | "restoring";
@@ -55,9 +62,10 @@ interface LlamaBenchState {
 
 async function pollUntilDone(
   set: (s: Partial<LlamaBenchState>) => void,
+  machine: string | null = null,
 ): Promise<LlamaBenchJob | null> {
   for (;;) {
-    const job = await getLlamaBenchJob().catch(() => null);
+    const job = await getLlamaBenchJob(undefined, machine).catch(() => null);
     if (job) set({ job });
     if (!job || TERMINAL.has(job.status)) return job;
     await sleep(1000);
@@ -69,6 +77,14 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
     (set, get) => ({
       config: DEFAULT_LLAMA_BENCH,
       available: null,
+      upstreamAvailable: false,
+      machine: null,
+      machines: [],
+      setMachine: (machine) => {
+        if (get().phase !== "idle") return;
+        set({ machine, available: null, job: null, error: null });
+        void get().refresh();
+      },
       job: null,
       phase: "idle",
       error: null,
@@ -76,23 +92,53 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
       shownId: null,
       setConfig: (patch) => set({ config: { ...get().config, ...patch } }),
       refresh: async () => {
-        const [status, runs] = await Promise.all([
-          getLlamaBenchStatus().catch(() => null),
+        const machine = get().machine;
+        const [status, runs, machines] = await Promise.all([
+          getLlamaBenchStatus(undefined, machine).catch(() => null),
           listLlamaBenchRuns().catch(() => get().runs),
+          listLinkedMachines().catch(() => get().machines),
         ]);
-        set({ available: status?.available ?? null, runs });
+        set({
+          available: status?.available ?? null,
+          upstreamAvailable: status?.upstreamAvailable ?? false,
+          runs,
+          machines,
+        });
+        if (machine && !machines.includes(machine)) set({ machine: null });
         // A run started in another tab or before a reload: follow it.
         if (status?.job && get().phase === "idle") {
           set({ job: status.job });
           if (status.job.status === "running") {
             set({ phase: "running" });
-            await pollUntilDone(set);
+            await pollUntilDone(set, machine);
             set({ phase: "idle", runs: await listLlamaBenchRuns() });
           }
         }
       },
       start: async (model, variant) => {
         if (get().phase !== "idle") return;
+        const machine = get().machine;
+        if (machine) {
+          // A linked instance benchmarks whatever its own chat has loaded; this machine's
+          // model and settings are left alone.
+          set({ error: null, shownId: null, phase: "running" });
+          try {
+            const job = await startLlamaBench(get().config, machine);
+            set({ job });
+            const done = await pollUntilDone(set, machine);
+            if (done?.status === "error")
+              set({ error: done.error ?? "llama-bench failed" });
+            if (done?.rows.length) await saveRemoteLlamaBenchRun(done, machine);
+          } catch (err) {
+            set({ error: err instanceof Error ? err.message : String(err) });
+          } finally {
+            set({
+              phase: "idle",
+              runs: await listLlamaBenchRuns().catch(() => get().runs),
+            });
+          }
+          return;
+        }
         set({ error: null, shownId: null, phase: "loading" });
         await useChatRuntimeStore.getState().hydratePersistedSettings();
         let status = await getInferenceStatus();
@@ -151,7 +197,7 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
         }
       },
       cancel: async () => {
-        await cancelLlamaBench().catch(() => undefined);
+        await cancelLlamaBench(get().machine).catch(() => undefined);
       },
       show: (id) => set({ shownId: id }),
       remove: async (id) => {
@@ -164,7 +210,7 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
     }),
     {
       name: "unsloth-llama-bench",
-      partialize: (s) => ({ config: s.config }),
+      partialize: (s) => ({ config: s.config, machine: s.machine }),
     },
   ),
 );

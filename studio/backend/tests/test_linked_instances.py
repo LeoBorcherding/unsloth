@@ -395,3 +395,41 @@ def test_stream_usage_is_requested_counted_and_hidden_unless_asked(monkeypatch, 
         {"prompt_tokens": 5, "completion_tokens": 7},
     ) in monitor.calls
     assert ("append_reply", ("entry-1", "hi é"), {}) in monitor.calls
+
+
+def test_proxy_passes_an_allowlisted_benchmarks_call_with_the_key(monkeypatch):
+    instance = linked_instances_db.create_instance("colab", "http://remote", REMOTE_KEY)
+    seen = {}
+
+    def handler(request: httpx.Request):
+        seen["url"] = str(request.url)
+        seen["method"] = request.method
+        seen["body"] = json.loads(request.content)
+        seen["headers"] = request.headers
+        return httpx.Response(409, json = {"detail": "Load a GGUF model first"})
+
+    _remote(handler, monkeypatch)
+    response = asyncio.run(
+        linked_instances.proxy(
+            instance, "POST", "api/benchmarks/llama-bench/run", "", b'{"repetitions": 2}'
+        )
+    )
+    # The remote's own status comes back untouched, so its 409 still reads as a 409.
+    assert response.status_code == 409
+    assert seen["method"] == "POST"
+    assert seen["url"] == "http://remote/api/benchmarks/llama-bench/run"
+    assert seen["body"] == {"repetitions": 2}
+    assert seen["headers"]["authorization"] == f"Bearer {REMOTE_KEY}"
+    assert seen["headers"][linked_instances.HOP_HEADER] == "1"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["api/inference/load", "api/benchmarks/runs", "api/auth/api-keys", "api/system/../auth/me"],
+)
+def test_proxy_refuses_anything_off_the_allowlist(monkeypatch, path):
+    instance = linked_instances_db.create_instance("colab", "http://remote", REMOTE_KEY)
+    _remote(lambda r: pytest.fail(f"forwarded {r.url}"), monkeypatch)
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(linked_instances.proxy(instance, "GET", path, "", b""))
+    assert err.value.status_code == 404

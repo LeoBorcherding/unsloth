@@ -59,6 +59,8 @@ class LlamaBenchRequest(BaseModel):
     repetitions: int = Field(default = 5, ge = 1, le = 20)
     flash_attn: Literal["auto", "on", "off"] = "auto"
     n_gpu_layers: Optional[int] = Field(default = None, ge = 0, le = 999)
+    # "upstream" runs the ggml-org build named by UNSLOTH_LLAMA_BENCH_UPSTREAM, for upstream-vs-ours rows.
+    build: Literal["unsloth", "upstream"] = "unsloth"
 
     @field_validator("prompt_tokens", "gen_tokens", "depths")
     @classmethod
@@ -151,6 +153,20 @@ def find_llama_bench() -> Optional[Path]:
     return None
 
 
+def find_upstream_llama_bench() -> Optional[Path]:
+    path = os.environ.get("UNSLOTH_LLAMA_BENCH_UPSTREAM", "").strip()
+    if not path:
+        return None
+    candidate = Path(path).expanduser()
+    if candidate.is_file() and (sys.platform == "win32" or os.access(candidate, os.X_OK)):
+        return candidate
+    return None
+
+
+def _binary_for(request: LlamaBenchRequest) -> Optional[Path]:
+    return find_upstream_llama_bench() if request.build == "upstream" else find_llama_bench()
+
+
 def _command(binary: Path, gguf: str, request: LlamaBenchRequest) -> list[str]:
     cmd = [str(binary), "-m", gguf, "-o", "jsonl", "--progress"]
     cmd += ["-p", ",".join(map(str, request.prompt_tokens or [0]))]
@@ -195,7 +211,12 @@ def _save(job: _Job) -> None:
 def _run(job: _Job, binary: Path, gguf: str) -> None:
     from core.inference.llama_cpp import LlamaCppBackend
     try:
-        env = LlamaCppBackend._llama_server_env_for_binary(str(binary))
+        # An upstream build brings its own libraries; Unsloth's library path would shadow them.
+        env = (
+            None
+            if job.request.build == "upstream"
+            else LlamaCppBackend._llama_server_env_for_binary(str(binary))
+        )
         job.proc = subprocess.Popen(
             _command(binary, gguf, job.request),
             stdout = subprocess.PIPE,
@@ -232,6 +253,7 @@ def _run(job: _Job, binary: Path, gguf: str) -> None:
                 continue
             if not job.meta:
                 job.meta = {k: raw.get(k) for k in _META_KEYS}
+                job.meta["build"] = job.request.build
             job.rows.append(_row(raw))
         code = job.proc.wait()
         reader.join(timeout = 2)
@@ -275,6 +297,7 @@ def status(
     loaded_model = _public({"model": backend.model_identifier if loaded else None}, via_api_key)
     return {
         "available": find_llama_bench() is not None,
+        "upstreamAvailable": find_upstream_llama_bench() is not None,
         "model": loaded_model["model"] if loaded_model else None,
         "ggufVariant": backend.hf_variant if loaded and loaded_model else None,
         "job": _public(job, via_api_key),
@@ -294,15 +317,22 @@ async def run(
         raise HTTPException(
             status_code = 400, detail = "Nothing to measure: add a prompt or a generation size"
         )
-    binary = find_llama_bench()
+    binary = _binary_for(request)
     if binary is None:
         raise HTTPException(
             status_code = 409,
-            detail = {
-                "error": "llama_bench_missing",
-                "message": "This llama.cpp install doesn't include llama-bench. It comes with the next "
-                "llama.cpp update.",
-            },
+            detail = (
+                {
+                    "error": "llama_bench_upstream_missing",
+                    "message": "Set UNSLOTH_LLAMA_BENCH_UPSTREAM to an upstream llama-bench to compare against it.",
+                }
+                if request.build == "upstream"
+                else {
+                    "error": "llama_bench_missing",
+                    "message": "This llama.cpp install doesn't include llama-bench. It comes with the next "
+                    "llama.cpp update.",
+                }
+            ),
         )
     from models.inference import UnloadRequest
     from routes.inference import _unload_model_impl, get_llama_cpp_backend

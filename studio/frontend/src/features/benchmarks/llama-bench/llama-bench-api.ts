@@ -13,7 +13,11 @@ export interface LlamaBenchConfig {
   repetitions: number;
   flash_attn: "auto" | "on" | "off";
   n_gpu_layers?: number | null;
+  /** "upstream" runs the ggml-org build the machine names in UNSLOTH_LLAMA_BENCH_UPSTREAM. */
+  build?: LlamaBenchBuild;
 }
+
+export type LlamaBenchBuild = "unsloth" | "upstream";
 
 export interface LlamaBenchRow {
   test: string;
@@ -35,6 +39,9 @@ export interface LlamaBenchMeta {
   model_type?: string | null;
   model_size?: number | null;
   model_n_params?: number | null;
+  build?: LlamaBenchBuild | null;
+  /** The linked instance it ran on; absent for this machine. */
+  machine?: string | null;
 }
 
 export type LlamaBenchStatus = "running" | "done" | "error" | "cancelled";
@@ -83,21 +90,35 @@ async function parse<T>(res: Response, what: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-const BASE = "/api/benchmarks/llama-bench";
+const LOCAL = "/api/benchmarks/llama-bench";
 
-export async function getLlamaBenchStatus(signal?: AbortSignal): Promise<{
+/** A linked instance's llama-bench goes through this server, which adds that instance's key. */
+const base = (machine?: string | null) =>
+  machine
+    ? `/api/linked-instances/${encodeURIComponent(machine)}/proxy/api/benchmarks/llama-bench`
+    : LOCAL;
+
+export async function getLlamaBenchStatus(
+  signal?: AbortSignal,
+  machine?: string | null,
+): Promise<{
   available: boolean;
+  upstreamAvailable?: boolean;
   model: string | null;
   ggufVariant: string | null;
   job: LlamaBenchJob | null;
 }> {
-  return parse(await authFetch(`${BASE}/status`, { signal }), "Reading llama-bench");
+  return parse(
+    await authFetch(`${base(machine)}/status`, { signal }),
+    "Reading llama-bench",
+  );
 }
 
 export async function startLlamaBench(
   config: LlamaBenchConfig,
+  machine?: string | null,
 ): Promise<LlamaBenchJob> {
-  const res = await authFetch(`${BASE}/run`, {
+  const res = await authFetch(`${base(machine)}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(config),
@@ -107,14 +128,51 @@ export async function startLlamaBench(
 
 export async function getLlamaBenchJob(
   signal?: AbortSignal,
+  machine?: string | null,
 ): Promise<LlamaBenchJob | null> {
-  const res = await authFetch(`${BASE}/run`, { signal });
+  const res = await authFetch(`${base(machine)}/run`, { signal });
   return (await parse<{ job: LlamaBenchJob | null }>(res, "Reading llama-bench"))
     .job;
 }
 
-export async function cancelLlamaBench(): Promise<void> {
-  await authFetch(`${BASE}/run`, { method: "DELETE" });
+export async function cancelLlamaBench(machine?: string | null): Promise<void> {
+  await authFetch(`${base(machine)}/run`, { method: "DELETE" });
+}
+
+/** Keeps a linked instance's finished run in this machine's history, tagged with where it ran. */
+export async function saveRemoteLlamaBenchRun(
+  job: LlamaBenchJob,
+  machine: string,
+): Promise<void> {
+  const res = await authFetch(
+    `/api/benchmarks/runs/${encodeURIComponent(job.id)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: job.id,
+        kind: "llama-bench",
+        sweep: "llama-bench",
+        model: job.model,
+        ggufVariant: job.ggufVariant,
+        config: job.config,
+        meta: { ...job.meta, machine },
+        outcomes: job.rows,
+        createdAt: job.createdAt,
+        finishedAt: job.finishedAt,
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(`Saving the run here failed (${res.status})`);
+}
+
+export async function listLinkedMachines(
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const res = await authFetch("/api/linked-instances", { signal });
+  if (!res.ok) return [];
+  const list = (await res.json()) as { name: string }[];
+  return list.map((i) => i.name);
 }
 
 export async function listLlamaBenchRuns(
