@@ -4284,6 +4284,7 @@ SIDEBAR_NAV_ITEM_DEFAULTS = {
     "recipes": False,
     "export": False,
     "api": False,
+    "benchmarks": False,
 }
 
 MAX_SIDEBAR_NAV_INPUT_ITEMS = 4 * len(SIDEBAR_NAV_ITEM_DEFAULTS)
@@ -4326,6 +4327,7 @@ SidebarNavItemId = Literal[
     "recipes",
     "export",
     "api",
+    "benchmarks",
 ]
 
 
