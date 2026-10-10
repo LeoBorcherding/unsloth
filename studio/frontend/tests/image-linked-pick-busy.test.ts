@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const page = readFileSync(new URL("../src/features/images/images-page.tsx", import.meta.url), "utf8");
+
+test("a pick refused while busy does not move the Images page to another machine", () => {
+  const start = page.indexOf("const handleModelSelect = useCallback(");
+  assert.ok(start >= 0);
+  const body = page.slice(start);
+  const guard = body.indexOf("if (busy !== null && !downloadOnlyPick) return;");
+  const switchMachine = body.indexOf("setImagesMachine(machine)");
+  assert.ok(guard >= 0 && switchMachine >= 0);
+  assert.ok(guard < switchMachine, "the busy guard must run before the machine switch");
+});

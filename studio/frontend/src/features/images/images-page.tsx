@@ -3615,11 +3615,6 @@ export function ImagesPage({
       // A pick from a linked instance loads and generates there; its load fetches what is missing,
       // so it skips this machine's download manager.
       const machine = pickMeta.linkedInstanceId ?? null;
-      if (machine !== getImagesMachine()) {
-        setImagesMachine(machine);
-        setImagesMachineState(machine);
-        void refreshStatus();
-      }
       const meta: ModelSelectorChangeMeta = machine
         ? { ...pickMeta, source: "local" }
         : pickMeta;
@@ -3631,6 +3626,12 @@ export function ImagesPage({
       // with a 409. A download-only pick submits no load, so that cannot happen, and the selector
       // stays interactive during a generation: refusing it there was a silent dead click.
       if (busy !== null && !downloadOnlyPick) return;
+      // After the guard: a refused pick must leave status and gallery on the machine still working.
+      if (machine !== getImagesMachine()) {
+        setImagesMachine(machine);
+        setImagesMachineState(machine);
+        void refreshStatus();
+      }
       if (!downloadOnlyPick) beginPick();
       // This pick owns the page now, so one still awaiting a listing or a plan drops out. Before any
       // branch, since staging never sets `busy`.
