@@ -53,11 +53,23 @@ interface LlamaBenchState {
   remove: (id: string) => Promise<void>;
 }
 
+const POLL_MISS_LIMIT = 30;
+
 async function pollUntilDone(
   set: (s: Partial<LlamaBenchState>) => void,
 ): Promise<LlamaBenchJob | null> {
+  let misses = 0;
   for (;;) {
-    const job = await getLlamaBenchJob().catch(() => null);
+    let job: LlamaBenchJob | null;
+    try {
+      job = await getLlamaBenchJob();
+      misses = 0;
+    } catch (err) {
+      // A failed read is not a finished job: returning would restore chat over a running bench.
+      if (++misses >= POLL_MISS_LIMIT) throw err;
+      await sleep(1000);
+      continue;
+    }
     if (job) set({ job });
     if (!job || TERMINAL.has(job.status)) return job;
     await sleep(1000);
@@ -86,8 +98,11 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
           set({ job: status.job });
           if (status.job.status === "running") {
             set({ phase: "running" });
-            await pollUntilDone(set);
-            set({ phase: "idle", runs: await listLlamaBenchRuns() });
+            try {
+              await pollUntilDone(set);
+            } finally {
+              set({ phase: "idle", runs: await listLlamaBenchRuns().catch(() => get().runs) });
+            }
           }
         }
       },
