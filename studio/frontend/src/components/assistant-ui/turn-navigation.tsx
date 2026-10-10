@@ -51,7 +51,8 @@ import { cn } from "@/lib/utils";
 const MIN_NAVIGATOR_TURNS = 5;
 // how far an overflowing rail's ends fade out, scaled by how much is hidden past each end
 const RAIL_FADE_PX = 24;
-const RAIL_LEAD = 1.15;
+// how far the rail runs ahead of the thread, so its hidden ends come into view early
+const RAIL_LEAD_MAX = 3;
 // clearance kept between the rail and the thread's top and bottom
 const RAIL_INSET_PX = 48;
 const PROMPT_PREVIEW_CHARS = 240;
@@ -702,8 +703,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     // refit only after a resize; scrolling just moves the rail
     let fitPending = true;
     let railRange = 0;
-    let railFull = 0;
-    let railView = 0;
+    let railLead = RAIL_LEAD_MAX;
     const setStyle = (name: string, value: string) => {
       if (rail.style.getPropertyValue(name) !== value) {
         rail.style.setProperty(name, value);
@@ -748,17 +748,19 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
           setStyle(name, value);
         }
         // the one extra layout, and only after a resize
-        railFull = rail.scrollHeight;
-        railView = rail.clientHeight;
-        railRange = Math.max(0, railFull - railView);
+        const full = rail.scrollHeight;
+        const view = rail.clientHeight;
+        railRange = Math.max(0, full - view);
+        // capped so the current turn's dash never runs off the rail on a chat far longer than it shows
+        railLead =
+          full > 2 * view
+            ? Math.min(RAIL_LEAD_MAX, 1 / (1 - (2 * view) / full))
+            : RAIL_LEAD_MAX;
       }
-      // the marker for where the thread is sits mid-rail, a touch ahead, so the ends come into view early
+      // in step with the thread's scrollbar but ahead of it, so the rail reaches its ends early
       const progress = range > 0 ? scrollTop / range : 0;
-      const ahead = 0.5 + (progress - 0.5) * RAIL_LEAD;
-      const railTop = Math.min(
-        Math.max(ahead * railFull - railView / 2, 0),
-        railRange,
-      );
+      const ahead = Math.min(Math.max(0.5 + (progress - 0.5) * railLead, 0), 1);
+      const railTop = ahead * railRange;
       rail.scrollTop = railTop;
       setFades(railTop);
     };
