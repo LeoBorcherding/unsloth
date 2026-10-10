@@ -16,3 +16,10 @@ test("a pick refused while busy does not move the Images page to another machine
   assert.ok(guard >= 0 && switchMachine >= 0);
   assert.ok(guard < switchMachine, "the busy guard must run before the machine switch");
 });
+
+test("a download-only pick of a linked model is refused before it reaches this machine's downloads", () => {
+  const body = page.slice(page.indexOf("const handleModelSelect = useCallback("));
+  const refuse = body.indexOf("if (downloadOnlyPick && machine)");
+  const switchMachine = body.indexOf("setImagesMachine(machine)");
+  assert.ok(refuse >= 0 && refuse < switchMachine);
+});

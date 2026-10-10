@@ -3626,6 +3626,12 @@ export function ImagesPage({
       // with a 409. A download-only pick submits no load, so that cannot happen, and the selector
       // stays interactive during a generation: refusing it there was a silent dead click.
       if (busy !== null && !downloadOnlyPick) return;
+      // The download manager writes to this machine's cache; a linked model fetches what it
+      // needs when it loads there.
+      if (downloadOnlyPick && machine) {
+        toast.error("Download only fetches to this machine. Load a linked model to get it there.");
+        return;
+      }
       // After the guard: a refused pick must leave status and gallery on the machine still working.
       if (machine !== getImagesMachine()) {
         setImagesMachine(machine);
