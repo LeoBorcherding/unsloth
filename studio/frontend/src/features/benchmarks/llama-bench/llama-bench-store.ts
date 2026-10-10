@@ -109,8 +109,15 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
       start: async (model, variant) => {
         if (get().phase !== "idle") return;
         set({ error: null, shownId: null, phase: "loading" });
-        await useChatRuntimeStore.getState().hydratePersistedSettings();
-        let status = await getInferenceStatus();
+        let status: Awaited<ReturnType<typeof getInferenceStatus>>;
+        try {
+          await useChatRuntimeStore.getState().hydratePersistedSettings();
+          status = await getInferenceStatus();
+        } catch (err) {
+          // Nothing has been touched yet; leaving "loading" here locked the controls until a reload.
+          set({ phase: "idle", error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
         const original = status;
         const originalLoad = chatBaseLoad(original);
         let touched = false;
