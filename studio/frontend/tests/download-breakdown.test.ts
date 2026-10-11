@@ -224,3 +224,23 @@ test("the Hub queue sizes earlier and later parts in the order it runs the jobs"
     /withPlanBreakdown\(checkpointFirst\(entries\)/,
   );
 });
+
+test("a checkpoint the plan stages without bytes still shows as the cached model", () => {
+  // An older snapshot holds the GGUF: the plan stages it to link the file but counts nothing.
+  const [, companion] = withPlanBreakdown(
+    [
+      { checkpoint: true, fileBytes: {} },
+      { checkpoint: false, fileBytes: { "text_encoder/model.safetensors": 9 * GB, "vae/diffusion_pytorch_model.safetensors": GB } },
+    ],
+    7 * GB,
+  );
+  assert.equal(companion.cachedCheckpointBytes, 7 * GB);
+});
+
+test("FLUX.1's root-level ae.safetensors counts as the VAE", () => {
+  const parts = downloadParts(
+    { fileBytes: { "flux1-dev-Q4_K_M.gguf": 6.8 * GB, "ae.safetensors": 0.335 * GB } },
+    0,
+  );
+  assert.deepEqual(parts?.map((p) => p.kind), ["model", "vae"]);
+});

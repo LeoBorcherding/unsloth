@@ -13,7 +13,8 @@ export interface DownloadPart {
 
 // Same patterns assetLabel reads an entry's file list with.
 const ENCODER = /text_encoder|clip|t5|qwen.*vl/i;
-const VAE = /vae|decoder|codec/i;
+// `ae.safetensors` is FLUX.1's VAE, picked as a root-level VAE override.
+const VAE = /vae|decoder|codec|(^|\/)ae\.safetensors$/i;
 // A weights file at the repo root is a single-file pick, the model itself: a hosted prequant such as
 // `Qwen-Image-2.1-FP8.safetensors` names no transformer/ folder. Encoder prequants there say text_encoder.
 const MODEL = /transformer|unet|\.gguf$|^[^/]+\.(safetensors|pt|pth|bin)$/i;
@@ -100,8 +101,12 @@ export function withPlanBreakdown<T extends { checkpoint?: boolean; fileBytes?: 
   entries: T[],
   checkpointBytes: number | undefined,
 ): (T & { cachedCheckpointBytes?: number; earlierBytes?: Record<string, number>; laterBytes?: Record<string, number> })[] {
+  // A checkpoint entry that counts no bytes only links a file an older snapshot holds, so it is cached too.
+  const checkpointDownloads = entries.some(
+    (e) => e.checkpoint && Object.keys(e.fileBytes ?? {}).length > 0,
+  );
   const cachedOn =
-    checkpointBytes && checkpointBytes > 0 && !entries.some((e) => e.checkpoint)
+    checkpointBytes && checkpointBytes > 0 && !checkpointDownloads
       ? entries.findIndex((e) => !e.checkpoint)
       : -1;
   const merged = (list: T[]) => Object.assign({}, ...list.map((e) => e.fileBytes ?? {})) as Record<string, number>;
