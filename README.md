@@ -60,11 +60,6 @@ Or if you prefer to install manually:
 curl -fsSL https://unsloth.ai/install.sh | sh
 ```
 
-On macOS, you can also install Unsloth Desktop with Homebrew:
-```bash
-brew install --cask unsloth
-```
-
 #### Windows:
 ```powershell
 irm https://unsloth.ai/install.ps1 | iex
@@ -72,6 +67,11 @@ irm https://unsloth.ai/install.ps1 | iex
 #### Docker
 
 The [Unsloth Docker image](https://hub.docker.com/r/unsloth/unsloth) `unsloth/unsloth` is available on Docker. [Read guide.](https://unsloth.ai/docs/get-started/install/docker)
+
+#### Homebrew:
+```bash
+brew install --cask unsloth
+```
 
 #### Community:
 
