@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { registerBundlerResolver } from "./helpers/kit.ts";
+import { readSrc, registerBundlerResolver } from "./helpers/kit.ts";
 
 registerBundlerResolver();
 
@@ -15,6 +15,9 @@ const {
 } = await import("../src/features/hub/download-manager/download-breakdown.ts");
 const { diffusionStagingEntries } = await import(
   "../src/lib/diffusion-pipeline-load-target.ts"
+);
+const { checkpointFirst, selectDownloadEntries } = await import(
+  "../src/features/hub/download-manager/required-assets.ts"
 );
 
 const GB = 1e9;
@@ -99,7 +102,7 @@ test("every job of a plan shows all three parts from the start", () => {
     5.9 * GB,
   );
   const halfway = downloadParts(
-    { fileBytes: gguf.fileBytes, laterBytes: gguf.laterBytes },
+    { fileBytes: gguf.fileBytes ?? {}, laterBytes: gguf.laterBytes },
     3 * GB,
   );
   assert.deepEqual(
@@ -113,7 +116,7 @@ test("every job of a plan shows all three parts from the start", () => {
   // The GGUF counts once: as the companion's earlier job, not also as a cached checkpoint.
   assert.equal(companion.cachedCheckpointBytes, undefined);
   const next = downloadParts(
-    { fileBytes: companion.fileBytes, earlierBytes: companion.earlierBytes },
+    { fileBytes: companion.fileBytes ?? {}, earlierBytes: companion.earlierBytes },
     0,
   );
   assert.deepEqual(next?.[0], { kind: "model", bytes: 5.9 * GB, doneBytes: 5.9 * GB });
@@ -157,4 +160,67 @@ test("staging carries the plan's per-file sizes and the cached checkpoint", () =
   assert.equal(entries.length, 1);
   assert.deepEqual(entries[0].fileBytes, qwen.fileBytes);
   assert.equal(entries[0].cachedCheckpointBytes, 2.5 * GB);
+});
+
+test("a hosted prequant transformer at the repo root is the model, its encoder twin is not", () => {
+  const parts = downloadParts(
+    {
+      fileBytes: {
+        "Qwen-Image-2.1-FP8.safetensors": 12 * GB,
+        "Qwen-Image-2.1-text_encoder-INT8-ConvRot.safetensors": 9 * GB,
+        "vae/diffusion_pytorch_model.safetensors": 1.4 * GB,
+      },
+    },
+    0,
+  );
+  assert.deepEqual(
+    parts?.map((p) => [p.kind, p.bytes]),
+    [
+      ["model", 12 * GB],
+      ["encoder", 9 * GB],
+      ["vae", 1.4 * GB],
+    ],
+  );
+});
+
+test("the Hub queue sizes earlier and later parts in the order it runs the jobs", () => {
+  // The plan lists the encoder repo before the GGUF; the queue fetches the checkpoint first.
+  const plan: { repoId: string; bytes: number; checkpoint: boolean; fileBytes: Record<string, number> }[] = [
+    {
+      repoId: "unsloth/Qwen-Image-2.1-FP8",
+      bytes: 9 * GB,
+      checkpoint: false,
+      fileBytes: { "Qwen-Image-2.1-text_encoder-FP8.safetensors": 9 * GB },
+    },
+    {
+      repoId: "unsloth/Qwen-Image-2.1-GGUF",
+      bytes: 12 * GB,
+      checkpoint: true,
+      fileBytes: { "qwen-image-2.1-Q4_K_M.gguf": 12 * GB },
+    },
+  ];
+  const [first, second] = withPlanBreakdown(checkpointFirst(plan), 0);
+  assert.equal(first.repoId, "unsloth/Qwen-Image-2.1-GGUF");
+  assert.deepEqual(
+    downloadParts(first, 0.1 * GB)?.map((p) => [p.kind, p.doneBytes]),
+    [
+      ["model", 0.1 * GB],
+      ["encoder", 0],
+    ],
+  );
+  assert.deepEqual(
+    downloadParts(second, 0)?.map((p) => [p.kind, p.doneBytes]),
+    [
+      ["model", 12 * GB],
+      ["encoder", 0],
+    ],
+  );
+  // Assets left unticked: the checkpoint alone keeps the single bar.
+  const [only] = withPlanBreakdown(checkpointFirst(selectDownloadEntries(plan, false)), 0);
+  assert.equal(downloadParts(only, 6 * GB), null);
+  // The Hub hook sizes the breakdown after the include choice and the reorder.
+  assert.match(
+    readSrc("features/hub/catalog/use-required-assets-download.tsx"),
+    /withPlanBreakdown\(checkpointFirst\(entries\)/,
+  );
 });
