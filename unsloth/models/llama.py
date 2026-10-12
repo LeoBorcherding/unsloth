@@ -21,6 +21,7 @@ from typing import Optional, Tuple, List, Union
 
 from ._utils import *
 from ._utils import apply_unsloth_gradient_checkpointing
+from ._utils import _ignore_block_swap_params_for_ddp
 from ._utils import __version__, importlib_version
 from ._utils import move_to_device
 from ._utils import per_layer_device
@@ -3545,6 +3546,7 @@ class FastLlamaModel:
 
         model, tokenizer = patch_tokenizer(model, tokenizer)
         model, tokenizer = model_patcher.post_patch(model, tokenizer, correct_dtype = dtype)
+        mark_auto_offload_for_ddp(model, _offload_layers_requested)
         attach_offload_layers(
             model,
             _block_swap_saved,
@@ -3994,6 +3996,8 @@ class FastLlamaModel:
                     prefetch_depth = prefetch_depth,
                     use_gradient_checkpointing = use_gradient_checkpointing,
                 )
+                # After the swap: get_peft_model(offload_layers = "auto") marks the model only now.
+                _ignore_block_swap_params_for_ddp(model)
                 skip_checkpointing(model, checkpoint_skip_layers)
                 return model
             else:
@@ -4404,6 +4408,9 @@ class FastLlamaModel:
         # otherwise poison (see prepare_for_training_mode).
         _unsloth_install_pretrain_detector(model)
         model = _exclude_rope_inv_freq_from_ddp(model)
+        # Here, not at load: only after get_peft_model is the frozen set the same on every rank, and a
+        # custom loop may hand the model to DistributedDataParallel without a Trainer.
+        _ignore_block_swap_params_for_ddp(model)
         return model
 
     @staticmethod
