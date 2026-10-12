@@ -3153,8 +3153,12 @@ function Install-UnslothStudio {
     }
 
     # Custom Unsloth roots are not supported with --tauri (the desktop app uses
-    # the Windows profile folder). Pass through if the override is that same root.
-    if ($TauriMode -and $envOverride) {
+    # the Windows profile folder). Pass through if the override is that same root,
+    # or the folder the desktop itself chose at first install: it scrubs inherited
+    # values and sets UNSLOTH_DESKTOP_CHOSEN_STUDIO_HOME=1 only beside its own.
+    $tauriChosenRoot = ($TauriMode -and $envOverrideVar -eq "UNSLOTH_STUDIO_HOME" -and
+        $env:UNSLOTH_DESKTOP_CHOSEN_STUDIO_HOME -eq "1")
+    if ($TauriMode -and $envOverride -and -not $tauriChosenRoot) {
         $_tauriOverride = $envOverride
         if ($_tauriOverride -eq "~" -or $_tauriOverride -like "~/*" -or $_tauriOverride -like "~\*") {
             $_tauriOverride = (Join-Path $env:USERPROFILE $_tauriOverride.Substring(1).TrimStart('/','\'))
@@ -3244,6 +3248,34 @@ function Install-UnslothStudio {
             Write-StudioLine "ERROR: $envOverrideVar=$StudioHome is not writable." -ForegroundColor Red
             Restore-StudioTempEnvironment
             throw "$envOverrideVar=$StudioHome is not writable."
+        }
+        # A folder the desktop chose outside the profile inherits that drive's ACL, which on a
+        # non-system drive usually lets every signed-in account write. Give a root created here
+        # the profile's access (this account, SYSTEM, Administrators) before anything lands in
+        # it; a folder that already existed keeps its ACL.
+        if ($tauriChosenRoot -and -not $script:StudioEnvRootExisted) {
+            try {
+                $rootAcl = New-Object System.Security.AccessControl.DirectorySecurity
+                $rootAcl.SetAccessRuleProtection($true, $false)
+                $inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+                foreach ($sid in @(
+                        [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+                        (New-Object System.Security.Principal.SecurityIdentifier "S-1-5-18"),
+                        (New-Object System.Security.Principal.SecurityIdentifier "S-1-5-32-544"))) {
+                    $rootAcl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                        $sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit,
+                        [System.Security.AccessControl.PropagationFlags]::None,
+                        [System.Security.AccessControl.AccessControlType]::Allow)))
+                }
+                $rootInfo = New-Object System.IO.DirectoryInfo $StudioHome
+                if ($rootInfo.PSObject.Methods['SetAccessControl']) {
+                    $rootInfo.SetAccessControl($rootAcl)
+                } else {
+                    [System.IO.FileSystemAclExtensions]::SetAccessControl($rootInfo, $rootAcl)
+                }
+            } catch {
+                Write-StudioLine "[WARN] Could not restrict access to ${StudioHome}: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
         }
         $StudioDataDir = Join-Path $StudioHome "share"
         $StudioRedirectMode = 'env'
