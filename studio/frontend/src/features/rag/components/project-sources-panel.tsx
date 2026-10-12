@@ -18,17 +18,9 @@ import {
   subscribeProjectSourcesUpdated,
 } from "../api/rag-api";
 import { isLinkedFolderManaged } from "../types/rag";
-import { DocumentStatusChip } from "./document-status-chip";
-import {
-  groupByLinkedFolder,
-  useLinkedFolderNames,
-} from "./linked-folder-groups";
 import { LinkedFoldersManager } from "./linked-folders-manager";
-import {
-  RAG_SOURCE_UPLOAD_ACCEPT,
-  SUPPORTED_SOURCES_HINT,
-  isSupportedSourceName,
-} from "./source-drop-policy";
+import { ProjectSourceChip } from "./project-source-chip";
+import { RAG_SOURCE_UPLOAD_ACCEPT } from "./source-drop-policy";
 import {
   type RagUploadItem,
   fileItems,
@@ -270,32 +262,10 @@ export function ProjectSourcesPanel({ projectId }: { projectId: string }) {
             </div>
           </div>
           <div className="flex flex-row flex-wrap items-center gap-1.5">
-            {/* A linked folder is one chip: it can hold thousands of files. */}
-            {groups.folders.map(([folderId, docs]) => {
-              const indexing = docs.filter(
-                (doc) => doc.status === "pending" || doc.status === "running",
-              ).length;
-              const name = folderNames.get(folderId) ?? "Linked folder";
-              return (
-                <DocumentStatusChip
-                  key={`folder:${folderId}`}
-                  filename={`${name} · ${docs.length} file${docs.length === 1 ? "" : "s"}`}
-                  status={indexing > 0 ? "running" : "completed"}
-                  progress={
-                    indexing > 0 ? (docs.length - indexing) / docs.length : null
-                  }
-                  shared={true}
-                />
-              );
-            })}
-            {groups.loose.map((doc) => (
-              <DocumentStatusChip
+            {documents.map((doc) => (
+              <ProjectSourceChip
                 key={doc.id}
-                filename={doc.filename}
-                status={doc.status}
-                progress={doc.progress}
-                stage={doc.stage}
-                error={doc.error}
+                doc={doc}
                 onRemove={
                   isLinkedFolderManaged(doc) ||
                   (doc.id.startsWith("pending_") && doc.status !== "failed")
