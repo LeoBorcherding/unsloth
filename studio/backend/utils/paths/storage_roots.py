@@ -1285,6 +1285,26 @@ def parseable_cache_fallback(key: str, intended: str) -> str | None:
     return candidate
 
 
+def _use_studio_uv_tools() -> None:
+    """A custom-home install keeps its own uv in <studio>/bin, off the user PATH, and its
+    uv-managed Python in <studio>/python. Point on-demand installs at both. The installer only
+    places a uv there when PATH had none or one below its minimum, so it goes first."""
+    root = studio_root()
+    try:
+        if root.resolve() == (Path.home() / ".unsloth" / "studio").resolve():
+            return
+    except (OSError, RuntimeError, ValueError):
+        return
+    if not (os.environ.get("UV_PYTHON_INSTALL_DIR") or "").strip():
+        os.environ["UV_PYTHON_INSTALL_DIR"] = str(root / "python")
+    bin_dir = root / "bin"
+    if not (bin_dir / ("uv.exe" if os.name == "nt" else "uv")).is_file():
+        return
+    current = os.environ.get("PATH", "")
+    if str(bin_dir) not in current.split(os.pathsep):
+        os.environ["PATH"] = str(bin_dir) + os.pathsep + current if current else str(bin_dir)
+
+
 def _setup_cache_env() -> None:
     """Set cache env vars for HuggingFace, uv, and vLLM.
 
@@ -1292,6 +1312,7 @@ def _setup_cache_env() -> None:
     stored location. Unsloth seeds import-time variables once, while each later
     worker receives its own captured cache location.
     """
+    _use_studio_uv_tools()
     root = cache_root()
     from utils.hf_cache_settings import initialize_hf_cache_environment
 
