@@ -23,7 +23,7 @@ import structlog
 from loggers import get_logger
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 
 logger = get_logger(__name__)
 
@@ -5586,6 +5586,7 @@ def estimate_required_model_memory_gb(
         compute_total_params,
         compute_optimizer_bytes,
         compute_gradient_bytes,
+        compute_decoder_layer_weights_bytes,
         CUDA_OVERHEAD_BYTES,
         QUANT_4BIT_FACTOR,
         DEFAULT_TARGET_MODULES,
@@ -5665,6 +5666,14 @@ def estimate_required_model_memory_gb(
         metadata["estimation_mode"] = "detailed"
         metadata["attention_implementation"] = vram_config.attention_implementation
         metadata["vram_breakdown"] = breakdown.to_gb_dict()
+        # Offload layers sizing: what one decoder layer frees when it lives in host RAM.
+        metadata["decoder_layers"] = arch.num_hidden_layers
+        metadata["decoder_layer_weights_gb"] = round(
+            compute_decoder_layer_weights_bytes(arch, training_method, vram_config.load_in_4bit)
+            / max(arch.num_hidden_layers, 1)
+            / (1024**3),
+            6,
+        )
         # The parent-visible ids can outgrow the visible count when a GPU appears after startup; auto-selection ranks every id and reads this table.
         max_gpus = max(1, get_visible_gpu_count(), len(get_parent_visible_gpu_ids()))
         for n_gpus in range(1, max_gpus + 1):
@@ -5901,6 +5910,25 @@ def gpu_ids_with_torch_kernels() -> Optional[list[int]]:
     return covered
 
 
+def _offload_single_gpu_required_gb(
+    required_gb: float,
+    estimate_metadata: Dict[str, Any],
+    offload_layers: Union[int, str],
+    prefetch_depth: Union[int, str],
+) -> Optional[float]:
+    """One card's need with Offload layers on; None when offload is off or the layer size is unknown."""
+    n_layers = estimate_metadata.get("decoder_layers")
+    layer_gb = estimate_metadata.get("decoder_layer_weights_gb")
+    if not offload_layers or not n_layers or layer_gb is None:
+        return None
+    # Auto swaps as many as it needs, keeping at least one layer resident.
+    swapped = n_layers - 1 if offload_layers == "auto" else min(int(offload_layers), n_layers)
+    depth = prefetch_depth if isinstance(prefetch_depth, int) else 2
+    # Swapped layers stream through depth + 1 slots that stay on the card.
+    freed = max(0, swapped - min(depth + 1, swapped))
+    return required_gb - freed * layer_gb
+
+
 def auto_select_gpu_ids(
     model_name: str,
     *,
@@ -5914,6 +5942,8 @@ def auto_select_gpu_ids(
     gradient_checkpointing: str = "unsloth",
     optimizer: str = "adamw_8bit",
     required_override_gb: Optional[float] = None,
+    offload_layers: Union[int, str] = 0,
+    prefetch_depth: Union[int, str] = 2,
 ) -> tuple[Optional[list[int]], Dict[str, Any]]:
     metadata: Dict[str, Any] = {"selection_mode": "auto"}
 
@@ -6008,6 +6038,12 @@ def auto_select_gpu_ids(
     # Per-GPU check: activations do not shard, so each GPU needs its weight shard plus the full activation cost.
     vram_breakdown = estimate_metadata.get("vram_breakdown", {})
 
+    offload_required_gb = _offload_single_gpu_required_gb(
+        required_gb, estimate_metadata, offload_layers, prefetch_depth
+    )
+    if offload_required_gb is not None:
+        metadata["offload_required_gb"] = round(offload_required_gb, 3)
+
     # A ROCm APU's free reading is the shared host pool: a discrete card that fits alone goes first.
     if IS_ROCM and len(ranked) > 1:
         unified = {
@@ -6034,6 +6070,9 @@ def auto_select_gpu_ids(
             )
 
         total_fits = usable_gb >= required_gb
+        # A fixed count is swapped out on any card set, so one card only has to hold the resident part.
+        if len(selected) == 1 and offload_required_gb is not None and offload_layers != "auto":
+            total_fits = usable_gb >= offload_required_gb
 
         per_gpu_fits = True
         if total_fits and len(selected) > 1:
@@ -6057,6 +6096,15 @@ def auto_select_gpu_ids(
                 multi_gpu_overhead,
             )
             return selected, metadata
+
+    # Auto offloads only what does not fit, so it takes a full split first, then one card that holds its floor.
+    if offload_required_gb is not None and offload_layers == "auto":
+        single = next((c for c in ranked if c["free_gb"] >= offload_required_gb), None)
+        if single is not None:
+            metadata["usable_gb"] = round(single["free_gb"], 3)
+            metadata["selection_mode"] = "auto"
+            metadata["selected_gpu_ids"] = [single["index"]]
+            return [single["index"]], metadata
 
     # Use only GPUs with verified VRAM data.
     fallback_all = [c["index"] for c in gpu_candidates] if gpu_candidates else parent_ids
@@ -6095,6 +6143,8 @@ def prepare_gpu_selection(
     gradient_checkpointing: str = "unsloth",
     optimizer: str = "adamw_8bit",
     required_override_gb: Optional[float] = None,
+    offload_layers: Union[int, str] = 0,
+    prefetch_depth: Union[int, str] = 2,
 ) -> tuple[Optional[list[int]], Dict[str, Any]]:
     """Resolve which physical GPUs to use for a model load. Explicit (gpu_ids=[5, 6, 7]) uses exactly those, sharded via device_map="balanced" even if fewer would do, validated against the parent-visible set; auto (None or []) lets auto_select_gpu_ids estimate VRAM and pick the minimum, preferring the most free memory. The result is passed to get_device_map() and to apply_gpu_ids() in the worker, which narrows CUDA_VISIBLE_DEVICES before torch init."""
     if gpu_ids and get_device() not in (DeviceType.CUDA, DeviceType.XPU):
@@ -6124,6 +6174,8 @@ def prepare_gpu_selection(
         gradient_checkpointing = gradient_checkpointing,
         optimizer = optimizer,
         required_override_gb = required_override_gb,
+        offload_layers = offload_layers,
+        prefetch_depth = prefetch_depth,
     )
     return selected_gpu_ids, metadata
 

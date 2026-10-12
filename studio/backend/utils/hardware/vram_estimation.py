@@ -859,6 +859,15 @@ def compute_model_weights_bytes(
     return int((total_quantizable + non_quantizable) * 2)
 
 
+def compute_decoder_layer_weights_bytes(
+    arch: ModelArchConfig, training_method: str, load_in_4bit: bool
+) -> int:
+    """Weight bytes of all decoder layers: the model minus its embeddings and output head."""
+    _, _, embed_tokens, lm_head = _compute_layer_elements(arch)
+    total = compute_model_weights_bytes(arch, training_method, load_in_4bit)
+    return max(0, total - (embed_tokens + lm_head) * 2)
+
+
 def compute_total_params(arch: ModelArchConfig) -> int:
     total_quantizable, layernorms, embed_tokens, lm_head = _compute_layer_elements(arch)
     n_layers = arch.num_hidden_layers

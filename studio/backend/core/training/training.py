@@ -1778,6 +1778,11 @@ class TrainingBackend:
             target_modules = config.get("target_modules"),
             gradient_checkpointing = config.get("gradient_checkpointing", "unsloth"),
             optimizer = config.get("optim", DEFAULT_TRAINING_OPTIMIZER),
+            # The trainer drops offload for a full finetune.
+            offload_layers = (
+                0 if config["training_type"] == "Full Finetuning" else config["offload_layers"]
+            ),
+            prefetch_depth = config["prefetch_depth"],
         )
 
         defer_auto_selection = False
