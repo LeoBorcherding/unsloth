@@ -7,7 +7,11 @@ import re
 from typing import Any, Optional
 
 from utils.datasets.cells import text_cell_check, unwrap_message_column
-from utils.datasets.format_detection import detect_dataset_format, has_message_prompt_completion
+from utils.datasets.format_detection import (
+    detect_dataset_format,
+    has_message_prompt_completion,
+    is_judge_result,
+)
 from utils.datasets.pretokenized import PRETOKENIZED_FORMAT, is_pretokenized_dataset
 
 
@@ -50,6 +54,7 @@ def detect_custom_format_heuristic(dataset):
         "solution",
         "explanation",
         "solve",
+        "implementation",
     ]
     user_words_high_priority = [
         "input",
@@ -223,7 +228,9 @@ def detect_custom_format_heuristic(dataset):
             and not has_keyword(col_name, assistant_words)
         )
 
-    content_columns = [col for col in all_columns if not is_metadata(col)]
+    content_columns = [
+        col for col in all_columns if not is_metadata(col) and not is_judge_result(sample.get(col))
+    ]
     system_named = [
         col
         for col in content_columns
