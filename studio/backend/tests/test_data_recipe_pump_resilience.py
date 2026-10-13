@@ -86,7 +86,7 @@ def test_pump_survives_handler_exception_and_still_finalizes(monkeypatch):
         [{"type": "boom"}, {"type": "log"}, {"type": "boom"}, {"type": "progress"}]
     )
 
-    pump = threading.Thread(target = m._pump_loop, daemon = True)
+    pump = threading.Thread(target = m._pump_loop, args = (m._job, m._proc, m._mp_q), daemon = True)
     pump.start()
     try:
         assert _wait_until(
@@ -120,7 +120,7 @@ def test_pump_finalizes_when_drain_raises(monkeypatch):
     m._proc = _FakeProc(alive = False)
     m._mp_q = _BadDrainQueue()
 
-    m._pump_loop()  # returns once it sees the dead worker
+    m._pump_loop(m._job, m._proc, m._mp_q)  # returns once it sees the dead worker
 
     assert m._job.status == "error"
     assert retired and retired[0] is m._job
@@ -144,7 +144,7 @@ def test_pump_finalizes_when_read_keeps_raising_on_dead_worker(monkeypatch):
     m._proc = _FakeProc(alive = False)
     m._mp_q = _BrokenReadQueue()
 
-    pump = threading.Thread(target = m._pump_loop, daemon = True)
+    pump = threading.Thread(target = m._pump_loop, args = (m._job, m._proc, m._mp_q), daemon = True)
     pump.start()
     pump.join(timeout = 5)
     assert not pump.is_alive(), "pump must finalize a dead worker even when reads keep raising"

@@ -45,7 +45,7 @@ def test_recipe_survives_its_starting_thread(tmp_path, monkeypatch, cancel):
         lambda module, target, env, kwargs: ((module_name, "run", env), kwargs),
     )
     # The test consumes the worker's ready event itself. No progress pump is needed.
-    monkeypatch.setattr(manager_mod.JobManager, "_pump_loop", lambda self: None)
+    monkeypatch.setattr(manager_mod.JobManager, "_pump_loop", lambda self, *args: None)
     monkeypatch.setattr(process_lifetime, "adopt_pid", lambda pid: None)
     manager = manager_mod.JobManager()
     release = tmp_path / "release"

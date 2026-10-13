@@ -45,6 +45,7 @@ logger = get_logger(__name__)
 
 
 _CTX = mp.get_context("spawn")
+_TERMINAL_STATUSES = {"completed", "error", "cancelled"}
 
 
 def _github_source_estimated_total(recipe: dict) -> int | None:
@@ -177,6 +178,12 @@ class JobManager:
             llm_column_count = 1
 
         with self._lock:
+            prev_proc, prev_job = self._proc, self._job
+        if prev_proc is not None and prev_job is not None and prev_job.status in _TERMINAL_STATUSES:
+            # The worker reports its result before interpreter teardown; let it finish exiting.
+            prev_proc.join(timeout = 5)
+
+        with self._lock:
             if self._proc is not None and self._proc.is_alive():
                 raise RuntimeError("job already running")
 
@@ -225,11 +232,22 @@ class JobManager:
 
             self._mp_q = mp_q
             self._proc = proc
-            self._pump_thread = account_thread(target = self._pump_loop, daemon = True)
+            self._pump_thread = account_thread(
+                target = self._pump_loop, args = (self._job, proc, mp_q), daemon = True
+            )
             self._pump_thread.start()
 
             self._emit({"type": EVENT_JOB_ENQUEUED, "ts": time.time(), "job_id": job_id})
             return job_id
+
+    def is_running(self) -> bool:
+        """Whether start() would refuse: a worker that has not reported a terminal event yet."""
+        with self._lock:
+            return (
+                self._proc is not None
+                and self._proc.is_alive()
+                and (self._job is None or self._job.status not in _TERMINAL_STATUSES)
+            )
 
     @job_control
     def cancel(self, job_id: str) -> bool:
@@ -483,13 +501,6 @@ class JobManager:
         if stale:
             self._subs = [q for q in self._subs if q not in stale]
 
-    def _snapshot(self) -> tuple[Job, mp.Process, Any] | None:
-        """Grab pointers for the pump loop (avoid holding lock too long)."""
-        with self._lock:
-            if self._job is None or self._proc is None or self._mp_q is None:
-                return None
-            return self._job, self._proc, self._mp_q
-
     @staticmethod
     def _read_queue_with_timeout(q: Any, *, timeout_sec: float) -> dict | None:
         """Try read 1 event from mp queue. Timeout = pump stays responsive."""
@@ -526,18 +537,14 @@ class JobManager:
             logger.exception("Data-recipe job pump: failed to handle %s event; skipping", etype)
 
     @job_pump
-    def _pump_loop(self) -> None:
+    def _pump_loop(self, job: Job, proc: mp.Process, mp_q: Any) -> None:
         """Background thread: consume worker events and update the job snapshot.
 
         Guarded so no single event can end the loop; it is the sole writer of the
-        snapshot the UI polls, so its death would freeze status/SSE.
+        snapshot the UI polls, so its death would freeze status/SSE. Bound to the job
+        it was started for: the next run can start before this one finalizes.
         """
         while True:
-            snap = self._snapshot()
-            if snap is None:
-                return
-            job, proc, mp_q = snap
-
             try:
                 event = self._read_queue_with_timeout(mp_q, timeout_sec = 0.25)
             except Exception:
@@ -561,30 +568,31 @@ class JobManager:
 
                 retired_job: Job | None = None
                 with self._lock:
-                    if self._job and self._job.status in {
+                    if job.status in {
                         "pending",
                         "active",
                         "cancelling",
                     }:
-                        if self._job.status == "cancelling":
-                            self._job.status = "cancelled"
+                        if job.status == "cancelling":
+                            job.status = "cancelled"
                         else:
-                            self._job.status = "error"
-                            self._job.error = self._job.error or "process exited"
-                        self._job.finished_at = time.time()
+                            job.status = "error"
+                            job.error = job.error or "process exited"
+                        job.finished_at = time.time()
                         event_type = (
                             EVENT_JOB_CANCELLED
-                            if self._job.status == "cancelled"
+                            if job.status == "cancelled"
                             else EVENT_JOB_ERROR
                         )
-                        self._emit(
-                            {
-                                "type": event_type,
-                                "ts": time.time(),
-                                "job_id": self._job.job_id,
-                            }
-                        )
-                        retired_job = self._job
+                        if self._job is job:
+                            self._emit(
+                                {
+                                    "type": event_type,
+                                    "ts": time.time(),
+                                    "job_id": job.job_id,
+                                }
+                            )
+                        retired_job = job
                 if retired_job is not None:
                     self._retire_workflow_key(retired_job)
             except Exception:

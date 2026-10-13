@@ -579,6 +579,10 @@ def create_job(
 
     _resolve_seed_endpoint(recipe)
 
+    # Refuse a busy click before minting: start() would 409 anyway, after writing a key row.
+    if get_job_manager().is_running():
+        raise HTTPException(status_code = 409, detail = "job already running")
+
     try:
         internal_api_key_id = _inject_local_providers(recipe, request, credential[1])
     except CredentialRotated as exc:
