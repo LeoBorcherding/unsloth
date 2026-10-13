@@ -2571,6 +2571,16 @@ def _openai_llama_admission_reserve(
     return reservation, config
 
 
+def _replay_preserve_thinking(llama_backend, payload, messages):
+    """The preserve_thinking generation will render with, so counts price the same prompt."""
+    resolver = getattr(llama_backend, "_replay_preserve_thinking", None)
+    if resolver is None:
+        return payload.preserve_thinking
+    return resolver(
+        payload.preserve_thinking, messages, payload.enable_thinking, payload.reasoning_effort
+    )
+
+
 def _count_gguf_admission_prompt(
     llama_backend,
     payload,
@@ -2593,7 +2603,9 @@ def _count_gguf_admission_prompt(
             strict = True,
             prefer_native = images == 0,
             chat_template_kwargs = llama_backend._request_reasoning_kwargs(
-                payload.enable_thinking, payload.reasoning_effort, payload.preserve_thinking
+                payload.enable_thinking,
+                payload.reasoning_effort,
+                _replay_preserve_thinking(llama_backend, payload, messages),
             ),
             continue_final_message = _continue_final_message(payload, thought = True)
             and trailing_assistant_resume_kind(messages) is not None,
@@ -32074,7 +32086,12 @@ async def produce_openai_chat_completions(
                             yield _OPENAI_TOOL_HEARTBEAT_SSE
                             continue
 
-                        if event["type"] in ("tool_output", "tool_args", "skill_load"):
+                        if event["type"] in (
+                            "tool_output",
+                            "tool_args",
+                            "skill_load",
+                            "tool_model_note",
+                        ):
                             if (
                                 event["type"] == "skill_load"
                                 and event.get("status") == "awaiting_approval"
@@ -41243,14 +41260,16 @@ async def chat_count_tokens(
     _count_messages = payload.messages
     if _folds_studio_tool_history(payload, llama_backend):
         _count_messages = _folded_studio_tool_messages(_count_messages)
+    _count_dumped = [m.model_dump(exclude_none = True) for m in _count_messages]
+    if not _takes_passthrough:
+        from core.inference.tool_loop_controller import restore_replayed_tool_results
+
+        # As generation sends them; off the loop since restoring may parse an envelope.
+        _count_dumped = await asyncio.to_thread(restore_replayed_tool_results, _count_dumped)
     # Awaited: stripping parses the whole envelope, and this recount runs in the
     # background on every turn, so it must not do that on the shared loop.
     openai_messages = await _promote_mcp_history_images_async(
-        _strip_provider_synthetic_tool_history(
-            _drop_empty_assistant_sentinels(
-                [m.model_dump(exclude_none = True) for m in _count_messages]
-            )
-        ),
+        _strip_provider_synthetic_tool_history(_drop_empty_assistant_sentinels(_count_dumped)),
         # Never as pixels: /apply-template prices a media marker, not the image.
         # This drops the base64 the completion path would have promoted, which is
         # the one part a count must not price as text.
@@ -41384,7 +41403,12 @@ async def chat_count_tokens(
     _template_kwargs = llama_backend._request_reasoning_kwargs(
         payload.enable_thinking,
         payload.reasoning_effort,
-        payload.preserve_thinking,
+        # Off the loop: first use probes the template.
+        payload.preserve_thinking
+        if _takes_passthrough
+        else await asyncio.to_thread(
+            _replay_preserve_thinking, llama_backend, payload, openai_messages
+        ),
     )
 
     # Whose tokenizer this is, in the shape /api/inference/status publishes: another tab's load
@@ -44583,12 +44607,16 @@ def _openai_messages_for_gguf_chat(
     per-turn ``image_url`` parts so multi-image chat history keeps each image
     attached to its original turn.
     """
+    from core.inference.tool_loop_controller import restore_replayed_tool_results
+
     # Coalesce only on the GGUF chat path (strict Jinja template); the tool path
     # reuses this via _set_or_prepend_system_message. Passthrough forwards verbatim.
     messages = _coalesce_consecutive_user_turns(
         _strip_provider_synthetic_tool_history(
             _drop_empty_assistant_sentinels(
-                [m.model_dump(exclude_none = True) for m in payload.messages]
+                restore_replayed_tool_results(
+                    [m.model_dump(exclude_none = True) for m in payload.messages]
+                )
             )
         )
     )
