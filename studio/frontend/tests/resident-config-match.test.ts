@@ -1094,6 +1094,17 @@ test("a diffusion resident is not judged on the chat-only invocation fields", ()
   assert.equal(matches({ ...diffusion, cache_type_kv: "q8_0" }, BLANK), false);
 });
 
+test("a diffusion pick matches its lowest GPU or the GPUs it split over (#6347)", () => {
+  // Fits one card: the runner reports only the lowest picked GPU.
+  const single = { ...DEFAULTS, is_diffusion: true, requested_gpu_ids: [0], gpu_ids: [0] };
+  assert.equal(matches(single, { ...BLANK, selectedGpuIds: [1, 0] }), true);
+  // Too big for one card: it reports the whole sorted pick it split over.
+  const split = { ...DEFAULTS, is_diffusion: true, requested_gpu_ids: [0, 1], gpu_ids: [0, 1] };
+  assert.equal(matches(split, { ...BLANK, selectedGpuIds: [1, 0] }), true);
+  // Narrowing that pick to one card is a reload.
+  assert.equal(matches(split, { ...BLANK, selectedGpuIds: [0] }), false);
+});
+
 test("a dropped diffusion split is rechecked once the shim can apply it", () => {
   // diffusion_requested_ngl retains the request even when an older shim ignored it, so
   // once the installed shim gains --ngl support the same request must go through and
@@ -2012,7 +2023,7 @@ test("a pick asks the status about its own model and keeps or replaces the other
 test("ejects stop only the ejected model's chats; eject all asks once and unloads the others first", () => {
   assert.match(
     USE_CHAT_MODEL_RUNTIME,
-    /function stopQueuedRuns\(decision: StopRunningChatsDecision, scoped: boolean\): void \{\s*if \(scoped\) \{\s*requestPromptQueueStop\(decision\.promptQueueThreadIds\);\s*return;\s*\}\s*cancelPreStreamRunReservations\(decision\.preStreamRunTokens\);\s*requestLocalPromptQueueStop\(decision\.promptQueueThreadIds\);/,
+    /function stopQueuedRuns\(decision: StopRunningChatsDecision, scoped: boolean\): void \{\s*if \(scoped\) \{\s*requestScopedLocalPromptQueueStop\(decision\.promptQueueThreadIds\);\s*return;\s*\}\s*cancelPreStreamRunReservations\(decision\.preStreamRunTokens\);\s*requestLocalPromptQueueStop\(decision\.promptQueueThreadIds\);/,
   );
   assert.match(
     USE_CHAT_MODEL_RUNTIME,
@@ -2020,7 +2031,7 @@ test("ejects stop only the ejected model's chats; eject all asks once and unload
   );
   assert.match(
     USE_CHAT_MODEL_RUNTIME,
-    /const scope =\s*!confirmed && useChatRuntimeStore\.getState\(\)\.loadedModels\.length > 1\s*\?\s*params\.checkpoint\s*:\s*undefined;\s*const stopDecision =\s*confirmed \?\?\s*\(await confirmStopRunningChatsIfNeeded\(\s*"Unloading the model",\s*"unload",\s*scope,\s*\)\);/,
+    /const scope =\s*!confirmed && useChatRuntimeStore\.getState\(\)\.loadedModels\.length > 1\s*\?\s*checkpoint\s*:\s*undefined;\s*const stopDecision =\s*confirmed \?\?\s*\(await confirmStopRunningChatsIfNeeded\(\s*"Unloading the model",\s*"unload",\s*scope,\s*\)\);/,
   );
   assert.match(USE_CHAT_MODEL_RUNTIME, /stopQueuedRuns\(stopDecision, Boolean\(scope\)\);/);
   assert.match(

@@ -49,6 +49,7 @@ def _captured_generate_kwargs(config, **generate_kwargs):
         "FastBaseModel": SimpleNamespace(for_inference = lambda model: None),
         "dtype_from_config": lambda config: "bfloat16",
         "_get_dtype": lambda dtype: dtype,
+        "_get_inference_mode_context_manager": lambda model: nullcontext(),
         "_unsloth_generate_accepts_kwarg": lambda model, name: False,
         "NUM_LOGITS_TO_KEEP": {"DiaForConditionalGeneration": None},
         "DEVICE_TYPE_TORCH": "cuda",
@@ -56,6 +57,7 @@ def _captured_generate_kwargs(config, **generate_kwargs):
         "transformers_version": installed_version("transformers"),
         "_uses_flash_attention_for_generation": lambda config: True,
         "_clear_generation_caches": lambda model: None,
+        "_set_generate_param": _load_function("_set_generate_param", {}),
         "_is_text_seq2seq_config": lambda config: False,
     }
     fast_generate = _load_function("unsloth_base_fast_generate", namespace)
