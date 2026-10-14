@@ -3,19 +3,8 @@
 
 """Tests for charging the tied-embedding output duplicate to the VRAM budget.
 
-A model that ties its embeddings ships no ``output.weight``; llama.cpp
-re-creates it from ``token_embd`` as TENSOR_DUPLICATED and a second vocabulary
-matrix is really allocated. Sizing the load from the GGUF file alone therefore
-UNDER-counts, which is the dangerous direction: it leaves the context search
-believing there is VRAM the load will consume.
-
-Anchored on measurement. gemma-4-E2B-it UD-Q4_K_XL sums to 3021.88 MiB of
-tensors, and llama-server reported 3285.89 MiB of model buffers for it -- the
-difference is 264.01 MiB against a ``token_embd`` of exactly 264.00 MiB, and the
-two copies land on DIFFERENT devices (the original in CPU_Mapped, the duplicate
-in CUDA0), which is why the duplicate is a VRAM cost and not merely a RAM one.
-
-Pure: no GPU, no network, no subprocess. GGUFs are synthesised in a tmp_path.
+llama.cpp re-creates a missing output.weight from token_embd as TENSOR_DUPLICATED
+on the GPU (gemma-4-E2B: +264.01 MiB measured vs 264.00 MiB token_embd).
 """
 
 from __future__ import annotations
@@ -32,8 +21,7 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 
-# A minimal but real GGUF, so the probe meets the byte layout the product reads
-# rather than a mock that could agree with a wrong implementation.
+# A minimal real GGUF, not a mock that could agree with a wrong implementation.
 
 _GGUF_MAGIC = 0x46554747
 _TYPE_F32 = 0
@@ -48,12 +36,7 @@ def _write_gguf(
     ggml_type: int = _TYPE_F32,
     pad: int = 0,
 ) -> Path:
-    """Write a GGUF v3 with `tensors` as (name, shape).
-
-    ``pad`` appends filler past the tensor data, which no reader of the header
-    looks at: it exists so two files of different content can be given the same
-    byte length for the cache-identity test.
-    """
+    """Write a GGUF v3 with `tensors` as (name, shape); ``pad`` appends ignored filler."""
     block, block_bytes = (1, 4) if ggml_type == _TYPE_F32 else (256, 144)
     blobs: list[bytes] = []
     infos = bytearray()
@@ -77,7 +60,6 @@ def _write_gguf(
         data = value.encode()
         return struct.pack("<Q", len(data)) + data
 
-    # general.alignment, so the data section starts where the offsets say.
     kv = _string("general.alignment") + struct.pack("<II", 4, 32)
     n_kv = 1
     if architecture is not None:
@@ -93,6 +75,12 @@ def _write_gguf(
             fh.write(blob)
         fh.write(b"\0" * pad)
     return path
+
+
+@pytest.fixture(autouse = True)
+def _no_inherited_gpu_arch_override(monkeypatch):
+    """Drop an inherited HSA_OVERRIDE_GFX_VERSION, which the classifier reads as a spoof."""
+    monkeypatch.delenv("HSA_OVERRIDE_GFX_VERSION", raising = False)
 
 
 @pytest.fixture(scope = "module")
@@ -132,7 +120,6 @@ def test_a_tied_model_is_charged_one_more_embedding_matrix(backend, tied_gguf):
 
 
 def test_a_model_shipping_its_own_output_is_charged_nothing(backend, untied_gguf):
-    # Both tensors are in the file already, so adding anything over-counts.
     assert backend._tied_output_bytes(str(untied_gguf)) == 0
 
 
@@ -146,12 +133,7 @@ def test_a_separate_tied_drafter_charges_its_duplicated_output(backend, tied_ggu
 
 
 def test_the_charge_is_the_embedding_size_not_a_constant(backend, tmp_path):
-    """Two tied models of different vocabulary sizes must differ.
-
-    Guards against a fixed fudge factor, which would be right for one model and
-    wrong for every other: the real spread across the shipped gemma quants is
-    264 MiB (E2B UD-Q4_K_XL) to 924 MiB (31B UD-Q4_K_XL).
-    """
+    """Two tied models of different vocabulary sizes must differ (no fixed fudge factor)."""
     small = _write_gguf(tmp_path / "small.gguf", [("token_embd.weight", (8, 16))])
     large = _write_gguf(tmp_path / "large.gguf", [("token_embd.weight", (8, 64))])
     assert backend._tied_output_bytes(str(large)) == 4 * backend._tied_output_bytes(str(small))
@@ -163,17 +145,14 @@ def test_a_split_gguf_is_read_across_every_shard(backend, tmp_path):
     two = tmp_path / "m-00002-of-00002.gguf"
     _write_gguf(one, [("token_embd.weight", (8, 64))])
     _write_gguf(two, [("output.weight", (8, 64)), ("blk.0.ffn_up.weight", (8, 8))])
-    # output.weight in shard 2 makes this model untied.
     assert backend._tied_output_bytes(str(one)) == 0
 
-    # Without output.weight in any shard, the embedding is tied and charged.
     three = tmp_path / "n-00001-of-00002.gguf"
     four = tmp_path / "n-00002-of-00002.gguf"
     _write_gguf(three, [("token_embd.weight", (8, 64))])
     _write_gguf(four, [("blk.0.ffn_up.weight", (8, 8))])
     assert backend._tied_output_bytes(str(three)) == 8 * 64 * 4
 
-    # Ignore stale files outside the declared 1..N launch set.
     stale = tmp_path / "n-00003-of-00002.gguf"
     _write_gguf(stale, [("output.weight", (1, 1))])
     assert [p.name for p in backend._gguf_shard_paths(str(three))] == [three.name, four.name]
@@ -196,7 +175,6 @@ def test_the_per_layer_embedding_is_counted_from_a_later_shard(backend, tmp_path
 
 
 def test_host_pinned_covers_both_embedding_families(backend, tied_gguf, tmp_path):
-    # token_embd alone on a model without per-layer embeddings.
     assert backend._host_pinned_weight_bytes(str(tied_gguf)) == 8 * 64 * 4
 
     ple = tmp_path / "ple.gguf"
@@ -219,11 +197,7 @@ def test_host_pinned_is_zero_for_an_unreadable_file(backend, tmp_path):
 
 
 def test_a_quantised_embedding_is_charged_its_blocks_not_its_elements(backend, tmp_path):
-    """Every shipped tied model is quantised, so element count is not byte count.
-
-    Q4_K stores 256 elements in 144 bytes. Reading the shape and multiplying by
-    an f32 element size would over-charge that matrix by 7.1x.
-    """
+    """Quantised element count is not byte count (Q4_K: 256 elements in 144 bytes)."""
     path = _write_gguf(
         tmp_path / "q4k.gguf",
         [("token_embd.weight", (256, 64))],
@@ -233,13 +207,7 @@ def test_a_quantised_embedding_is_charged_its_blocks_not_its_elements(backend, t
 
 
 def test_a_quant_type_the_pinned_gguf_package_predates_is_still_charged(backend, tmp_path):
-    """Studio runs a user-supplied llama.cpp; `gguf` is pinned in pyproject.
-
-    A GGUF quantised with a type added after the pinned package is one the
-    selected llama-server loads fine, so aborting the probe on the unknown enum
-    would silently restore the whole under-count. The data layout bounds the
-    tensor without the table: the next tensor's offset ends the previous one.
-    """
+    """An enum newer than the pinned `gguf` is sized from the next tensor offset."""
     path = tmp_path / "future-quant.gguf"
     _write_gguf(
         path,
@@ -249,7 +217,6 @@ def test_a_quant_type_the_pinned_gguf_package_predates_is_still_charged(backend,
     expected = 256 * 64 // 256 * 144
     assert backend._tied_output_bytes(str(path)) == expected
 
-    # The same file with the quant enum bumped past everything the table knows.
     from gguf.constants import GGML_QUANT_SIZES
 
     unknown = max(GGML_QUANT_SIZES) + 1
@@ -262,8 +229,7 @@ def test_a_quant_type_the_pinned_gguf_package_predates_is_still_charged(backend,
     assert charged >= expected, "an unknown quant type must not silently cost 0"
     assert charged < expected + 32, "and it must not over-count by more than the alignment"
 
-    # And when token_embd is the last tensor there is no next offset, so the
-    # data section itself has to bound it.
+    # token_embd last: the data section bounds it.
     only = tmp_path / "only.gguf"
     _write_gguf(only, [("token_embd.weight", (256, 64))], ggml_type = _TYPE_Q4_K)
     raw = bytearray(only.read_bytes())
@@ -273,13 +239,7 @@ def test_a_quant_type_the_pinned_gguf_package_predates_is_still_charged(backend,
 
 
 def test_an_encoder_only_architecture_is_charged_nothing(backend, tmp_path):
-    """BERT ships token_embd and no output.weight, yet nothing is duplicated.
-
-    src/models/bert.cpp creates tok_embd and never an output tensor: the model
-    produces no vocabulary logits at all, so its missing output.weight is not
-    tying. Studio launches these through is_embedding_gguf, so they reach this
-    budget, and charging them shrinks the context for VRAM nobody allocates.
-    """
+    """BERT ships token_embd and no output.weight, yet nothing is duplicated (bert.cpp)."""
     path = _write_gguf(
         tmp_path / "bert.gguf",
         [("token_embd.weight", (8, 64))],
@@ -289,12 +249,7 @@ def test_an_encoder_only_architecture_is_charged_nothing(backend, tmp_path):
 
 
 def test_an_unrecognised_architecture_is_still_charged(backend, tmp_path):
-    """The exemption is a blocklist, and it fails towards charging.
-
-    A new decoder arch that is not listed over-counts by one embedding matrix;
-    a new one wrongly exempted would under-count by one, which is what makes the
-    search promise VRAM the load then takes.
-    """
+    """The exemption is a blocklist, and it fails towards charging."""
     path = _write_gguf(
         tmp_path / "future.gguf",
         [("token_embd.weight", (8, 64))],
@@ -304,21 +259,14 @@ def test_an_unrecognised_architecture_is_still_charged(backend, tmp_path):
 
 
 def test_a_split_model_is_charged_when_no_shard_ships_an_output(backend, tmp_path):
-    """The largest tied models are the split ones, so abstaining costs the most.
-
-    token_embd is in shard 1 and output.weight, if the model had one, would be
-    in a later shard, so shard 1 alone cannot answer. Every shard is scanned.
-    """
+    """Every shard is scanned: output.weight of a split model lives past shard 1."""
     _write_gguf(tmp_path / "m-00001-of-00002.gguf", [("token_embd.weight", (8, 64))])
     _write_gguf(tmp_path / "m-00002-of-00002.gguf", [("blk.1.attn_q.weight", (8, 8))])
     assert backend._tied_output_bytes(str(tmp_path / "m-00001-of-00002.gguf")) == 8 * 64 * 4
 
 
 def test_a_split_model_finds_its_output_weight_in_a_later_shard(backend, tmp_path):
-    """Reading only the shard it was handed would call this model tied.
-
-    That is the over-count, on exactly the models big enough to be split.
-    """
+    """Reading only the shard it was handed would call this model tied."""
     _write_gguf(tmp_path / "m-00001-of-00002.gguf", [("token_embd.weight", (8, 64))])
     _write_gguf(tmp_path / "m-00002-of-00002.gguf", [("output.weight", (8, 64))])
     assert backend._tied_output_bytes(str(tmp_path / "m-00001-of-00002.gguf")) == 0
@@ -331,11 +279,7 @@ def test_a_split_model_with_a_shard_missing_costs_the_old_budget(backend, tmp_pa
 
 
 def test_an_unreadable_file_costs_the_old_budget_rather_than_the_launch(backend, tmp_path):
-    """The budget must never be the reason a load fails.
-
-    A truncated or non-GGUF file returns 0, which is exactly the behaviour
-    before this change, instead of propagating out of the context search.
-    """
+    """A truncated or non-GGUF file returns 0 instead of failing the load."""
     junk = tmp_path / "junk.gguf"
     junk.write_bytes(b"not a gguf at all")
     assert backend._tied_output_bytes(str(junk)) == 0
@@ -343,14 +287,7 @@ def test_an_unreadable_file_costs_the_old_budget_rather_than_the_launch(backend,
 
 
 def test_the_probe_reads_the_header_without_building_a_gguf_reader(backend, tied_gguf):
-    """gguf.GGUFReader materialises every KV value, the tokenizer vocabulary included.
-
-    Measured in the studio venv: 12.1 s on gemma-4-E2B-it UD-Q4_K_XL and 6.2 s
-    on the 240 MiB gemma-3-270m-it, against 30-90 ms for the streaming read --
-    the cost tracks vocabulary size, not file size, so a small tied model pays it
-    too. This runs under the backend lock before llama-server is spawned, so it
-    would be a multi-second stall on every llama.cpp load.
-    """
+    """gguf.GGUFReader materialises the vocab (12.1 s vs 30-90 ms) under the backend lock."""
     import gguf
 
     def explode(*_args, **_kwargs):
@@ -372,13 +309,7 @@ def test_the_probe_reads_the_header_without_building_a_gguf_reader(backend, tied
 
 
 def test_the_probe_cache_is_keyed_on_the_inode_not_the_path_size_and_mtime(backend, tmp_path):
-    """A model rebuilt in place must not serve its predecessor's answer.
-
-    Path, size and mtime do not identify a file: an atomic replacement that
-    restores the timestamp matches on all three. The backend's own
-    _gguf_load_source_identity already keys on device and inode, and this probe
-    reuses it, so the swap below is seen.
-    """
+    """An in-place rebuild restoring mtime must not serve the cached answer (inode keyed)."""
     path = tmp_path / "swapped.gguf"
     _write_gguf(path, [("token_embd.weight", (8, 64)), ("output.weight", (8, 64))])
     assert backend._tied_output_bytes(str(path)) == 0
@@ -423,15 +354,8 @@ def test_the_host_pinned_cache_is_keyed_on_file_identity(backend, tmp_path):
 def test_a_separate_drafter_never_inherits_the_main_cpu_device():
     """Only a draft-only flag takes the drafter off the GPU.
 
-    llama.cpp replaces the main device list with the draft one for any separate
-    drafter (``result.devices = params_spec.devices``,
-    common_base_params_to_speculative), and an unset draft list means every device.
-    The main pin reaches the drafter only where Studio copies it, which
-    _emit_dspark never does and _emit_dflash and _emit_mtp do only when they emit a
-    sidecar of their own -- so reading it here under-counted a drafter that was
-    really on a GPU. The drafter is charged unless a draft-only flag says otherwise;
-    the cost is an over-charge where the pin is real, which loses context rather
-    than failing a launch.
+    llama.cpp replaces the main device list with the draft one for a separate drafter
+    (common_base_params_to_speculative); the main pin reaches it only where Studio copies it.
     """
     from core.inference import llama_cpp
 
@@ -449,7 +373,6 @@ def test_a_separate_drafter_never_inherits_the_main_cpu_device():
 
     generated = ["--model-draft", "draft.gguf", "--device", "none"]
     assert llama_cpp._extra_args_draft_offloaded_to_cpu(generated, {}) is False
-    # The draft-only flags still own it, in either spelling.
     for pin in (
         ["--spec-draft-device", "none"],
         ["--spec-draft-device", "cpu"],
@@ -674,18 +597,7 @@ def test_a_known_discrete_rocm_arch_is_proved_discrete(backend, monkeypatch, arc
 
 
 def test_the_classification_seam_survives_a_gguf_only_install(backend, monkeypatch):
-    """A GGUF-only (--no-torch) install must still classify its ROCm devices.
-
-    The classifier used to be imported from ``core.training.worker``, whose module
-    body pulls in the training stack. On an install without it that import raises,
-    and because the whole method is wrapped in ``except Exception: return False``,
-    every ROCm device silently read "unclassifiable" -- so the device was treated
-    as shared memory and the host-pinned discount was never applied. Safe direction,
-    but the optimisation was inert in exactly the configuration llama.cpp users run.
-
-    MEASURED on the AMD CI Windows runners, which install --no-torch: eleven
-    proved-discrete cases failed there while passing on Linux.
-    """
+    """A GGUF-only (--no-torch) install must still classify its ROCm devices (AMD CI Windows)."""
     import builtins
 
     real_import = builtins.__import__
@@ -719,13 +631,9 @@ def test_the_classification_seam_survives_a_gguf_only_install(backend, monkeypat
 
 
 def test_gfx942_alone_is_not_proof_of_a_private_vram_pool(backend, monkeypatch):
-    """MI300X (discrete) and MI300A (unified-memory APU) share gcnArchName gfx942.
+    """MI300X and the MI300A APU share gfx942; only ``integrated`` may prove unified.
 
-    hipDeviceProp_t.integrated only reports the MI300A's shared pool once clr reads
-    HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU (ROCm 6.1.2+); on 6.0.x/6.1.0/6.1.1 the only
-    signal is HSA_PROFILE_FULL and the MI300A GPU agent is BASE_PROFILE, so the flag
-    reads 0. The arch string must not stand in for it, or the host-pinned discount is
-    taken out of memory the CPU shares.
+    On ROCm < 6.1.2 the MI300A flag reads 0, so the arch must not imply discrete.
     """
 
     class _Props:
@@ -749,18 +657,15 @@ def test_gfx942_alone_is_not_proof_of_a_private_vram_pool(backend, monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", _Torch())
     monkeypatch.setattr(backend, "_resolve_visible_physical_ids", staticmethod(lambda: None))
     assert backend._torch_unified_memory_classification_known([0]) is False
-    # A newer wheel that does surface the APU flag still classifies the device.
     _Props.is_integrated = 1
     assert backend._torch_unified_memory_classification_known([0]) is True
 
 
 def test_an_hsa_override_cannot_spoof_an_apu_into_a_discrete_discount(backend, monkeypatch):
-    """The runtime arch is valid for kernel selection under the override, but it is
-    not evidence about the underlying memory topology used by the VRAM budget."""
+    """Under the override the runtime arch is no evidence of memory topology."""
 
     class _Props:
         gcnArchName = "gfx1030"
-        # Older ROCm wheels omit/zero this even for a gfx1035 laptop APU.
         is_integrated = 0
 
     class _Cuda:
@@ -781,10 +686,39 @@ def test_an_hsa_override_cannot_spoof_an_apu_into_a_discrete_discount(backend, m
     monkeypatch.setattr(backend, "_resolve_visible_physical_ids", staticmethod(lambda: None))
 
     assert backend._torch_unified_memory_classification_known([0]) is False
-    # The override invalidates arch-only DISCRETE proof, not a positive unified-memory
-    # signal from the device properties.
+    # The override voids arch-only discrete proof, not a positive unified signal.
     _Props.is_integrated = 1
     assert backend._torch_unified_memory_classification_known([0]) is True
+
+
+def test_an_hsa_override_on_windows_is_not_a_spoof(backend, monkeypatch):
+    """Windows ROCm (PAL) ignores HSA_OVERRIDE_GFX_VERSION (ROCm/TheRock#1719)."""
+
+    class _Props:
+        gcnArchName = "gfx1100"
+        is_integrated = 0
+
+    class _Cuda:
+        is_available = staticmethod(lambda: True)
+        device_count = staticmethod(lambda: 1)
+        get_device_properties = staticmethod(lambda _ordinal: _Props())
+
+    class _Version:
+        hip = "6.4"
+
+    class _Torch:
+        cuda = _Cuda()
+        version = _Version()
+        __version__ = "2.9.0"
+
+    monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "11.0.0")
+    monkeypatch.setitem(sys.modules, "torch", _Torch())
+    monkeypatch.setattr(backend, "_resolve_visible_physical_ids", staticmethod(lambda: None))
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert backend._torch_unified_memory_classification_known([0]) is True
+    # Linux honours it, so there the same reading proves nothing.
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert backend._torch_unified_memory_classification_known([0]) is False
 
 
 def test_a_user_override_to_a_gpu_buffer_cancels_the_discount(backend):
@@ -811,7 +745,6 @@ def test_a_user_override_to_a_gpu_buffer_cancels_the_discount(backend):
     assert backend._override_moves_host_pinned(["-ot", "token_embd=CUDA0"], env = {}) is True
     assert backend._override_moves_host_pinned(["-ot", "embd=CUDA0"], env = {}) is True
     assert backend._override_moves_host_pinned(["-ot", r"per_.*47$=CUDA0"], env = {}) is True
-    # The family is open-ended, so unrelated device mappings fail closed too.
     assert backend._override_moves_host_pinned(["-ot", r"^blk\.0=CUDA0"], env = {}) is True
     assert backend._override_moves_host_pinned(["-ot", r".*=CUDA0"], env = {}) is True
     assert (
@@ -833,13 +766,11 @@ def test_a_user_override_to_a_gpu_buffer_cancels_the_discount(backend):
 
 
 def test_cpu_only_or_absent_overrides_keep_the_discount(backend):
-    # Sending them to CPU is where llama.cpp puts them anyway.
     assert backend._override_moves_host_pinned(["-ot", "token_embd.weight=CPU"], env = {}) is False
     assert (
         backend._override_moves_host_pinned(["--override_tensor=token_embd.weight=CPU"], env = {})
         is False
     )
-    # Our own planner's patterns move FFN tensors, never the embeddings.
     assert (
         backend._override_moves_host_pinned(["-ot", r"^blk\.(1|2)\.ffn_down\.weight$=CPU"], env = {})
         is False
@@ -852,18 +783,11 @@ def test_cpu_only_or_absent_overrides_keep_the_discount(backend):
     )
     assert backend._override_moves_host_pinned([], env = {}) is False
     assert backend._override_moves_host_pinned(None, env = {}) is False
-    # A bare flag with no value must not crash the budget.
     assert backend._override_moves_host_pinned(["-ot"], env = {}) is False
 
 
 def test_every_site_that_prices_the_weights_carries_both_corrections(backend):
-    """The tied charge and host discount must survive the vision path.
-
-    Driving this through a real load needs a GPU and a binary, and the projector
-    pin is a closure with no seam, so the placement behaviour is covered in
-    test_mmproj_placement_policy.py and what is checked here is that no site
-    re-derives the footprint from the bare file size again.
-    """
+    """No vision-path site re-derives the footprint from the bare file size."""
     import inspect
 
     src = inspect.getsource(backend.load_model)
@@ -873,7 +797,6 @@ def test_every_site_that_prices_the_weights_carries_both_corrections(backend):
     assert "model_size = _model_weight_vram_bytes + mmproj_size" in src
     # The projector CPU pin removes only the projector, not either correction.
     assert "model_size = gguf_size" not in src
-    # And the probe that decides that pin prices what the placement prices.
     assert "_mm_base_need = (\n                            _model_weight_vram_bytes" in src
 
 
@@ -894,30 +817,9 @@ def tied_gguf_with_ple(tmp_path: Path) -> Path:
 def test_the_two_corrections_only_cancel_as_a_set(backend, tied_gguf_with_ple):
     """Charging the tied duplicate and discounting host-pinned embeddings are HALVES.
 
-    Reviewed separately each looks wrong, and the review of #9929 said so
-    correctly: on its own, charging the tied duplicate double-counts, because
-    ``gguf_size`` already carries one ``token_embd`` and llama.cpp only ever has
-    one vocabulary matrix in VRAM. What that argument assumes is that the
-    ``token_embd`` inside ``gguf_size`` stays there to stand in for the
-    duplicate. The host-pinned discount removes it, because llama.cpp pins the
-    input layer to the CPU (``dev_input = { cpu_dev, ... }`` in
-    ``llama_model::load_tensors``, commented "there is very little benefit to
-    offloading the input layer"), and both ``LLM_TENSOR_TOKEN_EMBD`` and
-    ``LLM_TENSOR_PER_LAYER_TOKEN_EMBD`` map to ``LLM_TENSOR_LAYER_INPUT`` in
-    ``LLM_TENSOR_INFOS``. The one exception is the tied duplicate, which
-    ``llama_model_loader::create_tensor`` remaps to ``LLM_TENSOR_OUTPUT`` and
-    does place on the GPU.
-
-    Named by symbol rather than by line. Verified against llama.cpp b81c99b
-    (2026-09-02) at llama-arch.cpp:709 and :900, llama-model.cpp:1485 and
-    llama-model-loader.cpp:1159-1160; the two latter numbers had already moved
-    from :1481 and :1118 in the 84 commits since this was first written, so the
-    line is the perishable part and the symbol is not.
-
-    So the three terms are only correct together, and each half alone is wrong
-    by exactly one vocabulary matrix in the OPPOSITE direction. This test states
-    that as arithmetic rather than as prose, and it is the reason neither half
-    should be merged without the other.
+    Each alone is wrong by one vocabulary matrix in opposite directions: llama.cpp pins
+    the input layer to CPU (``dev_input`` in ``llama_model::load_tensors``) but places the
+    tied duplicate, remapped to LLM_TENSOR_OUTPUT, on the GPU. Do not merge either alone.
     """
     path = str(tied_gguf_with_ple)
     gguf = backend._get_gguf_size_bytes(path)
@@ -927,19 +829,16 @@ def test_the_two_corrections_only_cancel_as_a_set(backend, tied_gguf_with_ple):
     assert backend._tied_output_bytes(path) == embd
     assert backend._host_pinned_weight_bytes(path) == embd + ple
 
-    # What llama.cpp really puts in VRAM: everything in the file except the two
-    # host-pinned embeddings, plus the duplicate of one of them.
+    # VRAM = file - two host-pinned embeddings + one duplicate.
     truth = gguf - (embd + ple) + embd
     assert truth == gguf - ple
 
-    # Unbound, passing the class as self: going through the seam is the point, since
-    # a test that recomputed the arithmetic would agree with a wrong implementation.
+    # Through the seam, not recomputed arithmetic.
     shipped = backend._separate_drafter_weight_vram_bytes(
         backend, path, host_pinned_bytes = backend._host_pinned_weight_bytes(path)
     )
     assert shipped == truth
 
-    # And each half on its own, priced from the same primitives.
     main_today = gguf
     tied_charge_alone = gguf + embd
     host_discount_alone = gguf - (embd + ple)
@@ -973,19 +872,10 @@ def mib_embd_pair(tmp_path: Path) -> "tuple[Path, Path]":
 
 
 def test_the_host_shortfall_stays_a_floor_over_the_file(backend, mib_embd_pair):
-    """The tied duplicate is a VRAM cost, and this check does no placement modelling.
+    """The floor check does no placement modelling: tied and untied price identically.
 
-    llama.cpp re-creates the tied output in the buffer-type context its layer resolves
-    to and returns the ORIGINAL when that is where token_embd already sits
-    (llama-model-loader.cpp:1437-1443), so whether a second matrix exists depends on
-    where the output layer lands. Deciding that here is the placement modelling this
-    function exists without, and it already omits the KV cache and compute buffers,
-    both far larger. Charging it could only turn a quiet load into a warned one, which
-    is the guarantee the floor rests on, so a tied and an untied model of the same file
-    size price identically.
-
-    The duplicate is charged where placement IS known: ``weights_size`` in the VRAM
-    budget and ``_separate_drafter_weight_vram_bytes``.
+    The duplicate is charged where placement is known (``weights_size``,
+    ``_separate_drafter_weight_vram_bytes``).
     """
     from core.inference.llama_cpp import _HOST_RAM_HEADROOM_MIB
 
@@ -1004,7 +894,6 @@ def test_the_host_shortfall_stays_a_floor_over_the_file(backend, mib_embd_pair):
             for path in (tied, untied)
         ]
         assert priced[0] == priced[1], (rows, kwargs)
-    # And on the file alone the spill is exactly 16 GiB, which the headroom covers.
     assert (
         instance._launch_host_shortfall_message(argv(tied), [(0, 4 * 1024)], avail_mib = avail_mib)
         is None
@@ -1045,12 +934,7 @@ def _spec_flags(monkeypatch, tmp_path: Path, mode: str, sidecar: str) -> "list[s
 
 
 def test_the_emitters_do_not_agree_on_pinning_the_drafter(monkeypatch, tmp_path):
-    """DSpark appends no --spec-draft-device; DFlash does.
-
-    That asymmetry is why a main ``--device none`` is not readable as the drafter's
-    placement: under DSpark the sidecar stays on a GPU, and dropping its ~11 GB from
-    the reserve picks a context the card cannot hold.
-    """
+    """DSpark appends no --spec-draft-device; DFlash does, so main --device none proves nothing."""
     from core.inference import llama_cpp
 
     assert "--spec-draft-device" not in _spec_flags(
@@ -1059,9 +943,7 @@ def test_the_emitters_do_not_agree_on_pinning_the_drafter(monkeypatch, tmp_path)
     dflash = _spec_flags(monkeypatch, tmp_path, "dflash", "dflash_draft_path")
     assert dflash[dflash.index("--spec-draft-device") + 1] == "none"
 
-    # Which is why no consumer may read the main device as the drafter's placement:
-    # the two emitters differ, and _emit_mtp copies it only inside its own sidecar
-    # branch, so the arguments alone cannot say whether the pin reaches the drafter.
+    # The emitters differ, so the args alone cannot say whether the pin reaches the drafter.
     assert (
         llama_cpp._extra_args_draft_offloaded_to_cpu(
             ["--model-draft", "draft.gguf", "--device", "none"], {}
@@ -1071,14 +953,11 @@ def test_the_emitters_do_not_agree_on_pinning_the_drafter(monkeypatch, tmp_path)
 
 
 def test_a_cpu_pinned_drafter_is_not_charged_the_tied_duplicate(backend, mib_embd_pair):
-    """-ngld 0 puts the whole drafter in the one CPU buffer-type context, so its tied
-    output is the same reuse case as a host-only target: a tied drafter and an untied
-    one of the same size cost the same host RAM."""
+    """-ngld 0 reuses token_embd for the tied output: tied and untied drafters cost the same."""
     tied, untied = mib_embd_pair
     instance = object.__new__(backend)
     instance._get_gguf_size_bytes = lambda _path: 8 * 1024**3
-    # The draft KV needs metadata a synthetic GGUF has no room for; the term under
-    # test is the weights, so hold it flat rather than abstain.
+    # Synthetic GGUF cannot size draft KV; hold it flat.
     instance._mtp_draft_kv_bytes = lambda *_a, **_kw: 0
     priced = [
         instance._cpu_resident_draft_bytes(4096, drafter_path = str(path)) for path in (tied, untied)
@@ -1109,21 +988,11 @@ def test_a_gpu_override_keeps_the_cpu_target_tied_charge(backend):
 
 
 def test_an_unclassified_vulkan_device_is_shared_for_the_host_pool_too(backend):
-    """Two different questions, and an unreadable type answers no to both.
-
-    `_unclassified_gpu_ids` withholds the discrete-only discount; `_shared_gpu_ids`
-    decides whether the pool may be credited ON TOP of host RAM, which is what
-    `_launch_host_shortfall_message` and `_fit_derived_load_mode` read. An integrated
-    device's heap IS that RAM, so counting it twice hides the shortfall the pageable
-    override exists to catch -- and the probe reports a heap for an unreadable row,
-    so `total <= 0` alone does not catch it.
-    """
+    """An unreadable type is neither discount-eligible nor a separate host-RAM pool."""
     import inspect
 
     compact = "".join(inspect.getsource(backend.load_model).split())
     assert "_shared_gpu_ids|=_unclassified_gpu_ids" in compact
-    # Vulkan only: elsewhere "unclassified" can just mean torch is absent, which is
-    # no evidence about any device's memory topology.
     vulkan_branch = compact[
         compact.index("ifis_vulkan_backend:_shared_gpu_ids=") : compact.index(
             "else:_unclassified_gpu_ids="
@@ -1133,9 +1002,7 @@ def test_an_unclassified_vulkan_device_is_shared_for_the_host_pool_too(backend):
 
 
 def test_a_shared_pool_is_not_credited_on_top_of_host_ram(backend, mib_embd_pair):
-    """Why the set membership above matters, at the seam that reads it: the same
-    device credited as dedicated VRAM answers "fits", and treated as shared answers
-    with a shortfall, which is what reaches the pageable-load override."""
+    """Dedicated VRAM answers "fits"; the same device treated as shared reports a shortfall."""
     from core.inference.llama_cpp import _HOST_RAM_HEADROOM_MIB
 
     tied, _untied = mib_embd_pair
@@ -1159,22 +1026,9 @@ def test_a_shared_pool_is_not_credited_on_top_of_host_ram(backend, mib_embd_pair
 def test_a_sidecar_that_inherits_the_target_output_is_charged_nothing(
     backend, tmp_path: Path, architecture
 ):
-    """dflash and eagle3 drafts without an ``output.weight`` INHERIT the target's.
+    """dflash/eagle3/DSpark drafts without ``output.weight`` inherit the target's (no duplicate).
 
-    Every other arch that ships ``token_embd`` and no ``output.weight`` is tied, and
-    llama.cpp duplicates the embedding into VRAM. These two are the exception: the
-    loader marks the output TENSOR_NOT_REQUIRED (dflash.cpp:158, eagle3.cpp:67) and
-    the graph falls back to ``model_other->output`` (dflash.cpp:775-780,
-    eagle3.cpp:312-315), so no second matrix is ever allocated. DSpark shares the
-    dflash arch and the same fallback (dflash.cpp:984-989).
-
-    Charging it was not free. ``_separate_drafter_weight_vram_bytes`` is
-    ``gguf_size + tied - host_pinned``, and for this shape the wrong ``tied`` exactly
-    cancelled the host-pinned discount on the draft's own ``token_embd``: the budget
-    came to the full file size where the truth is one embedding matrix less.
-
-    Case-insensitive and whitespace-tolerant, because ``general.architecture`` is
-    read verbatim out of the GGUF header.
+    See dflash.cpp:775-780, eagle3.cpp:312-315; the arch match is case/whitespace tolerant.
     """
     sidecar = _write_gguf(
         tmp_path / f"{architecture.strip().lower()}.gguf",
@@ -1186,8 +1040,7 @@ def test_a_sidecar_that_inherits_the_target_output_is_charged_nothing(
     )
     assert backend._tied_output_bytes(str(sidecar)) == 0
 
-    # The drafter budget is now the file less its host-pinned embedding, not the
-    # whole file: the two errors no longer cancel.
+    # Drafter budget is now the file less its host-pinned embedding.
     gguf = backend._get_gguf_size_bytes(str(sidecar))
     host_pinned = backend._host_pinned_weight_bytes(str(sidecar))
     assert host_pinned == 8 * 64 * 4
@@ -1200,15 +1053,101 @@ def test_a_sidecar_that_inherits_the_target_output_is_charged_nothing(
 
 
 def test_an_unlisted_sidecar_arch_is_still_charged(backend, tmp_path: Path):
-    """The exemption is a blocklist and fails towards charging.
-
-    A speculative arch we have not verified inherits the target output keeps the
-    tied charge, because over-counting costs context while under-counting fails a
-    launch. This is what stops the check above becoming a blanket "drafts are free".
-    """
+    """An unverified speculative arch keeps the tied charge (blocklist fails towards charging)."""
     sidecar = _write_gguf(
         tmp_path / "medusa.gguf",
         [("token_embd.weight", (8, 64)), ("blk.0.attn_q.weight", (8, 8))],
         architecture = "medusa",
     )
     assert backend._tied_output_bytes(str(sidecar)) == 8 * 64 * 4
+
+
+def test_a_lazily_read_table_leaves_the_host_floor_once(backend, tmp_path: Path):
+    """A --lazy-mode table over 4 GiB stays mmap'd, so the host floor must not charge it."""
+    from core.inference.llama_cpp import _HOST_RAM_HEADROOM_MIB
+
+    gib = 1024**3
+    instance = object.__new__(backend)
+    instance._get_gguf_size_bytes = lambda _path: 40 * gib
+    instance.probe_server_capabilities = lambda _binary: {}
+    instance._lazy_auto_resolves_off = lambda **_kw: False
+    instance._lazy_read_host_bytes = lambda *_a, **_kw: 27 * gib
+    argv = ["llama-server", "-m", str(tmp_path / "model.gguf")]
+    rows = [(0, 64 * 1024)]  # the 13 GiB left after the table fits in VRAM
+    # Floor = token_embd 1 GiB + per_layer_token_embd 27 GiB, as the launch passes it.
+    floor = 28 * gib
+    avail_mib = 1024 + _HOST_RAM_HEADROOM_MIB
+    assert (
+        instance._launch_host_shortfall_message(
+            argv, rows, avail_mib = avail_mib, host_only_bytes = floor
+        )
+        is None
+    )
+    instance._lazy_read_host_bytes = lambda *_a, **_kw: 0
+    assert (
+        instance._launch_host_shortfall_message(
+            argv, rows, avail_mib = avail_mib, host_only_bytes = floor
+        )
+        is not None
+    )
+
+
+def test_lazy_overlap_with_the_host_floor_is_matched_by_tensor_name(backend, tmp_path: Path):
+    """Lazy overlap is by tensor name, not min(lazy, floor), after an exact -ot move."""
+    from core.inference.llama_cpp import _HOST_RAM_HEADROOM_MIB
+
+    gib = 1024**3
+    items = (("token_embd.weight", 1 * gib), ("per_layer_token_embd.weight", 27 * gib))
+    instance = object.__new__(backend)
+    instance._get_gguf_size_bytes = lambda _path: 40 * gib
+    instance.probe_server_capabilities = lambda _binary: {}
+    instance._lazy_auto_resolves_off = lambda **_kw: False
+    instance._lazy_read_host_bytes = lambda *_a, **_kw: 27 * gib
+    instance._host_pinned_weight_items = lambda _path: items
+    instance._gguf_tensor_scan = lambda _path: ("gemma4", dict(items), 0)
+    model = str(tmp_path / "model.gguf")
+    moved = ["-ot", "per_layer_token_embd.weight=CUDA0"]
+    # The floor the launch passes: the moved table is gone, token_embd stays.
+    floor = instance._host_pinned_floor_bytes(model, moved, env = {})
+    assert floor == 1 * gib
+    argv = ["llama-server", "-m", model, *moved]
+    assert (
+        instance._launch_host_shortfall_message(
+            argv,
+            [(0, 64 * 1024)],
+            avail_mib = 512 + _HOST_RAM_HEADROOM_MIB,
+            host_only_bytes = floor,
+            env = {},
+        )
+        is not None
+    )
+
+    assert instance._lazy_read_in_host_floor(model, 27 * gib, moved, {}) == 0
+    assert instance._lazy_read_in_host_floor(model, 27 * gib, [], {}) == 27 * gib
+    cpu = ["-ot", "per_layer_token_embd.weight=CUDA0,exps=CPU"]
+    assert instance._lazy_read_in_host_floor(model, 27 * gib, cpu, {}) == 27 * gib
+
+
+def test_the_load_mode_fit_removes_a_lazy_table_once():
+    """A lazy host-pinned table leaves host_only_bytes only, not the device share too."""
+    import inspect
+
+    from core.inference.llama_cpp import LlamaCppBackend
+
+    compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
+    assert (
+        "_fit_lazy_in_host_pinned=min(self._lazy_read_in_host_floor("
+        "model_path,_fit_lazy_bytes,extra_args,os.environ),"
+        "_host_pinned+_fit_extra_host_pinned,)"
+    ) in compact
+    assert "-_fit_lazy_in_host_pinned,)+_ckpt_host_bytes," in compact
+    assert "lazy_read_bytes=_fit_lazy_bytes-_fit_lazy_in_host_pinned," in compact
+
+    # 13 GiB device weights, 1 GiB pinned token_embd, 27 GiB lazy table, 4 GiB free VRAM.
+    gib = 1024**3
+    device, embd, table, vram = 13 * gib, 1 * gib, 27 * gib, 4 * gib
+    host_only = embd + table - min(table, embd + table)
+    footprint = device + embd + table - min(table, embd + table)  # model_size + host_only
+    footprint -= table - min(table, embd + table)  # lazy_read_bytes left for the footprint
+    spill = max(0, footprint - host_only - vram) + host_only
+    assert spill == (device - vram) + embd

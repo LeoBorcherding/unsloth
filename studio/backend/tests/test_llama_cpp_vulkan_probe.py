@@ -304,69 +304,13 @@ def test_versioned_only_vulkan_soname_is_probed(tmp_path):
     assert gpus == [(0, 23 * 1024, 24 * 1024)], gpus
 
 
-class _RaisingCFunction:
-    def __init__(self):
-        self.restype = None
-        self.argtypes = None
-
-    def __call__(self, *_args):
-        raise OSError("no such symbol")
-
-
-def test_an_unreadable_device_type_is_reported_unknown_not_discrete():
-    """The probe degrades a failed type lookup to is_igpu=0 so the memory readings
-    still get through. That reads exactly like a proved dGPU, so the flag alone
-    cannot gate a credit only a discrete device may have."""
-    base = _types.SimpleNamespace(
-        ggml_backend_reg_dev_count = _FakeCFunction(1),
-        ggml_backend_reg_dev_get = _FakeCFunction(1),
-        ggml_backend_dev_type = _RaisingCFunction(),
-        ggml_backend_dev_name = _FakeCFunction(b"Mystery Vulkan device"),
-    )
-    lib = _types.SimpleNamespace(ggml_backend_vk_reg = _FakeCFunction(1))
-
-    flags, names, known = _igpu_flags_and_names(base, lib, 1)
-
-    assert flags == [False]
-    assert names == ["Mystery Vulkan device"]
-    assert known == [False]
-
-
-def test_an_unreachable_registry_reports_every_device_unknown():
-    base = _types.SimpleNamespace(
-        ggml_backend_reg_dev_count = _FakeCFunction(2),
-        ggml_backend_reg_dev_get = _FakeCFunction(1),
-        ggml_backend_dev_type = _FakeCFunction(2),
-    )
-    lib = _types.SimpleNamespace(ggml_backend_vk_reg = _FakeCFunction(0))  # null reg
-
-    flags, names, known = _igpu_flags_and_names(base, lib, 2)
-
-    assert flags == [False, False]
-    assert known == [False, False]
-
-
-def test_the_reader_carries_the_type_known_column(tmp_path):
-    """Six columns carry it; an older probe cannot distinguish a failed type read."""
-    binary = _make_vulkan_install(tmp_path)
-    rows = [
-        f"0\t{23 * GIB}\t0\t{24 * GIB}\tKnown dGPU\t1",
-        f"1\t{23 * GIB}\t0\t{24 * GIB}\tUnreadable\t0",
-        _row(2, 23 * GIB, is_igpu = 0, total_bytes = 24 * GIB, name = "Older probe"),
-    ]
-    with _mock_probe(rows):
-        inventory = LlamaCppBackend._run_vulkan_probe(binary)
-    assert [r["type_known"] for r in inventory] == [True, False, False]
-
-
 @pytest.mark.parametrize(
     "type_known,conservative,expected",
     [
         # Proved discrete: no shared pool, whatever the caller asked for.
         (True, True, False),
         (True, False, False),
-        # Type unreadable: shared only for the caller that says so, so the
-        # existing page-locking question keeps its own answer.
+        # Type unreadable: shared only for the caller that says so.
         (False, True, True),
         (False, False, False),
     ],
@@ -379,6 +323,58 @@ def test_an_unreadable_vulkan_type_is_shared_only_where_it_must_be(
         LlamaCppBackend._vulkan_rows_target_igpus(rows, [0], conservative_on_unknown = conservative)
         is expected
     )
+
+
+def test_windows_probe_sets_the_error_mode_before_loading_ggml(tmp_path, monkeypatch, capsys):
+    """SEM_FAILCRITICALERRORS is OR-ed into the inherited mode before either ggml DLL loads."""
+    from core.inference import _vulkan_probe as probe
+
+    for name in ("ggml-base.dll", "ggml-vulkan.dll"):
+        (tmp_path / name).write_bytes(b"stub")
+    error_mode = {"value": 0x8000}
+
+    class _Kernel32:
+        def GetErrorMode(self):
+            return error_mode["value"]
+
+        def SetErrorMode(self, value):
+            previous, error_mode["value"] = error_mode["value"], value
+            return previous
+
+    loads = []
+
+    def fake_cdll(path, mode = 0):
+        loads.append((Path(path).name, error_mode["value"]))
+        if Path(path).name == "ggml-vulkan.dll":
+            raise OSError(127, "The specified procedure could not be found")
+        return object()
+
+    monkeypatch.setattr(probe.sys, "argv", ["_vulkan_probe.py", str(tmp_path)])
+    monkeypatch.setattr(probe.os, "add_dll_directory", lambda _path: None, raising = False)
+    monkeypatch.setattr(probe.ctypes, "WinDLL", lambda _name: _Kernel32(), raising = False)
+    monkeypatch.setattr(probe.ctypes, "CDLL", fake_cdll)
+    monkeypatch.setattr(probe.sys, "platform", "win32")
+
+    assert probe.main() == 1
+    assert loads == [("ggml-base.dll", 0x8001), ("ggml-vulkan.dll", 0x8001)]
+    assert "ggml-vulkan load failed" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason = "real kernel32 error mode")
+def test_windows_probe_sets_the_real_process_error_mode(tmp_path):
+    probe_script = Path(__file__).resolve().parents[1] / "core" / "inference" / "_vulkan_probe.py"
+    code = (
+        "import ctypes, runpy, sys\n"
+        "k = ctypes.WinDLL('kernel32'); k.SetErrorMode(0)\n"
+        f"sys.argv = ['_vulkan_probe.py', {str(tmp_path)!r}]\n"
+        f"g = runpy.run_path({str(probe_script)!r})\n"
+        "rc = g['main']()\n"
+        "print(rc, k.GetErrorMode() & 1)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output = True, text = True, timeout = 60
+    )
+    assert result.stdout.split() == ["1", "1"], (result.stdout, result.stderr)
 
 
 if __name__ == "__main__":

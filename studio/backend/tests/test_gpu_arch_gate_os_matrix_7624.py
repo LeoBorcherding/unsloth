@@ -2608,6 +2608,15 @@ class TestArchCrashRetryReplacesTheCrashedSelectionsWarning:
         assert "does not fit in GPU memory" in (capture["backend"].last_load_warning or "")
 
 
+_INHERITED_HSA_OVERRIDE = os.environ.get("HSA_OVERRIDE_GFX_VERSION")
+
+
+def test_an_inherited_hsa_override_reaches_tests_that_touch_real_hardware():
+    """ROCr reads HSA_OVERRIDE_GFX_VERSION when torch first initialises the GPU, so a
+    suite-wide fixture dropping it breaks real AMD runs that need it for kernels."""
+    assert os.environ.get("HSA_OVERRIDE_GFX_VERSION") == _INHERITED_HSA_OVERRIDE
+
+
 class TestHsaOverrideGfxVersion:
     """``HSA_OVERRIDE_GFX_VERSION`` is the long-standing AMD workaround for an arch
     the ROCm stack does not build for: the user sets it, ROCr reports the SPOOFED
@@ -3239,11 +3248,7 @@ class TestTheCarveOutDecidesTheUnifiedMemoryEnv:
         tied,
         model_bytes = 18 * GIB,
     ):
-        """A file on a 16 GiB carve-out, with 1 GiB token_embd and 2.5 GiB PLE.
-
-        The layout counts every ``*token_embd*`` tensor in token_embd_bytes, as
-        offload_layout does, so a second PLE subtraction is visible here.
-        """
+        """A file on a 16 GiB carve-out, with 1 GiB token_embd and 2.5 GiB PLE."""
         embd, ple = 1 * GIB, GIB * 5 // 2
         monkeypatch.setattr(
             LlamaCppBackend,
@@ -3289,15 +3294,13 @@ class TestTheCarveOutDecidesTheUnifiedMemoryEnv:
     def test_an_untied_file_that_outgrows_the_carve_out_once_both_are_removed_gets_it(
         self, tmp_path, monkeypatch, probe_env
     ):
-        # 20.5 - 1 - 2.5 = 17 GiB outgrows the carve-out. Subtracting the PLE a second
-        # time reads 14.5 GiB and launches without the variable.
+        # 20.5 - 1 - 2.5 = 17 GiB outgrows the carve-out.
         _cmd, env = self._load_with_embeddings(
             tmp_path, monkeypatch, tied = False, model_bytes = GIB * 41 // 2
         )
         assert env.get("GGML_CUDA_ENABLE_UNIFIED_MEMORY") == "1"
 
     def test_a_tied_file_charges_its_duplicate_once(self, tmp_path, monkeypatch, probe_env):
-        # Both embeddings stay on the host and the duplicate reaches the device:
         # 18 - 1 - 2.5 + 1 = 15.5 GiB, under the carve-out.
         _cmd, env = self._load_with_embeddings(tmp_path, monkeypatch, tied = True)
         assert "GGML_CUDA_ENABLE_UNIFIED_MEMORY" not in env
@@ -3423,6 +3426,9 @@ class TestACpuDeviceSelectionEarnsNoHostPinnedDiscount:
         extra_args = (),
         env_extra = None,
         intent = None,
+        capture = None,
+        tied_bytes = 0,
+        model_bytes = 12 * GIB,
     ):
         _apply_os(monkeypatch, "linux")
         monkeypatch.setattr(
@@ -3433,7 +3439,9 @@ class TestACpuDeviceSelectionEarnsNoHostPinnedDiscount:
             "_host_pinned_weight_items",
             staticmethod(lambda _path: (("token_embd.weight", 6 * GIB),)),
         )
-        monkeypatch.setattr(LlamaCppBackend, "_tied_output_bytes", staticmethod(lambda _path: 0))
+        monkeypatch.setattr(
+            LlamaCppBackend, "_tied_output_bytes", staticmethod(lambda _path: tied_bytes)
+        )
         torch = _fake_torch(
             [_device(free_mib = 12000, total_bytes = 12 * GIB, name = "NVIDIA GeForce RTX 4070")],
             vendor = "nvidia",
@@ -3445,9 +3453,10 @@ class TestACpuDeviceSelectionEarnsNoHostPinnedDiscount:
             torch,
             None,
             returncode = None,
-            model_bytes = 12 * GIB,
+            model_bytes = model_bytes,
             env_extra = env_extra,
             intent_kwargs = {"extra_args": tuple(extra_args), **(intent or {})},
+            capture = capture,
         )[0][0]
 
     @staticmethod
@@ -3456,6 +3465,50 @@ class TestACpuDeviceSelectionEarnsNoHostPinnedDiscount:
 
     def test_a_gpu_target_takes_the_discount(self, tmp_path, monkeypatch, probe_env):
         assert self._fit(self._load(tmp_path, monkeypatch)) == "off"
+
+    def test_the_published_reservation_leaves_out_the_host_pinned_embeddings(
+        self, tmp_path, monkeypatch, probe_env
+    ):
+        """_other_planned_vram_mib charges this reservation against every later load, so it
+        carries the same discounted weights the placement fitted, not the whole file."""
+        capture = {}
+        assert self._fit(self._load(tmp_path, monkeypatch, capture = capture)) == "off"
+        backend = capture["backend"]
+        planned = backend._planned_vram_mib or backend._pending_plan_mib
+        assert set(planned) == {0}
+        assert planned[0] < 12 * 1024 - 1024, planned
+
+    def test_the_eviction_shortfall_leaves_out_the_host_pinned_embeddings(
+        self, tmp_path, monkeypatch, probe_env
+    ):
+        """GpuMemoryShortError.short_mib sizes the eviction, so it prices the weights the
+        placement fitted (20 GiB file less 6 GiB host-pinned), not the whole file."""
+        from core.inference.llama_cpp import GpuMemoryShortError
+
+        capture = {}
+        with pytest.raises(IndexError):  # refused before any spawn
+            self._load(
+                tmp_path,
+                monkeypatch,
+                model_bytes = 20 * GIB,
+                intent = {"refuse_partial_gpu_fit": True},
+                capture = capture,
+            )
+        error = capture["error"]
+        assert isinstance(error, GpuMemoryShortError), error
+        # 14 GiB of device weights on a 12000 MiB card: about 2.3 GiB short, not 8.3.
+        assert 0 < error.short_mib < 6 * 1024, error.short_mib
+
+    def test_the_published_reservation_keeps_the_tied_output_copy(
+        self, tmp_path, monkeypatch, probe_env
+    ):
+        """A tied token_embd is duplicated onto the GPU as the output matrix: the
+        placement charges it, so the reservation later loads subtract must too."""
+        capture = {}
+        self._load(tmp_path, monkeypatch, capture = capture, tied_bytes = 1 * GIB)
+        backend = capture["backend"]
+        planned = backend._planned_vram_mib or backend._pending_plan_mib
+        assert planned[0] >= 7 * 1024, planned
 
     @pytest.mark.parametrize("value", ["none", "cpu"])
     def test_a_cpu_device_flag_does_not(self, tmp_path, monkeypatch, probe_env, value):

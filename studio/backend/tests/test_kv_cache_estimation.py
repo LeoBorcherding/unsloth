@@ -29,6 +29,9 @@ if _BACKEND_DIR not in sys.path:
 # loggers
 _loggers_stub = _types.ModuleType("loggers")
 _loggers_stub.get_logger = lambda name: __import__("logging").getLogger(name)
+# __path__ so `loggers.media_progress` still resolves: a bare ModuleType shadows the whole
+# package, so the submodule import dies with "'loggers' is not a package" (#10995).
+_loggers_stub.__path__ = [str(Path(_BACKEND_DIR) / "loggers")]
 sys.modules.setdefault("loggers", _loggers_stub)
 
 # structlog. Carries get_logger because this stub is process-wide: whichever test
@@ -207,6 +210,12 @@ class TestGGUFParserNewFields:
             ("_ssm_state_size", "ssm.state_size", 128),
             ("_ssm_group_count", "ssm.group_count", 16),
             ("_ssm_conv_kernel", "ssm.conv_kernel", 4),
+            ("_feed_forward_length", "feed_forward_length", 12288),
+            ("_expert_used_count", "expert_used_count", 8),
+            ("_expert_feed_forward_length", "expert_feed_forward_length", 512),
+            ("_expert_shared_feed_forward_length", "expert_shared_feed_forward_length", 512),
+            ("_expert_shared_count", "expert_shared_count", 1),
+            ("_embedding_length_per_layer_input", "embedding_length_per_layer_input", 256),
         ],
     )
     def test_field_parsed(self, field, gguf_key, value):
@@ -255,6 +264,14 @@ class TestGGUFParserNewFields:
         # get a safe upper bound.
         assert b._n_kv_heads == 8
         assert b._sliding_window_pattern == [True, True, True, True, True, False]
+
+    def test_per_layer_feed_forward_length_keeps_the_widest(self):
+        # Gemma 4 E2B stores one FFN width per layer; the compute buffer is set by
+        # the widest.
+        b = _backend_from_gguf(
+            "gemma4", {"block_count": 3, "feed_forward_length": [6144, 12288, 6144]}
+        )
+        assert b._feed_forward_length == 12288
 
 
 class TestArchSwaPatternDefaults:
@@ -595,6 +612,117 @@ class TestDynamicSwaResolver:
         )
         assert b._sliding_window_pattern is None
         assert not (tmp_path / "swa_cache.json").exists()
+
+    def test_remembered_miss_skips_hf_refetch(self, monkeypatch, tmp_path):
+        self._isolate_cache(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            lc,
+            "_fetch_swa_entry_from_hf",
+            lambda repo_id: calls.append(repo_id) or lc._SWA_CONFIRMED_MISS,
+        )
+        monkeypatch.setattr(lc, "_resolve_swa_entry_from_transformers", lambda arch: None)
+        general = {"general.source.huggingface.repository": "vendor/does-not-exist"}
+        first = _backend_from_gguf("newmodel", _SWA_FIELDS, general = general)
+        assert first._sliding_window_pattern is None
+        assert calls == ["vendor/does-not-exist"]
+        with open(tmp_path / "swa_cache.json") as f:
+            assert json.load(f) == {"__missed_repos__": ["vendor/does-not-exist"]}
+        monkeypatch.setattr(lc, "_SWA_CACHE", None)
+        second = _backend_from_gguf("newmodel", _SWA_FIELDS, general = general)
+        assert second._sliding_window_pattern is None
+        assert calls == ["vendor/does-not-exist"]
+
+    def test_transient_hf_error_is_retried(self, monkeypatch, tmp_path):
+        self._isolate_cache(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            lc, "_fetch_swa_entry_from_hf", lambda repo_id: calls.append(repo_id) or None
+        )
+        monkeypatch.setattr(lc, "_resolve_swa_entry_from_transformers", lambda arch: None)
+        general = {"general.source.huggingface.repository": "vendor/newmodel-base"}
+        first = _backend_from_gguf("newmodel", _SWA_FIELDS, general = general)
+        assert first._sliding_window_pattern is None
+        assert not (tmp_path / "swa_cache.json").exists()
+        monkeypatch.setattr(lc, "_SWA_CACHE", None)
+        monkeypatch.setattr(
+            lc, "_fetch_swa_entry_from_hf", lambda repo_id: calls.append(repo_id) or 4
+        )
+        second = _backend_from_gguf("newmodel", _SWA_FIELDS, general = general)
+        assert second._sliding_window_pattern == [(i + 1) % 4 != 0 for i in range(12)]
+        assert calls == ["vendor/newmodel-base", "vendor/newmodel-base"]
+
+    def test_repo_miss_does_not_block_another_candidate(self, monkeypatch, tmp_path):
+        self._isolate_cache(monkeypatch, tmp_path)
+        calls = []
+
+        def fake_fetch(repo_id):
+            calls.append(repo_id)
+            return 4 if repo_id == "vendor/newmodel-base" else lc._SWA_CONFIRMED_MISS
+
+        monkeypatch.setattr(lc, "_fetch_swa_entry_from_hf", fake_fetch)
+        monkeypatch.setattr(lc, "_resolve_swa_entry_from_transformers", lambda arch: None)
+        b = _backend_from_gguf(
+            "newmodel",
+            _SWA_FIELDS,
+            general = {
+                "general.source.huggingface.repository": "quanter/newmodel-GGUF",
+                "general.base_model.0.repo_url": "https://huggingface.co/vendor/newmodel-base",
+            },
+        )
+        assert b._sliding_window_pattern == [(i + 1) % 4 != 0 for i in range(12)]
+        assert calls == ["quanter/newmodel-GGUF", "vendor/newmodel-base"]
+
+    def test_casefold_duplicate_repos_are_fetched_once(self, monkeypatch, tmp_path):
+        self._isolate_cache(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            lc, "_fetch_swa_entry_from_hf", lambda repo_id: calls.append(repo_id) or None
+        )
+        monkeypatch.setattr(lc, "_resolve_swa_entry_from_transformers", lambda arch: None)
+        b = _backend_from_gguf(
+            "newmodel",
+            _SWA_FIELDS,
+            general = {
+                "general.source.huggingface.repository": "DeepSeek-AI/Flash",
+                "general.organization": "deepseek-ai",
+                "general.basename": "Flash",
+            },
+        )
+        assert b._sliding_window_pattern is None
+        assert calls == ["DeepSeek-AI/Flash"]
+
+    def test_hf_fetch_leaves_no_repo_in_the_model_cache(self, monkeypatch, tmp_path):
+        import huggingface_hub
+        import utils.hf_probe
+
+        active = tmp_path / "hub"
+        active.mkdir()
+        monkeypatch.setattr("utils.hf_cache_settings.active_hf_hub_cache", lambda: str(active))
+        monkeypatch.setattr(utils.hf_probe, "hf_file_definitely_absent", lambda *a, **k: False)
+
+        def fake_download(repo_id, filename, *, cache_dir, **kwargs):
+            path = Path(cache_dir) / f"models--{repo_id.replace('/', '--')}" / filename
+            path.parent.mkdir(parents = True)
+            path.write_text(json.dumps({"sliding_window": 128}))
+            return str(path)
+
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+        assert (
+            lc._fetch_swa_entry_from_hf("deepseek-ai/DeepSeek-V4-Flash") is lc._SWA_CONFIRMED_MISS
+        )
+        assert list(active.iterdir()) == []
+
+    def test_hf_fetch_reads_an_already_cached_config_offline(self, monkeypatch, tmp_path):
+        import huggingface_hub
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"sliding_window_pattern": 6}))
+        monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache", lambda *a, **k: str(cfg))
+        monkeypatch.setattr(
+            huggingface_hub, "hf_hub_download", lambda *a, **k: pytest.fail("network fetch")
+        )
+        assert lc._fetch_swa_entry_from_hf("org/model") == 6
 
 
 class TestTransformersIntrospection:
@@ -973,6 +1101,359 @@ class TestHybridMambaEstimation:
         assert b._estimate_kv_cache_bytes(4096, "f16", n_parallel = 4) == (kv_only + 4 * per_slot)
 
 
+class TestSparseAttentionIndexerCache:
+    """DSA / QSA / MSA indexer key cache beside the attention KV (one key head per
+    indexer layer at the K cache type, same cells as the attention cache)."""
+
+    MIB = 1024 * 1024
+
+    # Qwen3.8-Flash-Next header, as shipped (UD-IQ1_S shard 1).
+    QWEN38 = {
+        "block_count": 48,
+        "context_length": 262144,
+        "embedding_length": 2560,
+        "attention.head_count": 24,
+        "attention.head_count_kv": 2,
+        "attention.key_length": 256,
+        "attention.value_length": 256,
+        "full_attention_interval": 4,
+        "ssm.conv_kernel": 4,
+        "ssm.state_size": 128,
+        "ssm.group_count": 16,
+        "ssm.inner_size": 6144,
+        "attention.indexer.head_count": 4,
+        "attention.indexer.key_length": 128,
+        "attention.indexer.top_k": 2048,
+        "attention.compress_ratios": [4 if (i + 1) % 4 == 0 else 0 for i in range(48)],
+    }
+
+    def _qwen38(self, **overrides):
+        return _backend_from_gguf("qwen4exp", {**self.QWEN38, **overrides})
+
+    def test_parser_reads_indexer_fields(self):
+        b = _backend_from_gguf(
+            "glm-dsa",
+            {
+                "block_count": 4,
+                "attention.indexer.key_length": 128,
+                "attention.indexer.top_k": 2048,
+                "attention.indexer.types": [True, False, False, True],
+                "attention.compress_ratios": [0, 4, 0, 4],
+            },
+        )
+        assert b._indexer_key_length == 128
+        assert b._indexer_top_k == 2048
+        assert b._indexer_types == [True, False, False, True]
+        assert b._compress_ratios == [0, 4, 0, 4]
+        assert _backend_from_gguf("llama", {"block_count": 4})._indexer_key_length is None
+
+    @pytest.mark.parametrize(
+        "n_ctx,cache_type,llama_cpp_attn_mib,llama_cpp_idx_mib",
+        [
+            # llama-completion -ngl 99 --fit off -v on a B200, build b11539:
+            # "llama_kv_cache: size = ..." for the attention and the indexer cache.
+            (8192, None, 192.0, 48.0),
+            (208384, None, 4884.0, 1221.0),
+            (65536, "q8_0", 816.0, 204.0),
+        ],
+    )
+    def test_qwen38_flash_next_matches_llama_cpp(
+        self, n_ctx, cache_type, llama_cpp_attn_mib, llama_cpp_idx_mib
+    ):
+        b = self._qwen38()
+        # 36 recurrent layers, f32: llama_memory_recurrent R 4.22 + S 108.00 MiB.
+        recurrent = 36 * (3 * (6144 + 2 * 16 * 128) + 128 * 6144) * 4
+        assert b._mamba_recurrent_state_bytes() == recurrent
+        expected = int((llama_cpp_attn_mib + llama_cpp_idx_mib) * self.MIB) + recurrent
+        assert b._estimate_kv_cache_bytes(n_ctx, cache_type) == expected
+
+    def test_qwen38_indexer_is_key_and_pooled_key_on_attention_layers(self):
+        rows = self._qwen38()._indexer_kv_layer_bytes(48, 2.0, 2.0)
+        assert [i for i, r in enumerate(rows) if r] == list(range(3, 48, 4))
+        assert set(r for r in rows if r) == {128 * 2 * 2.0}
+        # No QSA compress ratio: the cache holds the raw key alone.
+        b = self._qwen38(**{"attention.compress_ratios": [0] * 48})
+        assert set(r for r in b._indexer_kv_layer_bytes(48, 2.0, 2.0) if r) == {128 * 2.0}
+
+    def test_no_indexer_key_length_keeps_previous_estimate(self):
+        fields = {k: v for k, v in self.QWEN38.items() if "indexer" not in k}
+        b = _backend_from_gguf("qwen4exp", fields)
+        cells = _runtime_kv_cells(8192)
+        recurrent = b._mamba_recurrent_state_bytes()
+        assert b._estimate_kv_cache_bytes(8192, None) == 12 * cells * 2 * 512 * 2 + recurrent
+
+    def test_deepseek32_indexes_every_trunk_layer(self):
+        b = _backend_from_gguf(
+            "deepseek32",
+            {
+                "block_count": 62,
+                "nextn_predict_layers": 1,
+                "attention.head_count": 128,
+                "attention.head_count_kv": 1,
+                "attention.key_length": 576,
+                "attention.value_length": 512,
+                "attention.kv_lora_rank": 512,
+                "attention.key_length_mla": 192,
+                "attention.indexer.key_length": 128,
+                "attention.indexer.top_k": 2048,
+            },
+        )
+        cells = _runtime_kv_cells(4096)
+        # 61 trunk layers: MLA latent (576) + one 128-wide indexer key, both f16.
+        assert b._estimate_kv_cache_bytes(4096, "f16") == 61 * cells * (576 + 128) * 2
+        assert b._estimate_kv_cache_bytes(4096, "q8_0") == int(61 * cells * 576 * 1.0625) + int(
+            61 * cells * 128 * 1.0625
+        )
+
+    @pytest.mark.parametrize(
+        "context_length,types,expected_layers",
+        [
+            (202752, None, 78),  # GLM-5 / 5.1: every layer
+            (1048576, None, 21),  # GLM-5.2 default: 0, 1, 2, 6, 10, ..., 74
+            (1048576, [i % 2 == 0 for i in range(78)], 39),  # explicit types win
+        ],
+    )
+    def test_glm_dsa_indexer_layers(self, context_length, types, expected_layers):
+        fields = {
+            "block_count": 79,
+            "nextn_predict_layers": 1,
+            "context_length": context_length,
+            "attention.head_count_kv": 1,
+            "attention.key_length": 576,
+            "attention.value_length": 512,
+            "attention.kv_lora_rank": 512,
+            "attention.indexer.key_length": 128,
+        }
+        if types is not None:
+            fields["attention.indexer.types"] = types
+        b = _backend_from_gguf("glm-dsa", fields)
+        rows = b._indexer_kv_layer_bytes(78, 2.0, 2.0)
+        assert sum(1 for r in rows if r) == expected_layers
+        cells = _runtime_kv_cells(4096)
+        assert b._estimate_kv_cache_bytes(4096, "f16") == (
+            78 * cells * 576 * 2 + expected_layers * cells * 128 * 2
+        )
+
+    def test_glm_5_2_default_layout(self):
+        on = [i for i in range(80) if lc._glm_5_2_default_indexer_full(i)]
+        assert on[:5] == [0, 1, 2, 6, 10] and on[-1] == 74 and len(on) == 21
+
+    def test_hy_v4_needs_top_k_and_types(self):
+        fields = {
+            "block_count": 8,
+            "attention.head_count_kv": 1,
+            "attention.key_length": 576,
+            "attention.value_length": 512,
+            "attention.kv_lora_rank": 512,
+            "attention.indexer.key_length": 128,
+            "attention.indexer.types": [True, False, False, False, True, False, False, False],
+        }
+        dense = _backend_from_gguf("hy_v4", fields)  # top_k absent: full-attention checkpoint
+        assert dense._indexer_kv_layer_bytes(8, 2.0, 2.0) == []
+        sparse = _backend_from_gguf("hy_v4", {**fields, "attention.indexer.top_k": 1024})
+        assert [i for i, r in enumerate(sparse._indexer_kv_layer_bytes(8, 2.0, 2.0)) if r] == [0, 4]
+
+    def test_glm5_next_kpool_row_on_attention_layers(self):
+        heads = [0, 0, 0, 1] * 11 + [1]  # 44 KDA/DSA trunk layers + the NextN block
+        b = _backend_from_gguf(
+            "glm5-next",
+            {
+                "block_count": 45,
+                "nextn_predict_layers": 1,
+                "attention.head_count": 32,
+                "attention.head_count_kv": heads,
+                "attention.key_length": 576,
+                "attention.value_length": 512,
+                "attention.kv_lora_rank": 512,
+                "attention.indexer.key_length": 128,
+                "attention.indexer.types": [i != 7 for i in range(44)],
+                "kda.head_dim": 128,
+                "ssm.conv_kernel": 4,
+            },
+        )
+        rows = b._indexer_kv_layer_bytes(44, 2.0, 2.0)
+        layers = [i for i, r in enumerate(rows) if r]
+        assert layers == [i for i in range(3, 44, 4) if i != 7]
+        assert set(r for r in rows if r) == {3 * 128 * 2.0}  # key | gate | pooled
+        cells = _runtime_kv_cells(4096)
+        attn = 11 * cells * 576 * 2
+        idx = 10 * cells * 3 * 128 * 2
+        assert b._estimate_kv_cache_bytes(4096, "f16") == attn + idx + b._recurrent_state_bytes()
+
+    def test_dots3note_full_cells_on_indexer_layers(self):
+        b = _backend_from_gguf(
+            "dots3note",
+            {
+                "block_count": 4,
+                "attention.head_count_kv": 1,
+                "attention.key_length": 576,
+                "attention.value_length": 512,
+                "attention.kv_lora_rank": 512,
+                "attention.sliding_window": 512,
+                "attention.sliding_window_pattern": [True, True, True, False],
+                "attention.indexer.key_length": 128,
+                "attention.indexer.types": [False, False, False, True],
+            },
+        )
+        cells = _runtime_kv_cells(32768)
+        assert b._estimate_kv_cache_bytes(32768, "f16") == (4 * cells * 576 * 2 + cells * 128 * 2)
+
+    def test_minimax_m3_caches_a_one_head_value_row_past_dense_lead(self):
+        b = _backend_from_gguf(
+            "minimax-m3",
+            {
+                "block_count": 6,
+                "leading_dense_block_count": 2,
+                "attention.head_count": 8,
+                "attention.head_count_kv": 2,
+                "attention.key_length": 128,
+                "attention.value_length": 128,
+                "attention.indexer.key_length": 64,
+            },
+        )
+        cells = _runtime_kv_cells(4096)
+        attn = 6 * cells * 2 * (128 + 128) * 2
+        idx = 4 * cells * (64 + 128) * 2  # K 64 + V 128 (llama_kv_cache_msa is not MLA)
+        assert b._estimate_kv_cache_bytes(4096, "f16") == attn + idx
+        q8 = b._estimate_kv_cache_bytes(4096, "q8_0", flash_attn = False)
+        # FA off floors V at f16 for the indexer as for the attention cache.
+        assert q8 == int(6 * cells * 2 * (128 * 1.0625 + 128 * 2)) + int(
+            4 * cells * (64 * 1.0625 + 128 * 2)
+        )
+
+    def test_deepseek4_and_unknown_arch(self):
+        fields = {
+            "block_count": 4,
+            "attention.head_count_kv": 1,
+            "attention.key_length": 512,
+            "attention.value_length": 512,
+            "attention.indexer.key_length": 128,
+        }
+        assert _backend_from_gguf("deepseek4", fields)._indexer_kv_layer_bytes(4, 2.0, 2.0) == []
+        # An unknown architecture declaring an indexer is charged a key row per layer.
+        rows = _backend_from_gguf("futurearch", fields)._indexer_kv_layer_bytes(4, 2.0, 2.0)
+        assert rows == [128 * 2.0] * 4
+
+    def test_embedded_mtp_head_carries_its_indexer(self):
+        b = self._qwen38(block_count = 49, nextn_predict_layers = 1)
+        cells = _runtime_kv_cells(8192)
+        assert b._mtp_draft_kv_bytes(8192) == cells * (2 * 512 * 2 + 2 * 128 * 2)
+
+    def test_layer_weights_carry_the_indexer(self):
+        b = _backend_from_gguf(
+            "minimax-m3",
+            {
+                "block_count": 4,
+                "attention.head_count_kv": 2,
+                "attention.key_length": 128,
+                "attention.value_length": 128,
+                "attention.sliding_window": 1024,
+                "attention.sliding_window_pattern": [True, True, True, False],
+                "attention.indexer.key_length": 64,
+            },
+        )
+        weights = b._kv_layer_weights(65536)
+        assert sum(weights) == pytest.approx(b._estimate_kv_cache_bytes(65536, None), rel = 1e-6)
+
+
+class TestSsmStateWithoutAttentionInterval:
+    """SSM headers with no full_attention_interval, recurrent layers per llama.cpp's is_recr."""
+
+    _SSM = {"ssm.inner_size": 1024, "ssm.state_size": 16, "ssm.conv_kernel": 4}
+
+    @staticmethod
+    def _per_layer(group):
+        return ((4 - 1) * (1024 + 2 * group * 16) + 16 * 1024) * 4
+
+    @pytest.mark.parametrize(
+        "arch, fields, recurrent",
+        [
+            pytest.param(
+                "granitehybrid",
+                {"attention.head_count_kv": [0, 0, 8, 0], "ssm.group_count": 1},
+                3,
+                id = "zero-kv-heads",
+            ),
+            pytest.param(
+                "nemotron_h",
+                {
+                    "attention.head_count_kv": [0, 0, 8, 0],
+                    "feed_forward_length": [0, 21504, 0, 0],
+                    "ssm.group_count": 8,
+                },
+                2,
+                id = "dense-nemotron-mlp-layers-are-not-ssm",
+            ),
+            pytest.param(
+                "nemotron_h_moe",
+                {
+                    "attention.head_count_kv": [0, 0, 2, 0],
+                    "feed_forward_length": [0, 1856, 0, 0],
+                    "ssm.group_count": 8,
+                },
+                2,
+                id = "nemotron-ffn-layers-are-not-ssm",
+            ),
+            pytest.param(
+                "jamba", {"attention.head_count_kv": [0, 8, 0, 0]}, 3, id = "mamba1-no-groups"
+            ),
+            pytest.param(
+                "falcon-h1",
+                {"attention.head_count_kv": 8, "ssm.group_count": 1},
+                4,
+                id = "parallel-every-layer",
+            ),
+            pytest.param(
+                "mamba2", {"attention.head_count": 0, "ssm.group_count": 1}, 4, id = "pure-mamba2"
+            ),
+            pytest.param("mamba", {"attention.head_count": 0}, 4, id = "pure-mamba1"),
+        ],
+    )
+    def test_recurrent_layers_follow_llama_cpp(self, arch, fields, recurrent):
+        b = _backend_from_gguf(
+            arch,
+            {"block_count": 4, "attention.head_count": 32, "embedding_length": 2048}
+            | self._SSM
+            | fields,
+        )
+        group = fields.get("ssm.group_count", 0)
+        assert b._mamba_recurrent_state_bytes() == recurrent * self._per_layer(group)
+        assert b._rollback_state_bytes(1) == b._mamba_recurrent_state_bytes()
+
+    def test_kda_and_non_ssm_headers_are_not_sized_here(self):
+        kda = _backend_from_gguf(
+            "kimi_linear",
+            {"block_count": 4, "attention.head_count_kv": [0, 0, 8, 0], "kda.head_dim": 128}
+            | self._SSM,
+        )
+        assert kda._mamba_recurrent_state_bytes() == 0
+        plain = _backend_from_gguf(
+            "granitehybrid", {"block_count": 4, "attention.head_count_kv": [0, 8, 0, 8]}
+        )
+        assert plain._mamba_recurrent_state_bytes() == 0
+
+    @pytest.mark.parametrize("key_length", [128, None], ids = ["gqa-path", "legacy-path"])
+    def test_the_estimate_charges_live_state_and_snapshots(self, key_length):
+        dims = (
+            {}
+            if key_length is None
+            else {"attention.key_length": 128, "attention.value_length": 128}
+        )
+        fields = {
+            "block_count": 4,
+            "attention.head_count": 32,
+            "embedding_length": 4096,
+            "attention.head_count_kv": [0, 0, 8, 0],
+            "ssm.group_count": 1,
+        } | dims
+        ssm = _backend_from_gguf("granitehybrid", fields | self._SSM)
+        attention_only = _backend_from_gguf("granitehybrid", fields)
+        state = 3 * self._per_layer(1)
+        kv = lambda b, **k: b._estimate_kv_cache_bytes(4096, "f16", n_parallel = 4, **k)  # noqa: E731
+        assert kv(ssm) - kv(attention_only) == 4 * state
+        assert kv(ssm, ctx_checkpoints = 5) - kv(ssm) == 4 * 5 * state
+
+
 # E. Path 3: Sliding Window Estimation
 
 
@@ -1201,6 +1682,33 @@ class TestLegacyEstimation:
         bpe = 2.0
         old_formula = int(2 * n_kv_heads * head_dim * n_layers * n_ctx * bpe)
         assert b._estimate_kv_cache_bytes(n_ctx, "f16") == old_formula
+
+    @pytest.mark.parametrize(
+        "overrides, flash_attn, k_heads, v_heads",
+        [
+            pytest.param(
+                {"_n_layers": 4, "_n_kv_heads_by_layer": [0, 0, 8, 4]},
+                True,
+                12,
+                12,
+                id = "per-layer-heads",
+            ),
+            pytest.param(
+                {"_n_layers": 4, "_n_kv_heads_by_layer": [0, 0, 8, 4]},
+                False,
+                12,
+                4 * 8,
+                id = "per-layer-heads-padded-v",
+            ),
+            pytest.param({"_n_kv_heads": None, "_n_heads": 0}, False, 0, 0, id = "pure-ssm"),
+        ],
+    )
+    def test_only_kv_bearing_layers_are_charged(self, overrides, flash_attn, k_heads, v_heads):
+        b = self._legacy_backend(**overrides)
+        kv = b._estimate_kv_cache_bytes(4096, "q8_0", flash_attn = flash_attn)
+        q8 = lc._kv_bytes_per_elem("q8_0")
+        # The FA-off retry rewrites a quantized V cache to f16.
+        assert kv == int((k_heads * q8 + v_heads * (q8 if flash_attn else 2)) * 128 * 4096)
 
 
 # H. Path Priority (selection order)

@@ -251,8 +251,6 @@ def test_vision_downgrade_preserves_multi_gpu_intent():
     src = inspect.getsource(LlamaCppBackend.load_model)
     assert "_layer_min_gpus = max(_layer_min_gpus, len(gpus))" in src
     assert src.count("min_gpus = _layer_min_gpus") >= 2
-    # The enumeration starts at _auto_min_gpus, now the argument to
-    # _ranked_candidate_subsets rather than an inline loop bound.
     assert "_auto_subsets = _ranked_candidate_subsets(ranked, _auto_min_gpus)" in src
     assert "for count in range(min_count, len(ranked) + 1):" in src
     auto = src.find("_auto_min_gpus = max(")
@@ -388,9 +386,10 @@ def test_tensor_split_abort_raises_early_to_layer_fallback():
     # The strip is matched on the call, not on what is passed to it. What this
     # test is about is that the abort raises BEFORE the projector is thrown
     # away; which command the strip reads from is that code's own business.
+    # `cmd = ` skips the extra-args strip, whose --mmproj the managed flag re-emits.
     for label, needle in (
         ("the flash-attn-off retry", "_with_flash_attn_off"),
-        ("the text-only mmproj strip", "_strip_mmproj_args("),
+        ("the text-only mmproj strip", "cmd = self._strip_mmproj_args("),
     ):
         idx = src.find(needle)
         assert idx != -1, (
@@ -402,7 +401,7 @@ def test_tensor_split_abort_raises_early_to_layer_fallback():
             f"retry runs after the projector has already been discarded (#6659)"
         )
     # gated on the marker-plus-crash helper, which also drives the record just above
-    guard = src[max(0, raise_idx - 600) : raise_idx]
+    guard = src[max(0, raise_idx - 900) : raise_idx]
     assert "_should_record_tensor_split_abort" in guard
     rec_idx = src.find("LlamaCppBackend._record_tensor_split_abort(")
     assert rec_idx != -1 and rec_idx < raise_idx
@@ -483,8 +482,7 @@ def test_auto_context_layer_loops_capped_to_usable_gpus():
         "range(max(1, _layer_min_gpus), len(ranked) + 1)" not in src
     ), "auto-context loops must cap _layer_min_gpus to usable GPUs, not use it raw"
     assert "_auto_min_gpus" in src
-    # Same floor as a minimum subset size. The raw-_layer_min_gpus check above is
-    # what guards #6659, wherever the enumeration lives.
+    # The raw _layer_min_gpus check above guards #6659.
     assert "_auto_subsets = _ranked_candidate_subsets(ranked, _auto_min_gpus)" in src
     assert "for count in range(min_count, len(ranked) + 1):" in src
     # the eligibility threshold is the per-device layer overhead, not bare > 0
