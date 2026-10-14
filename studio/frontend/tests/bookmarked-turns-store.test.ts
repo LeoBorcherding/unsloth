@@ -27,7 +27,7 @@ test("forgetting chats with no bookmarks keeps the state object", () => {
 });
 
 test("every chat delete route forgets the deleted chats' bookmarks", async () => {
-  // A project delete or a clear-all removes chats without going through deleteChatItems.
+  // project delete and clear-all remove chats without going through deleteChatItems
   const { readSrcAsync } = await import("./helpers/kit.ts");
   for (const file of [
     "features/chat/hooks/use-chat-sidebar-items.ts",
@@ -43,7 +43,6 @@ test("every chat delete route forgets the deleted chats' bookmarks", async () =>
 });
 
 test("clear all chats forgets the cleared chats' bookmarks", async () => {
-  // Settings -> Clear all chats skips deleteChatItems, so it forgets them itself.
   const clearAll = await readFile(
     new URL("../src/features/chat/utils/clear-all-chats.ts", import.meta.url),
     "utf8",
@@ -94,5 +93,50 @@ test("an open turn card reads its reply live while it streams", async () => {
   assert.match(
     nav,
     /role === "user"\) \{\s*return messages\[index\]\.id === previewOpenerId/,
+  );
+});
+
+test("the turn card stays inside a phone-width viewport", async () => {
+  const nav = await readFile(
+    new URL(
+      "../src/components/assistant-ui/turn-navigation.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  // the card is positioned from the right, so the cap is what keeps its left edge on screen
+  assert.match(
+    nav,
+    /right: `calc\(\$\{preview\.right\}px \+ 1\.5rem\)`,[\s\S]{0,160}maxWidth: `calc\(100vw - \$\{preview\.right\}px - 2rem\)`/,
+  );
+});
+
+test("the turn card follows its focused marker when the rail scrolls", async () => {
+  const nav = await readFile(
+    new URL(
+      "../src/components/assistant-ui/turn-navigation.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(
+    nav,
+    /const onRailScroll = useCallback\([\s\S]{0,700}current\.openerId === focused\.dataset\.turnId[\s\S]{0,120}top: box\.top \+ box\.height \/ 2/,
+  );
+});
+
+test("the turn card names its turn and stays out of select-all copies", async () => {
+  const nav = await readFile(
+    new URL(
+      "../src/components/assistant-ui/turn-navigation.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  // the card is portaled to body, so the rail anchor's select-none does not reach it
+  assert.match(nav, /"aui-turn-preview [^"]*\bselect-none\b/);
+  assert.match(
+    nav,
+    /<span className="shrink-0 text-muted-foreground\/80 text-ui-11">\s*\{preview \? t\("turns\.label", \{ number: preview\.turn \}\)/,
   );
 });

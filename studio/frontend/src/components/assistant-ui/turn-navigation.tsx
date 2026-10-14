@@ -49,11 +49,10 @@ import { scheduleIdleTask } from "@/lib/schedule-idle-task";
 import { cn } from "@/lib/utils";
 
 const MIN_NAVIGATOR_TURNS = 5;
-// how far an overflowing rail's ends fade out, scaled by how much is hidden past each end
+// end fade of an overflowing rail, scaled by how much is hidden past each end
 const RAIL_FADE_PX = 24;
-// how far the rail runs ahead of the thread, so its hidden ends come into view early
-const RAIL_LEAD_MAX = 3;
-// clearance kept between the rail and the thread's top and bottom
+const RAIL_LEAD = 1.15;
+// rail clearance from the thread's top and bottom
 const RAIL_INSET_PX = 48;
 const PROMPT_PREVIEW_CHARS = 240;
 const REPLY_PREVIEW_CHARS = 480;
@@ -62,11 +61,10 @@ const PREVIEW_HIDE_DELAY_MS = 150;
 // a pointer heading left for the open card crosses neighbouring markers; only a pause on one retargets it
 const PREVIEW_SWITCH_DELAY_MS = 120;
 const PYRAMID_REACH = 3;
-// math blocks above the target settle from placeholder heights once reached, so the jump re-aligns briefly
+// math blocks above the target settle from placeholder heights, so the jump re-aligns briefly
 const JUMP_ALIGN_FRAMES = 4;
 
-// keyed by thread (compare panes mount several). Built from the rail's one scan per thread and only
-// marked settled after a switch finishes mounting, so labels and rail add nothing to the switch itself
+// keyed by thread (compare panes mount several); settled after a switch mounts, so it adds no cost
 interface TurnIndex {
   turns: ReadonlyMap<string, number>;
   settled: boolean;
@@ -93,7 +91,7 @@ function useTurnBookmark(
   ownTurn: boolean,
 ): { bookmarked: boolean; toggle: () => void } | null {
   const incognito = useChatRuntimeStore((state) => state.incognito);
-  // one primitive selector: it runs on every store write (keystrokes, streamed tokens) for every mounted message
+  // one primitive selector: it runs on every store write for every mounted message
   const key = useAuiState(
     ({ thread, message, threadListItem }) =>
       `${threadListItem.remoteId ?? ""}\n${ownTurn ? message.id : (turnOpenerIdAt(thread.messages, message.index) ?? "")}`,
@@ -165,46 +163,6 @@ const BookmarkTurnMenuItemInner: FC<{ className?: string }> = ({
       />
       {t(turnBookmark.bookmarked ? "turns.removeBookmark" : "turns.bookmark")}
     </ActionBarMorePrimitive.Item>
-  );
-};
-
-export const UserTurnLabel: FC = () => {
-  const enabled = useChatPreferencesStore((state) => state.showTurnNavigation);
-  return enabled ? <UserTurnLabelText /> : null;
-};
-
-const UserTurnLabelText: FC = () => {
-  const t = useT();
-  // constant per message, so it never rescans thread.messages
-  const key = useAuiState(
-    ({ message, threadListItem }) =>
-      `${threadListItem.id}\n${threadListItem.remoteId ?? ""}\n${message.id}`,
-  );
-  const [threadKey, threadId, messageId] = key.split("\n");
-  const turn = useTurnIndexStore((state) =>
-    state[threadKey]?.settled
-      ? (state[threadKey].turns.get(messageId) ?? 0)
-      : 0,
-  );
-  const bookmarked = useIsTurnBookmarked(threadId, messageId);
-  // the box mounts with the message and only its text fills in once a switch settles: a late box
-  // would resize every message and restyle the whole document
-  return (
-    <div
-      {...{ [FIND_SKIP_ATTRIBUTE]: "" }}
-      className="aui-user-turn-label flex select-none items-center gap-1 font-medium text-muted-foreground/80 text-ui-11"
-    >
-      {bookmarked && (
-        <HugeiconsIcon
-          icon={Bookmark02Icon}
-          strokeWidth={2}
-          className="size-3 fill-current"
-          role="img"
-          aria-label={t("turns.bookmarked")}
-        />
-      )}
-      <span>{turn ? t("turns.label", { number: turn }) : "\u00a0"}</span>
-    </div>
   );
 };
 
@@ -282,108 +240,31 @@ function alignTurnTop(
   }
 }
 
-// keep the core wider than one frame of travel, or a thin line strobes
-const SHINE_MS = 1100;
-const SHINE_FRAMES = 24;
-const SHINE_SLANT = Math.tan((32 * Math.PI) / 180);
-// nested bands, outer to inner: half-width as a share of the bubble width, and the opacity reached inside it
-const SHINE_LAYERS = [0.25, 0.17, 0.11, 0.07, 0.0375, 0.018];
-const SHINE_ALPHA = {
-  light: [0.04, 0.12, 0.3, 0.55, 0.8, 1],
-  dark: [0.015, 0.04, 0.1, 0.18, 0.28, 0.36],
+const SHINE_GRADIENT = {
+  light:
+    "linear-gradient(110deg, transparent 36%, rgb(0 0 0 / 0.07) 44%, rgb(255 255 255 / 0.95) 50%, rgb(0 0 0 / 0.07) 56%, transparent 64%)",
+  dark: "linear-gradient(110deg, transparent 36%, rgb(255 255 255 / 0.03) 44%, rgb(255 255 255 / 0.24) 50%, rgb(255 255 255 / 0.03) 56%, transparent 64%)",
 };
-let shineNonce = 0;
-const shineOwner = new WeakMap<HTMLElement, number>();
 
-// cubic-bezier(0.4, 0, 0.2, 1) at time t
-function shineEase(t: number): number {
-  const bez = (s: number, a: number, b: number) =>
-    3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
-  let lo = 0;
-  let hi = 1;
-  for (let i = 0; i < 20; i++) {
-    const mid = (lo + hi) / 2;
-    if (bez(mid, 0.4, 0.2) < t) lo = mid;
-    else hi = mid;
-  }
-  return bez((lo + hi) / 2, 0, 1);
-}
-
-// the band is drawn flat on the bubble "unrolled", then wrapped onto a rounded glass surface: the rounded
-// rim (radius r) unrolls to a quarter circle's arc, so near the edges the band bends and thins as it turns away
 function shineTurn(target: HTMLElement): void {
   const bubble = target.querySelector<HTMLElement>(".aui-user-message-content");
   if (!bubble || prefersReducedMotion()) {
     return;
   }
-  const w = bubble.offsetWidth;
-  const h = bubble.offsetHeight;
-  const r = Math.min(
-    Number.parseFloat(getComputedStyle(bubble).borderTopLeftRadius) || 0,
-    w / 2,
-    h / 2,
+  const shine = {
+    backgroundImage: document.documentElement.classList.contains("dark")
+      ? SHINE_GRADIENT.dark
+      : SHINE_GRADIENT.light,
+    backgroundSize: "250% 100%",
+    backgroundRepeat: "no-repeat",
+  };
+  bubble.animate(
+    [
+      { ...shine, backgroundPosition: "100% 0" },
+      { ...shine, backgroundPosition: "0% 0" },
+    ],
+    { duration: 900, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
   );
-  // each axis unrolls on its own: the full height curves like a cylinder (a flat face plus a thin rim kinks
-  // the band on tall bubbles), and the ends wrap over their radius. Unrolled deeper than a true quarter
-  // circle on pills, so the bend reads at chat-bubble sizes
-  const half = h / 2;
-  const depth = r >= half - 1 ? Math.PI : Math.PI * 0.6;
-  const reachY = half * depth;
-  const arc = r * Math.PI;
-  const ease = (d: number, span: number) =>
-    Math.sin((Math.min(Math.max(d, -span), span) / span) * (Math.PI / 2));
-  const wrap = (x: number, y: number): string => {
-    let sx = x;
-    if (x < r) sx = r - r * ease(r - x, arc);
-    else if (x > w - r) sx = w - r + r * ease(x - (w - r), arc);
-    const sy = half + half * ease(y - half, reachY);
-    return `${sx.toFixed(1)},${sy.toFixed(1)}`;
-  };
-  const top = half - reachY;
-  const bottom = half + reachY;
-  // band sized off a capped width, so a long prompt gets the same streak as a short one
-  const size = Math.min(w, 240);
-  const rows = 14;
-  const band = (centre: number, half: number): string => {
-    const left: string[] = [];
-    const right: string[] = [];
-    for (let i = 0; i <= rows; i++) {
-      const y = top + ((bottom - top) * i) / rows;
-      const x = centre + ((top + bottom) / 2 - y) * SHINE_SLANT;
-      left.push(wrap(x - half, y));
-      right.unshift(wrap(x + half, y));
-    }
-    return [...left, ...right].join(" ");
-  };
-  const reach = SHINE_LAYERS[0] * size + (bottom - top) * SHINE_SLANT;
-  const from = r - arc - reach;
-  const to = w - r + arc + reach;
-  const alphas = document.documentElement.classList.contains("dark")
-    ? SHINE_ALPHA.dark
-    : SHINE_ALPHA.light;
-  let under = 0;
-  const polygons = SHINE_LAYERS.map((share, index) => {
-    const opacity = 1 - (1 - alphas[index]) / (1 - under);
-    under = alphas[index];
-    const frames = Array.from({ length: SHINE_FRAMES + 1 }, (_, f) =>
-      band(from + (to - from) * shineEase(f / SHINE_FRAMES), share * size),
-    );
-    return `<polygon fill="#fff" fill-opacity="${opacity.toFixed(3)}" points="${frames[0]}"><animate attributeName="points" dur="${SHINE_MS}ms" fill="freeze" values="${frames.join(";")}"/></polygon>`;
-  }).join("");
-  // a fresh nonce restarts the image's timeline on a repeat jump; still a background, so no box is added
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" data-n="${++shineNonce}"><filter id="s"><feGaussianBlur stdDeviation="1.6"/></filter><g id="b" filter="url(#s)">${polygons}</g><mask id="m"><use href="#b"/><use href="#b"/></mask><rect x="0.75" y="0.75" width="${w - 1.5}" height="${h - 1.5}" rx="${Math.max(0, r - 0.75)}" fill="none" stroke="#fff" stroke-width="1.5" mask="url(#m)"/></svg>`;
-  const nonce = shineNonce;
-  shineOwner.set(bubble, nonce);
-  bubble.style.backgroundImage = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-  bubble.style.backgroundSize = "100% 100%";
-  bubble.style.backgroundRepeat = "no-repeat";
-  window.setTimeout(() => {
-    if (shineOwner.get(bubble) === nonce) {
-      bubble.style.removeProperty("background-image");
-      bubble.style.removeProperty("background-size");
-      bubble.style.removeProperty("background-repeat");
-    }
-  }, SHINE_MS + 50);
 }
 
 type PreviewPart = { type: string; text?: string };
@@ -475,7 +356,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   const [previewOpen, setPreviewOpen] = useState(false);
   // non-empty from the start, so the first hover edits text nodes instead of inserting them
   const lastReplyRef = useRef(" ");
-  // only the latest turn can still stream, so an open card follows it and the scan stops at its prompt
+  // only the latest turn can stream, so an open card follows it and the scan stops at its prompt
   const previewOpenerId = previewOpen ? preview?.openerId : undefined;
   const liveReply = useAuiState(({ thread }) => {
     if (!previewOpenerId) {
@@ -612,8 +493,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     magnifiedRef.current = [];
   }, []);
   useEffect(() => clearMagnify, [clearMagnify]);
-  // dock-style: each dash's width follows its distance to the pointer every frame,
-  // so fast sweeps stay smooth instead of stepping through the data-dist widths
+  // dock-style: widths follow pointer distance every frame, so fast sweeps skip the data-dist steps
   const magnify = useCallback((rail: HTMLElement) => {
     magnifyFrameRef.current = 0;
     const markers = Array.from(rail.children) as HTMLElement[];
@@ -684,9 +564,19 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   // the dashes move under a still pointer when the rail itself scrolls
   const onRailScroll = useCallback(
     (event: UIEvent<HTMLElement>) => {
+      const rail = event.currentTarget;
       if (magnifiedRef.current.length > 0 && !magnifyFrameRef.current) {
-        const rail = event.currentTarget;
         magnifyFrameRef.current = requestAnimationFrame(() => magnify(rail));
+      }
+      // the rail follows a keyboard jump, so the card stays on its still-focused marker
+      const focused = document.activeElement;
+      if (focused instanceof HTMLButtonElement && rail.contains(focused)) {
+        const box = focused.getBoundingClientRect();
+        setPreview((current) =>
+          current && current.openerId === focused.dataset.turnId
+            ? { ...current, top: box.top + box.height / 2 }
+            : current,
+        );
       }
     },
     [magnify],
@@ -703,7 +593,8 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     // refit only after a resize; scrolling just moves the rail
     let fitPending = true;
     let railRange = 0;
-    let railLead = RAIL_LEAD_MAX;
+    let railFull = 0;
+    let railView = 0;
     const setStyle = (name: string, value: string) => {
       if (rail.style.getPropertyValue(name) !== value) {
         rail.style.setProperty(name, value);
@@ -715,8 +606,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       setStyle("--rail-fade-top", fade(top));
       setStyle("--rail-fade-bottom", fade(railRange - top));
     };
-    // every layout read before any write, and writes skipped when unchanged: one layout per frame at most,
-    // which matters while a chat loads (autoscroll) and during a window resize drag
+    // reads before writes, no-op writes skipped: one layout per frame (autoscroll, resize drag)
     const sync = () => {
       frame = 0;
       const scrollTop = viewport.scrollTop;
@@ -725,12 +615,11 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       let fit: Record<string, string> | null = null;
       if (fitPending && anchor) {
         const box = viewport.getBoundingClientRect();
-        // the rail is centred on the anchor, so it may grow to twice the room on its tighter side; not the
-        // composer: the rail sits beside the message column, and the composer grows with the queue
+        // centred on the anchor, so twice the tighter side's room; not the composer, it grows with the queue
         const centre = anchor.getBoundingClientRect().top;
         const room =
           Math.min(centre - box.top, box.bottom - centre) - RAIL_INSET_PX;
-        // whole device pixels for line, pitch and start, or fractional scaling (125%) renders uneven dashes
+        // snap line, pitch and start to device pixels, or 125% scaling renders uneven dashes
         const dpr = window.devicePixelRatio || 1;
         const dash = rail.querySelector("span");
         const shift = Number.parseFloat(rail.style.marginTop) || 0;
@@ -747,20 +636,18 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
         for (const [name, value] of Object.entries(fit)) {
           setStyle(name, value);
         }
-        // the one extra layout, and only after a resize
-        const full = rail.scrollHeight;
-        const view = rail.clientHeight;
-        railRange = Math.max(0, full - view);
-        // capped so the current turn's dash never runs off the rail on a chat far longer than it shows
-        railLead =
-          full > 2 * view
-            ? Math.min(RAIL_LEAD_MAX, 1 / (1 - (2 * view) / full))
-            : RAIL_LEAD_MAX;
+        // forces a layout, so only after a resize
+        railFull = rail.scrollHeight;
+        railView = rail.clientHeight;
+        railRange = Math.max(0, railFull - railView);
       }
-      // in step with the thread's scrollbar but ahead of it, so the rail reaches its ends early
+      // thread position maps to mid-rail, a touch ahead, so the ends come into view early
       const progress = range > 0 ? scrollTop / range : 0;
-      const ahead = Math.min(Math.max(0.5 + (progress - 0.5) * railLead, 0), 1);
-      const railTop = ahead * railRange;
+      const ahead = 0.5 + (progress - 0.5) * RAIL_LEAD;
+      const railTop = Math.min(
+        Math.max(ahead * railFull - railView / 2, 0),
+        railRange,
+      );
       rail.scrollTop = railTop;
       setFades(railTop);
     };
@@ -774,7 +661,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       schedule();
     };
     const fadeEnds = () => setFades(rail.scrollTop);
-    // keyboard focus scrolls the rail to reveal its dash; keep the ends right, then follow the thread again once focus leaves
+    // focus scrolls the rail to reveal its dash; once focus leaves, follow the thread again
     const onFocusOut = (event: globalThis.FocusEvent) => {
       if (!rail.contains(event.relatedTarget as Node | null)) {
         schedule();
@@ -784,7 +671,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
     viewport.addEventListener("scroll", schedule, { passive: true });
     rail.addEventListener("scroll", fadeEnds, { passive: true });
     rail.addEventListener("focusout", onFocusOut);
-    // the rail eases to a new height on resize, so keep its ends in step
+    // the rail height eases, so observing it keeps the fades in step
     const resize = new ResizeObserver(refit);
     resize.observe(rail);
     resize.observe(viewport);
@@ -803,8 +690,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
       setActiveMarker(null);
     }, PREVIEW_HIDE_DELAY_MS);
   }, [cancelHide, setActiveMarker]);
-  // WebView2 sends no pointerleave when the cursor exits the page straight onto the window frame (say, to
-  // drag an edge), so the card and magnify would stay up; leaving the document or resizing closes them
+  // WebView2 sends no pointerleave on exit onto the window frame, so close on leave or resize
   useEffect(() => {
     if (!previewOpen) {
       return;
@@ -929,14 +815,14 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   if (previewReply) {
     lastReplyRef.current = previewReply;
   }
-  // sticky, and the rail is not a scroller, so wheel scrolling over it reaches the thread
+  // the rail is not a scroller, so wheel scrolling over it reaches the thread
   return (
     <div
       ref={anchorRef}
       {...{ [FIND_SKIP_ATTRIBUTE]: "" }}
       className="aui-turn-navigator-anchor pointer-events-none select-none sticky top-1/2 z-10 h-0 w-full shrink-0"
     >
-      {/* gutter beside the message column; when it is too narrow the resting dashes sit in the thread padding */}
+      {/* gutter beside the message column; if too narrow the dashes sit in the thread padding */}
       <div
         style={{
           width:
@@ -962,8 +848,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
           {markers}
         </nav>
       </div>
-      {/* portaled out of the thread's autoscroll MutationObserver, and made invisible rather than
-          unmounted: adding or removing boxes trips a document-wide :has() restyle */}
+      {/* portaled out of the autoscroll observer; invisible, not unmounted: no :has() restyle */}
       {createPortal(
         <div
           id={previewId}
@@ -974,21 +859,24 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
               ? {
                   top: preview.top,
                   right: `calc(${preview.right}px + 1.5rem)`,
+                  // keeps the card on screen at phone widths or a larger ui text scale
+                  maxWidth: `calc(100vw - ${preview.right}px - 2rem)`,
                 }
               : undefined
           }
           onPointerEnter={cancelHide}
           onPointerLeave={hidePreview}
           className={cn(
-            "aui-turn-preview pointer-events-auto fixed z-50 flex w-84 -translate-y-1/2 flex-col gap-1.5 rounded-2xl border border-sidebar-border bg-sidebar py-3 pr-2.5 pl-4 text-sidebar-foreground text-ui-13 shadow-md",
+            "aui-turn-preview pointer-events-auto fixed z-50 flex w-84 -translate-y-1/2 select-none flex-col gap-1.5 rounded-2xl border border-sidebar-border bg-sidebar py-3 pr-2.5 pl-4 text-sidebar-foreground text-ui-13 shadow-md",
             !previewOpen && "invisible",
           )}
         >
           <div className="flex items-center gap-2">
-            <p className="min-w-0 flex-1 truncate font-medium text-ui-13p5">
-              {preview
-                ? preview.prompt || t("turns.label", { number: preview.turn })
-                : " "}
+            <p className="flex min-w-0 flex-1 items-baseline gap-2 font-medium text-ui-13p5">
+              <span className="shrink-0 text-muted-foreground/80 text-ui-11">
+                {preview ? t("turns.label", { number: preview.turn }) : " "}
+              </span>
+              <span className="min-w-0 truncate">{preview?.prompt ?? " "}</span>
             </p>
             {threadId && !incognito && (
               <button
@@ -1015,7 +903,7 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
               </button>
             )}
           </div>
-          {/* collapsed by class, not `hidden`: toggling display restyles the whole document via :has() */}
+          {/* collapsed by class, not `hidden`: display toggles restyle the document via :has() */}
           <p
             className={cn(
               "line-clamp-3 pr-1.5 text-muted-foreground leading-relaxed",

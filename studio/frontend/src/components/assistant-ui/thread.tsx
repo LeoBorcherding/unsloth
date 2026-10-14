@@ -110,7 +110,6 @@ import {
   BookmarkTurnButton,
   BookmarkTurnMenuItem,
   TurnNavigator,
-  UserTurnLabel,
 } from "@/components/assistant-ui/turn-navigation";
 import {
   IntentAwareScrollProvider,
@@ -1309,7 +1308,12 @@ function handlePromptQueueRunState(
   if (run.paused) {
     return;
   }
-  if (run.waitingForTargetIdle) {
+  // An idle edge before an unsent prompt dispatches belongs to the cancelled response (steering
+  // race with the dispatch timer); index -1 is the normal wait for the current response.
+  if (
+    run.waitingForTargetIdle ||
+    (run.index >= 0 && !getActivePromptQueueItem(run)?.dispatched)
+  ) {
     clearPromptQueueRetryTimer(run);
     run.waitingForTargetIdle = false;
     const activeItem = run.items[run.index];
@@ -2193,8 +2197,7 @@ export const Thread: FC<{
               hideComposer
                 ? "pt-4"
                 : // + the chat-model notice, which is an opaque absolute bar
-                  // directly under the header. 0px whenever it is not showing,
-                  // so every other surface keeps the padding it had.
+                  // directly under the header; 0px when hidden so other surfaces are unchanged
                   "[--thread-header-offset:calc(var(--studio-content-top-inset,0px)+var(--studio-chat-header-height,48px)+var(--studio-chat-notice-height,0px))] pt-[var(--thread-header-offset)]",
             )}
           >
@@ -2208,21 +2211,14 @@ export const Thread: FC<{
 
             <TurnNavigator viewportRef={viewportElRef} />
 
-            {/* Drop-in for ThreadPrimitive.Messages that bounds a long thread's first commit to
-            the tail and mounts the rest over the following frames. Nothing unmounts and the
-            document converges to the tree this rendered before; consumers that cannot wait call
-            completeProgressiveMounts. It takes the propless slot #9042 introduced, for the same
-            reason: React's bail-out needs one shared element per row. See
-            progressive-mount-controller.ts. */}
+            {/* tail first, rest over later frames (progressive-mount-controller.ts); propless so React bails out per row, #9042 */}
             <ProgressiveMessages
               renderMessage={renderThreadMessage}
               resetKey={runtimeThreadId}
               viewportRef={viewportElRef}
             />
 
-            {/* Bottom slack so the last message has room above the sticky
-            scroll-to-bottom button (and floating composer in single mode),
-            instead of butting against the footer. */}
+            {/* bottom slack above the sticky scroll-to-bottom button and single-mode composer */}
             <AuiIf condition={({ thread }) => hideWelcome || !thread.isEmpty}>
               <div
                 ref={spacerRef}
@@ -2697,8 +2693,6 @@ const Composer: FC<{
 
   const supportsTools = useChatRuntimeStore((s) => s.supportsTools);
   const codeToolsEnabled = useChatRuntimeStore((s) => s.codeToolsEnabled);
-  // Effective Code (Full Access implies it), the same gate the request uses to offer read_skill.
-  const codeToolsEffective = useChatRuntimeStore(codeToolsOn);
   const imageToolsEnabled = useChatRuntimeStore((s) => s.imageToolsEnabled);
   const supportsBuiltinImageGeneration = useChatRuntimeStore(
     (s) => s.supportsBuiltinImageGeneration,
@@ -2805,7 +2799,7 @@ const Composer: FC<{
   const setMentionOpen = useCallback((open: boolean) => {
     mentionOpenRef.current = open;
   }, []);
-  const { inputProps, isComposing, isComposingRef } =
+  const { inputProps, isComposing, isComposingRef, imeSessionOpenRef } =
     useImeComposerInputHandlers({
       submitOnEnter: true,
       skipEnterRef: mentionConsumesEnterRef,
@@ -3838,11 +3832,15 @@ const Composer: FC<{
   }, [draftKey, pasteDraftKey]);
   // Call wherever the composer is emptied because its text left as a message.
   const armJustSent = useCallback((...texts: string[]) => {
-    justSentRef.current = armSentTextGuard(texts, draftKeyRef.current);
+    justSentRef.current = armSentTextGuard(
+      texts,
+      draftKeyRef.current,
+      imeSessionOpenRef.current,
+    );
     // Here, not beside send(): handleSubmit returns early on the three queueing
     // paths, which empty the composer too.
     setIsWritingExpanded(false);
-  }, []);
+  }, [imeSessionOpenRef]);
   const clearStoredDraft = useCallback(() => {
     if (draftSaveTimerRef.current !== null) {
       clearTimeout(draftSaveTimerRef.current);
@@ -5535,13 +5533,14 @@ const Composer: FC<{
               {(showWritingToggle || isWritingExpanded) && (
                 <TooltipIconButton
                   type="button"
-                  tooltip={
+                  tooltip={isWritingExpanded ? "Collapse" : "Expand"}
+                  aria-label={
                     isWritingExpanded ? "Collapse composer" : "Expand composer"
                   }
                   aria-expanded={isWritingExpanded}
                   aria-controls={inputId}
                   disabled={disabled}
-                  className="unsloth-composer-expand absolute -right-1 top-0 size-8 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-muted-foreground dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground"
+                  className="unsloth-composer-expand absolute size-8 rounded-md bg-transparent text-muted-foreground hover:bg-transparent hover:text-muted-foreground dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={toggleWritingExpanded}
                 >
@@ -5609,19 +5608,24 @@ const Composer: FC<{
     <PromptQueueContext.Provider value={queueContextValue}>
     <ComposerPrimitive.Unstable_TriggerPopoverRoot>
       <SkillMentionPopover
-        enabled={supportsTools && codeToolsEffective}
+        // mentions remain available without Code because each one offers read_skill.
+        enabled={supportsTools}
+        composerRef={editorRef}
         onConsumesEnterChange={setMentionConsumesEnter}
         onOpenChange={setMentionOpen}
       />
     <ComposerPrimitive.Root
       ref={attachComposer}
-      // Out of find-in-page's reach: the draft itself lives in a textarea the index cannot read, so
-      // all this leaves to find are the pill labels, and a search for "code" or "images" would land
-      // on the toolbar instead of on the conversation.
+      // skip find-in-page because it cannot index the textarea and would match toolbar pills.
       {...{ [FIND_SKIP_ATTRIBUTE]: "" }}
       className="aui-composer-root relative flex w-full flex-col"
       data-writing-expanded={
         isWritingExpanded && !isDictating ? "true" : undefined
+      }
+      data-writing-toggle={
+        (showWritingToggle || isWritingExpanded) && !isDictating
+          ? "true"
+          : undefined
       }
       aria-disabled={disabled}
       onSubmit={handleSubmit}
@@ -5959,6 +5963,7 @@ function useImeComposerInputHandlers({
     },
     isComposing,
     isComposingRef: composingRef,
+    imeSessionOpenRef,
   };
 }
 
@@ -8383,7 +8388,7 @@ function useDeleteMessage() {
         try {
           thread.stopSpeaking();
         } catch {
-          // Playback ended between reading the state and stopping it.
+          // playback ended between reading the state and stopping it
         }
       }
     }
@@ -8411,7 +8416,7 @@ function useDeleteMessage() {
   return { handleDelete, isRunning, hidden: Boolean(researchRunId || ownsResearchMessage) };
 }
 
-// The More menu's Delete, last and in red.
+// the More menu's Delete, last and in red
 const DeleteMessageMenuItem: FC = () => {
   const { handleDelete, isRunning, hidden } = useDeleteMessage();
   if (hidden) {
@@ -8805,7 +8810,7 @@ const UserMessageAudio: FC = () => {
 
 const UserMessage: FC = () => {
   const focusReveal = useActionBarFocusReveal();
-  // Attachments alone (annotations, images) get no empty bubble under them.
+  // attachments alone (annotations, images) get no empty bubble under them
   const hasContent = useAuiState(({ message }) =>
     message.content.some((part) => part.type !== "text" || part.text.trim() !== ""),
   );
@@ -8816,7 +8821,6 @@ const UserMessage: FC = () => {
       tabIndex={0}
       {...focusReveal}
     >
-      <UserTurnLabel />
       <UserMessageAttachments />
       <UserMessageAudio />
 
@@ -8831,8 +8835,7 @@ const UserMessage: FC = () => {
           <BranchPicker className="aui-user-branch-picker ml-[calc(6px*var(--ui-space-scale,1))] shrink-0" />
         </UserMessageFooter>
       </div>
-      {/* The other half of the pair: last is a user message while a reply is
-          still to come, or once one has been deleted. */}
+      {/* last is a user message while a reply is pending or after the reply was deleted */}
       <MessagePrimitive.If last={true}>
         <ForkChatShortcut />
       </MessagePrimitive.If>

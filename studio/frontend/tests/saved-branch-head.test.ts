@@ -99,11 +99,11 @@ function sidebar(deleteResult: () => Promise<string[]>) {
         CHAT_HISTORY_UPDATED_EVENT: "chat-history-updated",
         notifyChatHistoryUpdated: () => {},
       },
-      "../stores/bookmarked-turns-store": {
-        useBookmarkedTurnsStore: { getState: () => ({ forgetThreads: () => {} }) },
-      },
       "../stores/chat-runtime-store": {
         useChatRuntimeStore: { getState: () => ({ setActiveThreadId: () => {} }) },
+      },
+      "../stores/bookmarked-turns-store": {
+        useBookmarkedTurnsStore: { getState: () => ({ forgetThreads: () => {} }) },
       },
       "../utils/chat-history-storage": { deleteStoredChatThreads: deleteResult },
       "../utils/branch-head": { clearBranchHead: (id: string) => cleared.push(id) },
