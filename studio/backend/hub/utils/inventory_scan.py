@@ -1575,6 +1575,22 @@ def snapshot_pipeline_missing_denoiser(snapshot: Optional[Path]) -> bool:
         return False
 
 
+def snapshot_denoiser_has_weights(snapshot: Optional[Path]) -> bool:
+    """Whether a weight file or shard index, whole or torn, sits under transformer/ or unet/. A GGUF's companion prefetch lands only the config there (diffusion.py ``_base_file_downloaded``); a denoiser download that stopped part way leaves an index or a shard, and stays a partial the Hub can download again. Not the manifest's other denoiser dirs: the prefetch does fetch a ``transformer_2/``. Names only, so a dangling shard symlink still counts. Best-effort: a read error reports none."""
+    if snapshot is None:
+        return False
+    try:
+        root = Path(snapshot)
+        return any(
+            entry.name.lower().endswith((*_DENOISER_WEIGHT_SUFFIXES, ".index.json"))
+            for name in _DENOISER_DIRS
+            if (root / name).is_dir()
+            for entry in (root / name).iterdir()
+        )
+    except OSError:
+        return False
+
+
 def repo_has_pipeline_index(repo_info) -> bool:
     """Whether the cached snapshot carries a ROOT model_index.json, i.e. is loadable as a full diffusers pipeline (from_pretrained reads only the repo root). A nested subdir/model_index.json does not count: loading the repo root still fails, so the row must keep its single_file flag. CachedFileInfo.file_name is the basename, so a name match alone would also claim nested copies; scope by file_path when the scan provides it."""
     try:
