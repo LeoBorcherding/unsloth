@@ -28,6 +28,7 @@ from .mistral import FastMistralModel
 from .qwen2 import FastQwen2Model
 from .qwen3 import FastQwen3Model
 from .qwen3_moe import FastQwen3MoeModel
+from .reap import reap_prune as _reap_prune, raise_if_unsaved_reap
 from .cohere import FastCohereModel
 from transformers import AutoConfig
 from transformers import __version__ as transformers_version
@@ -1016,10 +1017,13 @@ def _drop_vllm_engine_kwargs(kwargs):
 
 
 class FastLanguageModel(FastLlamaModel):
+    reap_prune = staticmethod(_reap_prune)
+
     # Text-diffusion models load through FastModel's slow path; these route them there for the PEFT / mode helpers.
     @staticmethod
     @functools.wraps(FastLlamaModel.get_peft_model)
     def get_peft_model(model, *args, **kwargs):
+        raise_if_unsaved_reap(model)
         if getattr(model, "_unsloth_slow_diffusion", False):
             return FastDiffusionModel.get_peft_model(
                 model, **_diffusion_peft_kwargs(model, args, kwargs)
@@ -1910,6 +1914,8 @@ except:
 
 
 class FastModel(FastBaseModel):
+    reap_prune = staticmethod(_reap_prune)
+
     @staticmethod
     def _prepare_for_qat(model, qat_scheme):
         model = _prepare_model_for_qat(model, qat_scheme)
@@ -1917,6 +1923,7 @@ class FastModel(FastBaseModel):
 
     @staticmethod
     def get_peft_model(model, *args, **kwargs):
+        raise_if_unsaved_reap(model)
         # Route text-diffusion models (slow path) to the transformers-only PEFT helper.
         if getattr(model, "_unsloth_slow_diffusion", False):
             return FastDiffusionModel.get_peft_model(
