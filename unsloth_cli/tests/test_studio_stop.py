@@ -25,6 +25,7 @@ def _studio():
 
 # Captured before _install stubs it, for the tests that exercise it.
 _REAL_IS_STUDIO_SERVER = _studio()._pid_is_studio_server
+_REAL_LEGACY_RUNS_STUDIO = _studio()._legacy_pid_runs_studio
 
 
 def _install(
@@ -45,6 +46,7 @@ def _install(
 
     monkeypatch.setattr(studio_mod, "_pid_alive", lambda pid: pid in live)
     monkeypatch.setattr(studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): True)
+    monkeypatch.setattr(studio_mod, "_legacy_pid_runs_studio", lambda pid: True)
 
     def fake_kill(pid, _sig):
         killed.append(pid)
@@ -485,3 +487,84 @@ def test_a_record_whose_pid_is_not_ascii_digits_is_discarded(monkeypatch, tmp_pa
 
     assert result.exit_code == 0, result.output
     assert not (tmp_path / "studio-8901-1.pid").exists()
+
+
+def _fake_psutil(argv, exe = "C:/Windows/System32/notepad.exe"):
+    class _FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def cmdline(self):
+            return argv
+
+        def exe(self):
+            return exe
+
+    return SimpleNamespace(Process = _FakeProcess)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "run.py", "--port", "8901"],
+        ["C:/venv/Scripts/python.exe", "C:/venv/Scripts/unsloth.exe", "studio", "-p", "8888"],
+        ["/venv/bin/python3", "/venv/bin/unsloth", "studio"],
+        ["python", "-m", "unsloth_cli", "studio", "--api-only"],
+    ],
+)
+def test_a_bare_legacy_record_running_studio_is_recognised(monkeypatch, argv):
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil(argv))
+
+    assert _REAL_LEGACY_RUNS_STUDIO(8550) is True
+
+
+def test_a_bare_legacy_record_on_an_unrelated_process_is_not_stopped(monkeypatch, tmp_path):
+    # A reused PID behind studio.pid used to get taskkill /T /F on its whole tree.
+    studio_mod, _live, killed = _install(monkeypatch, tmp_path, alive = {8550})
+    monkeypatch.setattr(studio_mod, "_pid_is_studio_server", _REAL_IS_STUDIO_SERVER)
+    monkeypatch.setattr(studio_mod, "_legacy_pid_runs_studio", _REAL_LEGACY_RUNS_STUDIO)
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil(["notepad.exe", "notes.txt"]))
+    _write_pid(tmp_path, "studio.pid", 8550)
+
+    result = _run_stop(studio_mod)
+
+    assert killed == []
+    assert result.exit_code == 0, result.output
+    assert "Sent shutdown signal" not in result.output
+    assert not (tmp_path / "studio.pid").exists()
+
+
+def test_a_bare_legacy_record_is_not_stopped_without_psutil(monkeypatch, tmp_path):
+    studio_mod, _live, killed = _install(monkeypatch, tmp_path, alive = {8550})
+    monkeypatch.setattr(studio_mod, "_pid_is_studio_server", _REAL_IS_STUDIO_SERVER)
+    monkeypatch.setattr(studio_mod, "_legacy_pid_runs_studio", _REAL_LEGACY_RUNS_STUDIO)
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    _write_pid(tmp_path, "studio.pid", 8550)
+
+    result = _run_stop(studio_mod)
+
+    assert killed == []
+    assert result.exit_code == 1, result.output
+    assert "PID 8550" in result.output
+    assert (tmp_path / "studio.pid").exists()
+
+
+def test_stop_leaves_a_real_unrelated_process_behind_a_bare_record(monkeypatch, tmp_path):
+    import subprocess
+
+    pytest.importorskip("psutil")
+    studio_mod = _studio()
+    monkeypatch.setattr(studio_mod, "STUDIO_HOME", tmp_path)
+    monkeypatch.setattr(studio_mod, "_PID_FILE", tmp_path / "studio.pid")
+    monkeypatch.setattr(studio_mod.time, "sleep", lambda _s: None)
+    signalled = []
+    monkeypatch.setattr(studio_mod, "_signal_stop", lambda pid: signalled.append(pid))
+    victim = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    try:
+        _write_pid(tmp_path, "studio.pid", victim.pid)
+        result = _run_stop(studio_mod)
+    finally:
+        victim.kill()
+        victim.wait()
+
+    assert signalled == [], result.output

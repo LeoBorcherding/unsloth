@@ -3262,6 +3262,26 @@ def _pid_is_studio_server(pid: int, created_times: "Sequence[float | None]" = ()
     return any(abs(actual - c) < 1.0 for c in known)
 
 
+def _legacy_pid_runs_studio(pid: int) -> "bool | None":
+    """Whether the PID behind a bare studio.pid is running Unsloth Studio. That record has no start
+    time, so a reused PID can only be told apart by what it runs. None when psutil can't say."""
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        argv = proc.cmdline()
+        exe = proc.exe()
+    except Exception:
+        return None
+    names = [Path(a).name.lower() for a in argv]
+    stems = {n[:-4] if n.endswith((".exe", ".bat", ".cmd")) else n for n in names}
+    if "run.py" in names or ("studio" in names and stems & {"unsloth", "unsloth_cli"}):
+        return True
+    try:
+        return Path(exe).resolve().is_relative_to(STUDIO_HOME.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _graceful_shutdown_on_sigterm() -> None:
     """Route SIGTERM (docker stop, `unsloth studio stop`) into the wait loop's Ctrl+C path,
     which stops and saves a running training job before anything is killed."""
@@ -3311,7 +3331,19 @@ def stop():
 
     signalled, failed = [], []
     for pid, created_times, paths in entries:
-        if not _pid_alive(pid) or not _pid_is_studio_server(pid, created_times):
+        ours = _pid_alive(pid) and _pid_is_studio_server(pid, created_times)
+        if ours and all(path == _PID_FILE for path in paths):
+            ours = _legacy_pid_runs_studio(pid)
+            if ours is None:
+                # taskkill /T /F would take a stranger's whole tree, so don't guess.
+                failed.append((pid, "unverified"))
+                typer.echo(
+                    f"{_PID_FILE.name} names PID {pid}, which could not be confirmed as an Unsloth "
+                    "server. Not stopping it; stop it by hand if it is one.",
+                    err = True,
+                )
+                continue
+        if not ours:
             for path in paths:
                 _unlink_quietly(path)
             continue
