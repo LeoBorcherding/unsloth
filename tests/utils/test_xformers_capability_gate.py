@@ -168,3 +168,22 @@ def test_probe_syncs_and_fails_on_deferred_async_error(monkeypatch):
 
     monkeypatch.setattr(ad.torch.cuda, "synchronize", deferred_cuda_error)
     assert ad._xformers_runs_on_device() is False
+
+
+@pytest.mark.parametrize(
+    "capability, xformers_version, expect",
+    [
+        ((8, 9), "0.0.32.post2", False),
+        ((9, 0), "0.0.32.post2", False),
+        ((10, 0), "0.0.32.post2", True),
+        ((10, 3), "0.0.32.post2", True),  # B300 / GB300
+        ((11, 0), "0.0.32.post2", True),
+        ((12, 0), "0.0.32.post2", True),
+        ((12, 1), "0.0.32.post2", True),  # DGX Spark GB10
+        ((12, 1), "0.0.33", False),
+        ((10, 3), "0.0.35", False),
+    ],
+)
+def test_fa3_misdispatch_guard_covers_every_sm_above_hopper(capability, xformers_version, expect):
+    from unsloth.models._utils import _xformers_fa3_misdispatches
+    assert _xformers_fa3_misdispatches(capability, xformers_version) is expect
