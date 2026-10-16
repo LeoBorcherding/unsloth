@@ -162,9 +162,14 @@ def _lean_lora(encoder) -> None:
         module.forward = types.MethodType(_lean_lora_forward, module)
 
 
-def _soft_cross_entropy(logits, target, mask):
+def _per_decision_mean(values, num_items = None):
+    # num_items counts the decisions of the whole accumulation window, so each one weighs the same.
+    return values.mean() if num_items is None else values.sum() / num_items
+
+
+def _soft_cross_entropy(logits, target, mask, num_items = None):
     logits = logits.float().masked_fill(~mask, -1e4)
-    return -(target * torch.log_softmax(logits, -1)).sum(-1).mean()
+    return _per_decision_mean(-(target * torch.log_softmax(logits, -1)).sum(-1), num_items)
 
 
 def _decision_loss(
@@ -175,26 +180,31 @@ def _decision_loss(
     label_smoothing = 0.0,
     brier_weight = 0.0,
     ordinal_weight = 0.0,
+    num_items = None,
+    num_ordinal = None,
 ):
     # Cloudflare's Clef recipe: label-smoothed cross entropy, a Brier term for calibration, and
     # partial credit on score questions (expected distance from the gold level).
     if not (label_smoothing or brier_weight or ordinal_weight):
-        return _soft_cross_entropy(logits, target, mask)
+        return _soft_cross_entropy(logits, target, mask, num_items)
     log_p = torch.log_softmax(logits.float().masked_fill(~mask, -1e4), -1)
     smoothed = target
     if label_smoothing:
         uniform = mask.float() / mask.sum(-1, keepdim = True).clamp(min = 1)
         smoothed = (1.0 - label_smoothing) * target + label_smoothing * uniform
-    loss = -(smoothed * log_p).sum(-1).mean()
+    loss = _per_decision_mean(-(smoothed * log_p).sum(-1), num_items)
     p = log_p.exp()
     if brier_weight:
-        loss = loss + brier_weight * ((p - target) ** 2 * mask).sum(-1).mean()
+        loss = loss + brier_weight * _per_decision_mean(
+            ((p - target) ** 2 * mask).sum(-1), num_items
+        )
     if ordinal_weight and ordinal is not None and ordinal.any():
         levels = torch.arange(p.shape[-1], device = p.device, dtype = p.dtype)
         distance = (levels[:, None] - levels[None, :]).abs()
         span = (mask.sum(-1) - 1).clamp(min = 1).to(p.dtype)
         expected = torch.einsum("ri,ij,rj->r", p, distance, target) / span
-        loss = loss + ordinal_weight * (expected * ordinal).sum() / ordinal.sum()
+        scored = ordinal.sum() if num_ordinal is None else num_ordinal
+        loss = loss + ordinal_weight * (expected * ordinal).sum() / scored
     return loss
 
 
@@ -1204,6 +1214,10 @@ class DecisionTrainer(Trainer):
                 kwargs["data_collator"] = DecisionDataCollator(pad_token_id)
         self.head_learning_rate = head_learning_rate
         super().__init__(model = model, args = args, **kwargs)
+        # compute_loss divides by the window's decision count, so Trainer must not divide by the
+        # accumulation steps again.
+        self.model_accepts_loss_kwargs = True
+        self._num_ordinal_in_batch = None
         backward = self.accelerator.backward
 
         def _backward(loss, **backward_kwargs):
@@ -1286,6 +1300,23 @@ class DecisionTrainer(Trainer):
             [len(item["input_ids"]) for item in dataset], self.args.train_batch_size, self.args.seed
         )
 
+    def get_batch_samples(self, epoch_iterator, num_batches, device = None):
+        # Records carry different numbers of decisions, so count them over the accumulation window
+        # (the base Trainer only counts a `labels` key, which decision batches don't have).
+        batch_samples = []
+        for _ in range(num_batches):
+            try:
+                batch_samples.append(next(epoch_iterator))
+            except StopIteration:
+                break
+        if not batch_samples:
+            return batch_samples, None
+        num_items = sum(int(batch["marker_mask"].any(-1).sum()) for batch in batch_samples)
+        self._num_ordinal_in_batch = sum(
+            int(batch["ordinal"].sum()) for batch in batch_samples if "ordinal" in batch
+        )
+        return batch_samples, max(num_items, 1)
+
     def compute_loss(
         self,
         model,
@@ -1307,6 +1338,8 @@ class DecisionTrainer(Trainer):
             self.label_smoothing,
             self.brier_weight,
             self.ordinal_weight,
+            num_items_in_batch,
+            self._num_ordinal_in_batch if num_items_in_batch is not None else None,
         )
         if self._reference_head is not None:
             unwrapped = self.accelerator.unwrap_model(model)
@@ -1314,7 +1347,9 @@ class DecisionTrainer(Trainer):
                 reference, _ = unwrapped(**inputs, head = self._reference_head)
             log_ref = torch.log_softmax(reference.float().masked_fill(~mask, -1e4), -1)
             log_p = torch.log_softmax(logits.float().masked_fill(~mask, -1e4), -1)
-            kl = (log_ref.exp() * (log_ref - log_p) * mask).sum(-1).mean()
+            kl = _per_decision_mean(
+                (log_ref.exp() * (log_ref - log_p) * mask).sum(-1), num_items_in_batch
+            )
             loss = loss + self.kl_weight * kl
         return (loss, {"loss": loss, "logits": logits}) if return_outputs else loss
 
