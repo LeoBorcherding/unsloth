@@ -254,7 +254,10 @@ def run(
         env = env,
         creationflags = _CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
-    return result.returncode, decode(result.stdout + result.stderr)
+    # Decoded apart: a wsl.exe warning on stderr is UTF-16 and would turn the guest's UTF-8 to noise.
+    # It is only wanted to explain a failure, so a success returns the guest's output alone.
+    out = decode(result.stdout)
+    return result.returncode, out if result.returncode == 0 else out + decode(result.stderr)
 
 
 def blocker(output: str) -> str | None:
