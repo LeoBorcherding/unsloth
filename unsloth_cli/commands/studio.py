@@ -2354,11 +2354,8 @@ def _consume_legacy_short_aliases(
 
 
 def _consume_exact_short_flags(args: List[str], flag: str) -> tuple[bool, List[str]]:
-    """Pop an exact boolean short flag, leaving clusters (`-ctv`) for the llama-server tail."""
-    if "--" in args:
-        cut = args.index("--")
-        found, head = _consume_exact_short_flags(args[:cut], flag)
-        return found, head + args[cut:]
+    """Pop an exact boolean short flag, leaving clusters (`-ctv`) for the llama-server tail.
+    Click drops `--` from ctx.args, so a `-v` after it is popped too."""
     out = [tok for tok in args if tok != flag]
     return len(out) != len(args), out
 
