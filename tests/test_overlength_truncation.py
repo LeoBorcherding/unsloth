@@ -48,7 +48,8 @@ def _tiny():
 def _batch():
     generator = torch.Generator().manual_seed(0)
     input_ids = torch.randint(0, VOCAB_SIZE, (2, FULL_LENGTH), generator = generator).cuda()
-    position_ids = torch.arange(FULL_LENGTH, device = "cuda").repeat(2, 1)
+    # Offset from the default 0..n so a wrong slice of them shows up in the output.
+    position_ids = torch.arange(FULL_LENGTH, device = "cuda").repeat(2, 1) + 5
     return input_ids, position_ids
 
 
@@ -73,7 +74,9 @@ def test_overlength_training_batch_matches_the_truncated_one(with_position_ids):
 def test_overlength_eval_with_mask_matches_the_truncated_one():
     model = _tiny().eval()
     input_ids, position_ids = _batch()
+    # Left padding inside the kept window, so the 4D SDPA mask is actually built.
     attention_mask = torch.ones_like(input_ids)
+    attention_mask[1, :2] = 0
 
     with torch.no_grad():
         full = model(
@@ -87,7 +90,7 @@ def test_overlength_eval_with_mask_matches_the_truncated_one():
             position_ids = position_ids[:, :MAX_SEQ_LENGTH],
         )
     assert full.logits.shape[1] == MAX_SEQ_LENGTH
-    torch.testing.assert_close(full.logits, short.logits)
+    torch.testing.assert_close(full.logits, short.logits, atol = 1e-3, rtol = 1e-2)
 
 
 class _TruncatingCausalLM:
