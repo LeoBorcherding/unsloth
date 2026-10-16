@@ -121,3 +121,15 @@ def test_datasets_go_in_the_same_commit(push, monkeypatch, datasets):
     expected = [datasets] if isinstance(datasets, str) else datasets
     assert card.data.datasets == expected
     assert "gguf" in card.data.tags
+
+
+def test_tags_go_in_the_readme(push):
+    tags = ["my-tag", "unsloth"]
+    calls = push(tags = tags)
+    assert "add_tags" not in [name for name, _ in calls]
+    readme = next(kw for name, kw in calls if name == "create_commit")["readme"]
+    card_tags = huggingface_hub.ModelCard(readme).data.tags
+    for tag in ("my-tag", "gguf", "llama.cpp", "llama-cpp", "unsloth", "vision-language-model"):
+        assert tag in card_tags
+    assert len(card_tags) == len(set(card_tags))
+    assert tags == ["my-tag", "unsloth"]
