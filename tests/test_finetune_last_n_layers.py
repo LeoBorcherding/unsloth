@@ -76,3 +76,71 @@ def test_finetune_last_n_layers_signature_present_on_llama_and_vision():
             f"{cls.__name__}.get_peft_model: finetune_last_n_layers default "
             f"must be None to preserve historical behavior"
         )
+
+
+def _tiny_vlm(layers = 4):
+    """Text decoder and vision tower with the same block count, like the tiny test VLMs."""
+    import torch.nn as nn
+
+    def stack():
+        return nn.ModuleList(
+            nn.ModuleDict({"self_attn": nn.ModuleDict({"q_proj": nn.Linear(4, 4)})})
+            for _ in range(layers)
+        )
+
+    class Language(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = stack()
+
+    class Visual(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.blocks = stack()
+
+    class Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.language_model = Language()
+            self.visual = Visual()
+
+    class VLM(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = Inner()
+
+        def get_decoder(self):
+            return self.model.language_model
+
+    return VLM()
+
+
+def _lora_layers(target_modules):
+    from peft import LoraConfig, inject_adapter_in_model
+
+    config = LoraConfig(r = 2, target_modules = target_modules)
+    model = inject_adapter_in_model(config, _tiny_vlm())
+    return sorted(n.rsplit(".lora_A", 1)[0] for n, _ in model.named_modules() if n.endswith("lora_A"))
+
+
+@pytest.mark.parametrize(
+    "target_modules",
+    [r"(?:.*?(?:visual|language).*?(?:self_attn).*?(?:q_proj).*?)", ["q_proj"]],
+)
+def test_last_n_layers_folds_into_target_modules(target_modules):
+    """PEFT rejects layers_to_transform with a regex; folded in, only the text decoder's last layers train."""
+    from unsloth.models.vision import _decoder_layers_path, _restrict_targets_to_layers
+
+    path = _decoder_layers_path(_tiny_vlm(), 4)
+    assert path == "model.language_model.layers"
+    regex = _restrict_targets_to_layers(target_modules, path, [2, 3])
+    assert _lora_layers(regex) == [
+        "model.language_model.layers.2.self_attn.q_proj",
+        "model.language_model.layers.3.self_attn.q_proj",
+    ]
+
+
+def test_decoder_layers_path_needs_a_matching_layer_count():
+    from unsloth.models.vision import _decoder_layers_path
+
+    assert _decoder_layers_path(_tiny_vlm(), 5) is None
