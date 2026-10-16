@@ -264,3 +264,24 @@ def test_a_merge_the_caller_owns_survives_the_same_export(monkeypatch, tmp_path)
     _tight_disk(monkeypatch)
     _run(tmp_path, ["q4_k_m"])
     assert weights.exists()
+
+
+@pytest.mark.parametrize(
+    "methods, converted, quantized",
+    [(["bf16"], "bf16", []), (["q4_k_m"], "bf16", ["q4_k_m"])],
+)
+def test_bf16_stays_bf16_without_cuda_bf16(monkeypatch, tmp_path, methods, converted, quantized):
+    # XPU, MPS and CPU hosts: torch.cuda says no bf16, but the converter runs on the CPU anyway.
+    monkeypatch.setattr(save_mod.torch.cuda, "is_bf16_supported", lambda *a, **k: False)
+    h = _Harness(monkeypatch, tmp_path)
+    model_dir = tmp_path / "model_dir"
+    model_dir.mkdir()
+    save_mod.save_to_gguf(
+        model_name = "testmodel",
+        model_type = "llama",
+        model_dtype = "bfloat16",
+        model_directory = str(model_dir),
+        quantization_method = methods,
+    )
+    assert h.convert_calls[0]["quantization_type"] == converted
+    assert [c["quant_type"] for c in h.quantize_calls] == quantized

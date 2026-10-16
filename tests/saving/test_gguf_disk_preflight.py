@@ -2938,10 +2938,10 @@ class TestTheGgufPreflightIsToldTheModelDtype:
         import torch
         assert S._gguf_source_dtype(self._Model(self._Config(torch.float16))) == "f16"
 
-    def test_hardware_without_bf16_falls_back_like_the_exporter(self, monkeypatch):
+    def test_hardware_without_bf16_keeps_bf16_like_the_exporter(self, monkeypatch):
         import torch
         monkeypatch.setattr(S.torch.cuda, "is_bf16_supported", lambda: False)
-        assert S._gguf_source_dtype(self._Model(self._Config(torch.bfloat16))) == "f16"
+        assert S._gguf_source_dtype(self._Model(self._Config(torch.bfloat16))) == "bf16"
 
     def test_an_unreadable_model_reports_the_exporters_own_fallback(self):
         assert S._gguf_source_dtype(_FakeModel()) == "f16"
@@ -3081,8 +3081,8 @@ class TestThePrewarmedCacheIsChargedToItsOwnFilesystem:
         assert "_active_caches" in inspect.getsource(S._hub_cache_directory)
 
 
-class TestAnUnsupportedBF16IsNormalizedBeforeEstimating:
-    """On a T4 save_to_gguf turns bf16 into f16 first, so the preflight must price the same dtype."""
+class TestBF16IsPricedAsBF16OnEveryHost:
+    """The conversion runs on the CPU, so save_to_gguf keeps bf16 without CUDA bf16 and the preflight prices the same dtype."""
 
     N = 8_190_735_360  # Qwen3-8B logical parameters
     BITS = {"f32": 32.0, "f16": 16.0, "bf16": 16.0, "q4_k_m": 4.9}
@@ -3133,11 +3133,11 @@ class TestAnUnsupportedBF16IsNormalizedBeforeEstimating:
         )
 
     @pytest.mark.parametrize("first_conversion", ["bf16", None])
-    def test_hardware_without_bf16_is_priced_at_f16(self, sized, monkeypatch, first_conversion):
+    def test_hardware_without_bf16_is_priced_at_bf16(self, sized, monkeypatch, first_conversion):
         """None goes through `_choose_first_conversion`, which returns "bf16" too."""
         monkeypatch.setattr(S.torch.cuda, "is_bf16_supported", lambda: False)
         self._run(first_conversion)
-        assert sized == ["f16"]
+        assert sized == ["bf16"]
 
     @pytest.mark.parametrize("first_conversion", ["bf16", None])
     def test_hardware_with_bf16_is_left_alone(self, sized, monkeypatch, first_conversion):
@@ -3145,29 +3145,19 @@ class TestAnUnsupportedBF16IsNormalizedBeforeEstimating:
         self._run(first_conversion)
         assert sized == ["bf16"]
 
-    def test_an_unanswerable_probe_takes_the_wider_reading(self, sized, monkeypatch):
+    def test_the_hardware_probe_is_never_asked(self, sized, monkeypatch):
         def boom():
             raise RuntimeError("no CUDA here")
 
         monkeypatch.setattr(S.torch.cuda, "is_bf16_supported", boom)
         self._run("bf16")
-        assert sized == ["f16"]
+        assert sized == ["bf16"]
 
-    def test_the_undercount_is_a_whole_checkpoint(self):
-        """What the wrong name costs, priced with the transcribed estimator."""
-        wrong = self._estimate(quantization_methods = ["bf16"], first_conversion = "bf16")
-        right = self._estimate(quantization_methods = ["bf16"], first_conversion = "f16")
-        assert (right - wrong) == self.N * 2
-        assert round(wrong / GB, 1) == 30.5
-        assert round(right / GB, 1) == 45.8
-        assert round((right - wrong) / GB, 1) == 15.3
-
-    def test_the_exporter_still_does_the_drop_this_mirrors(self):
+    def test_neither_the_exporter_nor_the_preflight_drops_bf16(self):
         import inspect
 
-        source = inspect.getsource(S.save_to_gguf)
-        assert 'first_conversion == "bf16" and not torch.cuda.is_bf16_supported()' in source
-        assert 'first_conversion = "f16"' in source
+        for fn in (S.save_to_gguf, S._preflight_gguf_disk, S._gguf_source_dtype):
+            assert "is_bf16_supported" not in inspect.getsource(fn)
 
 
 class TestTheCacheIsChargedOnTheConversionFilesystem:
