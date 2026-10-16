@@ -222,6 +222,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsTab, TranslationKey[]> = {
     "settings.apiKeys.title",
     "settings.apiKeys.description",
     "settings.apiKeys.accessTokens",
+    "settings.apiKeys.linkedInstances.title",
     "settings.apiKeys.decisionApi.title",
     "settings.apiKeys.mcp.title",
   ],
