@@ -2807,6 +2807,33 @@ def _text_core_decoder_prefix(model):
     return name
 
 
+def _decoder_layers_path(model, total_layers):
+    """Dotted path of the text decoder's layer list, or None."""
+    prefix = _text_core_decoder_prefix(model)
+    try:
+        decoder = model.get_submodule(prefix) if prefix else model.get_decoder()
+    except Exception:
+        return None
+    if not prefix:
+        prefix = next((n for n, m in model.named_modules() if m is decoder), None)
+    if not isinstance(decoder, torch.nn.Module) or prefix is None:
+        return None
+    for name, child in decoder.named_children():
+        if isinstance(child, torch.nn.ModuleList) and len(child) == total_layers:
+            return f"{prefix}.{name}" if prefix else name
+    return None
+
+
+def _restrict_targets_to_layers(target_modules, layers_path, layer_ids):
+    # PEFT refuses layers_to_transform with a regex, and with a list applies it to every numbered stack (vision blocks too).
+    if isinstance(target_modules, str):
+        regex = target_modules
+    else:
+        regex = r"(?:.*\.)?(?:" + "|".join(re.escape(str(t)) for t in target_modules) + ")"
+    ids = "|".join(str(i) for i in layer_ids)
+    return rf"(?={re.escape(layers_path)}\.(?:{ids})\.)(?:{regex})"
+
+
 def _text_trainable_core(model, text_intent = True):
     """With text_intent, the text child to train when the wrapper's forward needs non-text
     inputs (Nemotron-3-Nano-Omni) or has none (Qwen3-Omni); else a hint, and a forward-less
@@ -4827,7 +4854,24 @@ class FastBaseModel:
                 _total_layers = _get_total_transformer_layers(getattr(model, _core_name, None))
             if _total_layers is not None and _total_layers > 0:
                 n = max(1, min(int(finetune_last_n_layers), _total_layers))
-                layers_to_transform = list(range(_total_layers - n, _total_layers))
+                _last_layers = list(range(_total_layers - n, _total_layers))
+                _layers_path = _decoder_layers_path(model, _total_layers)
+                if _layers_path is not None:
+                    target_modules = _restrict_targets_to_layers(
+                        target_modules, _layers_path, _last_layers
+                    )
+                    if finetune_vision_layers:
+                        print(
+                            f"Unsloth: finetune_last_n_layers = {n} trains only the last {n} "
+                            "text decoder layers; vision layers stay frozen."
+                        )
+                elif isinstance(target_modules, str):
+                    raise ValueError(
+                        "Unsloth: finetune_last_n_layers could not find the text decoder's layers "
+                        "on this model. Pass a target_modules list with layers_to_transform instead."
+                    )
+                else:
+                    layers_to_transform = _last_layers
 
         validate_init_target_parameters(init_lora_weights, target_parameters)
 
