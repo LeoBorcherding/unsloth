@@ -108,6 +108,7 @@ from core.inference.audio_errors import (
 )
 from core.inference.audio_cpp_outputs import NO_STEMS
 from core.inference import context_refusal
+from core.inference import linked_instances
 from core.inference.context_window import (
     estimate_message_tokens as _estimate_message_tokens,
     estimate_messages_tokens as _estimate_messages_tokens,
@@ -30418,6 +30419,12 @@ class _DroppedFrameKeepalive:
         return True
 
 
+async def _forward_linked(request: Request, path: str, linked: tuple, subject: str):
+    return await linked_instances.forward(
+        request, path, linked, subject = subject, via_api_key = _request_used_api_key(request)
+    )
+
+
 @router.post("/chat/completions")
 @account_access.gpu_busy_route
 async def openai_chat_completions(
@@ -30425,8 +30432,12 @@ async def openai_chat_completions(
     request: Request,
     current_subject: str = Depends(get_current_subject),
 ):
-    _admit_tool_access(payload)
     from auth.authentication import request_admitted_without_credential
+
+    # Before the local tool policy, as on /responses and /messages: the linked server applies its own.
+    if linked := await linked_instances.resolve(request, payload.model):
+        return await _forward_linked(request, "chat/completions", linked, current_subject)
+    _admit_tool_access(payload)
 
     if (payload.provider_id or payload.provider_type) and request_admitted_without_credential(
         request
@@ -36828,22 +36839,28 @@ async def loaded_inference_models(current_subject: str = Depends(get_current_sub
 @router.get("/models/", include_in_schema = False)
 @router.get("/models")
 async def openai_list_models(
-    output_modalities: Optional[str] = None, current_subject: str = Depends(get_current_subject)
+    output_modalities: Optional[str] = None,
+    current_subject: str = Depends(get_current_subject),
+    request: Request = None,
 ):
     """
     OpenAI-compatible model listing endpoint (``GET /v1/models``).
 
     Lists every model available on this server -- the loaded model(s) plus
     locally available (downloaded/cached) models -- not only what is resident in
-    memory. Each entry carries a clean public id and a ``loaded`` flag.
+    memory. Each entry carries a clean public id and a ``loaded`` flag. Models on
+    linked Unsloth Studio instances follow as ``@<instance>/<id>``.
     """
     wanted = {m.strip() for m in (output_modalities or "").split(",")}
-    if not wanted & {"all", "decisions"}:
-        return {"object": "list", "data": await _openai_catalog_objects(quant_pins = True)}
-    from routes.systemone import decision_model_objects
-
-    data = [] if wanted == {"decisions"} else await _openai_catalog_objects(quant_pins = True)
-    data += await asyncio.to_thread(decision_model_objects)
+    data: list = []
+    if wanted != {"decisions"}:
+        local, linked = await asyncio.gather(
+            _openai_catalog_objects(quant_pins = True), linked_instances.catalog_objects(request)
+        )
+        data = local + linked
+    if wanted & {"all", "decisions"}:
+        from routes.systemone import decision_model_objects
+        data += await asyncio.to_thread(decision_model_objects)
     return {"object": "list", "data": data}
 
 
@@ -36901,7 +36918,11 @@ def _quant_pin_object(listed: dict, variant: str, resident_quants) -> dict:
 
 
 @router.get("/models/{model_id:path}")
-async def openai_retrieve_model(model_id: str, current_subject: str = Depends(get_current_subject)):
+async def openai_retrieve_model(
+    model_id: str,
+    current_subject: str = Depends(get_current_subject),
+    request: Request = None,
+):
     """
     OpenAI-compatible single-model retrieval endpoint (``GET /v1/models/{id}``).
 
@@ -36911,6 +36932,20 @@ async def openai_retrieve_model(model_id: str, current_subject: str = Depends(ge
     with slashes intact.
     """
     from core.inference.model_ids import model_id_matches
+
+    if linked_instances.split_model(model_id):
+        for model in await linked_instances.catalog_objects(request):
+            if model["id"].lower() == model_id.lower():
+                return model
+        raise HTTPException(
+            status_code = 404,
+            detail = openai_error_body(
+                f"The model '{model_id}' does not exist",
+                status = 404,
+                code = "model_not_found",
+                param = "model",
+            ),
+        )
 
     # Loaded models resolve without a catalog scan (the common case); only build
     # the full catalog -- which may hit the filesystem -- for unloaded ids. Match
@@ -37011,6 +37046,12 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
     Proxies to the running llama-server's ``/v1/completions``. Only available
     when a GGUF model is loaded.
     """
+    try:
+        _linked_model = (await request.json()).get("model")
+    except (ValueError, AttributeError):
+        _linked_model = None
+    if linked := await linked_instances.resolve(request, _linked_model):
+        return await _forward_linked(request, "completions", linked, current_subject)
     # Reject a request with no prompt before any automatic load so an invalid request never
     # swaps or reloads the resident model (as chat/embeddings already validate before
     # switching). Gate on every automatic-load trigger, and on a preview-owned slot the switch
@@ -37781,6 +37822,12 @@ def _embeddings_input_present(body: dict) -> bool:
 async def openai_embeddings(request: Request, current_subject: str = Depends(get_current_subject)):
     """OpenAI-compatible embeddings: the resident embedding GGUF when one is loaded,
     else Studio's configured embedding model."""
+    try:
+        _linked_model = _raw_body_model(await request.json())
+    except (json.JSONDecodeError, ValueError):
+        _linked_model = None
+    if linked := await linked_instances.resolve(request, _linked_model):
+        return await _forward_linked(request, "embeddings", linked, current_subject)
     if model_slots.slots:
         try:
             await _route_to_extra_slot(_raw_body_model(await request.json()))
@@ -40214,6 +40261,8 @@ async def openai_responses(
     internally, and returns a response matching the Responses API schema
     (output array, input_tokens/output_tokens, named SSE events for streaming).
     """
+    if linked := await linked_instances.resolve(request, payload.model):
+        return await _forward_linked(request, "responses", linked, current_subject)
     _admit_tool_access(payload)
     for history_param in ("previous_response_id", "conversation"):
         if getattr(payload, history_param, None) is not None:
@@ -41636,6 +41685,8 @@ async def anthropic_count_tokens(
     tokenizer, and returns ``{"input_tokens": int}`` only. Unlike /messages,
     max_tokens is NOT required here.
     """
+    if linked := await linked_instances.resolve(request, payload.model):
+        return await _forward_linked(request, "messages/count_tokens", linked, current_subject)
     # Reject malformed tools before the switch, like /messages, so an invalid
     # count request can't evict the loaded model.
     _validate_anthropic_client_tools(payload.tools)
@@ -41883,6 +41934,8 @@ async def anthropic_messages(
     responses in Anthropic Messages API format (streaming SSE or non-streaming
     JSON).
     """
+    if linked := await linked_instances.resolve(request, payload.model):
+        return await _forward_linked(request, "messages", linked, current_subject)
     _admit_tool_access(payload)
     await _route_to_extra_slot(_switch_model_for_payload(payload))
     llama_backend = get_llama_cpp_backend()
@@ -48398,6 +48451,8 @@ async def openai_image_generations(
 
     With media auto-switch on, ``model`` names the image model to serve on and is loaded
     when it is not the resident one; with it off ``model`` stays informational."""
+    if linked := await linked_instances.resolve(request, body.model):
+        return await _forward_linked(request, "images/generations", linked, current_subject)
     # Refused before the row is opened, as on /audio/speech: a request rejected before any
     # work is not traffic worth a red error row.
     if body.stream:
