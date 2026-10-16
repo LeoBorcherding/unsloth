@@ -659,7 +659,10 @@ if DEVICE_TYPE == "cuda":
         bnb = None
         bnb_functional = None
     try:
-        cdequantize_blockwise_fp32 = bnb_functional.lib.cdequantize_blockwise_fp32
+        # Without bitsandbytes only libcuda is left to probe: a missing bnb is not a linking
+        # failure, and reading it as one ran ldconfig as root and warned on every 16-bit install.
+        if bnb_functional is not None:
+            cdequantize_blockwise_fp32 = bnb_functional.lib.cdequantize_blockwise_fp32
         libcuda_dirs()
     except:
         if not torch.cuda.is_available():
@@ -685,13 +688,12 @@ if DEVICE_TYPE == "cuda":
                 if len(possible_cudas) == 0:
                     os.system("ldconfig /usr/local/")
                 else:
-                    find_number = re.compile(r"([\d\.]{2,})")
-                    latest_cuda = np.argsort(
-                        [float(find_number.search(x).group(1)) for x in possible_cudas]
-                    )[::-1][0]
-                    latest_cuda = possible_cudas[latest_cuda]
+                    # By version parts: float() refused cuda-12.4.1 and ranked 12.10 below 12.9.
+                    latest_cuda = max(
+                        possible_cudas, key = lambda x: tuple(int(p) for p in re.findall(r"\d+", x))
+                    )
                     os.system(f"ldconfig /usr/local/{latest_cuda}")
-                    del find_number, latest_cuda
+                    del latest_cuda
                 del possible_cudas, find_cuda
 
             if bnb is not None:
@@ -713,7 +715,8 @@ if DEVICE_TYPE == "cuda":
                         pass
                 else:
                     from triton.common.build import libcuda_dirs
-                cdequantize_blockwise_fp32 = bnb_functional.lib.cdequantize_blockwise_fp32
+                if bnb_functional is not None:
+                    cdequantize_blockwise_fp32 = bnb_functional.lib.cdequantize_blockwise_fp32
                 libcuda_dirs()
             except:
                 warnings.warn(
