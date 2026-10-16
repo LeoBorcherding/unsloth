@@ -2,7 +2,12 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { ModelInventoryFormat } from "@/features/hub";
-import type { S3Config } from "@/types/training";
+import type {
+  GrpoRewardSelection,
+  GrpoVariant,
+  S3Config,
+  TrainingObjective,
+} from "@/types/training";
 
 export interface TrainingStartRequest {
   model_name: string;
@@ -48,6 +53,7 @@ export interface TrainingStartRequest {
   max_steps: number | null;
   save_steps: number;
   eval_steps: number;
+  early_stopping_patience?: number;
   weight_decay: number;
   max_grad_norm?: number | null;
   max_grad_value?: number | null;
@@ -69,6 +75,18 @@ export interface TrainingStartRequest {
   use_loftq: boolean;
   use_dora: boolean;
   train_on_completions: boolean;
+  objective: TrainingObjective;
+  rl_beta: number | null;
+  rl_max_prompt_length: number | null;
+  grpo_num_generations: number;
+  grpo_max_completion_length: number | null;
+  grpo_temperature: number;
+  rl_system_prompt: string | null;
+  grpo_enable_thinking: boolean;
+  grpo_variant: GrpoVariant;
+  grpo_mask_truncated_completions: boolean;
+  grpo_epsilon_high: number | null;
+  grpo_rewards: GrpoRewardSelection[];
   finetune_vision_layers: boolean;
   finetune_language_layers: boolean;
   finetune_attention_modules: boolean;
@@ -84,6 +102,31 @@ export interface TrainingStartRequest {
   enable_tensorboard: boolean;
   tensorboard_dir: string | null;
   resume_from_checkpoint?: string | null;
+  /** Omitted unless the user turned drafter training on (requests stay byte-identical otherwise). */
+  drafter?: DrafterTrainingRequest;
+}
+
+export interface DrafterTrainingRequest {
+  enabled: boolean;
+  strategy: "auto" | "mtp" | "eagle3";
+  data_source: "dataset" | "regenerate";
+  max_examples: number;
+  epochs: number;
+  learning_rate: number | null;
+  draft_steps: number;
+}
+
+/** GET /api/train/drafter-capability: which drafter this model can train, and where it runs. */
+export interface DrafterCapability {
+  model_name: string;
+  has_native_mtp: boolean;
+  strategy: "mtp" | "eagle3" | null;
+  supported: boolean;
+  reason: string | null;
+  vllm: boolean;
+  llama_cpp: boolean;
+  /** The probe could not run (timeout, crash): retried, never a refusal. */
+  inconclusive?: boolean;
 }
 
 export interface TrainingStartResponse {

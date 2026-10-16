@@ -352,6 +352,7 @@ from routes import (
     inference_studio_router,
     mcp_servers_router,
     skills_router,
+    rewards_router,
     models_router,
     providers_router,
     openai_codex_auth_router,
@@ -1699,6 +1700,11 @@ class MaxBodyMiddleware:
         await self.app(scope, replay_receive, send)
 
 
+# Added before MaxBodyMiddleware so it runs inside it: the body it reads is already capped.
+from utils.model_aliases import ModelAliasMiddleware  # noqa: E402
+
+app.add_middleware(ModelAliasMiddleware)
+
 app.add_middleware(
     MaxBodyMiddleware,
     max_bytes_getter = default_request_body_limit_bytes,
@@ -1794,6 +1800,11 @@ from utils.remote_access_settings import RemoteAccessStopResponseMiddleware  # n
 
 app.add_middleware(RemoteAccessStopResponseMiddleware)
 
+from auth.x_api_key import XApiKeyMiddleware  # noqa: E402
+
+# Added last so it is outermost: every Authorization reader below sees the rewritten header.
+app.add_middleware(XApiKeyMiddleware)
+
 app.include_router(auth_router, prefix = "/api/auth", tags = ["auth"])
 app.include_router(
     __import__("routes.accounts", fromlist = ["router"]).router,
@@ -1833,6 +1844,7 @@ app.include_router(settings_router, prefix = "/api/settings", tags = ["settings"
 app.include_router(sandbox_capability_router, prefix = "/api/sandbox", tags = ["sandbox"])
 app.include_router(mcp_servers_router, prefix = "/api/mcp/servers", tags = ["mcp"])
 app.include_router(skills_router, prefix = "/api/skills", tags = ["skills"])
+app.include_router(rewards_router, prefix = "/api/rewards", tags = ["rewards"])
 app.include_router(prompts_router, prefix = "/api/prompts", tags = ["prompts"])
 app.include_router(library_router, prefix = "/api/library", tags = ["library"])
 app.include_router(profile_stats_router, prefix = "/api/profile", tags = ["profile"])
@@ -2999,6 +3011,7 @@ def get_hardware_info(
         **video_capability(),
     }
     if include_details:
+        from utils.audio_cpp_update import get_installed_audio_cpp_version
         from utils.llama_cpp_update import get_installed_llama_version
 
         # All backend-visible GPUs (respects CUDA_VISIBLE_DEVICES); get_gpu_summary reports only the primary. Sort by
@@ -3010,6 +3023,7 @@ def get_hardware_info(
             for d in sorted(devices, key = lambda d: d.get("visible_ordinal", 0))
         ]
         body["llama_cpp"] = get_installed_llama_version()
+        body["audio_cpp"] = get_installed_audio_cpp_version()
     return body
 
 

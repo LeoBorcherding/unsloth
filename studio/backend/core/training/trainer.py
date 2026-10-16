@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable, Union
 from datasets import Dataset
 from core.training.eval_dataset import evaluation_enabled
+from core.training.rl import rl_log_metrics, with_reward_isolation
 from utils.datasets.audio_decode import ensure_audio_decoding
 from utils.datasets.cache_safe import load_dataset_cache_safe as load_dataset
 from utils.hf_dataset_options import hf_dataset_split_instruction_names
@@ -85,6 +86,11 @@ from utils.datasets.cells import csv_as_text_kwargs
 from utils.datasets.chat_templates import get_training_chat_template
 from utils.datasets.completion_masking import apply_completion_masking
 from utils.datasets.iterable import is_streaming_dataset as detect_streaming_dataset
+from utils.datasets.pretokenized import (
+    PRETOKENIZED_FORMAT,
+    has_custom_labels,
+    prepare_pretokenized_dataset,
+)
 from utils.datasets.raw_text import prepare_raw_text_dataset, resolve_column_names
 from utils.paths import (
     dataset_files_in_dir,
@@ -546,6 +552,7 @@ class UnslothTrainer:
         self.is_training = False
         self.should_stop = False
         self.save_on_stop = True
+        self._early_stopping = None
         self.load_in_4bit = True
 
         self.is_cpt = False
@@ -1027,6 +1034,10 @@ class UnslothTrainer:
                     grad_norm = grad_norm,
                     num_tokens = num_tokens,
                     eval_loss = logs.get("eval_loss", None),
+                    rl_metrics = with_reward_isolation(
+                        rl_log_metrics(logs),
+                        getattr(trainer_ref.trainer, "_unsloth_reward_isolation", None),
+                    ),
                     is_run_summary = is_run_summary,
                     offload = trainer_ref._offload_snapshot(),
                     status_message = "",
@@ -1044,6 +1055,23 @@ class UnslothTrainer:
                     return control
 
         return _ProgressCallback()
+
+    def _attach_early_stopping(self, training_args):
+        from core.training.early_stopping import attach_early_stopping
+        self._early_stopping = attach_early_stopping(
+            self.trainer,
+            training_args.get("early_stopping_patience"),
+            user_stopped = lambda: self.should_stop,
+        )
+
+    def _early_stopping_summary(self) -> str:
+        es = self._early_stopping
+        if es is None:
+            return ""
+        summary = f"Stopped early at step {es.stopped_at}. " if es.stopped_at is not None else ""
+        if es.restored:
+            summary += f"Kept the weights from step {es.best_step} (eval loss {es.best_loss:.4f}). "
+        return summary
 
     def _calculate_total_steps(self, num_samples, batch_size, grad_accum, num_epochs, max_steps):
         """Calculate total training steps from dataset size and training params."""
@@ -1124,7 +1152,9 @@ class UnslothTrainer:
             logger.info(f"\n{msg}. Model saved to {output_dir}\n")
             self._update_progress(
                 is_training = False,
-                status_message = f"Training stopped. Model saved to {output_dir}",
+                status_message = (
+                    f"Training stopped. {self._early_stopping_summary()}Model saved to {output_dir}"
+                ),
             )
         elif self.should_stop:
             msg = f"{label} training cancelled" if label else "Training cancelled"
@@ -1139,7 +1169,9 @@ class UnslothTrainer:
             self._update_progress(
                 is_training = False,
                 is_completed = True,
-                status_message = f"Training completed! Model saved to {output_dir}",
+                status_message = (
+                    f"Training completed! {self._early_stopping_summary()}Model saved to {output_dir}"
+                ),
             )
 
     def _cleanup_audio_artifacts(self):
@@ -1749,6 +1781,7 @@ class UnslothTrainer:
         use_rslora,
         use_loftq,
         use_dora,
+        random_state = 3407,
     ) -> bool:
         """LoRA for a text-diffusion model through its profile. Studio's default target list names
         autoregressive projections (LLaDA has none of o/gate/down_proj, and the MoE families must keep their
@@ -1797,7 +1830,7 @@ class UnslothTrainer:
             lora_dropout = lora_dropout,
             bias = "none",
             use_gradient_checkpointing = bool(use_gradient_checkpointing),
-            random_state = 3407,
+            random_state = random_state,
         )
         if modules_to_save:
             peft_kwargs["modules_to_save"] = modules_to_save
@@ -1827,6 +1860,7 @@ class UnslothTrainer:
         use_loftq: bool = False,
         use_dora: bool = False,
         modules_to_save: list = None,
+        random_state: int = 3407,
     ) -> bool:
         try:
             if self.model is None:
@@ -1894,6 +1928,7 @@ class UnslothTrainer:
                     use_rslora = use_rslora,
                     use_loftq = use_loftq,
                     use_dora = use_dora,
+                    random_state = random_state,
                 )
 
             # LoRA/QLoRA. "all-linear" is a PEFT keyword targeting every linear layer.
@@ -1955,7 +1990,7 @@ class UnslothTrainer:
                     lora_dropout = lora_dropout,
                     bias = "none",
                     use_gradient_checkpointing = use_gradient_checkpointing,
-                    random_state = 3407,
+                    random_state = random_state,
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     **_loftq_peft_kwargs(use_loftq),
@@ -1987,7 +2022,7 @@ class UnslothTrainer:
                     lora_dropout = lora_dropout,
                     bias = "none",
                     use_gradient_checkpointing = use_gradient_checkpointing,
-                    random_state = 3407,
+                    random_state = random_state,
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     **_loftq_peft_kwargs(use_loftq),
@@ -2007,7 +2042,7 @@ class UnslothTrainer:
                     lora_dropout = lora_dropout,
                     bias = "none",
                     use_gradient_checkpointing = use_gradient_checkpointing,
-                    random_state = 3407,
+                    random_state = random_state,
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     **_loftq_peft_kwargs(use_loftq),
@@ -2032,7 +2067,7 @@ class UnslothTrainer:
                     lora_dropout = lora_dropout,
                     bias = "none",
                     use_gradient_checkpointing = use_gradient_checkpointing,
-                    random_state = 3407,
+                    random_state = random_state,
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     **_loftq_peft_kwargs(use_loftq),
@@ -2053,7 +2088,7 @@ class UnslothTrainer:
                     lora_dropout = lora_dropout,
                     bias = "none",
                     use_gradient_checkpointing = use_gradient_checkpointing,
-                    random_state = 3407,
+                    random_state = random_state,
                     use_rslora = use_rslora,
                     use_dora = use_dora,
                     **_loftq_peft_kwargs(use_loftq),
@@ -3209,6 +3244,9 @@ class UnslothTrainer:
         dataset_slice_start: Optional[int] = None,
         dataset_slice_end: Optional[int] = None,
         is_cpt: bool = False,
+        objective: str = "sft",
+        rl_keep_columns: tuple = (),
+        rl_system_prompt: Optional[str] = None,
         s3_config: dict = None,
         dataset_local_files_only: bool = False,
         dataset_local_path: Optional[str] = None,
@@ -3839,6 +3877,17 @@ class UnslothTrainer:
 
             _raise_if_empty_train_split(dataset, "")
 
+            if objective != "sft":
+                return self._format_rl_dataset(
+                    dataset,
+                    eval_dataset,
+                    objective = objective,
+                    custom_format_mapping = custom_format_mapping,
+                    keep_columns = rl_keep_columns,
+                    system_prompt = rl_system_prompt,
+                    split_eval = eval_enabled and not has_separate_eval_source,
+                )
+
             # ========== FORMAT FIRST ==========
             logger.info(f"Formatting dataset with format_type='{format_type}'...\n")
 
@@ -3920,6 +3969,45 @@ class UnslothTrainer:
         finally:
             if s3_download is not None:
                 s3_download.cleanup()
+
+    def _format_rl_dataset(
+        self,
+        dataset,
+        eval_dataset,
+        *,
+        objective: str,
+        custom_format_mapping: Optional[Dict[str, Any]],
+        keep_columns: tuple,
+        split_eval: bool,
+        system_prompt: Optional[str] = None,
+    ) -> tuple:
+        """Shape rows for DPO/ORPO/GRPO; TRL applies the chat template itself."""
+        from core.training.rl import format_rl_dataset
+
+        num_proc = dataset_map_num_proc(None)
+        formatted, roles = format_rl_dataset(
+            dataset, objective, custom_format_mapping, keep_columns, num_proc, system_prompt
+        )
+        if eval_dataset is not None:
+            eval_dataset, _ = format_rl_dataset(
+                eval_dataset,
+                objective,
+                custom_format_mapping,
+                keep_columns,
+                num_proc,
+                system_prompt,
+            )
+        elif split_eval:
+            split_result = self._resolve_eval_split_from_dataset(formatted)
+            if split_result is not None:
+                formatted, eval_dataset = split_result
+        _raise_if_empty_train_split(formatted, "after formatting")
+        mapped = ", ".join(f"{column} -> {role}" for role, column in roles.items())
+        self._update_progress(
+            status_message = f"Dataset ready ({len(formatted):,} samples, {objective.upper()}: {mapped})"
+        )
+        logger.info(f"{objective.upper()} dataset ready ({len(formatted)} rows; {mapped})\n")
+        return ({"dataset": formatted, "detected_format": objective, "success": True}, eval_dataset)
 
     def _auto_detect_eval_split_from_hf(
         self,
@@ -4427,6 +4515,7 @@ class UnslothTrainer:
                     trainer_kwargs["eval_dataset"] = eval_dataset
                 self.trainer = HFTrainer(**trainer_kwargs)
                 self.trainer.add_callback(self._create_progress_callback())
+                self._attach_early_stopping(training_args)
                 # Unsloth publishes progress itself, so HF's stdout callbacks are pure duplication in a log that has
                 # no terminal; --verbose keeps them.
                 _drop_hf_stdout_callbacks(self.trainer)
@@ -4473,6 +4562,7 @@ class UnslothTrainer:
                     trainer_kwargs["eval_dataset"] = eval_dataset
                 self.trainer = HFTrainer(**trainer_kwargs)
                 self.trainer.add_callback(self._create_progress_callback())
+                self._attach_early_stopping(training_args)
                 _drop_hf_stdout_callbacks(self.trainer)
 
                 batch_size = training_args.get("batch_size", 2)
@@ -4525,6 +4615,7 @@ class UnslothTrainer:
 
                 self.trainer = Seq2SeqTrainer(**trainer_kwargs)
                 self.trainer.add_callback(self._create_progress_callback())
+                self._attach_early_stopping(training_args)
                 _drop_hf_stdout_callbacks(self.trainer)
 
                 batch_size = training_args.get("batch_size", 2)
@@ -4563,6 +4654,9 @@ class UnslothTrainer:
                 str(dataset.get("final_format", "")).lower() if isinstance(dataset, dict) else ""
             )
             raw_text_mode = dataset_final_format == "raw_text"
+            pretokenized_mode = dataset_final_format == PRETOKENIZED_FORMAT
+            # Without a labels column, "Train on responses only" can still mask prompts from input_ids.
+            user_labels = pretokenized_mode and has_custom_labels(dataset["dataset"])
             self.tokenizer = get_training_chat_template(
                 self.tokenizer, self.model_name, dataset_final_format
             )
@@ -4849,26 +4943,66 @@ class UnslothTrainer:
                 # Packed rows share one bidirectional attention window, so documents would see each other.
                 config_args["packing"] = False
                 logger.info("Text-diffusion model: sequence packing turned off\n")
+            if pretokenized_mode:
+                # Packing on TRL < 1.7 keeps only input_ids, silently replacing the user's labels.
+                if config_args.get("packing"):
+                    logger.info("Pre-tokenized dataset: sequence packing turned off\n")
+                config_args["packing"] = False
+                try:
+                    vocab_size = int(self.model.get_input_embeddings().num_embeddings)
+                except Exception:
+                    vocab_size = None
+                max_seq = training_args.get("max_seq_length", 2048)
+                dataset["dataset"] = prepare_pretokenized_dataset(
+                    dataset["dataset"], max_seq_length = max_seq, vocab_size = vocab_size
+                )
+                if eval_dataset is not None:
+                    eval_dataset = prepare_pretokenized_dataset(
+                        eval_dataset, max_seq_length = max_seq, vocab_size = vocab_size
+                    )
 
             # Plain-text single-pass runs tokenize in the DataLoader workers instead of a blocking .map(); everything
             # else stays eager.
             self._online_prewarm_batches = 0
-            online_decision = self._configure_online_tokenization(
-                config_args = config_args,
-                dataset = dataset,
-                eval_dataset = eval_dataset,
-                training_args = training_args,
-                data_collator = data_collator,
-                raw_text_mode = raw_text_mode,
-                is_deepseek_ocr = is_deepseek_ocr,
-            )
-            if online_decision.enabled:
-                eval_dataset = self._online_eval_dataset
+            objective = training_args.get("objective", "sft")
+            self.training_objective = objective
+            if objective == "sft":
+                online_decision = self._configure_online_tokenization(
+                    config_args = config_args,
+                    dataset = dataset,
+                    eval_dataset = eval_dataset,
+                    training_args = training_args,
+                    data_collator = data_collator,
+                    raw_text_mode = raw_text_mode,
+                    is_deepseek_ocr = is_deepseek_ocr,
+                )
+                if online_decision.enabled:
+                    eval_dataset = self._online_eval_dataset
 
             logger.info(f"The configuration is: {config_args}")
 
             logger.info("Training configuration prepared\n")
-            if self.is_audio_vlm and not raw_text_mode:
+            if objective != "sft":
+                from core.training.rl import build_rl_trainer
+                from transformers import ProcessorMixin
+
+                rl_tokenizer = self.tokenizer
+                if isinstance(rl_tokenizer, ProcessorMixin) and hasattr(rl_tokenizer, "tokenizer"):
+                    rl_tokenizer = rl_tokenizer.tokenizer
+                logger.info(f"Configuring {objective.upper()} trainer\n")
+                self.trainer = build_rl_trainer(
+                    objective,
+                    model = self.model,
+                    tokenizer = rl_tokenizer,
+                    train_dataset = dataset["dataset"] if isinstance(dataset, dict) else dataset,
+                    eval_dataset = eval_dataset,
+                    config_args = config_args,
+                    settings = training_args.get("rl_settings") or {},
+                    reward_specs = training_args.get("reward_specs") or [],
+                )
+                if rl_tokenizer is not self.tokenizer:
+                    self.trainer.processing_class = self.tokenizer
+            elif self.is_audio_vlm and not raw_text_mode:
                 # Image VLM: dict wrapper from format_and_template_dataset (raw-text uses the text path). Audio VLM
                 # (e.g. Gemma 3N + audio): raw Dataset from _format_audio_vlm_dataset, and the notebook uses
                 # processing_class=processor.tokenizer; raw-text runs use the text path.
@@ -5007,7 +5141,7 @@ class UnslothTrainer:
             is_cpt = training_args.get("is_cpt", False)
             train_on_responses_enabled = (
                 False
-                if (is_cpt or raw_text_mode)
+                if (is_cpt or raw_text_mode or user_labels or objective != "sft")
                 else training_args.get("train_on_completions", False)
             )
 
@@ -5016,6 +5150,10 @@ class UnslothTrainer:
             elif raw_text_mode:
                 logger.info(
                     "Raw-text mode: skipping train_on_responses_only — training on all tokens\n"
+                )
+            elif user_labels:
+                logger.info(
+                    "Pre-tokenized dataset: its labels define the loss, no response masking\n"
                 )
 
             # Markers auto-detected from the chat template first, with the manual table as fallback; gpt-oss stays on
@@ -5105,6 +5243,7 @@ class UnslothTrainer:
                     logger.info("Training on full sequences (including prompts)\n")
 
             self.trainer.add_callback(self._create_progress_callback())
+            self._attach_early_stopping(training_args)
             # Unsloth publishes progress itself, so HF's stdout callbacks are pure duplication in a log that has no
             # terminal; --verbose keeps them.
             _drop_hf_stdout_callbacks(self.trainer)
@@ -5133,17 +5272,25 @@ class UnslothTrainer:
                 if num_samples is None:
                     num_samples = len(train_dataset_obj)
                 batch_size = training_args.get("batch_size", 2)
+                grad_accum = training_args.get("gradient_accumulation_steps", 4)
+                if objective == "grpo":
+                    # Unsloth may resize the batch to fit num_generations, and each prompt becomes
+                    # num_generations rows, so count from the trainer's own args.
+                    rl_args = self.trainer.args
+                    num_samples *= int(getattr(rl_args, "num_generations", 1) or 1)
+                    batch_size = rl_args.per_device_train_batch_size
+                    grad_accum = rl_args.gradient_accumulation_steps
                 total_steps = self._calculate_total_steps(
                     num_samples,
                     batch_size,
-                    training_args.get("gradient_accumulation_steps", 4),
+                    grad_accum,
                     training_args.get("num_epochs", 3),
                     max_steps,
                 )
 
             self._update_progress(total_steps = total_steps)
             # Fail fast on an invalid first batch (empty/float input_ids) vs a step-1 crash.
-            preflight_error = self._preflight_first_batch()
+            preflight_error = self._preflight_first_batch() if objective == "sft" else None
             if preflight_error:
                 logger.error(preflight_error)
                 self._update_progress(error = preflight_error, is_training = False)
@@ -5203,6 +5350,10 @@ class UnslothTrainer:
 
             config["unsloth_training_method"] = method
             config["unsloth_load_in_4bit"] = trained_in_4bit
+            # Separate key: readers infer 4-bit loading from unsloth_training_method.
+            objective = getattr(self, "training_objective", "sft")
+            if objective != "sft":
+                config["unsloth_training_objective"] = objective.upper()
             logger.info(f"Patching adapter_config.json with unsloth_training_method='{method}'")
 
             with open(config_path, "w", encoding = "utf-8") as f:

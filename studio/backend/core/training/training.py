@@ -261,6 +261,8 @@ def _build_training_worker_config(values: dict[str, Any]) -> dict[str, Any]:
         "train_split": values.get("train_split", "train"),
         "eval_split": values.get("eval_split"),
         "eval_steps": values.get("eval_steps", 0.00),
+        "early_stopping_patience": values.get("early_stopping_patience", 0),
+        "drafter": values.get("drafter"),
         "dataset_streaming": values.get("dataset_streaming", False),
         "dataset_slice_start": values.get("dataset_slice_start"),
         "dataset_slice_end": values.get("dataset_slice_end"),
@@ -311,6 +313,9 @@ def _build_training_worker_config(values: dict[str, Any]) -> dict[str, Any]:
         "use_loftq": values.get("use_loftq", False),
         "use_dora": values.get("use_dora", False),
         "train_on_completions": values.get("train_on_completions", False),
+        "objective": values.get("objective", "sft"),
+        "rl_settings": dict(values.get("rl_settings") or {}),
+        "reward_specs": list(values.get("reward_specs") or []),
         "finetune_vision_layers": values.get("finetune_vision_layers", True),
         "finetune_language_layers": values.get("finetune_language_layers", True),
         "finetune_attention_modules": values.get("finetune_attention_modules", True),
@@ -450,6 +455,8 @@ def _apply_model_cache_pin(config: dict[str, Any], warnings: list[str]) -> None:
         config["actual_model_repo_id"] = None
         config["model_snapshot_path"] = None
         config["model_revision"] = None
+        # Nothing is pinned, so an offline start's pin has nothing left to validate.
+        config["require_validated_model_snapshot"] = False
         return
     requested_pin = config.get("model_snapshot_path")
     require_validated_snapshot = bool(config.get("require_validated_model_snapshot"))
@@ -708,6 +715,11 @@ class TrainingProgress:
     # The end-of-run record has no step loss, so the progress filter would drop it, and with it the only
     # elapsed time that includes the final evaluation, checkpoint save and best-model reload.
     is_run_summary: bool = False
+    # Reward / KL / preference numbers from DPO, ORPO and GRPO logs, keyed as TRL logs them.
+    rl_metrics: Optional[dict] = None
+    # Drafter phase after the fine-tune: {strategy, step, total_steps, loss, top1, state}. Kept apart
+    # from the SFT fields so its step counter never lands in the SFT loss history.
+    drafter: Optional[dict] = None
 
 
 # Marks an omitted mode, which keeps the loaded one; a literal default would overwrite it.
@@ -842,6 +854,7 @@ class _MLXTrainerAdapter:
         use_rslora: bool = False,
         use_loftq: bool = False,
         use_dora: bool = False,
+        random_state: int = 3407,
     ) -> bool:
         if use_gradient_checkpointing is _UNSET:
             # This entry overrides load_model's, so default to the mode recorded there.
@@ -1224,6 +1237,7 @@ class TrainingBackend:
         self.grad_norm_step_history: list = []
         self.eval_loss_history: list = []
         self.eval_step_history: list = []
+        self.rl_metric_history: list[dict] = []
         self.eval_enabled: bool = False
         self.current_theme: str = "light"
 
@@ -1266,6 +1280,7 @@ class TrainingBackend:
             "grad_norm_step_history",
             "eval_loss_history",
             "eval_step_history",
+            "rl_metric_history",
         ):
             getattr(self, name).clear()
         self.current_job_id = self.current_start_request_id = None
@@ -1969,6 +1984,7 @@ class TrainingBackend:
             self.grad_norm_step_history.clear()
             self.eval_loss_history.clear()
             self.eval_step_history.clear()
+            self.rl_metric_history.clear()
             self.eval_enabled = False
             self._output_dir = config.get("output_dir") if resume_source_run_id else None
             self._progress.output_dir = self._output_dir
@@ -3194,6 +3210,17 @@ class TrainingBackend:
                 self._progress.grad_norm = event.get("grad_norm", self._progress.grad_norm)
                 self._progress.num_tokens = event.get("num_tokens", self._progress.num_tokens)
                 self._progress.eval_loss = event.get("eval_loss")
+                rl_metrics = event.get("rl_metrics")
+                self._progress.rl_metrics = rl_metrics
+                _rl_step = event.get("step", 0)
+                if (
+                    rl_metrics
+                    and _rl_step > 0
+                    and (
+                        not self.rl_metric_history or _rl_step > self.rl_metric_history[-1]["step"]
+                    )
+                ):
+                    self.rl_metric_history.append({"step": _rl_step, **rl_metrics})
                 _peak = event.get("peak_memory_gb")
                 if _peak is not None:
                     try:
@@ -3256,6 +3283,7 @@ class TrainingBackend:
                         "epoch": event.get("epoch"),
                         "num_tokens": event.get("num_tokens"),
                         "elapsed_seconds": event.get("elapsed_seconds"),
+                        "rl": event.get("rl_metrics") if step > 0 else None,
                     }
                 )
 
@@ -3298,6 +3326,14 @@ class TrainingBackend:
 
             elif etype == "status":
                 self._progress.status_message = event.get("message", "")
+                self._progress.is_training = True
+
+            elif etype == "drafter_progress":
+                info = {
+                    k: event.get(k)
+                    for k in ("strategy", "step", "total_steps", "loss", "top1", "state")
+                }
+                self._progress.drafter = info
                 self._progress.is_training = True
 
             elif etype == "warning":

@@ -148,6 +148,33 @@ export const CPT_LORA_HYPERPARAMS = {
   loraVariant: "rslora",
 } as const;
 
+// The answer format every Unsloth GRPO notebook puts in the system prompt; the default rewards grade it.
+export const GRPO_DEFAULT_SYSTEM_PROMPT =
+  "Respond in the following format:\n<reasoning>\n...\n</reasoning>\n<answer>\n...\n</answer>";
+
+// Kept out of DEFAULT_HYPERPARAMS so the advanced-settings summary does not count them.
+export const DEFAULT_RL_SETTINGS = {
+  trainingObjective: "sft" as import("@/types/training").TrainingObjective,
+  rlBeta: null as number | null,
+  rlMaxPromptLength: null as number | null,
+  rlRoleMapping: {} as Record<string, string>,
+  grpoNumGenerations: 4,
+  grpoMaxCompletionLength: null as number | null,
+  grpoTemperature: 1.0,
+  grpoSystemPrompt: GRPO_DEFAULT_SYSTEM_PROMPT,
+  grpoEnableThinking: false,
+  grpoVariant: "dapo" as import("@/types/training").GrpoVariant,
+  grpoMaskTruncatedCompletions: false,
+  grpoEpsilonHigh: null as number | null,
+  grpoRewards: [
+    { name: "strict-xml-format", weight: 1 },
+    { name: "exact-answer", weight: 1 },
+  ] as import("@/types/training").GrpoRewardSelection[],
+};
+
+// Learning rates the TRL notebooks use for each objective; SFT keeps the method default.
+export const RL_LEARNING_RATES = { dpo: 5e-6, orpo: 8e-6, grpo: 5e-6 } as const;
+
 export const DEFAULT_HYPERPARAMS = {
   epochs: 3,
   contextLength: 2048,
@@ -168,6 +195,14 @@ export const DEFAULT_HYPERPARAMS = {
   maxSteps: 60,
   saveSteps: 0,
   evalSteps: 0.0,
+  earlyStoppingPatience: 0,
+  drafterEnabled: false,
+  drafterStrategy: "auto" as const,
+  drafterDataSource: "dataset" as const,
+  drafterMaxExamples: 2000,
+  drafterEpochs: 1,
+  drafterLearningRate: null as number | null,
+  drafterDraftSteps: 3,
   packing: false,
   trainOnCompletions: false,
   gradientCheckpointing: "unsloth" as const,
@@ -231,10 +266,29 @@ export const PRIORITY_TRAINING_MODELS: readonly string[] = [
   "unsloth/Llama-3.2-3B-Instruct",
 ];
 
+const LAYA_TRAINING_MODEL = "convaiinnovations/laya";
+const CLEF_OMNI_MLX_TRAINING_MODEL = "mlx-community/clef-omni-8bit";
+
+/** The pinned models for a device: Clef Omni trains only through MLX, so only a Mac lists it. */
+export function priorityTrainingModels(
+  deviceType?: string | null,
+): readonly string[] {
+  return deviceType === "mac"
+    ? PRIORITY_TRAINING_MODELS.flatMap((id) =>
+        id === LAYA_TRAINING_MODEL ? [id, CLEF_OMNI_MLX_TRAINING_MODEL] : [id],
+      )
+    : PRIORITY_TRAINING_MODELS;
+}
+
 /** Pin priority models to the top of a list of model IDs, preserving their defined order. */
-export function applyPriorityOrdering(ids: string[]): string[] {
+export function applyPriorityOrdering(
+  ids: string[],
+  deviceType?: string | null,
+): string[] {
   const idSet = new Set(ids);
-  const pinned = PRIORITY_TRAINING_MODELS.filter((id) => idSet.has(id));
+  const pinned = priorityTrainingModels(deviceType).filter((id) =>
+    idSet.has(id),
+  );
   const pinnedSet = new Set(pinned);
   const rest = ids.filter((id) => !pinnedSet.has(id));
   return [...pinned, ...rest];

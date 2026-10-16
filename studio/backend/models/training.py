@@ -113,8 +113,36 @@ def _resolve_inventory_handle(value: str) -> str:
     return resolve_inventory_handle(value)
 
 
+class RewardSelection(BaseModel):
+    """One library reward enabled for a GRPO run, with its weight in the summed reward."""
+
+    model_config = ConfigDict(extra = "forbid")
+
+    name: str = Field(..., min_length = 1, max_length = 64)
+    weight: float = Field(1.0, ge = -10, le = 10, allow_inf_nan = False)
+
+
 # The strings trainer.normalize_gradient_checkpointing turns into False.
 _CHECKPOINTING_OFF = ("false", "0", "no", "none", "off")
+
+
+class DrafterTrainingConfig(BaseModel):
+    """Optional speculative-decoding drafter trained after the fine-tune (omitted or disabled = off)."""
+
+    enabled: bool = False
+    strategy: Literal["auto", "mtp", "eagle3"] = "auto"
+    data_source: Literal["dataset", "regenerate"] = "dataset"
+    max_examples: int = Field(2000, ge = 16, le = 100000)
+    epochs: float = Field(1.0, ge = 0.1, le = 20)
+    learning_rate: Optional[float] = Field(None, gt = 0, le = 1.0)
+    draft_steps: int = Field(3, ge = 1, le = 8)
+
+    @field_validator("max_examples", "draft_steps", "epochs", mode = "before")
+    @classmethod
+    def _reject_booleans(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("expected a number, not a boolean")
+        return value
 
 
 class TrainingStartRequest(BaseModel):
@@ -205,6 +233,16 @@ class TrainingStartRequest(BaseModel):
         description = "Whether to load the Hugging Face dataset in streaming mode",
     )
     eval_steps: float = Field(0.00, description = "Fraction of total steps between evals (0-1)")
+    early_stopping_patience: int = Field(
+        0,
+        ge = 0,
+        le = 1000,
+        description = "Stop after this many evaluations without a lower eval loss and keep the best weights. 0 = off",
+    )
+    drafter: Optional[DrafterTrainingConfig] = Field(
+        None,
+        description = "Train a speculative-decoding drafter (MTP head or EAGLE-3) after the fine-tune",
+    )
     dataset_slice_start: Optional[int] = Field(
         None,
         ge = 0,
@@ -230,6 +268,13 @@ class TrainingStartRequest(BaseModel):
     @classmethod
     def _normalize_project_name(cls, value: Optional[str]) -> Optional[str]:
         return normalize_project_name(value)
+
+    @field_validator("early_stopping_patience", mode = "before")
+    @classmethod
+    def _reject_boolean_patience(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("early_stopping_patience must be a number, not a boolean")
+        return value
 
     @field_validator("eval_steps", mode = "before")
     @classmethod
@@ -603,6 +648,59 @@ class TrainingStartRequest(BaseModel):
     use_dora: bool = Field(False, description = "Use DoRA")
     train_on_completions: bool = Field(False, description = "Train on completions only")
 
+    objective: Literal["sft", "dpo", "orpo", "grpo"] = Field(
+        "sft",
+        description = "Training objective: supervised fine-tuning, or DPO / ORPO / GRPO.",
+    )
+    rl_beta: Optional[float] = Field(
+        None,
+        ge = 0,
+        le = 10,
+        allow_inf_nan = False,
+        description = "DPO/ORPO beta, or the GRPO KL coefficient. Null uses the objective's default.",
+    )
+    rl_max_prompt_length: Optional[int] = Field(
+        None,
+        ge = 16,
+        description = "Prompt token budget for DPO/ORPO/GRPO. Null derives it from max_seq_length.",
+    )
+    grpo_num_generations: int = Field(4, ge = 2, le = 16, description = "Completions sampled per prompt")
+    grpo_max_completion_length: Optional[int] = Field(
+        None, ge = 16, description = "Completion token budget. Null uses what the prompt leaves."
+    )
+    grpo_temperature: float = Field(1.0, gt = 0, le = 2.0, allow_inf_nan = False)
+    grpo_variant: Literal["dapo", "dr_grpo", "bnpo", "grpo", "gspo"] = Field(
+        "dapo",
+        description = "GRPO loss variant; dapo is the TRL and Unsloth default, gspo uses sequence-level ratios",
+    )
+    rl_system_prompt: Optional[str] = Field(
+        None,
+        max_length = 8000,
+        description = "System prompt for rows without one (GRPO notebooks set the answer format here)",
+    )
+    grpo_enable_thinking: Optional[bool] = Field(
+        False,
+        description = "For chat templates with a thinking switch (Qwen3): open a thinking block or not. Null keeps the template default.",
+    )
+    grpo_mask_truncated_completions: bool = Field(
+        False, description = "Leave completions cut off at the length limit out of the loss"
+    )
+    grpo_epsilon_high: Optional[float] = Field(
+        None,
+        gt = 0,
+        le = 1,
+        allow_inf_nan = False,
+        description = "Upper clip bound (DAPO clip-higher). Null uses epsilon.",
+    )
+    grpo_python_reward_isolation: Literal["required", "auto"] = Field(
+        "required",
+        description = "Python rewards: 'required' refuses to start without the OS sandbox; 'auto' "
+        "falls back to software safeguards, which do not isolate files, network or processes.",
+    )
+    grpo_rewards: List[RewardSelection] = Field(
+        default_factory = list, max_length = 16, description = "Library rewards for GRPO"
+    )
+
     finetune_vision_layers: bool = Field(False, description = "Finetune vision layers")
     finetune_language_layers: bool = Field(True, description = "Finetune language layers")
     finetune_attention_modules: bool = Field(True, description = "Finetune attention modules")
@@ -678,6 +776,27 @@ class TrainingStartRequest(BaseModel):
         return self
 
     @model_validator(mode = "after")
+    def _validate_objective(self) -> "TrainingStartRequest":
+        objective = getattr(self, "objective", "sft")
+        if objective == "sft":
+            return self
+        if getattr(self, "training_type", None) == "Continued Pretraining":
+            raise ValueError(f"{objective.upper()} cannot be combined with Continued Pretraining.")
+        if self.is_decision:
+            raise ValueError(f"{objective.upper()} cannot train a decision model.")
+        if self.is_dataset_image or self.is_dataset_audio or self.is_embedding:
+            raise ValueError(f"{objective.upper()} supports text datasets only for now.")
+        if self.dataset_streaming:
+            raise ValueError(f"{objective.upper()} does not support dataset streaming yet.")
+        if objective == "grpo" and not self.grpo_rewards:
+            raise ValueError("GRPO needs at least one reward.")
+        if objective == "grpo" and len({r.name for r in self.grpo_rewards}) != len(
+            self.grpo_rewards
+        ):
+            raise ValueError("Each GRPO reward can only be selected once.")
+        return self
+
+    @model_validator(mode = "after")
     def _check_steps_or_epochs(self) -> "TrainingStartRequest":
         # Each accepts 0 as "use the other"; both 0 means nothing to train.
         if (self.max_steps is None or self.max_steps == 0) and self.num_epochs == 0:
@@ -725,6 +844,17 @@ class TrainingStartRequest(BaseModel):
             )
         return self
 
+    @model_validator(mode = "after")
+    def _validate_drafter(self) -> "TrainingStartRequest":
+        drafter = getattr(self, "drafter", None)
+        if drafter is None or not drafter.enabled:
+            return self
+        if getattr(self, "is_embedding", False) or getattr(self, "is_decision", False):
+            raise ValueError("drafter training is only available for text generation models.")
+        if getattr(self, "training_type", None) == "Continued Pretraining":
+            raise ValueError("drafter training is not available for continued pretraining.")
+        return self
+
 
 class TrainingJobResponse(BaseModel):
     """Immediate response when training is initiated"""
@@ -734,6 +864,32 @@ class TrainingJobResponse(BaseModel):
     message: str = Field(..., description = "Human-readable status message")
     error: Optional[str] = Field(None, description = "Error details if status is 'error'")
     error_code: Optional[str] = Field(None, description = "Stable error code if status is 'error'")
+
+
+class TokenPreviewRequest(BaseModel):
+    """How a training run would tokenize and mask a few dataset rows, or ``text`` when given. Only
+    the model's tokenizer is read, never its weights."""
+
+    model_name: str = Field(..., min_length = 1)
+    model_type: Optional[str] = None
+    load_in_4bit: bool = True
+    dataset_name: Optional[str] = None
+    subset: Optional[str] = None
+    train_split: Optional[str] = None
+    dataset_local_path: Optional[str] = None
+    dataset_known_cached: bool = False
+    format_type: str = "auto"
+    custom_format_mapping: Optional[Dict[str, Any]] = None
+    train_on_completions: bool = False
+    is_cpt: bool = False
+    max_seq_length: int = Field(2048, ge = 1, le = 1_048_576)
+    num_samples: int = Field(3, ge = 1, le = 8)
+    seed: int = 0
+    text: Optional[str] = Field(None, max_length = 200_000)
+    # The dataset's format from an earlier preview, so typed text gets the template and markers it would.
+    final_format: Optional[str] = None
+
+    _resolve_the_handles = field_validator("model_name", "dataset_name")(_resolve_inventory_handle)
 
 
 class TrainingStartRequestStatus(BaseModel):
@@ -761,6 +917,7 @@ class TrainingStatus(BaseModel):
         "loading_dataset",
         "configuring",
         "training",
+        "training_drafter",
         "finalizing",
         "completed",
         "error",
@@ -810,6 +967,9 @@ class TrainingProgress(BaseModel):
     num_tokens: Optional[int] = Field(None, description = "Total number of tokens processed so far")
     eval_loss: Optional[float] = Field(
         None, description = "Eval loss from the most recent evaluation step"
+    )
+    rl_metrics: Optional[Dict[str, float]] = Field(
+        None, description = "DPO/ORPO/GRPO metrics from the latest log, keyed as TRL logs them"
     )
 
 
@@ -869,6 +1029,8 @@ class TrainingRunMetrics(BaseModel):
     grad_norm_step_history: List[int] = Field(default_factory = list)
     eval_loss_history: List[float] = Field(default_factory = list)
     eval_step_history: List[int] = Field(default_factory = list)
+    # DPO/ORPO/GRPO only: [{"step": n, "<TRL log key>": value, ...}], as /status metric_history.rl.
+    rl_history: List[Dict[str, float]] = Field(default_factory = list)
     final_epoch: Optional[float] = None
     final_num_tokens: Optional[int] = None
 
