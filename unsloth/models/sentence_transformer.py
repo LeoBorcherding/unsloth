@@ -42,6 +42,7 @@ import transformers
 from packaging.version import Version
 import re
 from transformers import AutoModel, AutoConfig
+from transformers import set_seed as transformers_set_seed
 import tempfile
 from huggingface_hub import HfApi, get_token
 # Deferred to first call: a module-scope bind out of `unsloth.save` closes an import cycle.
@@ -3030,16 +3031,23 @@ class FastSentenceTransformer(FastModel):
                                     f"Unsloth Warning: {inner_model.__class__.__name__} does not support gradient checkpointing. Skipping."
                                 )
 
+                # Same options the non-fast route hands FastModel.get_peft_model.
+                transformers_set_seed(random_state)
+                allowed_parameters = inspect.signature(LoraConfig).parameters.keys()
                 lora_config = LoraConfig(
+                    **{k: v for k, v in kwargs.items() if k in allowed_parameters},
                     r = r,
                     lora_alpha = lora_alpha,
                     target_modules = target_modules,
                     lora_dropout = lora_dropout,
                     bias = bias,
+                    layers_to_transform = layers_to_transform,
+                    layers_pattern = layers_pattern,
+                    use_rslora = use_rslora,
                     use_dora = use_dora,
+                    modules_to_save = modules_to_save,
                     init_lora_weights = init_lora_weights,
                     loftq_config = loftq_config or {},
-                    task_type = kwargs.get("task_type", "FEATURE_EXTRACTION"),
                 )
 
                 peft_model = peft_get_peft_model(inner_model, lora_config)
