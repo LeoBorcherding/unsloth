@@ -62,12 +62,13 @@ def test_broken_xformers_is_reported():
     assert "unsloth install-kernels xformers" in out
 
 
-def test_version_guard_keeps_its_own_fix():
+@pytest.mark.parametrize("capability", [(12, 0), (10, 3), (12, 1)])
+def test_version_guard_keeps_its_own_fix(capability):
     # install-kernels maps torch 2.8 back to 0.0.32.post2, so it cannot fix this guard.
     old_blackwell_xformers = (
         "import torch, xformers\n"
         "xformers.__version__ = '0.0.32.post2'\n"
-        "torch.cuda.get_device_capability = lambda *args, **kwargs: (12, 0)\n"
+        f"torch.cuda.get_device_capability = lambda *args, **kwargs: {capability}\n"
     )
     out = _run(old_blackwell_xformers + _IMPORT_UNSLOTH)
     assert "XFORMERS_IS_NONE True" in out
