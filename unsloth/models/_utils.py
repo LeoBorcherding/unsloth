@@ -4008,6 +4008,11 @@ def _xformers_fa3_lacks_sm90a(build_info, capability, flash3) -> bool:
     return bool(arch_list) and "9.0a" not in arch_list
 
 
+def _xformers_fa3_misdispatches(capability, xformers_version) -> bool:
+    # Every capability above Hopper, not just x.0: SM 10.3 (B300) and 12.1 (GB10) hit it too.
+    return tuple(capability) > (9, 0) and Version(xformers_version) <= Version("0.0.32.post2")
+
+
 try:
     _xformers_logger = logging.getLogger("xformers")
     _xformers_logger.setLevel(logging.ERROR)
@@ -4017,12 +4022,10 @@ except:
 try:
     from xformers import __version__ as xformers_version
 
-    # Xformers <= 0.0.32.post2 dispatches FA3 wrongly on Blackwell/RTX 50x: `capability >= (9, 0)` matches SM 10.0/11.0/12.0 and runs sm_90a kernels on non-Hopper GPUs (CUDA error in flash_fwd_launch_template.h:188). Fixed in 0.0.33 with `<= (9, 0)`; see facebookresearch/xformers#1329. is_available() as well as DEVICE_TYPE: a CUDA-built torch on a driverless host keeps DEVICE_TYPE at "cuda" and get_device_capability() would raise out of _lazy_init().
+    # Xformers <= 0.0.32.post2 dispatches FA3 wrongly on Blackwell/RTX 50x: `capability >= (9, 0)` matches every SM above 9.0 (10.x, 11.x, 12.x) and runs sm_90a kernels on non-Hopper GPUs (CUDA error in flash_fwd_launch_template.h:188). Fixed in 0.0.33 with `<= (9, 0)`; see facebookresearch/xformers#1329. is_available() as well as DEVICE_TYPE: a CUDA-built torch on a driverless host keeps DEVICE_TYPE at "cuda" and get_device_capability() would raise out of _lazy_init().
     if DEVICE_TYPE == "cuda" and torch.cuda.is_available():
         major_version, minor_version = torch.cuda.get_device_capability()
-        if (f"{major_version}.{minor_version}" in ("10.0", "11.0", "12.0")) and (
-            Version(xformers_version) <= Version("0.0.32.post2")
-        ):
+        if _xformers_fa3_misdispatches((major_version, minor_version), xformers_version):
             raise NotImplementedError(
                 f"Unsloth: Xformers {xformers_version} has a broken FA3 dispatch on "
                 f"SM {major_version}.{minor_version} GPUs. Please upgrade to >= 0.0.33 or build from source via\n"
