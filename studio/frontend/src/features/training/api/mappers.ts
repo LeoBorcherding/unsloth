@@ -158,6 +158,19 @@ export function trainingGpuIndices(
     .filter((i): i is number => typeof i === "number");
 }
 
+// The worker captures activations only on the HF text/vision trainer; audio, embedding
+// and decision runs return before the capture callback is wired.
+export function activationCaptureApplies(
+  config: Pick<TrainingConfigState, "isAudioModel" | "isEmbeddingModel" | "modelType">,
+): boolean {
+  return (
+    !config.isAudioModel &&
+    !config.isEmbeddingModel &&
+    config.modelType !== "embeddings" &&
+    config.modelType !== "decision"
+  );
+}
+
 export function buildTrainingStartPayload(
   config: TrainingConfigState,
   hfToken: string | null,
@@ -307,5 +320,8 @@ export function buildTrainingStartPayload(
     tensorboard_dir: config.enableTensorboard
       ? config.tensorboardDir.trim() || null
       : null,
+    // The saved run config must not claim capture on a run that cannot produce any.
+    enable_activation_capture:
+      config.enableActivationCapture && activationCaptureApplies(config),
   };
 }

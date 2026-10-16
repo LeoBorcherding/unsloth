@@ -333,6 +333,10 @@ def _build_training_worker_config(values: dict[str, Any]) -> dict[str, Any]:
         "gpu_ids": values.get("gpu_ids"),
         "s3_config": values.get("s3_config"),
         "disable_xet": values.get("disable_xet", False),
+        # Decision and embedding runs return through their own trainers before capture is wired.
+        "enable_activation_capture": bool(values.get("enable_activation_capture", False))
+        and not values.get("is_embedding", False)
+        and not values.get("is_decision", False),
     }
     for key in ("output_dir", "allow_external_output_dir"):
         if key in values:
@@ -1752,6 +1756,8 @@ class TrainingBackend:
         self._pump_running = False
 
         config = _build_training_worker_config(kwargs)
+        # Activation capture files its records under the run.
+        config["job_id"] = job_id
         hf_token = hf_token_arg(
             config["hf_token"], allow_ambient_token = config.get("allow_ambient", True)
         )

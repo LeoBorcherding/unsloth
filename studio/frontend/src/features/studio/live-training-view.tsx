@@ -3,15 +3,20 @@
 
 import {
   getTrainingRun,
+  useActivationData,
   useTrainingConfigStore,
   useTrainingRuntimeStore,
 } from "@/features/training";
 import type { TrainingViewData } from "@/features/training";
+import { activationCaptureApplies } from "@/features/training/api/mappers";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChartsSection } from "./sections/charts-section";
+import { NeuronHeatmapSection, ReplayControls } from "./sections/neuron-heatmap-section";
+import { NeuronHealthTrend } from "./sections/neuron-health-trend";
+import { DiagnosticsPanel } from "./sections/diagnostics-panel";
 import { OffloadPanel } from "./sections/offload-panel";
 import { ProgressSection } from "./sections/progress-section";
 import {
@@ -19,6 +24,81 @@ import {
   mapRunConfigToOverride,
 } from "./sections/run-config-override";
 import { TrainingStartOverlay } from "./training-start-overlay";
+
+function InterpretabilitySection({
+  isTraining,
+  jobId,
+}: {
+  isTraining: boolean;
+  jobId: string | null;
+}): ReactElement {
+  const { metadata, records, loading } = useActivationData({ isTraining, jobId });
+  const [stepIndex, setStepIndex] = useState<number>(0);
+
+  // Keep step index at the latest record after training finishes
+  useEffect(() => {
+    if (!isTraining) setStepIndex(Math.max(0, records.length - 1));
+  }, [records.length, isTraining]);
+
+  const handleStepChange = useCallback(
+    (idx: number) => {
+      if (idx === -1) {
+        setStepIndex((prev) => Math.min(prev + 1, records.length - 1));
+      } else {
+        setStepIndex(Math.max(0, Math.min(idx, records.length - 1)));
+      }
+    },
+    [records.length],
+  );
+
+  // During training always show the latest; after training the slider drives it
+  const displayIndex = isTraining ? Math.max(0, records.length - 1) : stepIndex;
+  const record = records[displayIndex] ?? null;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Heatmap — full width, horizontal */}
+      <NeuronHeatmapSection
+        isTraining={isTraining}
+        records={records}
+        metadata={metadata}
+        loading={loading}
+        record={record}
+        stepIndex={displayIndex}
+        onStepChange={handleStepChange}
+      />
+
+      {/* Trend chart — full width, compact */}
+      <div className="h-[calc(280px*var(--ui-space-scale,1))]">
+        <NeuronHealthTrend
+          records={records}
+          stepIndex={displayIndex}
+          onStepChange={handleStepChange}
+        />
+      </div>
+
+      {/* Replay controls */}
+      {!isTraining && records.length > 1 && (
+        <ReplayControls
+          stepIndex={stepIndex}
+          totalSteps={records.length}
+          onStepChange={handleStepChange}
+          currentStep={record?.step ?? 0}
+        />
+      )}
+
+      {/* Diagnostics */}
+      {records.length > 0 && (
+        <DiagnosticsPanel
+          records={records}
+          stepIndex={displayIndex}
+          metadata={metadata}
+          onStepChange={handleStepChange}
+        />
+      )}
+    </div>
+  );
+}
 
 /** Retry budget for the run-config lookup. The row is inserted at start_training(), but a
 * lookup issued in the same instant can still miss it; a few short retries cover that. */
@@ -75,6 +155,10 @@ export function LiveTrainingView(): ReactElement {
       selectedModel: state.selectedModel,
       projectName: state.projectName,
       trainingMethod: state.trainingMethod,
+      enableActivationCapture: state.enableActivationCapture,
+      isAudioModel: state.isAudioModel,
+      isEmbeddingModel: state.isEmbeddingModel,
+      dataset: state.dataset,
       modelType: state.modelType,
     })),
   );
@@ -155,6 +239,7 @@ export function LiveTrainingView(): ReactElement {
     isTrainingRunning: runtime.isTrainingRunning,
     modelName: runtime.startModelName ?? config.selectedModel ?? "",
     projectName: activeProjectName,
+    datasetName: config.dataset ?? null,
     // Prefer the saved run's method: the form may have been edited (e.g. LoRA -> Full) after the
     // run started, which would relabel the run and hide its saved LoRA rows in the popover.
     trainingMethod:
@@ -184,7 +269,7 @@ export function LiveTrainingView(): ReactElement {
     <div className={cn("relative", showOverlay && "min-h-[72dvh]")}>
       <div
         className={cn(
-          "relative z-10 flex flex-col gap-6 transition-[filter]",
+          "relative z-10 flex flex-col gap-4 transition-[filter]",
           showOverlay && "blur",
         )}
       >
@@ -197,16 +282,43 @@ export function LiveTrainingView(): ReactElement {
           />
         </div>
         <OffloadPanel isTrainingRunning={viewData.isTrainingRunning} />
-        <ChartsSection
-          currentStep={viewData.currentStep}
-          totalSteps={viewData.totalSteps}
-          isTraining={viewData.isTrainingRunning}
-          evalEnabled={viewData.evalEnabled}
-          lossHistory={viewData.lossHistory}
-          lrHistory={viewData.lrHistory}
-          gradNormHistory={viewData.gradNormHistory}
-          evalLossHistory={viewData.evalLossHistory}
-        />
+        <Tabs defaultValue="training">
+          <TabsList className="mb-2">
+            <TabsTrigger value="training">Training</TabsTrigger>
+            <TabsTrigger value="interpretability">Interpretability</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="training">
+            <ChartsSection
+              currentStep={viewData.currentStep}
+              totalSteps={viewData.totalSteps}
+              isTraining={viewData.isTrainingRunning}
+              evalEnabled={viewData.evalEnabled}
+              lossHistory={viewData.lossHistory}
+              lrHistory={viewData.lrHistory}
+              gradNormHistory={viewData.gradNormHistory}
+              evalLossHistory={viewData.evalLossHistory}
+            />
+          </TabsContent>
+
+          <TabsContent value="interpretability">
+            {(runConfigOverride?.enableActivationCapture ??
+              (config.enableActivationCapture && activationCaptureApplies(config))) ? (
+              <InterpretabilitySection
+                isTraining={viewData.isTrainingRunning}
+                jobId={runtime.jobId}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center min-h-[calc(300px*var(--ui-space-scale,1))] gap-3 text-center text-muted-foreground">
+                <p className="text-sm">Neuron activation capture is disabled.</p>
+                <p className="text-xs max-w-sm">
+                  Enable <span className="font-medium text-foreground">Neuron activation capture</span> in
+                  training parameters before starting training to see interpretability data here.
+                </p>
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </div>
       {showOverlay ? (
         <TrainingStartOverlay
