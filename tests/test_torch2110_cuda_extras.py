@@ -236,3 +236,13 @@ def test_cuda12_torch2100_keeps_torch_pinned_off_x86(cuda: str):
         f"x86-64-only xformers wheel (and its transitive pin) is skipped"
     )
     assert torch_req.marker is None, "the torch pin must apply on every machine"
+
+
+@pytest.mark.parametrize(
+    "torch_version, series",
+    [("2.7.0", "torch270"), ("2.7.1", "torch271"), ("2.7.1+cu128", "torch271"), ("2.8.0", "torch280")],
+)
+def test_auto_install_gives_torch_2_7_1_its_own_extra(torch_version: str, series: str, capsys):
+    # torch270 pins the xformers wheel built for torch 2.7.0, so 2.7.1 there means a torch downgrade.
+    out = _run_auto_install(torch_version, "12.8", capsys)
+    assert f'"unsloth[cu128-{series}] @' in out
