@@ -1812,3 +1812,54 @@ def test_validate_answers_when_the_error_collector_cannot_read_the_seed(monkeypa
 
     assert response.valid is False
     assert "repository not found" in (response.raw_detail or "")
+
+
+def _inspect_gsm8k(monkeypatch, tmp_path, subset):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    configs = [
+        {
+            "config_name": name,
+            "data_files": [
+                {"split": "train", "path": f"{name}/train-*"},
+                {"split": "test", "path": f"{name}/test-*"},
+            ],
+        }
+        for name in ("main", "socratic")
+    ]
+    monkeypatch.setattr(seed_route, "_list_hf_repo_files", lambda **kwargs: _GSM8K_FILES)
+    monkeypatch.setattr(seed_route, "_list_hf_dataset_configs", lambda **kwargs: configs)
+    monkeypatch.setattr(seed_route, "refuse_unauthorized_dataset_preview", lambda *a, **k: None)
+    loads = []
+
+    def fake_preview(*, load_dataset_fn, load_kwargs, preview_size):
+        loads.append(load_kwargs)
+        return [{"question": "q"}]
+
+    monkeypatch.setattr(seed_route, "_load_preview_rows", fake_preview)
+    response = seed_route.inspect_seed_dataset(
+        SimpleNamespace(
+            dataset_name = "openai/gsm8k",
+            split = "train",
+            subset = subset,
+            hf_token = None,
+            preview_size = 1,
+        ),
+        allow_ambient_token = False,
+    )
+    return response, loads
+
+
+def test_a_card_with_several_configs_and_no_default_seeds_from_one(monkeypatch, tmp_path):
+    # gsm8k ships main and socratic, neither the default: a repo-root glob read both, every
+    # question twice, while the preview showed one.
+    response, loads = _inspect_gsm8k(monkeypatch, tmp_path, None)
+    assert response.resolved_path == "datasets/openai/gsm8k/main/train-*.parquet"
+    assert response.subset == "main"
+    assert loads[0].get("name") == "main"
+    assert loads[0]["data_files"] == ["main/train-00000-of-00001.parquet"]
+
+
+def test_a_named_subset_still_wins(monkeypatch, tmp_path):
+    response, _loads = _inspect_gsm8k(monkeypatch, tmp_path, "socratic")
+    assert response.resolved_path == "datasets/openai/gsm8k/socratic/train-*.parquet"
+    assert response.subset == "socratic"
