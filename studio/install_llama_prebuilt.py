@@ -8288,8 +8288,8 @@ def runtime_payload_health_groups(
             ["libmtmd.so*"],
             ["libggml-vulkan.so*"],
         ]
-        if source_label == "published":
-            groups.append(["llama-diffusion-gemma-visual-server"])
+        # No DiffusionGemma visual server here: the fork builds it best-effort and
+        # ensure_diffusion_visual_server treats it as optional.
         return groups + _linux_split_entrypoint_groups(source_label, tag)
     if install_kind in {"windows-cpu", "windows-arm64"}:
         return _windows_shared_groups(source_label, tag)
@@ -8309,10 +8309,7 @@ def runtime_payload_health_groups(
         # Measured on app-b10798-mix-659e406-windows-x64-rocm-gfx1150.zip.
         return _windows_shared_groups(source_label, tag) + [["ggml-hip*.dll"]]
     if install_kind == "windows-vulkan":
-        groups = _windows_shared_groups(source_label, tag) + [["ggml-vulkan.dll"]]
-        if source_label == "published":
-            groups.append(["llama-diffusion-gemma-visual-server.exe"])
-        return groups
+        return _windows_shared_groups(source_label, tag) + [["ggml-vulkan.dll"]]
     return []
 
 

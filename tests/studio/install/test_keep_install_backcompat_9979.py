@@ -462,17 +462,21 @@ def test_the_macos_keep_path_requires_the_dylibs(tmp_path):
     assert ILP._kept_install_payload_is_healthy(gutted, MACOS) is False
 
 
-def test_a_legacy_published_vulkan_install_without_the_visual_server_is_refused(tmp_path):
-    """``source`` has been recorded since the first shape, so this reaches old installs: a
-    published Vulkan install predating ``ensure_diffusion_visual_server`` is held to a file it
-    never had. The one case where an old install is rebuilt rather than kept."""
+def test_a_legacy_published_vulkan_install_without_the_visual_server_is_backfilled_not_refused(
+    tmp_path,
+):
+    """The fork builds the visual server best-effort, so a published Vulkan install without it
+    still passes the payload check (a fallback can keep it). A release-matched update still
+    re-extracts it so an install predating ``ensure_diffusion_visual_server`` gets the file."""
+    marker = S6 | {"source": "published"}
     install_dir = build_install(
         tmp_path,
-        marker = S6 | {"source": "published"},
+        marker = marker,
         payload_backend = "vulkan",
         visual_server = False,
     )
-    assert ILP._kept_install_payload_is_healthy(install_dir, LINUX) is False
+    assert ILP._kept_install_payload_is_healthy(install_dir, LINUX) is True
+    assert ILP._diffusion_visual_server_missing_for_marker(install_dir, LINUX, marker) is True
 
 
 def test_a_binary_that_dies_on_sigsegv_is_not_a_working_install(tmp_path, monkeypatch):

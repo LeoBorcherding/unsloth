@@ -512,7 +512,8 @@ def test_fork_linux_intel_prefers_published_vulkan_bundle():
     )
     assert [attempt.install_kind for attempt in attempts] == ["linux-vulkan", "linux-cpu"]
     assert attempts[0].source_label == "published"
-    assert ["llama-diffusion-gemma-visual-server"] in ilp.runtime_payload_health_groups(
+    # Built best-effort by the fork, so a bundle without it must still pass.
+    assert ["llama-diffusion-gemma-visual-server"] not in ilp.runtime_payload_health_groups(
         attempts[0].install_kind, source_label = attempts[0].source_label
     )
 
@@ -561,7 +562,8 @@ def test_fork_windows_intel_prefers_published_vulkan_bundle():
     )
     assert [attempt.install_kind for attempt in attempts] == ["windows-vulkan", "windows-cpu"]
     assert attempts[0].source_label == "published"
-    assert ["llama-diffusion-gemma-visual-server.exe"] in ilp.runtime_payload_health_groups(
+    # Built best-effort by the fork, so a bundle without it must still pass.
+    assert ["llama-diffusion-gemma-visual-server.exe"] not in ilp.runtime_payload_health_groups(
         attempts[0].install_kind, source_label = attempts[0].source_label
     )
 
