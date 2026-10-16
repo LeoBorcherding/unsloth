@@ -483,6 +483,40 @@ def test_converted_config_keeps_token_fields(monkeypatch, tmp_path):
     assert seen["args"].parallelism_config is parallelism
 
 
+
+def test_messages_dataset_trains_on_the_assistant_turns(monkeypatch, tmp_path):
+    # The objective takes the response from the labels; a chat row must not be supervised end to end.
+    from datasets import Dataset
+    from unsloth.models import diffusion_trainer
+    from unsloth.models.diffusion_trainer import DiffusionConfig, DiffusionTrainer
+
+    seen, warned = {}, []
+    monkeypatch.setattr(
+        DiffusionTrainer.__bases__[0],
+        "__init__",
+        lambda self, model, args, *a, **k: seen.update(args = args),
+    )
+    logger = SimpleNamespace(warning_once = warned.append)
+    monkeypatch.setattr(diffusion_trainer, "logger", logger, raising = False)
+    chat = Dataset.from_list(
+        [{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]}]
+    )
+    pairs = Dataset.from_list([{"prompt": "hi", "completion": " yo"}])
+
+    def resolved(dataset, **config):
+        args = DiffusionConfig(
+            output_dir = str(tmp_path), report_to = "none", use_cpu = True, bf16 = False, **config
+        )
+        DiffusionTrainer(
+            model = None, args = args, train_dataset = dataset, diffusion_profile = _profile("dream")
+        )
+        return seen["args"].assistant_only_loss
+
+    assert resolved(chat) is True
+    assert resolved(pairs) is False and not warned
+    assert resolved(chat, assistant_only_loss = False) is False
+    assert len(warned) == 1 and "assistant_only_loss" in warned[0]
+
 _TINY_TRAIN = r"""
 import math, os, sys, torch
 import unsloth
