@@ -1168,6 +1168,10 @@ def inspect_seed_dataset(
     repo_files = _list_hf_repo_files(dataset_name = dataset_name, token = token)
     data_files = [file for file in repo_files if file.lower().endswith(DATA_EXTS)]
     configs = _list_hf_dataset_configs(dataset_name = dataset_name, token = token)
+    # Several configs and none the default: the Hub viewer's first, returned as the subset so the
+    # run reads it too. The repo-root glob read every config at once (gsm8k twice over).
+    if not subset and len(configs) > 1 and _pick_config(configs, None) is None:
+        subset = str(configs[0].get("config_name") or DEFAULT_CONFIG)
 
     # Preview the same files the recipe will read, so the rows on screen are not
     # from a config the resolved path excludes.
