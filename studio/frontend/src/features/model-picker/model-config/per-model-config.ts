@@ -24,7 +24,12 @@ import {
 export interface PerModelConfig {
   engineParallelism?: "tensor" | "pipeline" | "data";
   enginePrecision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
+  engineKvCacheDtype?: "auto" | "fp8";
+  engineSeed?: number | null;
+  engineGpuMemoryUtilization?: number | null;
   engine?: "auto" | "vllm" | "sglang";
+  /** Default engine only; optional so older blobs parse, and anything but false is the 4-bit default. */
+  loadIn4bit?: boolean;
   customContextLength: number | null;
   maxSeqLength: number | null;
   kvCacheDtype: string | null;
@@ -74,6 +79,10 @@ export const DEFAULT_PER_MODEL_CONFIG: PerModelConfig = {
   engine: "auto",
   enginePrecision: "auto",
   engineParallelism: "tensor",
+  engineKvCacheDtype: "auto",
+  engineSeed: null,
+  engineGpuMemoryUtilization: null,
+  loadIn4bit: true,
   customContextLength: null,
   maxSeqLength: null,
   kvCacheDtype: null,
@@ -95,6 +104,28 @@ export const DEFAULT_PER_MODEL_CONFIG: PerModelConfig = {
   disableVision: false,
   chatTemplateOverride: null,
 };
+
+/** vLLM --seed / SGLang --random-seed; the backend bounds it to a non-negative int32. */
+export function normalizeEngineSeed(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 2 ** 31 - 1
+    ? value
+    : null;
+}
+
+/** Ceiling on the share of each GPU a managed engine may claim, as the backend bounds it. */
+export function normalizeEngineGpuMemoryUtilization(
+  value: unknown,
+): number | null {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0.05 &&
+    value <= 0.99
+    ? Math.round(value * 1000) / 1000
+    : null;
+}
 
 // Mirrors llama_server_args.py PARALLEL_MIN/MAX; null = follow the server-wide default.
 export const N_PARALLEL_MIN = 1;
@@ -443,6 +474,7 @@ const STORED_CONFIG_FIELDS = new Set([
   "kvCacheDtype",
   "mlxKvQuant",
   "mlxInt8Prefill",
+  "loadIn4bit",
   "speculativeType",
   "specDraftNMax",
   "specDraftCacheDtype",
@@ -1079,6 +1111,12 @@ function normalizeV1(partial: RawConfig): PerModelConfig {
       partial.engine === "vllm" || partial.engine === "sglang"
         ? partial.engine
         : "auto",
+    engineKvCacheDtype: partial.engineKvCacheDtype === "fp8" ? "fp8" : "auto",
+    engineSeed: normalizeEngineSeed(partial.engineSeed),
+    engineGpuMemoryUtilization: normalizeEngineGpuMemoryUtilization(
+      partial.engineGpuMemoryUtilization,
+    ),
+    loadIn4bit: partial.loadIn4bit !== false,
     customContextLength:
       typeof partial.customContextLength === "number" &&
       Number.isFinite(partial.customContextLength) &&
@@ -1357,6 +1395,10 @@ export function isDefaultConfig(config: PerModelConfig): boolean {
     (config.engine ?? "auto") === "auto" &&
     (config.enginePrecision ?? "auto") === "auto" &&
     (config.engineParallelism ?? "tensor") === "tensor" &&
+    (config.engineKvCacheDtype ?? "auto") === "auto" &&
+    config.engineSeed == null &&
+    config.engineGpuMemoryUtilization == null &&
+    config.loadIn4bit !== false &&
     config.customContextLength == null &&
     config.maxSeqLength == null &&
     (config.kvCacheDtype ?? null) === DEFAULT_PER_MODEL_CONFIG.kvCacheDtype &&
@@ -1437,6 +1479,9 @@ export function savePerModelConfig(
     return false;
   }
   const written = writeMap(map);
+  if (written) {
+    stampWrite(key, map);
+  }
   if (written && evicted) {
     for (const evictedKey of evictedKeys) {
       const id = modelIdFromStorageKey(evictedKey);
@@ -1499,10 +1544,14 @@ export function deletePerModelConfig(
  * can spell one key. */
 function findModelOverrideKeyOwners(
   overrideKey: string,
-): { modelId: string; ggufVariant: string | null }[] {
+): { modelId: string; ggufVariant: string | null; storageKey: string }[] {
   const key = overrideKey.trim();
   const foldedKey = normalizeModelIdentity(key);
-  const owners: { modelId: string; ggufVariant: string | null }[] = [];
+  const owners: {
+    modelId: string;
+    ggufVariant: string | null;
+    storageKey: string;
+  }[] = [];
   for (const storageKey of Object.keys(readMap())) {
     const modelId = modelIdFromStorageKey(storageKey);
     if (!modelId) {
@@ -1514,7 +1563,7 @@ function findModelOverrideKeyOwners(
     );
     if (!variant) {
       if (foldedKey === normalizeModelIdentity(modelId)) {
-        owners.push({ modelId, ggufVariant: null });
+        owners.push({ modelId, ggufVariant: null, storageKey });
       }
       continue;
     }
@@ -1526,19 +1575,71 @@ function findModelOverrideKeyOwners(
       normalizeModelIdentity(key.slice(0, cut)) ===
         normalizeModelIdentity(modelId)
     ) {
-      owners.push({ modelId, ggufVariant: variant });
+      owners.push({ modelId, ggufVariant: variant, storageKey });
     }
   }
   return owners;
 }
 
-/** Delete the records the server keys name; false when one was left behind. */
+// A unique mark per save, beside the records, so another tab's identical re-save still reads as new.
+const WRITE_STAMPS_KEY = "unsloth_model_config_stamps";
+
+function readStamps(): Record<string, string> {
+  if (!canUseStorage()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(WRITE_STAMPS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stampWrite(key: string, map: StoredMap): void {
+  const stamps: Record<string, string> = {};
+  for (const [k, v] of Object.entries(readStamps())) {
+    if (k in map) {
+      stamps[k] = v;
+    }
+  }
+  stamps[key] = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  try {
+    localStorage.setItem(WRITE_STAMPS_KEY, JSON.stringify(stamps));
+  } catch {
+    // Best-effort: without it a forget's cleanup falls back to comparing contents.
+  }
+}
+
+export type PerModelConfigSnapshot = {
+  readonly records: Readonly<Record<string, unknown>>;
+  readonly stamps: Readonly<Record<string, string>>;
+};
+
+export function perModelConfigSnapshot(): PerModelConfigSnapshot {
+  return { records: readMapRaw(), stamps: readStamps() };
+}
+
+/** Delete the records the server keys name; false when one was left behind. With
+ *  `unchangedSince`, a record written after that snapshot (in any tab) is kept. */
 export function deletePerModelConfigsForOverrideKeys(
   overrideKeys: readonly string[],
+  unchangedSince?: PerModelConfigSnapshot,
 ): boolean {
   let deleted = true;
+  const current = unchangedSince ? perModelConfigSnapshot() : null;
   for (const overrideKey of overrideKeys) {
     for (const owner of findModelOverrideKeyOwners(overrideKey)) {
+      const key = owner.storageKey;
+      if (
+        unchangedSince &&
+        current &&
+        (current.stamps[key] !== unchangedSince.stamps[key] ||
+          JSON.stringify(current.records[key]) !==
+            JSON.stringify(unchangedSince.records[key]))
+      ) {
+        continue;
+      }
       if (!deletePerModelConfig(owner.modelId, owner.ggufVariant)) {
         deleted = false;
       }

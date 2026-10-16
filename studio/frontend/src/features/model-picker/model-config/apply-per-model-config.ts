@@ -39,13 +39,32 @@ export function applyPerModelConfigToRuntime(
   const engine = config.engine ?? "auto";
   const engineParallelism = config.engineParallelism ?? "tensor";
   const enginePrecision = config.enginePrecision ?? "auto";
+  const engineKvCacheDtype = config.engineKvCacheDtype ?? "auto";
+  const engineSeed = config.engineSeed ?? null;
+  const engineGpuMemoryUtilization = config.engineGpuMemoryUtilization ?? null;
+  const loadIn4bit = config.loadIn4bit !== false;
   if (
     maxSeqLength !== store.params.maxSeqLength ||
     engine !== (store.params.engine ?? "auto") ||
     enginePrecision !== (store.params.enginePrecision ?? "auto") ||
-    engineParallelism !== (store.params.engineParallelism ?? "tensor")
+    engineParallelism !== (store.params.engineParallelism ?? "tensor") ||
+    engineKvCacheDtype !== (store.params.engineKvCacheDtype ?? "auto") ||
+    engineSeed !== (store.params.engineSeed ?? null) ||
+    engineGpuMemoryUtilization !==
+      (store.params.engineGpuMemoryUtilization ?? null) ||
+    loadIn4bit !== (store.params.loadIn4bit !== false)
   ) {
-    store.setParams({ ...store.params, maxSeqLength, engine, enginePrecision, engineParallelism });
+    store.setParams({
+      ...store.params,
+      maxSeqLength,
+      engine,
+      enginePrecision,
+      engineParallelism,
+      engineKvCacheDtype,
+      engineSeed,
+      engineGpuMemoryUtilization,
+      loadIn4bit,
+    });
   }
   const gpuSelection =
     config.selectedGpuIds !== undefined
@@ -124,6 +143,10 @@ export function currentRuntimePerModelConfig(
     engine: s.params.engine ?? "auto",
     enginePrecision: s.params.enginePrecision ?? "auto",
     engineParallelism: s.params.engineParallelism ?? "tensor",
+    engineKvCacheDtype: s.params.engineKvCacheDtype ?? "auto",
+    engineSeed: s.params.engineSeed ?? null,
+    engineGpuMemoryUtilization: s.params.engineGpuMemoryUtilization ?? null,
+    loadIn4bit: s.params.loadIn4bit !== false,
     customContextLength: s.customContextLength ?? null,
     maxSeqLength: options.includeMaxSeqLength
       ? normalizeMaxSeqLength(s.params.maxSeqLength)
@@ -164,19 +187,30 @@ export function currentRuntimePerModelConfig(
 }
 
 /** `followGlobal`: only against the running config, which holds the mode a null one resolved to.
- *  Stored configs and presets keep null distinct from an explicit mode equal to today's global. */
+ *  Stored configs and presets keep null distinct from an explicit mode equal to today's global.
+ *  `unsetIsAuto`: a draft against its saved record, where null and "auto" both follow the global. */
 export function perModelConfigsEqual(
   a: PerModelConfig,
   b: PerModelConfig,
-  { followGlobal = false }: { followGlobal?: boolean } = {},
+  {
+    followGlobal = false,
+    unsetIsAuto = false,
+  }: { followGlobal?: boolean; unsetIsAuto?: boolean } = {},
 ): boolean {
   const speculative = followGlobal
     ? resolvedSpeculativeType
-    : normalizeSpeculativeType;
+    : unsetIsAuto
+      ? (v: string | null | undefined) => normalizeSpeculativeType(v) ?? "auto"
+      : normalizeSpeculativeType;
   return (
     (a.engine ?? "auto") === (b.engine ?? "auto") &&
     (a.enginePrecision ?? "auto") === (b.enginePrecision ?? "auto") &&
     (a.engineParallelism ?? "tensor") === (b.engineParallelism ?? "tensor") &&
+    (a.engineKvCacheDtype ?? "auto") === (b.engineKvCacheDtype ?? "auto") &&
+    (a.engineSeed ?? null) === (b.engineSeed ?? null) &&
+    (a.engineGpuMemoryUtilization ?? null) ===
+      (b.engineGpuMemoryUtilization ?? null) &&
+    (a.loadIn4bit !== false) === (b.loadIn4bit !== false) &&
     (a.customContextLength ?? null) === (b.customContextLength ?? null) &&
     normalizeMaxSeqLength(a.maxSeqLength) ===
       normalizeMaxSeqLength(b.maxSeqLength) &&

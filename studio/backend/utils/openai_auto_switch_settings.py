@@ -446,6 +446,18 @@ def normalize_model_override(
         entry["engine_precision"] = payload["engine_precision"]
     if payload.get("engine") in ("vllm", "sglang"):
         entry["engine"] = payload["engine"]
+    if payload.get("engine_kv_cache_dtype") == "fp8":
+        entry["engine_kv_cache_dtype"] = "fp8"
+    seed = _bounded_int(payload.get("engine_seed"), minimum = 0, maximum = 2**31 - 1)
+    if seed is not None:
+        entry["engine_seed"] = seed
+    utilization = payload.get("engine_gpu_memory_utilization")
+    if (
+        isinstance(utilization, (int, float))
+        and not isinstance(utilization, bool)
+        and 0.05 <= utilization <= 0.99
+    ):
+        entry["engine_gpu_memory_utilization"] = round(float(utilization), 3)
 
     extra_args = payload.get("llama_extra_args")
     if isinstance(extra_args, (list, tuple)) and extra_args:
@@ -534,6 +546,10 @@ def normalize_model_override(
 
     if _coerce_bool(payload.get("mlx_int8_prefill")):
         entry["mlx_int8_prefill"] = True
+
+    # Stored only when off: absent is the 4-bit default, so an untouched model follows it.
+    if payload.get("load_in_4bit") is False:
+        entry["load_in_4bit"] = False
 
     # Stored only when set. Like tensor_parallel: absent means the default, so an override that never touched the switch does not pin it off for a later load.
     if _coerce_bool(payload.get("disable_vision")):
@@ -637,9 +653,14 @@ def model_override_load_kwargs(override: dict[str, Any], *, is_gguf: bool) -> di
         kwargs["engine"] = override["engine"]
         kwargs["engine_parallelism"] = override.get("engine_parallelism", "tensor")
         kwargs["engine_precision"] = override.get("engine_precision", "auto")
+        for key in ("engine_kv_cache_dtype", "engine_seed", "engine_gpu_memory_utilization"):
+            if key in override:
+                kwargs[key] = override[key]
         kwargs["load_in_4bit"] = False
         if override.get("gpu_ids") is not None:
             kwargs["gpu_ids"] = override["gpu_ids"]
+    elif not is_gguf and override.get("load_in_4bit") is False:
+        kwargs["load_in_4bit"] = False
 
     max_seq_length = resolve_fit_max_seq_length(override, is_gguf = is_gguf)
     if max_seq_length is not None:

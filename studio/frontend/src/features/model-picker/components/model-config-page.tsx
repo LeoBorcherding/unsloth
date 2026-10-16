@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useLlamaCppBackend } from "@/hooks/use-llama-backend";
+import { useSliderDraft } from "@/hooks/use-slider-draft";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InfoHint } from "@/components/ui/info-hint";
@@ -157,6 +158,7 @@ import {
 } from "../model-config/model-config-draft";
 import { loadedConfigSignature } from "../model-config/config-signature";
 import { ggufQuantLabel } from "../model-config/model-identity";
+import { useSavedRunSettings } from "../model-config/saved-run-settings";
 import {
   CACHE_RAM_LLAMA_DEFAULT,
   CACHE_RAM_MAX,
@@ -208,6 +210,7 @@ import {
 } from "../model-config/per-model-config";
 import { isAudioRuntimeGguf } from "../../audio/audio-cpp-catalog";
 import { isNpuModelId, NPU_DEFAULT_CONTEXT_LENGTH } from "../../npu";
+import { SettingResetButton } from "./setting-reset-button";
 import {
   type RunConfigImport,
   SharedRunConfigControls,
@@ -487,6 +490,7 @@ function MaxSeqLengthSetting({
   fittedToMemory,
   windowUnknown,
   hint,
+  reset,
 }: {
   value: number;
   max: number;
@@ -498,15 +502,23 @@ function MaxSeqLengthSetting({
   fittedToMemory?: boolean;
   windowUnknown?: boolean;
   hint?: string;
+  reset?: ReactNode;
 }) {
   // MLX sizes itself when unpinned, so the control is the GGUF path's Context Length and
   // shows the length that will be served, not "Auto". A dash only while it is unknown.
   const label = isMlx ? "Context Length" : "Max Seq Length";
+  const { draft, sliderProps } = useSliderDraft(
+    // Clamped, or the first nudge would jump from the shown number to the bound.
+    Math.min(Math.max(value, MAX_SEQ_LENGTH_MIN), max),
+    onChange,
+  );
+  const dragging = draft !== null;
   return (
     <div className="space-y-2">
       <div className={ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS}>{label}</span>
+          {reset}
           <InfoHint>
             {hint ?? (isMlx
               ? "Tokens of context the model is sized for." +
@@ -519,13 +531,13 @@ function MaxSeqLengthSetting({
         </div>
         <NumericValueInput
           ref={inputRef}
-          value={value}
+          value={draft ?? value}
           min={MAX_SEQ_LENGTH_MIN}
           max={inputMax}
           step={MAX_SEQ_LENGTH_STEP}
           onChange={onChange}
-          displayValue={isMlx && windowUnknown ? "—" : undefined}
-          derived={isMlx && !pinned}
+          displayValue={isMlx && windowUnknown && !dragging ? "—" : undefined}
+          derived={isMlx && !pinned && !dragging}
           ariaLabel={label}
           className={NUMBER_INPUT_CLASS}
           fixedWidth={true}
@@ -536,13 +548,99 @@ function MaxSeqLengthSetting({
         min={MAX_SEQ_LENGTH_MIN}
         max={max}
         step={MAX_SEQ_LENGTH_STEP}
-        // Outside the control's range it sits at the nearer edge, or the first nudge
-        // would step from the shown number onto the bound.
-        value={[Math.min(Math.max(value, MAX_SEQ_LENGTH_MIN), max)]}
-        onValueChange={([next]) => onChange(next)}
+        {...sliderProps}
         className="panel-slider"
         aria-label={label}
       />
+    </div>
+  );
+}
+
+function GgufContextLengthSetting({
+  value,
+  autoValue,
+  min,
+  max,
+  nativeContextLength,
+  activeLoadedContext,
+  inputRef,
+  resetButton,
+  onChange,
+  renderWarning,
+}: {
+  value: number;
+  autoValue: number;
+  min: number;
+  max: number;
+  nativeContextLength: number | null;
+  activeLoadedContext: number | null;
+  inputRef?: Ref<NumericValueInputHandle>;
+  resetButton?: ReactNode;
+  onChange: (value: number) => void;
+  renderWarning: (value: number) => ReactNode;
+}) {
+  const { draft, sliderProps } = useSliderDraft(value, onChange);
+  const shown = draft ?? value;
+  const isAuto = shown === 0;
+  return (
+    <div className="space-y-2">
+      <div className={ROW_CLASS}>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={LABEL_CLASS}>Context Length</span>
+          {resetButton}
+          <InfoHint>
+            Drag all the way left for Auto, which picks a context that
+            fits while keeping GPU speed. Custom values request an exact
+            context; higher ones use more memory.
+            {isAuto && activeLoadedContext != null
+              ? ` Auto currently selected ${activeLoadedContext.toLocaleString()} tokens.`
+              : ""}
+            {nativeContextLength != null
+              ? ` This model's native context is ${nativeContextLength.toLocaleString()} tokens.`
+              : ""}
+          </InfoHint>
+        </div>
+        <NumericValueInput
+          ref={inputRef}
+          value={isAuto ? autoValue : shown}
+          min={min}
+          max={max}
+          step={1}
+          onChange={onChange}
+          displayValue={isAuto ? "Auto" : undefined}
+          ariaLabel="Context Length"
+          className={NUMBER_INPUT_CLASS}
+          fixedWidth={true}
+          size={8}
+        />
+      </div>
+      {/* Grouped so the warning sits 4px under the slider, as advice does elsewhere. */}
+      <div className="space-y-1">
+        {nativeContextLength != null ? (
+          <div className="space-y-1">
+            <Slider
+              min={0}
+              max={max}
+              step={128}
+              {...sliderProps}
+              className="panel-slider"
+              aria-label="Context Length"
+              thumbValueText={(v) =>
+                v !== 0
+                  ? `${v.toLocaleString()} tokens`
+                  : activeLoadedContext != null
+                    ? `Auto, currently ${autoValue.toLocaleString()} tokens`
+                    : "Auto"
+              }
+            />
+            <div className="flex justify-between text-ui-10 text-muted-foreground">
+              <span>Auto</span>
+              <span>{max.toLocaleString()}</span>
+            </div>
+          </div>
+        ) : null}
+        {renderWarning(shown)}
+      </div>
     </div>
   );
 }
@@ -558,7 +656,8 @@ function AdvancedGpuSlider({
   min,
   max,
   onChange,
-  displayValue,
+  onDraft,
+  format,
   info,
   inputRef,
   step = 1,
@@ -569,12 +668,15 @@ function AdvancedGpuSlider({
   min: number;
   max: number;
   onChange: (value: number) => void;
-  displayValue?: string;
+  onDraft?: (value: number | null) => void;
+  format?: (value: number) => string | undefined;
   info?: ReactNode;
   inputRef?: Ref<NumericValueInputHandle>;
   step?: number;
   disabled?: boolean;
 }) {
+  const { draft, sliderProps } = useSliderDraft(value, onChange, onDraft);
+  const shown = draft ?? value;
   return (
     <div className="space-y-2">
       <div className={ROW_CLASS}>
@@ -584,12 +686,12 @@ function AdvancedGpuSlider({
         </div>
         <NumericValueInput
           ref={inputRef}
-          value={value}
+          value={shown}
           min={min}
           max={max}
           step={step}
           onChange={onChange}
-          displayValue={displayValue}
+          displayValue={format?.(shown)}
           ariaLabel={label}
           className={NUMBER_INPUT_CLASS}
           fixedWidth={true}
@@ -601,8 +703,7 @@ function AdvancedGpuSlider({
         min={min}
         max={max}
         step={step}
-        value={[value]}
-        onValueChange={([next]) => onChange(next)}
+        {...sliderProps}
         className="panel-slider"
         aria-label={label}
         disabled={disabled}
@@ -621,6 +722,7 @@ function VramBudgetRow() {
   const isMac = usePlatformStore((s) => s.deviceType === "mac");
   const [settings, setSettings] = useState<VramBudgetSettings | null>(null);
   const [percent, setPercent] = useState<number | null>(null);
+  const [draftPercent, setDraftPercent] = useState<number | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const adviceId = useId();
   const modelLoading = useChatRuntimeStore((s) => s.modelLoading);
@@ -712,6 +814,7 @@ function VramBudgetRow() {
   }
 
   const defaultPercent = vramFractionToPercent(settings.defaultFraction);
+  const shownPercent = draftPercent ?? percent;
   // Stored beats UNSLOTH_VRAM_FRACTION, so once the slider has been touched there is otherwise
   // no way back to inheriting it. Clearing is what the null the API accepts is for.
   const resetBudget = () => {
@@ -734,7 +837,7 @@ function VramBudgetRow() {
   };
   const commit = (next: number) => {
     setPercent(next);
-    // Debounced: the slider fires per pointer move, so a drag would be dozens of writes, each
+    // Debounced: a held arrow key commits every step, so one press would be dozens of writes, each
     // invalidating the read cache.
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
@@ -761,8 +864,9 @@ function VramBudgetRow() {
         min={vramFractionToPercent(settings.minFraction)}
         max={vramFractionToPercent(settings.maxFraction)}
         step={VRAM_BUDGET_PERCENT_STEP}
-        displayValue={`${percent}%`}
+        format={(v) => `${v}%`}
         onChange={commit}
+        onDraft={setDraftPercent}
         disabled={locked}
         info={
           <div className="flex flex-col gap-1.5">
@@ -784,9 +888,9 @@ function VramBudgetRow() {
           </div>
         }
       />
-      {percent !== defaultPercent && (
+      {shownPercent !== defaultPercent && (
         <p id={adviceId} className="text-ui-11 text-amber-500">
-          {percent > defaultPercent
+          {shownPercent > defaultPercent
             ? "Above the default fits more context but leaves less slack, so a load can run out of memory. llama.cpp treats that as a hard failure rather than falling back."
             : "Below the default is safer on a shared GPU, but a tight fit may push layers onto the CPU and generate slowly."}
         </p>
@@ -931,6 +1035,12 @@ function GpuMemorySettings({
       <div className={isDiffusion ? "hidden" : ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS}>GPU Memory</span>
+          <SettingResetButton
+            label="GPU Memory"
+            setting="gpuMemory"
+            config={config}
+            update={update}
+          />
           <InfoHint>
             <div className="flex flex-col gap-1.5">
               <div>
@@ -993,7 +1103,7 @@ function GpuMemorySettings({
             onChange={(v) =>
               update(v < 0 ? { gpuLayers: v, tensorSplit: null } : { gpuLayers: v })
             }
-            displayValue={autoLayers ? "Auto" : undefined}
+            format={(v) => (v < 0 ? "Auto" : undefined)}
             info={
               <>
                 Layers to keep on the GPU (--gpu-layers); the rest run on CPU.
@@ -1079,9 +1189,9 @@ function GpuMemorySettings({
                     </span>
                   </div>
                 )}
-                {/* Not for diffusion: that runner drives one device and matches_gpu_ids
-                    reduces the request to its lowest id, so the arrows would move a row
-                    without moving the model, under help text promising the opposite. */}
+                {/* Not for diffusion: that runner uses the lowest id, or splits in id
+                    order, so the arrows would move a row without moving the model, under
+                    help text promising the opposite. */}
                 {isGpuChecked(d.index) && !singleGpuInUse && !isDiffusion && (
                   <div className="flex shrink-0 items-center gap-0.5">
                     <button
@@ -1173,6 +1283,12 @@ function ParallelSlotsRow({
     <div className={ROW_CLASS}>
       <div className="flex min-w-0 items-center gap-1.5">
         <span className={LABEL_CLASS}>Parallel Slots</span>
+        <SettingResetButton
+          label="Parallel Slots"
+          setting="nParallel"
+          config={config}
+          update={update}
+        />
         <InfoHint>{hint}</InfoHint>
       </div>
       <input
@@ -1243,6 +1359,12 @@ function MlxSpeculativeRows({
             Ngram copies without one. Drafters are read from the local Hugging
             Face cache, never downloaded.
           </InfoHint>
+          <SettingResetButton
+            label="Speculative Decoding"
+            setting="mlxSpeculative"
+            config={config}
+            update={update}
+          />
         </div>
         <Select
           value={mode}
@@ -1287,6 +1409,12 @@ function MlxSpeculativeRows({
               ceiling and Unsloth decodes plainly when drafting would be slower.
               Leave blank to let Unsloth tune it for this machine.
             </InfoHint>
+            <SettingResetButton
+              label="Draft Tokens"
+              setting="specDraftNMax"
+              config={config}
+              update={update}
+            />
           </div>
           <input
             type="number"
@@ -1319,6 +1447,12 @@ function MlxSpeculativeRows({
               model. Auto uses the model's own head or the first cached drafter
               named for it.
             </InfoHint>
+            <SettingResetButton
+              label="Drafter"
+              setting="specDraftModel"
+              config={config}
+              update={update}
+            />
           </div>
           <Select
             value={config.specDraftModel ?? "auto"}
@@ -1390,6 +1524,12 @@ function MlxAdvancedSettings({
       <div className={ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS}>KV Cache Dtype</span>
+          <SettingResetButton
+            label="KV Cache Dtype"
+            setting="mlxKvQuant"
+            config={config}
+            update={update}
+          />
           <InfoHint>
             Lower KV cache precision to save memory, at some cost to quality.
             Auto keeps full precision; 8-bit is the safest step down.
@@ -1432,6 +1572,12 @@ function MlxAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS}>Int8 Prefill</span>
+            <SettingResetButton
+              label="Int8 Prefill"
+              setting="mlxInt8Prefill"
+              config={config}
+              update={update}
+            />
             <span className="shrink-0 rounded-md bg-[rgb(0_0_0_/_calc(0.04*var(--contrast-wash-gain,1)))] px-1.5 py-0.5 text-ui-10 font-medium uppercase tracking-wide text-muted-foreground dark:bg-muted">
               Exp
             </span>
@@ -1506,6 +1652,12 @@ function LoadModeRow({
       <div className={ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS}>Mmap/Mlock</span>
+          <SettingResetButton
+            label="Mmap/Mlock"
+            setting="loadMode"
+            config={config}
+            update={update}
+          />
           <InfoHint>
             How the weights are read off disk (--load-mode). Auto is the
             default and lets Unsloth pick. mmap maps the file, mlock keeps the
@@ -1605,6 +1757,12 @@ function GgufAdvancedSettings({
       <div className={ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS}>KV Cache Dtype</span>
+          <SettingResetButton
+            label="KV Cache Dtype"
+            setting="kvCacheDtype"
+            config={config}
+            update={update}
+          />
           <InfoHint>
             Lower KV cache precision to save VRAM, at some cost to quality. f16
             is the default; q8_0 through iq4_nl are quantized.
@@ -1640,6 +1798,12 @@ function GgufAdvancedSettings({
       <div className={ROW_CLASS}>
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={LABEL_CLASS_WRAP}>Speculative Decoding</span>
+          <SettingResetButton
+            label="Speculative Decoding"
+            setting="speculative"
+            config={config}
+            update={update}
+          />
           <InfoHint>
             Faster generation. Auto picks the best strategy for the model and
             platform, or choose one to force it. DSpark and DFlash download a
@@ -1685,6 +1849,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS}>Draft Tokens</span>
+            <SettingResetButton
+              label="Draft Tokens"
+              setting="specDraftNMax"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               Max draft tokens per step. Leave blank for the default (2 or 3,
               depending on the strategy and device).
@@ -1718,6 +1888,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS_WRAP}>Spec Decoding KV Cache Dtype</span>
+            <SettingResetButton
+              label="Spec Decoding KV Cache Dtype"
+              setting="specDraftCacheDtype"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               KV cache precision for the draft model's own context, separate
               from the KV Cache Dtype above. f16 is the default; quantizing it
@@ -1764,6 +1940,12 @@ function GgufAdvancedSettings({
           <div className={ROW_CLASS}>
             <div className="flex min-w-0 items-center gap-1.5">
               <span className={LABEL_CLASS}>Batch Size</span>
+              <SettingResetButton
+                label="Batch Size"
+                setting="nBatch"
+                config={config}
+                update={update}
+              />
               <InfoHint>
                 Logical prompt batch size (--batch-size). Leave blank for the
                 default (2048). The micro-batch below usually matters more.
@@ -1810,6 +1992,12 @@ function GgufAdvancedSettings({
           <div className={ROW_CLASS}>
             <div className="flex min-w-0 items-center gap-1.5">
               <span className={LABEL_CLASS}>Micro-batch Size</span>
+              <SettingResetButton
+                label="Micro-batch Size"
+                setting="nUbatch"
+                config={config}
+                update={update}
+              />
               <InfoHint>
                 Physical prompt micro-batch size (--ubatch-size). Leave blank
                 for the default (512, or 1120 on Gemma 4 vision models). Larger
@@ -1857,6 +2045,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS}>Tensor Parallelism</span>
+            <SettingResetButton
+              label="Tensor Parallelism"
+              setting="tensorParallel"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               Speeds up dense models across multiple GPUs. No effect on a single
               GPU, and MoE models don't benefit.
@@ -1876,6 +2070,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS}>Vision</span>
+            <SettingResetButton
+              label="Vision"
+              setting="vision"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               Loads the vision projector so the model can read images. Turning
               it off frees that VRAM for more layers on the GPU. Text generation
@@ -1894,6 +2094,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS}>Reasoning Budget</span>
+            <SettingResetButton
+              label="Reasoning Budget"
+              setting="reasoningBudget"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               Maximum thinking tokens. -1 is unlimited and 0 turns reasoning
               off.
@@ -1931,6 +2137,12 @@ function GgufAdvancedSettings({
         <div className={ROW_CLASS}>
           <div className="flex min-w-0 items-center gap-1.5">
             <span className={LABEL_CLASS_WRAP}>Reasoning Budget Message</span>
+            <SettingResetButton
+              label="Reasoning Budget Message"
+              setting="reasoningBudgetMessage"
+              config={config}
+              update={update}
+            />
             <InfoHint>
               Optional text added before the end-of-thinking tag when the budget
               runs out.
@@ -1973,6 +2185,12 @@ function GgufAdvancedSettings({
           <div className={ROW_CLASS}>
             <div className="flex min-w-0 items-center gap-1.5">
               <span className={LABEL_CLASS}>Checkpoints</span>
+              <SettingResetButton
+                label="Checkpoints"
+                setting="ctxCheckpoints"
+                config={config}
+                update={update}
+              />
               <InfoHint>
                 Checkpoints kept per slot (--ctx-checkpoints), which let a
                 sliding-window model rewind instead of re-processing the prompt.
@@ -2011,6 +2229,12 @@ function GgufAdvancedSettings({
           <div className={ROW_CLASS}>
             <div className="flex min-w-0 items-center gap-1.5">
               <span className={LABEL_CLASS}>Cache RAM</span>
+              <SettingResetButton
+                label="Cache RAM"
+                setting="cacheRam"
+                config={config}
+                update={update}
+              />
               <InfoHint>
                 Host memory in MiB for caching prompt state evicted from a slot
                 (--cache-ram), so a returning conversation is not re-processed.
@@ -2979,19 +3203,6 @@ export function ModelConfigPage({
     maxContext,
   );
   const contextIsAuto = config.customContextLength == null;
-  const contextInputValue = contextIsAuto
-    ? Math.min(
-        Math.max(
-          activeLoadedContext ?? AUTO_OFFLOAD_CONTEXT_LENGTH,
-          minContext,
-        ),
-        maxContext,
-      )
-    : contextValue;
-  const contextSliderValue = contextIsAuto ? 0 : contextValue;
-  const setContextLength = (v: number) => update({ customContextLength: v });
-  const setContextSliderValue = (v: number) =>
-    update({ customContextLength: v === 0 ? null : v });
   const rawBaseline = loadedConfig ?? DEFAULT_PER_MODEL_CONFIG;
   const baseline = resolvedIsDiffusion
     ? withoutUnsupportedDiffusionSettings(rawBaseline, gpuIndexKind)
@@ -3331,6 +3542,29 @@ export function ModelConfigPage({
     });
 
   const rememberChanged = remember !== savedRemember;
+  // Against the saved record, not the edited flag: a field put back is no longer a change.
+  const storedRunSettings = useSavedRunSettings(target);
+  const savedNow = savedRemember && storedRunSettings != null;
+  const matchesSaved =
+    savedNow &&
+    perModelConfigsEqual(
+      config,
+      reconcileConfigGpuSelection(
+        storedRunSettings,
+        resolvedIsDiffusion,
+        gpuDevices,
+      ),
+      // MLX stores an explicit Auto apart from unset (storedSpeculativeAuto), so only GGUF folds them.
+      { unsetIsAuto: !targetIsMlx },
+    );
+  const saveState =
+    rememberChanged || (savedNow && !matchesSaved)
+      ? "Unsaved changes"
+      : savedNow
+        ? "Saved for this model"
+        : atDefault
+          ? "Using defaults"
+          : "Not saved";
   const persistenceOnly = isActiveModel && atBaseline && rememberChanged;
   const primaryActionLabel = persistenceOnly
     ? remember
@@ -3603,6 +3837,12 @@ export function ModelConfigPage({
             <div className="mt-1.5 truncate text-ui-14 font-semibold leading-tight text-foreground">
               {target.displayName}
             </div>
+            <div
+              className="mt-1 truncate text-ui-11 leading-tight text-muted-foreground"
+              aria-live="polite"
+            >
+              {saveState}
+            </div>
           </div>
         </div>
       )}
@@ -3617,7 +3857,26 @@ export function ModelConfigPage({
       />
       <div className="space-y-5">
         {!target.isGguf && !targetIsMlx && !targetIsNpu && !classifiedIsDiffusion && !target.meta.isLora && !target.meta.audioType && (
-          <InferenceEnginePicker parallelism={config.engineParallelism ?? "tensor"} onParallelismChange={engineParallelism => update({ engineParallelism })} precision={config.enginePrecision ?? "auto"} onPrecisionChange={enginePrecision => update({ enginePrecision })} value={config.engine ?? "auto"} onChange={engine => update({ engine })} onReadyChange={setEngineReady} onUse={handleRun} gpuIds={config.selectedGpuIds} onGpuChange={ids => update({ selectedGpuIds: ids, selectedGpuIndexKind: "physical" })} />
+          <InferenceEnginePicker parallelism={config.engineParallelism ?? "tensor"} onParallelismChange={engineParallelism => update({ engineParallelism })} precision={config.enginePrecision ?? "auto"} onPrecisionChange={enginePrecision => update({ enginePrecision })} kvCacheDtype={config.engineKvCacheDtype ?? "auto"} onKvCacheDtypeChange={engineKvCacheDtype => update({ engineKvCacheDtype })} gpuMemoryUtilization={config.engineGpuMemoryUtilization ?? null} onGpuMemoryUtilizationChange={engineGpuMemoryUtilization => update({ engineGpuMemoryUtilization })} seed={config.engineSeed ?? null} onSeedChange={engineSeed => update({ engineSeed })} value={config.engine ?? "auto"} onChange={engine => update({ engine })} onReadyChange={setEngineReady} onUse={handleRun} gpuIds={config.selectedGpuIds} onGpuChange={ids => update({ selectedGpuIds: ids, selectedGpuIndexKind: "physical" })} />
+        )}
+        {/* LoRA adapters keep the precision they were trained in, so they get no switch. */}
+        {!target.isGguf && !targetIsMlx && !targetIsNpu && !classifiedIsDiffusion && !target.meta.isLora && !target.meta.audioType && (config.engine ?? "auto") === "auto" && (
+          <div className={ROW_CLASS}>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className={LABEL_CLASS}>Load in 4-bit</span>
+              <InfoHint>
+                Quantizes the model to 4 bits as it loads, using about a quarter
+                of the memory. Turn it off to run the model in 16-bit, the same
+                precision as a 16-bit LoRA or full fine-tune.
+              </InfoHint>
+            </div>
+            <Switch
+              className="panel-switch shrink-0"
+              aria-label="Load in 4-bit"
+              checked={config.loadIn4bit !== false}
+              onCheckedChange={(checked) => update({ loadIn4bit: checked })}
+            />
+          </div>
         )}
         {audioRuntimeGguf ? (
           <p className="text-ui-12 leading-snug text-muted-foreground">
@@ -3650,87 +3909,52 @@ export function ModelConfigPage({
         )}
         {target.isGguf && !audioRuntimeGguf && (
           <>
-            <div className="space-y-2">
-              <div className={ROW_CLASS}>
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <span className={LABEL_CLASS}>Context Length</span>
-                  <InfoHint>
-                    Drag all the way left for Auto, which picks a context that
-                    fits while keeping GPU speed. Custom values request an exact
-                    context; higher ones use more memory.
-                    {contextIsAuto && activeLoadedContext != null
-                      ? ` Auto currently selected ${activeLoadedContext.toLocaleString()} tokens.`
-                      : ""}
-                    {nativeContextLength != null
-                      ? ` This model's native context is ${nativeContextLength.toLocaleString()} tokens.`
-                      : ""}
-                  </InfoHint>
-                </div>
-                <NumericValueInput
-                  ref={contextInputRef}
-                  value={contextInputValue}
-                  min={minContext}
-                  max={maxContext}
-                  step={1}
-                  onChange={setContextLength}
-                  displayValue={contextIsAuto ? "Auto" : undefined}
-                  ariaLabel="Context Length"
-                  className={NUMBER_INPUT_CLASS}
-                  fixedWidth={true}
-                  size={8}
+            <GgufContextLengthSetting
+              value={contextIsAuto ? 0 : contextValue}
+              autoValue={Math.min(
+                Math.max(
+                  activeLoadedContext ?? AUTO_OFFLOAD_CONTEXT_LENGTH,
+                  minContext,
+                ),
+                maxContext,
+              )}
+              min={minContext}
+              max={maxContext}
+              nativeContextLength={nativeContextLength}
+              activeLoadedContext={activeLoadedContext}
+              inputRef={contextInputRef}
+              resetButton={
+                <SettingResetButton
+                  label="Context Length"
+                  setting="contextLength"
+                  config={config}
+                  update={update}
                 />
-              </div>
-              {/* Grouped so the warning sits 4px under the slider, as advice does elsewhere. */}
-              <div className="space-y-1">
-                {nativeContextLength != null ? (
-                  <div className="space-y-1">
-                    <Slider
-                      min={0}
-                      max={maxContext}
-                      step={128}
-                      value={[contextSliderValue]}
-                      onValueChange={([v]) => setContextSliderValue(v)}
-                      className="panel-slider"
-                      aria-label="Context Length"
-                      // Position 0 is Auto, not a zero-token context, so aria-valuenow alone reads as a length no
-                      // model has. The number is only spoken once one exists.
-                      thumbValueText={(v) =>
-                        v !== 0
-                          ? `${v.toLocaleString()} tokens`
-                          : activeLoadedContext != null
-                            ? `Auto, currently ${contextInputValue.toLocaleString()} tokens`
-                            : "Auto"
-                      }
-                    />
-                    <div className="flex justify-between text-ui-10 text-muted-foreground">
-                      <span>Auto</span>
-                      <span>{maxContext.toLocaleString()}</span>
-                    </div>
-                  </div>
-                ) : null}
-                {!contextIsAuto &&
-                  isActiveModel &&
-                  loadedMaxContextLength != null &&
-                  contextValue > loadedMaxContextLength && (
-                    <p className="text-ui-11 text-amber-500">
-                      {isAppleUnifiedMemory ? (
-                        <>
-                          Above Studio&apos;s free-memory estimate (
-                          {loadedMaxContextLength.toLocaleString()} tokens). It
-                          may still load, but macOS may have to compress or swap
-                          other apps and generation may slow down.
-                        </>
-                      ) : (
-                        <>
-                          Exceeds estimated VRAM capacity (
-                          {loadedMaxContextLength.toLocaleString()} tokens). The
-                          model may use system RAM.
-                        </>
-                      )}
-                    </p>
-                  )}
-              </div>
-            </div>
+              }
+              onChange={(v) => update({ customContextLength: v === 0 ? null : v })}
+              renderWarning={(v) =>
+                isActiveModel &&
+                loadedMaxContextLength != null &&
+                v > loadedMaxContextLength && (
+                  <p className="text-ui-11 text-amber-500">
+                    {isAppleUnifiedMemory ? (
+                      <>
+                        Above Studio&apos;s free-memory estimate (
+                        {loadedMaxContextLength.toLocaleString()} tokens). It
+                        may still load, but macOS may have to compress or swap
+                        other apps and generation may slow down.
+                      </>
+                    ) : (
+                      <>
+                        Exceeds estimated VRAM capacity (
+                        {loadedMaxContextLength.toLocaleString()} tokens). The
+                        model may use system RAM.
+                      </>
+                    )}
+                  </p>
+                )
+              }
+            />
 
             {/* Above the block it reveals, so expanding never moves the switch. */}
             <AdvancedSettingsToggle
@@ -3767,6 +3991,14 @@ export function ModelConfigPage({
               inputRef={maxSeqLengthInputRef}
               isMlx={pinsContextLength}
               pinned={savedContextPin(config) != null}
+              reset={
+                <SettingResetButton
+                  label={pinsContextLength ? "Context Length" : "Max Seq Length"}
+                  setting="contextPin"
+                  config={config}
+                  update={update}
+                />
+              }
               fittedToMemory={
                 savedContextPin(config) == null && mlxFittedWindow != null
               }
@@ -3903,7 +4135,7 @@ export function ModelConfigPage({
               });
             }}
           >
-            Reset
+            Reset all
           </Button>
           {target.isGguf && (
             <SharedRunConfigControls
