@@ -31,6 +31,8 @@ class ExtraSlot:
     last_used: float = 0.0
     generations: set = field(default_factory = set)
     refs: int = 0
+    # Voice mode's speaking model, kept with multi-model off; voice mode unloads it.
+    voice: bool = False
 
 
 slots: list[ExtraSlot] = []
@@ -285,8 +287,36 @@ def unload_extra_models(
 def unload_idle() -> int:
     """Drop every kept model no request is using or loading."""
     filling = loading[0] if loading else None
-    idle = [s for s in list(slots) if s is not filling and not s.generations and not s.refs]
+    idle = [
+        s
+        for s in list(slots)
+        if s is not filling and not s.generations and not s.refs and not s.voice
+    ]
     return len(evict_these(idle))
+
+
+def audio_cpp_model_names(orchestrator) -> list[str]:
+    """The audio.cpp models an orchestrator holds or is loading: their servers run from the managed tree."""
+    from core.inference.audio_cpp_models import AUDIO_CPP_AUDIO_TYPES, looks_like_audio_cpp
+
+    # Snapshot the loads first: one that publishes between the two reads moves from loading to held.
+    loading = list(getattr(orchestrator, "loading_models", None) or ())
+    held = [
+        name
+        for name, entry in list((getattr(orchestrator, "models", None) or {}).items())
+        if isinstance(entry, dict) and entry.get("audio_type") in AUDIO_CPP_AUDIO_TYPES
+    ]
+    return held + [name for name in loading if name not in held and looks_like_audio_cpp(name)]
+
+
+def unload_audio_cpp_slots(strict: bool = False) -> int:
+    """Drop every slot holding or loading an audio.cpp model, for the audio.cpp runtime swap."""
+    doomed = [slot for slot in list(slots) if audio_cpp_model_names(slot.orchestrator)]
+    for slot in doomed:
+        # drop() keeps the loading marker, so a load still ahead of its spawn would start a worker after it.
+        for name in list(slot.orchestrator.loading_models):
+            slot.orchestrator.cancel_load(name)
+    return _drop_where(lambda slot, filling: any(slot is held for held in doomed), strict)
 
 
 def unload_llama_slots(strict: bool = False) -> int:
