@@ -1449,10 +1449,6 @@ gptoss_template = \
             {#- <|return|> should never be an input to the model, but we include it as the final token #}
             {#- when training, so the model learns to emit it. #}
             {{- "<|start|>assistant<|channel|>final<|message|>" + message.content + "<|return|>" }}
-        {%- elif "thinking" in message %}
-            {#- CoT is dropped during all previous turns, so we never render it for inference #}
-            {{- "<|start|>assistant<|channel|>analysis<|message|>" + message.content + "<|end|>" }}
-            {%- set last_tool_call.name = none %}
         {%- else %}
             {#- CoT is dropped during all previous turns, so we never render it for inference #}
             {{- "<|start|>assistant<|channel|>final<|message|>" + message.content + "<|end|>" }}
