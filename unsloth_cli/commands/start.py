@@ -6249,6 +6249,39 @@ def _open_codex_app() -> None:
     typer.echo("Open the Codex app now.")
 
 
+_console_close_handlers = []  # a ctypes callback must outlive any call still running in it
+
+
+@contextlib.contextmanager
+def _survive_console_close():
+    # Windows ends the process once a close, logoff or shutdown handler returns, skipping every finally.
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+
+    done = threading.Event()
+
+    @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+    def handler(event):
+        if event not in (1, 2, 5, 6):  # CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN
+            return 0
+        # Wakes the hold loop's sleep, which an interrupt from this thread alone would not.
+        signal.raise_signal(signal.SIGINT)
+        if event != 1:
+            done.wait()
+        return 1
+
+    _console_close_handlers.append(handler)
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetConsoleCtrlHandler(handler, 1)
+    try:
+        yield
+    finally:
+        kernel32.SetConsoleCtrlHandler(handler, 0)
+        done.set()
+
+
 def _hold_codex_app(base: str) -> None:
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -6270,6 +6303,7 @@ def _hold_codex_app(base: str) -> None:
             signal.signal(number, handler)
 
 
+@_survive_console_close()
 def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> None:
     target = _codex_app_target()
     catalog = target.path.with_name(_CODEX_APP_CATALOG)
