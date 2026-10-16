@@ -3275,13 +3275,70 @@ def _graceful_shutdown_on_sigterm() -> None:
     _signal.signal(_signal.SIGTERM, _handler)
 
 
-def _signal_stop(pid: int) -> "str | None":
+# Past the server's own save budget (UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S, 120 s), so a save
+# that finishes is never cut by the fallback kill.
+_GRACEFUL_STOP_WAIT_S = 150.0
+
+
+def _request_graceful_shutdown(paths: "Sequence[Path]") -> bool:
+    """POST /api/shutdown to the server behind a per-port record. Windows has no SIGTERM, and
+    taskkill /F skips the handler that stops and saves a running training job."""
+    from unsloth_cli._inference import (
+        _recorded_loopback_bases,
+        _studio_token,
+        urlopen_no_redirect,
+        verify_studio_identity,
+    )
+
+    for path in paths:
+        match = re.fullmatch(r"studio-(\d+)-\d+\.pid", path.name)
+        record = _read_pid_record(path) if match else None
+        if record is None:
+            continue
+        for base in _recorded_loopback_bases(record[2], match.group(1)):
+            # The token is only sent to a listener that proves it holds this install's secret.
+            if not verify_studio_identity(base):
+                continue
+            token = _studio_token()
+            if token is None:
+                return False
+            request = urllib.request.Request(
+                f"{base}/api/shutdown",
+                data = b"",
+                headers = {"Authorization": f"Bearer {token}", "User-Agent": "unsloth-cli"},
+                method = "POST",
+            )
+            try:
+                with urlopen_no_redirect(request, timeout = 10):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _wait_for_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+    return True
+
+
+def _signal_stop(pid: int, paths: "Sequence[Path]" = ()) -> "str | None":
     import signal as _signal
 
     if pid < 2:
         return f"refusing to signal PID {pid}"
     try:
         if sys.platform == "win32":
+            if _request_graceful_shutdown(paths):
+                typer.echo(
+                    f"Asked Unsloth server (PID {pid}) to shut down; a running training "
+                    "job is saved first."
+                )
+                if _wait_for_exit(pid, _GRACEFUL_STOP_WAIT_S):
+                    return None
             # /T also stops llama-server children, which otherwise keep GPU and port.
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check = True)
         else:
@@ -3315,7 +3372,7 @@ def stop():
             for path in paths:
                 _unlink_quietly(path)
             continue
-        error = _signal_stop(pid)
+        error = _signal_stop(pid, paths)
         if error is not None:
             failed.append((pid, error))
             typer.echo(f"Failed to stop Unsloth server (PID {pid}): {error}", err = True)
