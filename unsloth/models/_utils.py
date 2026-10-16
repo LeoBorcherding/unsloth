@@ -4751,7 +4751,10 @@ import transformers.utils.quantization_config
 
 transformers.utils.quantization_config.BitsAndBytesConfig.__init__ = _BitsAndBytesConfig__init__
 
+import atexit
 import pickle
+import shutil
+import tempfile
 
 
 def offload_to_disk(
@@ -4760,9 +4763,13 @@ def offload_to_disk(
     name,
     temporary_location: str = "_unsloth_temporary_saved_buffers",
 ):
-    file_location = os.path.join(temporary_location, model.config._name_or_path)
-    if not os.path.exists(file_location):
-        os.makedirs(file_location)
+    # Not os.path.join(temporary_location, _name_or_path): a local model's path is absolute, so the
+    # join lands in the user's model folder. A fresh dir per call also keeps concurrent runs apart.
+    model_name = os.path.basename(os.path.normpath(str(model.config._name_or_path)))
+    prefix = re.sub(r"[^\w.-]+", "_", model_name) or "model"
+    os.makedirs(temporary_location, exist_ok = True)
+    file_location = tempfile.mkdtemp(prefix = f"{prefix}-", dir = os.path.abspath(temporary_location))
+    atexit.register(shutil.rmtree, file_location, ignore_errors = True)
 
     filename = os.path.join(file_location, f"{name}.pt")
     W = W.weight if hasattr(W, "weight") else W
