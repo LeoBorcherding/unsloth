@@ -26,10 +26,12 @@ _COMPILE_OPTIONS = {
 _SKIP = {"GptOssDecoderLayer"}
 
 
-def _enabled():
-    return os.environ.get("UNSLOTH_BLOCK_COMPILE", "1") != "0" and os.environ.get(
-        "UNSLOTH_COMPILE_DISABLE", "0"
-    ) not in ("1", "partial")
+def _enabled(model = None):
+    # The loader restores UNSLOTH_COMPILE_DISABLE after each load; the model keeps its own value.
+    stamped = (getattr(model, "_unsloth_load_env", None) or {}).get("UNSLOTH_COMPILE_DISABLE")
+    return os.environ.get("UNSLOTH_BLOCK_COMPILE", "1") != "0" and not (
+        {os.environ.get("UNSLOTH_COMPILE_DISABLE", "0"), stamped} & {"1", "partial"}
+    )
 
 
 def _forced_float32(module):
@@ -743,7 +745,7 @@ def patch_block_compile(model):
             else:
                 layer.__dict__["_unsloth_forced_float32"] = bool(forced)
     forced = env if forced is None else forced
-    if forced or not _enabled() or not torch.cuda.is_available() or not _torch_supported():
+    if forced or not _enabled(model) or not torch.cuda.is_available() or not _torch_supported():
         return []
     classes = _decoder_layer_classes(model)
     if not classes:

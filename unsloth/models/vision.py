@@ -142,6 +142,8 @@ from .remote_code_shims import apply_remote_code_shims
 from .grouped_linear_lora import register_grouped_linear_lora
 from .loader_utils import (
     _bnb_bits_requested,
+    _load_env_values,
+    MODEL_SCOPED_ENV_VARS,
     DEFAULT_DEVICE_MAP,
     OFFLOAD_EMBEDDING_AUTO,
     planner_config_overrides,
@@ -1384,7 +1386,7 @@ def _compiles_decode(model):
         return False
     if os.environ.get("UNSLOTH_COMPILE_DECODE", "0") != "1":
         return False
-    if os.environ.get("UNSLOTH_COMPILE_DISABLE", "0") in ("1", "partial"):
+    if _load_env_values(model, "UNSLOTH_COMPILE_DISABLE") & {"1", "partial"}:
         return False
     # Mirror transformers' own auto-compile exceptions: when it will not compile the step,
     # leave the eager decode path exactly as it was.
@@ -1943,7 +1945,7 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
     # Fix generation_config: use hybrid if a sliding window was seen, otherwise try static.
     cache_implementation = getattr(self.config, "cache_implementation", None)
     if getattr(self, "_supports_static_cache", getattr(self, "_can_compile_fullgraph", True)):
-        if os.environ.get("UNSLOTH_DISABLE_STATIC_GENERATION", "0") == "0":
+        if _load_env_values(self, "UNSLOTH_DISABLE_STATIC_GENERATION") == {"0"}:
             cache_implementation = "static"
         elif Version(transformers_version) < Version("4.56.0.dev0"):
             cache_implementation = None
@@ -4424,6 +4426,7 @@ class FastBaseModel:
                 unsloth_base_fast_generate.__doc__ = model._old_generate.__doc__
                 model.generate = types.MethodType(unsloth_base_fast_generate, model)
         model._unsloth_trust_remote_code = trust_remote_code
+        model._unsloth_load_env = {name: os.environ.get(name) for name in MODEL_SCOPED_ENV_VARS}
         # Export's trusted config re-read pins to this commit, not a moved branch head.
         model._unsloth_trust_remote_code_commit = (
             _trusted_remote_code_commit(

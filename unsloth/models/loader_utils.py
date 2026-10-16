@@ -4026,7 +4026,15 @@ def _note_offline_retry(error, retry_error):
 
 
 # Set per load (family branches in FastModel.from_pretrained, the compiler's norm check) and read only during it. Left set, a later load of another family gets float32 norms beside 16 bit projections and fails with "float != BFloat16".
-LOAD_SCOPED_ENV_VARS = ("UNSLOTH_HIGH_PRECISION_LAYERNORM",)
+# Family switches also read after the load (decode compile, static generation, block compile): the model keeps its own copy in `_unsloth_load_env`.
+MODEL_SCOPED_ENV_VARS = ("UNSLOTH_COMPILE_DISABLE", "UNSLOTH_DISABLE_STATIC_GENERATION")
+LOAD_SCOPED_ENV_VARS = ("UNSLOTH_HIGH_PRECISION_LAYERNORM",) + MODEL_SCOPED_ENV_VARS
+
+
+def _load_env_values(model, name):
+    """`name` in the process env and as the model's own load set it."""
+    stamped = (getattr(model, "_unsloth_load_env", None) or {}).get(name)
+    return {os.environ.get(name, "0"), stamped or "0"}
 
 
 def _restore_load_scoped_env(fn):
