@@ -360,6 +360,26 @@ def test_a_model_with_no_adapter_is_unchanged(monkeypatch, tmp_path):
     assert len(model.saved) == 1
 
 
+@pytest.mark.parametrize(
+    "model_dtype, written",
+    [("bfloat16", "bfloat16"), ("float16", "float16"), ("float32", "float16")],
+)
+def test_a_16bit_full_finetune_keeps_its_dtype_without_cuda_bf16(
+    monkeypatch, tmp_path, model_dtype, written
+):
+    """XPU, MPS and CPU: torch.cuda reports no bf16 (the harness default), yet a bf16 model
+    must not be cast to f16, which turns anything past 65504 into inf."""
+    model = _FullModel()
+    model.dtype = model_dtype
+    generic_save, calls = _routing_environment(monkeypatch, model)
+    targets = []
+    generic_save.__globals__["_cast_state_dict_16bit"] = (
+        lambda model, state_dict, target: targets.append(target) or state_dict
+    )
+    generic_save(model, None, save_directory = str(tmp_path), save_method = "merged_16bit")
+    assert targets == [written]
+
+
 def test_none_is_normalised_before_the_merge_is_reached(monkeypatch, tmp_path):
     """Whatever the writer, `None` must have become `True` by the time it is forwarded."""
     model = _PeftModel()

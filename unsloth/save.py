@@ -2165,13 +2165,6 @@ def save_to_gguf(
     else:
         raise TypeError("Unsloth: quantization_method can only be a string or a list of strings")
 
-    if model_dtype == "bf16" and not torch.cuda.is_bf16_supported():
-        logger.warning(
-            "Unsloth: Cannot convert to bf16 GGUF since your computer doesn't support it.\n"
-            "We shall switch instead to f16."
-        )
-        model_dtype = "f16"
-
     has_imatrix = imatrix is not None and str(imatrix) != ""
     if has_imatrix:
         # quantize_gguf gained the imatrix kwarg in a recent unsloth_zoo; fail fast before the expensive conversion rather than silently dropping it.
@@ -2223,10 +2216,6 @@ def save_to_gguf(
             model_dtype,
             has_imatrix = has_imatrix,
         )
-
-    if first_conversion == "bf16" and not torch.cuda.is_bf16_supported():
-        logger.warning("Unsloth: Switching bf16 to f16 due to hardware limitations")
-        first_conversion = "f16"
 
     first_conversion_dtype = "" if first_conversion == "None" else first_conversion
     needs_quantize_pass = any(m != first_conversion for m in quantization_method)
@@ -3746,7 +3735,7 @@ def _hub_cache_directory():
 
 
 def _gguf_source_dtype(model):
-    """The initial-conversion dtype `save_to_gguf` will derive from the model. `estimate_gguf_export_bytes` omits a requested output EQUAL to the initial conversion, since that file is already on disk and gets no quantize pass, so the preflight must name the same dtype the export will. Told "f16" for a bf16 model asked for `["f16", "q4_k_m"]` it charges the f16 file as the intermediate and nothing else, while `save_to_gguf` writes a bf16 intermediate AND a separate f16 output: one whole checkpoint unaccounted for (15.3GB on Qwen3-8B). Mirrors `save_to_gguf` step for step, ending in the same drop to f16 on hardware with no bf16, and returns "f16" whenever anything cannot be read."""
+    """The initial-conversion dtype `save_to_gguf` will derive from the model. `estimate_gguf_export_bytes` omits a requested output EQUAL to the initial conversion, since that file is already on disk and gets no quantize pass, so the preflight must name the same dtype the export will. Told "f16" for a bf16 model asked for `["f16", "q4_k_m"]` it charges the f16 file as the intermediate and nothing else, while `save_to_gguf` writes a bf16 intermediate AND a separate f16 output: one whole checkpoint unaccounted for (15.3GB on Qwen3-8B). Mirrors `save_to_gguf` step for step and returns "f16" whenever anything cannot be read."""
     try:
         model_dtype = dtype_from_config(model.config)
         if type(model_dtype) is str:
@@ -3757,13 +3746,6 @@ def _gguf_source_dtype(model):
             dtype = "f16"
     except Exception:
         return "f16"
-    if dtype == "bf16":
-        try:
-            if not torch.cuda.is_bf16_supported():
-                return "f16"
-        except Exception:
-            # save_to_gguf calls this unguarded, so a raise means no export at all and the figure is never used. "f16" is the same width either way; only the name has to match.
-            return "f16"
     return dtype
 
 
@@ -3793,14 +3775,6 @@ def _preflight_gguf_disk(
             first_conversion = _choose_first_conversion(
                 methods, model_dtype, has_imatrix = has_imatrix
             )
-        # save_to_gguf drops a bf16 initial conversion to f16 on hardware without bf16 AFTER resolving one, so the drop must be applied after both branches, not only in the resolver. The estimate omits an output equal to the initial conversion, so ["bf16"] at first_conversion "bf16" was priced as one file while a T4 writes f16 plus bf16: 15.3GB missing on Qwen3-8B.
-        if first_conversion == "bf16":
-            try:
-                if not torch.cuda.is_bf16_supported():
-                    first_conversion = "f16"
-            except Exception:
-                # save_to_gguf asks unguarded, so a raise means no export runs and this is never used. f16 is the wider of the two readings, never the narrower.
-                first_conversion = "f16"
         need = estimate_gguf_export_bytes(
             model = model,
             quantization_methods = methods,
@@ -5964,7 +5938,10 @@ def unsloth_generic_save(
                     for k, v in state_dict.items()
                 }
             else:
-                _target_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                # A 16-bit model keeps its dtype: the cast needs no GPU bf16, and bf16 to f16 overflows past 65504.
+                _target_dtype = getattr(model, "dtype", None)
+                if _target_dtype not in (torch.bfloat16, torch.float16):
+                    _target_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
                 state_dict = _cast_state_dict_16bit(model, state_dict, _target_dtype)
         if is_qwen3_5_vlm:
             state_dict = _qwen3_5_vlm_state_dict_for_save(state_dict)
