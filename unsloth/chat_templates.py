@@ -163,33 +163,37 @@ chatml_eos_token = "<|im_end|>"
 CHAT_TEMPLATES["chatml"] = (chatml_template, chatml_eos_token, True, chatml_ollama,)
 DEFAULT_SYSTEM_MESSAGE["chatml"] = None
 
-# Mistral Instruct doesn't allow system prompts, so we append it to the user message.
+# Mistral Instruct v0.3 format: "[INST] user[/INST] reply</s>". The space goes before the reply, not
+# before [/INST]. No system role: Mistral's template puts it in the last user turn.
 # =========================================== Mistral-1
 mistral_template = \
     "{{ bos_token }}"\
     "{% if messages[0]['role'] == 'system' %}"\
-        "{% if messages[1]['role'] == 'user' %}"\
-            "{{ '[INST] ' + messages[0]['content'] + ' ' + messages[1]['content'] + ' [/INST]' }}"\
-            "{% set loop_messages = messages[2:] %}"\
-        "{% else %}"\
-            "{{ '[INST] ' + messages[0]['content'] + ' [/INST]' }}"\
-            "{% set loop_messages = messages[1:] %}"\
-        "{% endif %}"\
+        "{% set system_message = messages[0]['content'] %}"\
+        "{% set loop_messages = messages[1:] %}"\
     "{% else %}"\
         "{% set loop_messages = messages %}"\
     "{% endif %}"\
+    "{% set ns = namespace(last_user = -1) %}"\
+    "{% for message in loop_messages %}"\
+        "{% if message['role'] == 'user' %}{% set ns.last_user = loop.index0 %}{% endif %}"\
+    "{% endfor %}"\
     "{% for message in loop_messages %}"\
         "{% if message['role'] == 'user' %}"\
-            "{{ '[INST] ' + message['content'] + ' [/INST]' }}"\
+            "{% if system_message is defined and loop.index0 == ns.last_user %}"\
+                "{{ '[INST] ' + system_message + '\n\n' + message['content'] + '[/INST]' }}"\
+            "{% else %}"\
+                "{{ '[INST] ' + message['content'] + '[/INST]' }}"\
+            "{% endif %}"\
         "{% elif message['role'] == 'assistant' %}"\
-            "{{ message['content'] + eos_token }}"\
+            "{{ ' ' + message['content'] | trim + eos_token }}"\
         "{% else %}"\
             "{{ raise_exception('Only user and assistant roles are supported!') }}"\
         "{% endif %}"\
     "{% endfor %}"
 
 # Ollama from https://www.ollama.com/library/mistral
-mistral_ollama = _ollama_template("mistral")
+mistral_ollama = _ollama_template("mistral-v03")
 
 mistral_eos_token = "eos_token"
 CHAT_TEMPLATES["mistral"] = (mistral_template, mistral_eos_token, False, mistral_ollama,)
@@ -3012,7 +3016,7 @@ def test_chat_templates():
     assert(correct_prompt == our_prompt)
 
     template = mistral_template
-    correct_tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
+    correct_tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
     correct_prompt = correct_tokenizer.apply_chat_template(messages[1:], tokenize = False, add_generation_prompt = True)
     correct_tokenizer.chat_template = template
     our_prompt = correct_tokenizer.apply_chat_template(messages[1:], tokenize = False, add_generation_prompt = True)
