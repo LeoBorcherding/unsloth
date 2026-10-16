@@ -7056,6 +7056,14 @@ export function HubModelPicker({
       <ModelRowMenu
         ariaLabel={`More options for ${name}`}
         onReveal={() => revealLocalModel(m.path, m.id)}
+        runSettings={
+          onConfigure
+            ? modelConfigTarget(
+                m.id,
+                localModelMeta(false, m.task, m.audio_type, m.opaque === true),
+              )
+            : undefined
+        }
         del={
           DELETABLE_LOCAL_SOURCES.has(m.source)
             ? {
