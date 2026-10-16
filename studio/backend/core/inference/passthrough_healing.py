@@ -27,6 +27,7 @@ the reply means. Per-request opt-out:
 
 import json
 import os
+import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -34,7 +35,7 @@ from core.inference.tool_loop_controller import (
     coerce_arguments_by_schema,
     coerce_tool_arguments,
 )
-from core.tool_healing import parse_tool_calls_from_text
+from core.tool_healing import _balanced_brace_end, parse_tool_calls_from_text
 
 # Only the formats this healer's parser can promote -- narrower than the loops' broader TOOL_XML_SIGNALS. A loop-only
 # marker (Llama <|python_tag|>, bare [ARGS]) would buffer a streamed call as prose without promoting it, so keep a
@@ -70,7 +71,9 @@ def nudge_enabled(request_flag: Optional[bool], *, response_format: Any = None) 
     return _NUDGE_DEFAULT if request_flag is None else bool(request_flag)
 
 
-_MAX_SIGNAL_LEN = max(len(s) for s in _HEAL_SIGNALS)
+# The think markers tool_healing's rehearsal guard knows, as (opener, closer).
+_THINK_TAGS = (("<think>", "</think>"), ("[THINK]", "[/THINK]"))
+_JSON_CALL_OPEN_RE = re.compile(r"<tool_call>\s*\{")
 # A suspected-but-unclosed tool block larger than this is declared a false alarm and flushed, bounding memory on a
 # model rambling XML-lookalike text.
 _MAX_HOLD_CHARS = 64 * 1024
@@ -293,6 +296,14 @@ def _earliest_signal(buffer: str) -> int:
 
 
 def _closed_signal_span(buffer: str) -> Optional[tuple[int, int]]:
+    floor = 0
+    json_open = _JSON_CALL_OPEN_RE.match(buffer)
+    if json_open:
+        # Tags quoted inside the JSON arguments are data: nothing closes until the braces balance.
+        brace_end = _balanced_brace_end(buffer, json_open.end() - 1)
+        if brace_end is None:
+            return None
+        floor = brace_end
     spans = []
     for open_tag, close_tag in (
         ("<tool_call>", "</tool_call>"),
@@ -300,19 +311,21 @@ def _closed_signal_span(buffer: str) -> Optional[tuple[int, int]]:
         ("<function=", "</function>"),
     ):
         start = buffer.find(open_tag)
+        if 0 < start < floor:
+            start = buffer.find(open_tag, floor)
         if start < 0:
             continue
-        end = buffer.find(close_tag, start)
+        end = buffer.find(close_tag, max(start, floor))
         if end >= 0:
             spans.append((start, end + len(close_tag)))
     return min(spans, key = lambda span: span[0]) if spans else None
 
 
-def _partial_signal_suffix(buffer: str) -> int:
-    """Length of the longest buffer suffix that is a proper prefix of a signal."""
-    for length in range(min(len(buffer), _MAX_SIGNAL_LEN - 1), 0, -1):
+def _partial_signal_suffix(buffer: str, markers = _HEAL_SIGNALS) -> int:
+    """Length of the longest buffer suffix that is a proper prefix of a marker."""
+    for length in range(min(len(buffer), max(len(m) for m in markers) - 1), 0, -1):
         tail = buffer[-length:]
-        if any(signal.startswith(tail) for signal in _HEAL_SIGNALS):
+        if any(marker.startswith(tail) for marker in markers):
             return length
     return 0
 
@@ -339,6 +352,9 @@ class StreamToolCallHealer:
         self._tool_schemas = _tool_schemas_by_name(tools) if tools is not None else None
         self._buffer = ""
         self._holding = False
+        # Closer of the think block the relayed text is inside, if any. The parse window starts at the
+        # signal, so the parser's own rehearsal guard never sees the opener.
+        self._think_close: Optional[str] = None
         self._id_offset = 0
         # Markup span each promoted call was cut from, keyed by its call id. Promotion is destructive -- the span
         # never reaches the client -- so a caller that ends up DISCARDING a promoted call (a turn truncated at
@@ -377,14 +393,19 @@ class StreamToolCallHealer:
         events: list = []
         while True:
             if not self._holding:
-                start = _earliest_signal(self._buffer)
+                start, scanned = self._call_start()
                 if start >= 0:
                     if start:
                         events.append(("text", self._buffer[:start]))
                     self._buffer = self._buffer[start:]
                     self._holding = True
                 else:
-                    keep = _partial_signal_suffix(self._buffer)
+                    markers = (
+                        (self._think_close,)
+                        if self._think_close
+                        else _HEAL_SIGNALS + tuple(o for o, _c in _THINK_TAGS)
+                    )
+                    keep = _partial_signal_suffix(self._buffer[scanned:], markers)
                     emit = self._buffer[: len(self._buffer) - keep]
                     if emit:
                         events.append(("text", emit))
@@ -438,6 +459,28 @@ class StreamToolCallHealer:
             # Everything past the drained run (later blocks) stays and is rescanned.
             self._buffer = self._buffer[run_end:]
             self._holding = False
+
+    def _call_start(self) -> tuple[int, int]:
+        """(index of the first signal outside a think block or -1, end of the scan). Updates the think state
+        over every complete marker scanned, so a call rehearsed in reasoning relays as text, as non-stream does."""
+        buffer = self._buffer
+        pos = 0
+        while True:
+            if self._think_close:
+                end = buffer.find(self._think_close, pos)
+                if end < 0:
+                    return -1, pos
+                pos = end + len(self._think_close)
+                self._think_close = None
+                continue
+            signal = _earliest_signal(buffer[pos:])
+            opens = [(buffer.find(o, pos), o, c) for o, c in _THINK_TAGS]
+            opens = [t for t in opens if t[0] >= 0 and (signal < 0 or t[0] < pos + signal)]
+            if not opens:
+                return (pos + signal if signal >= 0 else -1), pos
+            index, opener, closer = min(opens)
+            pos = index + len(opener)
+            self._think_close = closer
 
     def finalize(self) -> list:
         """End of stream: last-chance heal of the residue, else flush it.

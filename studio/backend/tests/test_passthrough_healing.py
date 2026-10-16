@@ -361,6 +361,51 @@ class TestStreamHealer:
         assert not _events_calls(after)
 
 
+_PARITY_ALLOWED = {"bash", "read", "write"}
+
+
+def _stream_calls(text, size):
+    healer = StreamToolCallHealer(_PARITY_ALLOWED)
+    events = []
+    for i in range(0, len(text), size):
+        events += healer.feed(text[i : i + size])
+    events += healer.finalize()
+    return [(c["function"]["name"], c["function"]["arguments"]) for c in _events_calls(events)], _events_text(events)
+
+
+def _nonstream_calls(text):
+    msg = {"role": "assistant", "content": text}
+    heal_openai_message(msg, _PARITY_ALLOWED)
+    return [(c["function"]["name"], c["function"]["arguments"]) for c in msg.get("tool_calls") or []]
+
+
+@pytest.mark.parametrize("size", [1, 7, 16, 10_000])
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Calls rehearsed in reasoning stay text.
+        '<think>I could do <tool_call>{"name":"bash","arguments":{"cmd":"rm -rf /"}}</tool_call> but no</think>\nOK done.',
+        '[THINK]I will <tool_call>{"name":"bash","arguments":{"cmd":"rm"}}</tool_call>[/THINK]<tool_call>{"name":"read","arguments":{"q":"a"}}</tool_call>',
+        '<think>[TOOL_CALLS]bash{"cmd":"rm"}</think>done',
+        # Tags quoted inside a JSON argument don't end the call.
+        '<tool_call>{"name":"write","arguments":{"q":"Wrap calls as <tool_call>...</tool_call> in the prompt."}}</tool_call>',
+        '<tool_call>{"name":"write","arguments":{"q":"<function=bash><parameter=cmd>rm</parameter></function>"}}</tool_call>',
+    ],
+)
+def test_stream_healer_matches_non_stream(text, size):
+    calls, relayed = _stream_calls(text, size)
+    assert calls == _nonstream_calls(text)
+    if not calls:
+        assert relayed == text
+
+
+def test_a_call_after_a_closed_think_block_is_still_promoted():
+    text = '<think>plan: <tool_call>{"name":"bash","arguments":{"cmd":"rm"}}</tool_call></think>Reading.<tool_call>{"name":"read","arguments":{"q":"a"}}</tool_call>'
+    calls, relayed = _stream_calls(text, 3)
+    assert [name for name, _args in calls] == ["read"]
+    assert relayed.startswith("<think>plan: <tool_call>")
+
+
 class TestNudgeHelpers:
     def _resp(
         self,
