@@ -182,10 +182,11 @@ export const BUDGET = {
   // machine and build, chunk count unchanged at 95): the bridge's requested flag and the playback context moved
   // out of the lazy player. Raw is raised by that; transfer is left where it was.
   // Unloading a voice whose load settles after Voice was turned off moves the chat page's voice slot logic
-  // into its own module and adds 255 B raw / 176 B transfer (6,797,645 -> 6,797,900 B raw, 2,044,255 ->
-  // 2,044,431 B transfer, one machine and build, chunk count unchanged at 95). Raised by that.
-  transferBytes: 2_044_529,
-  rawBytes: 6_797_951,
+  // into its own module, with every page's slot loads and unloads run in order, and adds 352 B raw / 220 B
+  // transfer (6,797,645 -> 6,797,997 B raw, 2,044,255 -> 2,044,475 B transfer, one machine and build, chunk
+  // count unchanged at 95). Raised by that.
+  transferBytes: 2_044_573,
+  rawBytes: 6_798_048,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
