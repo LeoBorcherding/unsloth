@@ -142,6 +142,7 @@ from .remote_code_shims import apply_remote_code_shims
 from .grouped_linear_lora import register_grouped_linear_lora
 from .loader_utils import (
     _bnb_bits_requested,
+    fsdp2_requested,
     DEFAULT_DEVICE_MAP,
     OFFLOAD_EMBEDDING_AUTO,
     planner_config_overrides,
@@ -169,6 +170,7 @@ from .loader_utils import (
     sync_load_when_quantizing,
     warn_if_bitsandbytes_quantized_nothing,
 )
+from .fsdp2_qlora import prepare_fsdp2_qlora, set_fsdp2_quant_storage
 # `unsloth.save` imports `.models.loader_utils`, so binding a name out of it here at module
 # scope closes a cycle and a cold `import unsloth.save` fails on the half-built module.
 # `_gpu_init` hid that by importing `.models` first; the MLX branch never reaches it. So the
@@ -191,6 +193,11 @@ from unsloth_zoo.gradient_checkpointing import (
     unpatch_unsloth_gradient_checkpointing,
     unpatch_unsloth_smart_gradient_checkpointing,
 )
+
+try:
+    from unsloth_zoo.gradient_checkpointing import non_reentrant_offload_hooks
+except ImportError:  # older unsloth_zoo
+    non_reentrant_offload_hooks = None
 import torch.utils.checkpoint as torch_checkpoint
 import transformers.modeling_utils as hf_modeling_utils
 from peft import LoraConfig, TaskType, get_peft_model as _get_peft_model
@@ -682,6 +689,35 @@ def _attach_bnb_multidevice_hooks(
 
 global NUM_LOGITS_TO_KEEP
 NUM_LOGITS_TO_KEEP = dict()
+
+
+def _set_generate_param(
+    kwargs,
+    name,
+    value,
+    overwrite = True,
+    force = False,
+):
+    # Sets a generate() parameter that is also a recognized GenerationConfig field
+    # (e.g. pad_token_id, cache_implementation, compile_config). Setting such a field
+    # as a raw kwarg *alongside* an explicit generation_config (as TRL passes at
+    # rollout time) is ambiguous to transformers and triggers its
+    # generation_config-vs-kwargs deprecation warning (GenerationMixin.
+    # _prepare_generation_config), even though the merged result is unaffected either
+    # way. Set it on that config object instead when one was passed in.
+    # overwrite=False preserves an already-set (non-None) value on the caller's config.
+    caller_generation_config = kwargs.get("generation_config")
+    if caller_generation_config is not None:
+        # Never leave the raw kwarg behind. It used to win the merge, so carry the
+        # caller's value onto the config unless this call forces its own.
+        if name in kwargs:
+            caller_value = kwargs.pop(name)
+            if not force:
+                value, overwrite = caller_value, True
+        if overwrite or getattr(caller_generation_config, name, None) is None:
+            setattr(caller_generation_config, name, value)
+    else:
+        kwargs[name] = value
 
 
 def _unsloth_generate_accepts_kwarg(model, key):
@@ -1886,7 +1922,10 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
             config_pad_token_id = decoder_pad_token_id
     if (is_dia or _is_text_seq2seq_config(self.config)) and config_pad_token_id is not None:
         default_pad_token_id = config_pad_token_id
-    kwargs["pad_token_id"] = kwargs.pop("pad_token_id", default_pad_token_id)
+
+    _set_generate_param(
+        kwargs, "pad_token_id", kwargs.get("pad_token_id", default_pad_token_id), overwrite = False
+    )
 
     try:
         kwargs["pixel_values"] = kwargs["pixel_values"].to(dtype)
@@ -1917,9 +1956,9 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
     # FlashAttention breaks on the forced static cache below (unfilled slots stay unmasked while decoding), so delegate after normalization but before it.
     _clear_generation_caches(self)
     if _uses_flash_attention_for_generation(self.config):
-        # Pin the literal "dynamic": None is merged back to the model default, and a static cache still arrives via kwargs or the caller's generation_config (TRL). The kwarg wins, since update runs last; skip it when the caller passed a cache.
+        # Pin the literal "dynamic": None is merged back to the model default, and a static cache still arrives via kwargs or the caller's generation_config (TRL); skip it when the caller passed a cache.
         if kwargs.get("past_key_values") is None:
-            kwargs["cache_implementation"] = "dynamic"
+            _set_generate_param(kwargs, "cache_implementation", "dynamic", force = True)
         try:
             with _get_inference_mode_context_manager(self), autocaster:
                 return self._old_generate(*args, **kwargs)
@@ -1988,21 +2027,14 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
     compile_config = _decode_compile_config if compile_decode else _compile_config
     if _is_decode_compile_model(self):
         _match_compiled_call(self, compile_decode)
-    if "generation_config" in kwargs:
-        kwargs["generation_config"].cache_implementation = (
-            dynamic_implementation if force_dynamic_cache else cache_implementation
-        )
-        # kwargs are applied after the config merge, so an explicit value survives.
-        if force_dynamic_cache:
-            kwargs["cache_implementation"] = dynamic_implementation
-        if cache_implementation is not None:
-            kwargs["generation_config"].compile_config = compile_config
-    else:
-        kwargs["cache_implementation"] = (
-            dynamic_implementation if force_dynamic_cache else cache_implementation
-        )
-        if cache_implementation is not None:
-            kwargs["compile_config"] = compile_config
+    _set_generate_param(
+        kwargs,
+        "cache_implementation",
+        dynamic_implementation if force_dynamic_cache else cache_implementation,
+        force = force_dynamic_cache,
+    )
+    if cache_implementation is not None:
+        _set_generate_param(kwargs, "compile_config", compile_config)
 
     decode_scope = _CompileDecodeOnRepeat(self) if compile_decode else contextlib.nullcontext()
     eager_scope = _EagerDecodeSteps(self) if _eager_decodes(self) else contextlib.nullcontext()
@@ -2998,6 +3030,15 @@ def _offload_activation_unpack(packed):
     return x if device is None else x.to(device, non_blocking = True)
 
 
+def _offload_activation_hooks():
+    # The zoo hooks copy on a side stream; the fallback queues the copy on the compute stream.
+    if non_reentrant_offload_hooks is not None:
+        return non_reentrant_offload_hooks()
+    return torch.autograd.graph.saved_tensors_hooks(
+        _offload_activation_pack, _offload_activation_unpack
+    )
+
+
 _NON_REENTRANT_GC_MODEL_TYPES = ("deepseek_v41",)
 
 
@@ -3651,6 +3692,10 @@ class FastBaseModel:
                 bnb_4bit_compute_dtype = bnb_compute_dtype,
                 llm_int8_skip_modules = _skip_modules,
             )
+            if fsdp2_requested():
+                # FSDP2 shards packed 4-bit bytes only in a float storage dtype; the compute dtype makes its
+                # mixed precision cast of them a no-op.
+                set_fsdp2_quant_storage(bnb_config, bnb_compute_dtype)
         elif load_in_8bit:
             bnb_config = BitsAndBytesConfig(
                 load_in_8bit = True,
@@ -3909,6 +3954,8 @@ class FastBaseModel:
                 _prepare_compressed_tensors_model(model, full_finetuning = full_finetuning)
                 if full_finetuning:
                     _dequantize_bitsandbytes_for_full_finetuning(model, torch_dtype, model_name)
+                elif fsdp2_requested():
+                    prepare_fsdp2_qlora(model, bnb_compute_dtype)
                 if load_in_16bit and not load_in_4bit and not load_in_8bit:
                     _dequantize_leftover_fp8_params(
                         model,
@@ -4466,6 +4513,13 @@ class FastBaseModel:
                     f"({type(_exc).__name__}: {_exc})."
                 )
         _install_bnb_nf4_override()
+        # head_dim 512 layers (Gemma-4 globals) otherwise fall to SDPA's efficient / math kernels.
+        # Lazy: the kernel module defines Triton autotuners, which need a driver at import.
+        from ..kernels.large_head_attention import (
+            patch_large_head_attention as _patch_large_head_attention,
+        )
+
+        _patch_large_head_attention(model)
         return _mark_requested_float32(model, user_float32), tokenizer
 
     @staticmethod
@@ -4636,6 +4690,7 @@ class FastBaseModel:
 
         # Only a regex generated here may be widened to expert submodules below.
         _target_modules_auto_regex = False
+        _target_modules_from_explicit_list = False
         if target_modules is None or target_modules == "all-linear":
             target_modules = get_peft_regex(
                 model,
@@ -4669,16 +4724,26 @@ class FastBaseModel:
                         "finetune_(vision|language|attention|mlp) filters; adapters "
                         "attach only where both select."
                     )
-                target_modules = get_peft_regex(
-                    model,
-                    finetune_vision_layers = finetune_vision_layers,
-                    finetune_language_layers = finetune_language_layers,
-                    finetune_attention_modules = finetune_attention_modules,
-                    finetune_mlp_modules = finetune_mlp_modules,
-                    target_modules = list(target_modules),
-                    **_audio_kwargs,
-                )
+                try:
+                    target_modules = get_peft_regex(
+                        model,
+                        finetune_vision_layers = finetune_vision_layers,
+                        finetune_language_layers = finetune_language_layers,
+                        finetune_attention_modules = finetune_attention_modules,
+                        finetune_mlp_modules = finetune_mlp_modules,
+                        target_modules = list(target_modules),
+                        **_audio_kwargs,
+                    )
+                except RuntimeError:
+                    # Mixtral's [w1, w2, w3]: block_sparse_moe has no MLP tag, so Zoo matches nothing.
+                    expert_regex = None
+                    if finetune_language_layers and finetune_mlp_modules:
+                        expert_regex = native_expert_only_regex(model, target_modules)
+                    if expert_regex is None:
+                        raise
+                    target_modules = expert_regex
                 _target_modules_auto_regex = True
+                _target_modules_from_explicit_list = True
 
         if hasattr(model, "vllm_engine"):
             if (
@@ -4723,6 +4788,7 @@ class FastBaseModel:
                 target_modules,
                 _moe_module_detect,
                 auto_regex = _target_modules_auto_regex and bool(finetune_language_layers),
+                explicit_leaves = _target_modules_from_explicit_list and bool(finetune_mlp_modules),
             )
         )
         if _expert_submodule_leaves:
@@ -4977,9 +5043,7 @@ class FastBaseModel:
                 kwargs["use_reentrant"] = False
                 if not _offload:
                     return _orig_checkpoint(function, *args, **kwargs)
-                with torch.autograd.graph.saved_tensors_hooks(
-                    _offload_activation_pack, _offload_activation_unpack
-                ):
+                with _offload_activation_hooks():
                     return _orig_checkpoint(function, *args, **kwargs)
 
             _nonre_checkpoint._unsloth_original = _orig_checkpoint
@@ -5100,6 +5164,12 @@ class FastBaseModel:
         from ..tokenizer_utils import zero_pad_embedding_rows
 
         zero_pad_embedding_rows(model, tokenizer)
+        # One compiled region per decoder layer (_block_compile.py).
+        try:
+            from ._block_compile import patch_block_compile
+            patch_block_compile(model)
+        except Exception as e:
+            logger.warning(f"Unsloth: per-block compile not installed: {e}")
         return model
 
     @staticmethod
