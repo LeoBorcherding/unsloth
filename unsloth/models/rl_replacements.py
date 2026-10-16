@@ -2353,11 +2353,26 @@ def grpo_trainer__move_model_to_vllm(function_name, function):
     if function_name != "_move_model_to_vllm":
         return function
 
-    def _move_model_to_vllm(self, *args, **kwargs):
-        return None
+    # Server mode (trl vllm-serve) needs the push, or every rollout comes from the step-0 policy.
+    # Colocate either shares the weights (fast_inference) or reaches them through driver_worker,
+    # a line the trainer rewrite in rl.py turns into `pass`, so it keeps skipping.
+    head = re.search(
+        r"^[ \t]*def _move_model_to_vllm\([^)]*\)[^:\n]*:[ \t]*\n", function, re.MULTILINE
+    )
+    body = re.search(r"^([ \t]+)\S", function[head.end() :], re.MULTILINE) if head else None
+    if body is None:
 
-    function = inspect.getsource(_move_model_to_vllm)
-    return function
+        def _move_model_to_vllm(self, *args, **kwargs):
+            return None
+
+        return inspect.getsource(_move_model_to_vllm)
+    indent = body.group(1)
+    guard = (
+        f"{indent}if getattr(self, 'vllm_mode', None) != 'server' or "
+        "getattr(getattr(self, 'llm', None), 'shared_weights', False):\n"
+        f"{indent}    return None\n"
+    )
+    return function[: head.end()] + guard + function[head.end() :]
 
 
 RL_FUNCTIONS["grpo_trainer"].append(grpo_trainer__move_model_to_vllm)
