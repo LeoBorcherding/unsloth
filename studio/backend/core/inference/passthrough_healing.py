@@ -72,8 +72,13 @@ def nudge_enabled(request_flag: Optional[bool], *, response_format: Any = None) 
 
 _MAX_SIGNAL_LEN = max(len(s) for s in _HEAL_SIGNALS)
 # A suspected-but-unclosed tool block larger than this is declared a false alarm and flushed, bounding memory on a
-# model rambling XML-lookalike text.
-_MAX_HOLD_CHARS = 64 * 1024
+# model rambling XML-lookalike text. A real call over it (a large file write) streams as text, so it is settable.
+try:
+    _MAX_HOLD_CHARS = max(4096, int(os.environ.get("UNSLOTH_TOOL_HEAL_MAX_HOLD_CHARS", "")))
+except ValueError:
+    _MAX_HOLD_CHARS = 256 * 1024
+# Every call form ends in one of these, so a held block can't become a closed call on a delta without one.
+_CLOSERS = (">", "}", "]")
 
 
 def heal_gate(
@@ -371,6 +376,13 @@ class StreamToolCallHealer:
         if self.dormant:
             return [("text", text)] if text else []
         self._buffer += text
+        # Re-parsing the whole held block on every token made a long call quadratic.
+        if (
+            self._holding
+            and len(self._buffer) <= _MAX_HOLD_CHARS
+            and not any(closer in text for closer in _CLOSERS)
+        ):
+            return []
         return self._drain()
 
     def _drain(self) -> list:
