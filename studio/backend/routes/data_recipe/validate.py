@@ -13,8 +13,10 @@ from auth.authentication import (
     authenticated_via_api_key,
     require_ui_session_for_local_commands,
 )
+from core.data_recipe.mcp_tools import tool_wiring_errors
 from core.data_recipe.service import (
     build_config_builder,
+    build_mcp_providers,
     create_data_designer,
     recipe_has_stdio_mcp,
     validate_recipe,
@@ -227,6 +229,14 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
             valid = False,
             errors = parsed_errors or [ValidateError(message = detail)],
             raw_detail = detail,
+        )
+
+    # The engine only checks tool wiring when a run starts.
+    wiring = tool_wiring_errors(recipe, build_mcp_providers)
+    if wiring:
+        return ValidateResponse(
+            valid = False,
+            errors = [ValidateError(message = message, path = path) for path, message in wiring],
         )
 
     return ValidateResponse(valid = True)
