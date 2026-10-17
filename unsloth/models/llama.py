@@ -2693,9 +2693,6 @@ def _vllm_will_load_weights(fast_inference, num_labels = None):
     """
     if not fast_inference or num_labels is not None:
         return False
-    # from_pretrained clears fast_inference when vLLM is missing but re-enables it on hip.
-    if DEVICE_TYPE == "hip":
-        return True
     if not is_vLLM_available():
         return False
     if DEVICE_TYPE == "cuda" and torch.cuda.get_device_capability()[0] < 7:
@@ -3021,8 +3018,6 @@ class FastLlamaModel:
                         "Unsloth: vLLM does not work on older GPUs - will switch to Unsloth inference!"
                     )
                     fast_inference = False
-            elif DEVICE_TYPE == "hip":
-                fast_inference = True
             if unsloth_vllm_standby and os.environ.get("UNSLOTH_VLLM_STANDBY", "0") == "0":
                 raise RuntimeError(
                     "Unsloth: `unsloth_vllm_standby` is True, but  environment variable `UNSLOTH_VLLM_STANDBY` is not set to 1!"
