@@ -8,7 +8,9 @@ import { registerBundlerResolver } from "./helpers/kit.ts";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
 
 registerBundlerResolver();
-const audioSourceState = await import("../src/features/audio/hooks/audio-source-state.ts");
+const audioSourceState = await import(
+  "../src/features/audio/hooks/audio-source-state.ts"
+);
 
 /** useAudioSource under a minimal React, with a recorder whose start() throws. */
 function setup() {
@@ -30,7 +32,12 @@ function setup() {
       mediaDevices: {
         getUserMedia: async () => {
           micOpens += 1;
-          const track = { stopped: false, stop: () => (track.stopped = true) };
+          const track = {
+            stopped: false,
+            stop: () => {
+              track.stopped = true;
+            },
+          };
           tracks.push(track);
           return { active: false, getTracks: () => [track] };
         },
@@ -65,7 +72,9 @@ function setup() {
           addEventListener: () => {},
           stop: () => {},
           start: () => {
-            throw Object.assign(new Error("stream ended"), { name: "NotSupportedError" });
+            throw Object.assign(new Error("stream ended"), {
+              name: "NotSupportedError",
+            });
           },
         }),
       },
@@ -96,7 +105,10 @@ test("a recorder that refuses to start releases the mic and lets the user retry"
   assert.equal(actions.at(-1)?.type, "fail");
   assert.ok(actions.at(-1)?.message);
   assert.ok(!actions.some((action) => action.type === "record-start"));
-  assert.ok(tracks.every((track) => track.stopped), "every mic track is stopped");
+  assert.ok(
+    tracks.every((track) => track.stopped),
+    "every mic track is stopped",
+  );
   assert.equal(timers.size, 0, "the recording limit timer is cleared");
 
   await assert.doesNotReject(hook().startRecording());
