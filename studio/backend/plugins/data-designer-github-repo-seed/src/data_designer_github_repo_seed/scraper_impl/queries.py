@@ -332,6 +332,19 @@ query IssuesPageLight($owner: String!, $name: String!, $first: Int!, $after: Str
 """,
 )
 
+# Cut from the light queries when the seed doesn't keep comments, so they cost no GraphQL points.
+_LIGHT_COMMENTS = """        comments(first: 30) {
+          totalCount
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id databaseId createdAt updatedAt url body
+            author { ...ActorFields }
+          }
+        }
+"""
+PRS_PAGE_QUERY_LIGHT_NO_COMMENTS = PRS_PAGE_QUERY_LIGHT.replace(_LIGHT_COMMENTS, "")
+ISSUES_PAGE_QUERY_LIGHT_NO_COMMENTS = ISSUES_PAGE_QUERY_LIGHT.replace(_LIGHT_COMMENTS, "")
+
 ISSUE_COMMENTS_QUERY = _q(
     [F_ACTOR],
     """

@@ -35,7 +35,8 @@ class GitHubRepoSeedSource(SeedSource):
         default = True,
         description = "Fetch the first N comments of each issue/PR and include them in the `comments` column.",
     )
-    max_comments_per_item: int = Field(default = 30, ge = 0, le = 200)
+    # The scraper's light queries read the first 30 comments and don't paginate.
+    max_comments_per_item: int = Field(default = 30, ge = 0, le = 30)
 
     @field_validator("repos")
     @classmethod
