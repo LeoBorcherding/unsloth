@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import type { NodeConfig, ValidatorConfig } from "../../types";
-import { isValidatorCodeLang } from "../validators/code-lang";
+import type {
+  NodeConfig,
+  ValidatorCodeLang,
+  ValidatorConfig,
+} from "../../types";
+import { VALIDATOR_OXC_CODE_LANGS } from "../validators/code-lang";
 
 const OXC_VALIDATION_FN_MARKER = "unsloth_oxc_validator";
 const JSON_VALIDATION_FN_MARKER = "unsloth_json_validator";
@@ -61,8 +65,9 @@ export function buildValidatorColumn(
       targetConfig.kind === "llm" &&
       targetConfig.llm_type === "code"
     ) {
-      const targetLang = (targetConfig.code_lang ?? "").trim();
-      if (isValidatorCodeLang(targetLang)) {
+      const targetLang = (targetConfig.code_lang ?? "").trim() as ValidatorCodeLang;
+      // Only a language OXC parses; the backend would otherwise lint e.g. Python as JavaScript.
+      if (VALIDATOR_OXC_CODE_LANGS.includes(targetLang)) {
         codeLang = targetLang;
       }
     }
