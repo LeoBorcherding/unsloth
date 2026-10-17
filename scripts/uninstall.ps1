@@ -824,6 +824,16 @@ Environment:
         }
     }
 
+    # A literal prefix test: -like reads the [ ] a root may contain as a character class.
+    function _PathUnderRoot {
+        param([string]$Path, [string]$Root)
+        if (-not $Path -or -not $Root) { return $false }
+        $Root = $Root.TrimEnd('\', '/')
+        if (-not $Root) { return $false }
+        return ($Path.Equals($Root, [StringComparison]::OrdinalIgnoreCase) -or
+            $Path.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase))
+    }
+
     # Return $true iff the PID's image path lives under one of $KnownRoots, so an unrelated
     # process listening on a stale Unsloth port is never killed.
     function _PidUnderKnownRoot {
@@ -835,7 +845,7 @@ Environment:
             $exe = $proc.ExecutablePath
             if (-not $exe) { return $false }
             foreach ($r in $KnownRoots) {
-                if ($r -and ($exe -ilike "$r\*")) { return $true }
+                if (_PathUnderRoot $exe $r) { return $true }
             }
         } catch { }
         return $false
@@ -898,7 +908,7 @@ Environment:
                 if ($scoped) {
                     $match = $false
                     foreach ($r in $KnownRoots) {
-                        if ($p.ExecutablePath -and ($p.ExecutablePath -ilike "$r\*")) { $match = $true; break }
+                        if (_PathUnderRoot $p.ExecutablePath $r) { $match = $true; break }
                     }
                     if (-not $match) { continue }
                 }
@@ -965,7 +975,7 @@ Environment:
         $underRoot = {
             param($p)
             if (-not $p) { return $false }
-            foreach ($r in $clean) { if ($p -ieq $r -or $p -ilike "$r\*") { return $true } }
+            foreach ($r in $clean) { if (_PathUnderRoot $p $r) { return $true } }
             return $false
         }
         # 1. Image path under a target root (venv python, shim, llama-server).
@@ -1402,7 +1412,7 @@ Environment:
                         foreach ($r in $ownedRoots) {
                             if (-not $r) { continue }
                             $rNorm = $r.TrimEnd('\','/')
-                            if ($expanded -ieq $rNorm -or $expanded -ilike "$rNorm\*") {
+                            if (_PathUnderRoot $expanded $rNorm) {
                                 $isStudio = $true; break
                             }
                         }
@@ -1441,7 +1451,7 @@ Environment:
             foreach ($r in $ownedRoots) {
                 if (-not $r) { continue }
                 $rNorm = $r.TrimEnd('\', '/')
-                if ($expandedCache -ieq $rNorm -or $expandedCache -ilike "$rNorm\*") {
+                if (_PathUnderRoot $expandedCache $rNorm) {
                     [Environment]::SetEnvironmentVariable('TORCHINDUCTOR_CACHE_DIR', [NullString]::Value, 'User')
                     _Substep "cleared TORCHINDUCTOR_CACHE_DIR: $persistedCache" "Green"
                     break
