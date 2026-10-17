@@ -45,8 +45,9 @@ import {
 import { applyEdgeRemovals, applyNodeRemovals } from "./helpers/removals";
 import {
   applyLayoutDirectionToNodes,
-  applyRenameToConfigs,
+  applyNameEdit,
   buildNodeUpdate,
+  isFreeName,
   syncEdgesForConfigPatch,
   syncSubcategoryConfigsForCategoryUpdate,
   updateNodeData,
@@ -70,6 +71,8 @@ type RecipeStudioState = {
   llmAuxVisibility: Record<string, boolean>;
   configs: Record<string, NodeConfig>;
   processors: RecipeProcessorConfig[];
+  // Block id -> the name its references still use while its name field is empty or taken.
+  renameSources: Record<string, string>;
   sheetOpen: boolean;
   sheetView: SheetView;
   activeConfigId: string | null;
@@ -136,6 +139,7 @@ const INITIAL_STATE = {
   llmAuxVisibility: {},
   configs: {},
   processors: [],
+  renameSources: {},
   sheetOpen: false,
   sheetView: "root",
   activeConfigId: null,
@@ -154,6 +158,7 @@ const INITIAL_STATE = {
   | "llmAuxVisibility"
   | "configs"
   | "processors"
+  | "renameSources"
   | "sheetOpen"
   | "sheetView"
   | "activeConfigId"
@@ -735,6 +740,7 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       ),
       edges: snapshot.edges,
       processors: snapshot.processors,
+      renameSources: {},
       layoutDirection: snapshot.layoutDirection,
       nextId: snapshot.nextId,
       nextY: snapshot.nextY,
@@ -791,27 +797,36 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         state.edges,
         state.layoutDirection,
       );
+      // References may still be on an earlier name while this field is empty or taken.
+      const refName = state.renameSources[id] ?? oldName;
       configs = syncSubcategoryConfigsForCategoryUpdate(
         current,
         next,
         configs,
-        oldName,
+        refName,
         newName,
-        nameChanged,
+        nameChanged && isFreeName(configs, id, newName),
       );
 
+      let processors = state.processors;
+      let renameSources = state.renameSources;
       if (nameChanged) {
-        configs = applyRenameToConfigs(configs, oldName, newName);
+        ({ configs, processors, renameSources } = applyNameEdit(
+          { configs, processors, renameSources },
+          id,
+          oldName,
+          newName,
+        ));
       }
 
       // When a provider toggles local/external, keep linked model_config nodes
-      // in sync. applyRenameToConfigs above already propagated any name change,
-      // so providerName here is the post-rename value.
+      // in sync. applyNameEdit above already propagated any name change, so this
+      // is the name the model configs use.
       if (current.kind === "model_provider" && next.kind === "model_provider") {
         const prevIsLocal = current.is_local === true;
         const nextIsLocal = next.is_local === true;
         if (prevIsLocal !== nextIsLocal) {
-          const providerName = next.name;
+          const providerName = renameSources[id] ?? next.name;
           for (const [cfgId, cfg] of Object.entries(configs)) {
             if (cfg.kind !== "model_config" || cfg.provider !== providerName) {
               continue;
@@ -829,7 +844,7 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         }
       }
 
-      return { configs, nodes, edges };
+      return { configs, nodes, edges, processors, renameSources };
     };
     set(applyUpdate);
   },

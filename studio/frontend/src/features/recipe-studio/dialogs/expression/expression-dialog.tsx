@@ -14,7 +14,10 @@ import { useMemo } from "react";
 import { useRecipeStudioStore } from "../../stores/recipe-studio";
 import type { ExpressionConfig, ExpressionDtype } from "../../types";
 import { findInvalidJinjaReferences } from "../../utils/refs";
-import { getAvailableVariables } from "../../utils/variables";
+import {
+  getAvailableVariables,
+  getNestedReferenceRoots,
+} from "../../utils/variables";
 import { AvailableVariables } from "../shared/available-variables";
 import { FieldLabel } from "../shared/field-label";
 import { NameField } from "../shared/name-field";
@@ -37,9 +40,13 @@ export function ExpressionDialog({
     () => getAvailableVariables(configs, config.id),
     [configs, config.id],
   );
+  const nestedRoots = useMemo(
+    () => getNestedReferenceRoots(configs, config.id),
+    [configs, config.id],
+  );
   const invalidExprRefs = useMemo(
-    () => findInvalidJinjaReferences(config.expr, validReferences),
-    [config.expr, validReferences],
+    () => findInvalidJinjaReferences(config.expr, validReferences, nestedRoots),
+    [config.expr, validReferences, nestedRoots],
   );
   const invalidExprText = invalidExprRefs
     .slice(0, 3)
