@@ -13,7 +13,7 @@ from typing import Callable
 from .parsers import Page
 
 TokenCounter = Callable[[str], int]
-SEPARATORS = ("\n# ", "\n## ", "\n### ", "\n\n", "\n", ". ", " ", "")
+SEPARATORS = ("\n# ", "\n## ", "\n### ", "\n\n", "\n", ". ", " ")
 
 
 @dataclass(frozen = True)
@@ -48,7 +48,7 @@ def _split(
     if token_count <= max_tokens:
         return [_Piece(text, token_count)]
     for i, sep in enumerate(seps):
-        parts = list(text) if sep == "" else text.split(sep)
+        parts = text.split(sep)
         if len(parts) <= 1:
             continue
         if sep:
@@ -64,8 +64,23 @@ def _split(
                 else _split(p, seps[i + 1 :], max_tokens, count, tokens)
             )
         return out
-    n = max(1, max_tokens * 4)
-    return [_Piece(part, count(part)) for j in range(0, len(text), n) if (part := text[j : j + n])]
+    # No separator left (minified code, base64, long URLs): bisect each window to
+    # the largest prefix within max_tokens (never under one character, so it ends).
+    out = []
+    start = 0
+    while start < len(text):
+        lo, hi, lo_tokens = 1, len(text) - start, None
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            tokens = count(text[start : start + mid])
+            if tokens <= max_tokens:
+                lo, lo_tokens = mid, tokens
+            else:
+                hi = mid - 1
+        part = text[start : start + lo]
+        out.append(_Piece(part, count(part) if lo_tokens is None else lo_tokens))
+        start += lo
+    return out
 
 
 def _merge(
