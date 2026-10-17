@@ -64,6 +64,8 @@ class ExportOrchestrator:
         self.is_vision: bool = False
         self.is_peft: bool = False
         self.decision: Optional[Dict[str, Any]] = None
+        # What the running op reads or writes, so the Library delete can refuse those folders.
+        self._op_paths: Tuple[Optional[str], ...] = ()
 
         # Thread-safe ring buffer of worker log lines; powers the export logs SSE endpoint.
         self._log_buffer: Deque[Dict[str, Any]] = deque(maxlen = _LOG_BUFFER_MAXLEN)
@@ -146,6 +148,9 @@ class ExportOrchestrator:
 
     def is_export_active(self) -> bool:
         return self._export_active
+
+    def paths_in_use(self) -> List[str]:
+        return [p for p in (self.current_checkpoint, *self._op_paths) if p]
 
     def is_worker_alive(self) -> bool:
         proc = self._proc
@@ -568,6 +573,7 @@ class ExportOrchestrator:
             self.clear_logs()
             self._active_op_kind = "load_checkpoint"
             self._export_active = True
+            self._op_paths = (checkpoint_path,)
             op_success, op_message = False, ""
             try:
                 # Handshake with the sidecar install route (see load_checkpoint): either this recheck refuses
@@ -647,6 +653,7 @@ class ExportOrchestrator:
                 self._record_op_finished(op_success, op_message, None)
                 self._end_op()
                 self._active_op_kind = None
+                self._op_paths = ()
                 self._export_active = False
 
     def export_merged_model(
@@ -792,6 +799,7 @@ class ExportOrchestrator:
             self.clear_logs()
             self._active_op_kind = f"export_{export_type}"
             self._export_active = True
+            self._op_paths = (_export_write_dir(params.get("save_directory")),)
             op_success, op_message, op_output_path = False, "", None
             try:
                 # Recheck before sending, else an install blocks in cleanup_memory behind a long export op.
@@ -828,6 +836,7 @@ class ExportOrchestrator:
                 self._record_op_finished(op_success, op_message, op_output_path)
                 self._end_op()
                 self._active_op_kind = None
+                self._op_paths = ()
                 self._export_active = False
 
     @job_control
@@ -874,6 +883,17 @@ class ExportOrchestrator:
         from utils.models.checkpoints import scan_checkpoints
 
         return scan_checkpoints(outputs_dir = outputs_dir)
+
+
+def _export_write_dir(save_directory: Optional[str]) -> Optional[str]:
+    if not save_directory:
+        return None
+    try:
+        from utils.paths import resolve_export_write_dir
+
+        return str(resolve_export_write_dir(save_directory))
+    except Exception:
+        return save_directory
 
 
 _export_backend = None
