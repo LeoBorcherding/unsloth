@@ -9,20 +9,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import torch
 from unsloth_zoo.utils import Version
+from . import utils as _kernel_utils
 from .utils import (
+    _has_active_dora_adapter,
     _has_active_lora_bias,
     _has_multiple_active_adapters,
     addmm_,
     fast_dequantize,
-    QUANT_STATE,
+    _base_quant_state,
     get_lora_parameters,
     get_lora_parameters_bias,
     matmul_lora,
     torch_amp_custom_fwd,
     torch_amp_custom_bwd,
 )
+from . import rms_layernorm as _rms_layernorm
 
 _is_compiling = torch.compiler.is_compiling
 
@@ -38,12 +42,49 @@ if not TRACE_LORA_FUNCTIONS:
     _apply = torch._dynamo.disable(_apply)
 
 
+# torchao's NVFP4 / MX QAT linears fake-quantize inside forward() with no quantizer children, so fused LoRA
+# would train unquantized. Read lazily from sys.modules so importing Unsloth never imports torchao.
+_FORWARD_FAKE_QUANT_LINEARS = None
+
+
+def _forward_fake_quant_linears():
+    global _FORWARD_FAKE_QUANT_LINEARS
+    if _FORWARD_FAKE_QUANT_LINEARS is None:
+        qat = sys.modules.get("torchao.prototype.qat")
+        if qat is None:
+            return ()
+        _FORWARD_FAKE_QUANT_LINEARS = tuple(
+            cls
+            for cls in (
+                getattr(qat, "NVFP4FakeQuantizedLinear", None),
+                getattr(qat, "MXFakeQuantizedLinear", None),
+            )
+            if isinstance(cls, type)
+        )
+    return _FORWARD_FAKE_QUANT_LINEARS
+
+
 def _has_activation_fake_quantizer(proj):
     # Fused LoRA skips per-layer activation fake quantizers; explicit children, as proj.modules() is slow per call.
+    forward_fake_quant_linears = _forward_fake_quant_linears()
     for module in (getattr(proj, "base_layer", proj), *proj.lora_A.values(), *proj.lora_B.values()):
-        if module._modules.get("activation_fake_quantizer") is not None:
+        if module._modules.get("activation_fake_quantizer") is not None or isinstance(
+            module, forward_fake_quant_linears
+        ):
             return True
     return False
+
+
+def _may_overwrite_input(X):
+    # Backward writes dX into X; not when an RMSNorm saved X (its output) for its own backward,
+    # including through a view of it (tiled MLP chunks).
+    if _is_compiling():
+        return True
+    base = X._base
+    return not (
+        getattr(X, "_unsloth_rmsnorm_saved", False)
+        or (base is not None and getattr(base, "_unsloth_rmsnorm_saved", False))
+    )
 
 
 class LoRA_MLP(torch.autograd.Function):
@@ -129,7 +170,8 @@ class LoRA_MLP(torch.autograd.Function):
             _backward_function,
         )
         ctx.save_for_backward(gateA, gateB, upA, upB, downA, downB, X, e, g)
-        ctx.inplace = inplace
+        # Only an opt-in UNSLOTH_RMSNORM_SAVE_OUTPUT norm marks its output; skip the check otherwise.
+        ctx.inplace = inplace and (not _rms_layernorm._SAVE_OUTPUT or _may_overwrite_input(X))
         return i
 
     @staticmethod
@@ -150,7 +192,7 @@ class LoRA_MLP(torch.autograd.Function):
         gateA, gateB, upA, upB, downA, downB, X, e, g = ctx.saved_tensors
 
         batch, seq_len, hd = X.shape
-        dY = dY.view(-1, dY.shape[-1])
+        dY = dY.reshape(-1, dY.shape[-1])
         X = X.view(-1, X.shape[-1])
         e = e.view(-1, e.shape[-1])
         g = g.view(-1, g.shape[-1])
@@ -174,7 +216,11 @@ class LoRA_MLP(torch.autograd.Function):
             downB.t(),
         )
 
-        DW = matmul_lora(dY, downW.t(), downW_quant, downB, downA, downS)
+        if downW.dtype == torch.float8_e4m3fn:
+            # Dequantize like gate / up: matmul_lora would send the FP8 weight to fp8_linear, quantizing dY to FP8.
+            DW = matmul_lora(dY, fast_dequantize(downW.t(), downW_quant), None, downB, downA, downS)
+        else:
+            DW = matmul_lora(dY, downW.t(), downW_quant, downB, downA, downS)
         DW, e, g = _backward_function(DW, e, g)
         h, df, de = DW, e, g
 
@@ -245,6 +291,7 @@ def apply_lora_mlp_swiglu(
 ):
     if any(
         _has_multiple_active_adapters(proj)
+        or _has_active_dora_adapter(proj)
         or _has_active_lora_bias(proj)
         or _has_activation_fake_quantizer(proj)
         for proj in (self.gate_proj, self.up_proj, self.down_proj)
@@ -288,6 +335,7 @@ def apply_lora_mlp_geglu_exact(
 ):
     if any(
         _has_multiple_active_adapters(proj)
+        or _has_active_dora_adapter(proj)
         or _has_active_lora_bias(proj)
         or _has_activation_fake_quantizer(proj)
         for proj in (self.gate_proj, self.up_proj, self.down_proj)
@@ -327,6 +375,7 @@ from .geglu import geglu_approx_forward_kernel, geglu_approx_backward_kernel
 def apply_lora_mlp_geglu_approx(self, X):
     if any(
         _has_multiple_active_adapters(proj)
+        or _has_active_dora_adapter(proj)
         or _has_active_lora_bias(proj)
         or _has_activation_fake_quantizer(proj)
         for proj in (self.gate_proj, self.up_proj, self.down_proj)
@@ -450,7 +499,8 @@ class LoRA_QKV(torch.autograd.Function):
             VA,
             VB,
         )
-        ctx.inplace = inplace
+        # Only an opt-in UNSLOTH_RMSNORM_SAVE_OUTPUT norm marks its output; skip the check otherwise.
+        ctx.inplace = inplace and (not _rms_layernorm._SAVE_OUTPUT or _may_overwrite_input(X))
         return Q, K, V
 
     @staticmethod
@@ -468,9 +518,9 @@ class LoRA_QKV(torch.autograd.Function):
         ) = ctx.saved_tensors
 
         batch, seq_len, hd = X.shape
-        dQ = dQ.view(-1, dQ.shape[-1])
+        dQ = dQ.reshape(-1, dQ.shape[-1])
         dK = dK.reshape(-1, dK.shape[-1])  # view doesn't work on K.T
-        dV = dV.view(-1, dV.shape[-1])
+        dV = dV.reshape(-1, dV.shape[-1])
         X = X.view(-1, X.shape[-1])
         dtype = X.dtype
 
@@ -552,6 +602,7 @@ def apply_lora_qkv(
 ):
     if any(
         _has_multiple_active_adapters(proj)
+        or _has_active_dora_adapter(proj)
         or _has_active_lora_bias(proj)
         or _has_activation_fake_quantizer(proj)
         for proj in (self.q_proj, self.k_proj, self.v_proj)
@@ -659,6 +710,7 @@ class LoRA_W(torch.autograd.Function):
 def apply_lora_o(self, X):
     if (
         _has_multiple_active_adapters(self.o_proj)
+        or _has_active_dora_adapter(self.o_proj)
         or _has_active_lora_bias(self.o_proj)
         or _has_activation_fake_quantizer(self.o_proj)
     ):
@@ -698,7 +750,10 @@ def fast_lora_forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
                 lora_B = self.lora_B[active_adapter].weight
                 scaling = self.scaling[active_adapter]
                 W = self.base_layer.weight
-                return _apply(LoRA_W, x, W, QUANT_STATE(W), lora_A, lora_B, scaling)
+                W_quant = getattr(W, "quant_state", None)
+                if W_quant is None and _kernel_utils._FSDP2_QLORA_PREPARED:
+                    W_quant = _base_quant_state(self.base_layer, W)
+                return _apply(LoRA_W, x, W, W_quant, lora_A, lora_B, scaling)
             pass
         pass
 

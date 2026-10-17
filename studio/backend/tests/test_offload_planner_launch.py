@@ -788,14 +788,17 @@ def test_the_auto_cache_ram_clamp_charges_the_host_only_allocations(tmp_path, mo
         return backend, gguf
 
     monkeypatch.setitem(globals(), "_backend", hooked)
+    # The stub projector has no readable image tower, which raises the micro-batch for an unknown
+    # one and grows the compute buffer; held at the default so only the pinned projector moves.
+    import core.inference.llama_cpp as llama_mod
+
+    monkeypatch.setattr(llama_mod, "_mmproj_required_ubatch", lambda *a, **k: 0)
     proj = tmp_path / "proj.gguf"
     proj.write_bytes(b"GGUF")
     monkeypatch.setenv("LLAMA_ARG_MMPROJ", str(proj))
     monkeypatch.setenv("LLAMA_ARG_NO_MMPROJ_OFFLOAD", "1")
     _cmd, _backend_, seen = _launch_with(tmp_path, monkeypatch, plan, avail_mib = 26 * 1024)
-    # At least the projector: a loaded one also raises the micro-batch (#10683), which grows the
-    # GPU shortfall the clamp already subtracts.
-    assert seen["inputs"]["cache_ram_default_mib"] <= bound - 1024
+    assert seen["inputs"]["cache_ram_default_mib"] == bound - 1024
 
 
 def test_the_single_slot_retry_keeps_one_slot_after_the_plan_is_revoked(tmp_path, monkeypatch):

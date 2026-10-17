@@ -19,6 +19,8 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Hybrid Mamba-2 archs storing head_count_kv (and on Bolt expert_used_count) per layer.
+_NEMOTRON_H_ARCHS = frozenset({"nemotron_h", "nemotron_h_moe"})
 _BLOCK_RE = re.compile(r"^blk\.(\d+)\.(.+)$")
 
 # Sparse MoE experts: only expert_used_count of expert_count read per token, so host traffic is a small fraction of
@@ -236,13 +238,19 @@ def split_shard_paths(path: str) -> Optional[list[str]]:
     ]
 
 
-def layout_from_gguf(path: str, *, all_shards: bool = False) -> ModelLayout:
+def layout_from_gguf(
+    path: str,
+    *,
+    all_shards: bool = False,
+    build: Optional[int] = None,
+) -> ModelLayout:
     """Read ``path`` into a :class:`ModelLayout`.
 
     Returns an incomplete layout (``complete = False``) rather than raising when
     anything required is missing, so a surprising GGUF makes the planner abstain
     instead of failing a load that llama.cpp would have handled.
-    ``all_shards`` reads every sibling shard; all of them must be present.
+    ``all_shards`` reads every sibling shard; all of them must be present. ``build`` is the
+    llama.cpp build the layout is priced for (see :func:`indexer_cache_widths`).
     """
     try:
         from gguf import GGUFReader
@@ -258,7 +266,7 @@ def layout_from_gguf(path: str, *, all_shards: bool = False) -> ModelLayout:
         return ModelLayout()
 
     try:
-        return _layout_from_readers(readers)
+        return _layout_from_readers(readers, build = build)
     except Exception as exc:
         logger.debug("offload layout: cannot interpret %s (%s)", path, exc)
         return ModelLayout()
@@ -296,12 +304,43 @@ _FULL_ATTENTION_INTERVAL_DEFAULT: dict[str, int] = {
 # for V, since llama-memory-hybrid-idx.cpp overrides n_head_kv_arr and n_embd_head_k_full only.
 INDEXER_CACHE_ARCHS: frozenset[str] = frozenset({"qwen4exp"})
 
+# ggml-org/llama.cpp#28330 (first in b10889) builds the indexer cache as an MLA-shaped one, so it
+# allocates K only (llama-memory-hybrid-idx.cpp sets both n_embd_head_*_mla_impl). #29751 (b11330)
+# then widened a pooled qwen4exp row to "raw key | pooled key", indexer_kpool_row = 2 whenever any
+# attention.compress_ratios entry is non-zero (models/qwen4exp.cpp:load_arch_hparams).
+INDEXER_K_ONLY_BUILD = 10889
+INDEXER_POOLED_ROW_BUILD = 11330
+
+
+def indexer_cache_widths(
+    key_len: int,
+    val_len: int,
+    compress_ratios = None,
+    build: Optional[int] = None,
+) -> tuple[int, int]:
+    """``(k_width, v_width)`` elements per cell of the indexer cache for llama.cpp ``build``.
+
+    Shared by the layout reader and the backend estimator so the two price one cache. An unknown
+    build keeps the conservative K + V charge of the builds before #28330.
+    """
+    key_len = max(0, int(key_len or 0))
+    if build is None or build < INDEXER_K_ONLY_BUILD:
+        return key_len, max(0, int(val_len or 0))
+    if build < INDEXER_POOLED_ROW_BUILD:
+        return key_len, 0
+    ratios = compress_ratios if isinstance(compress_ratios, (list, tuple)) else (compress_ratios,)
+    pooled = any(int(r or 0) > 0 for r in ratios)
+    return key_len * (2 if pooled else 1), 0
+
 
 # Architectures whose recurrent rows hold a Kimi-Delta-Attention state rather than a Mamba one, so
 # llama.cpp sizes them from kda.head_dim and the head count (llama-hparams.cpp:n_embd_r, n_embd_s).
 # Named rather than derived from the key: an unlisted KDA family (kimi-linear, bailingmoe3) has no
-# measured figure to check the shape against, so abstaining is the safe answer.
-_KDA_STATE_ARCHS: frozenset[str] = frozenset({"kimi-k3", "glm5next"})
+# measured figure to check the shape against, so abstaining is the safe answer. glm5next
+# (GLM-5.3-Flash) is left out too: its llama_memory_hybrid_idx indexer cache is priced by neither
+# reader (INDEXER_CACHE_ARCHS and the build thresholds are qwen4exp's), so a complete layout would
+# let the planner pin -ngl -1 --fit off over a cache it never charged.
+_KDA_STATE_ARCHS: frozenset[str] = frozenset({"kimi-k3"})
 
 
 # llama.cpp refuses a file whose block_count is above this (LLAMA_MAX_LAYERS, src/llama-hparams.h;
@@ -381,11 +420,11 @@ def hybrid_layer_split(
     return n_attention, n_recurrent, known
 
 
-def _layout_from_reader(reader) -> ModelLayout:
-    return _layout_from_readers([reader])
+def _layout_from_reader(reader, *, build: Optional[int] = None) -> ModelLayout:
+    return _layout_from_readers([reader], build = build)
 
 
-def _layout_from_readers(readers) -> ModelLayout:
+def _layout_from_readers(readers, *, build: Optional[int] = None) -> ModelLayout:
     """One reader per shard, the first carrying the metadata."""
     reader = readers[0]
     # Split GGUF: llama.cpp loads every sibling shard (llama-model-loader.cpp:590-618), but GGUFReader memmaps only the
@@ -423,6 +462,8 @@ def _layout_from_readers(readers) -> ModelLayout:
     if not n_kv_head or not key_len or not val_len:
         return ModelLayout()
 
+    # hybrid_layer_split already reads nemotron_h's per-layer head_count_kv and FFN map.
+    nemotron_h = arch in _NEMOTRON_H_ARCHS
     n_attention, n_recurrent, recurrent_known = hybrid_layer_split(
         arch,
         n_layers,
@@ -449,15 +490,20 @@ def _layout_from_readers(readers) -> ModelLayout:
     kv_per_token = kv_heads_total * (int(key_len) + int(val_len)) * 2
 
     # The indexer cache holds the full n_ctx_seq like the attention one does, so the product CAN
-    # express it: one head of attention.indexer.key_length for K plus one of value_length for V,
-    # on every dense-attention row.
+    # express it: one head on every dense-attention row, as wide as this build allocates it.
     indexer_key_len = (
         int(_field(reader, f"{arch}.attention.indexer.key_length") or 0)
         if arch in INDEXER_CACHE_ARCHS
         else 0
     )
     if indexer_key_len:
-        kv_per_token += int(n_attention) * (indexer_key_len + int(val_len)) * 2
+        k_width, v_width = indexer_cache_widths(
+            indexer_key_len,
+            int(val_len),
+            _field(reader, f"{arch}.attention.compress_ratios"),
+            build,
+        )
+        kv_per_token += int(n_attention) * (k_width + v_width) * 2
 
     # Charging every layer the full context above is the safe direction for the TOTAL; what it
     # cannot say is which layers hold the big caches.
@@ -526,7 +572,12 @@ def _layout_from_readers(readers) -> ModelLayout:
         return ModelLayout()
 
     n_expert = int(_field(reader, f"{arch}.expert_count") or 0)
-    n_expert_used = int(_field(reader, f"{arch}.expert_used_count") or 0)
+    n_expert_used = _field(reader, f"{arch}.expert_used_count") or 0
+    if nemotron_h and isinstance(n_expert_used, (list, tuple)):
+        n_expert_used = max(
+            (int(n) for n in n_expert_used), default = 0
+        )  # per layer on Nemotron 3.5 Bolt
+    n_expert_used = int(n_expert_used)
     is_moe = bool(n_expert)
 
     spill: dict[int, int] = {}

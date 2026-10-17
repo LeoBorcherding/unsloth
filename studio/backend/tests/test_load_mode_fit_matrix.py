@@ -2273,6 +2273,24 @@ def test_the_replayed_cpu_fallback_recomputes_the_memory_record():
     assert "self._record_memory_state(cmd,env)" in arm
 
 
+def test_the_prompt_cache_is_in_the_footprint_it_is_subtracted_from():
+    """The prompt cache is host-only but absent from the footprint, so subtracting it credited
+    VRAM that was never charged and faked a fit."""
+    avail_mib = 16 * 1024
+
+    def _fit(cache):
+        return LlamaCppBackend._fit_derived_load_mode(
+            _Stub(avail_mib),
+            model_size = 20 * GIB,
+            prompt_cache_bytes = cache,
+            gpus = [(0, 12 * 1024)],
+            avail_mib = avail_mib,
+        )
+
+    assert _fit(0) == FIT_MODE
+    assert _fit(8 * GIB) is None
+
+
 def _no_flash_fit_rewriter(
     extra_args,
     *,
@@ -2410,19 +2428,10 @@ def test_the_reserve_holds_for_a_placement_the_fitter_will_not_move():
     assert _placement_is_fitter_proof(None, env = {}) is False
 
 
-def test_the_prompt_cache_is_in_the_footprint_it_is_subtracted_from():
-    """The prompt cache is host-only but absent from the footprint, so subtracting it credited
-    VRAM that was never charged and faked a fit."""
-    avail_mib = 16 * 1024
-
-    def _fit(cache):
-        return LlamaCppBackend._fit_derived_load_mode(
-            _Stub(avail_mib),
-            model_size = 20 * GIB,
-            prompt_cache_bytes = cache,
-            gpus = [(0, 12 * 1024)],
-            avail_mib = avail_mib,
-        )
-
-    assert _fit(0) == FIT_MODE
-    assert _fit(8 * GIB) is None
+@pytest.mark.parametrize("platform", ["linux", "windows", "wsl"])
+def test_an_integrated_cuda_soc_is_never_counted_twice(platform, monkeypatch):
+    """A Jetson / DGX Spark row is the host pool too (#4862): 40 GiB does not fit 32 GiB twice."""
+    monkeypatch.setattr(LlamaCppBackend, "_INTEGRATED_CUDA_IDS", {})
+    assert _mode(platform, "nvidia_discrete", 40 * GIB, 32 * 1024, monkeypatch) == FIT_MODE
+    LlamaCppBackend._INTEGRATED_CUDA_IDS[LlamaCppBackend._integrated_cuda_mask_key()] = {0}
+    assert _mode(platform, "nvidia_discrete", 40 * GIB, 32 * 1024, monkeypatch) is None

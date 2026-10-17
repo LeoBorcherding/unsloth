@@ -117,8 +117,8 @@ class LlamaServerStatsLogger:
         logger,
         interval_s = 10.0,
         stall_timeout_s = 600.0,
-        sysmem_watch = None,
         headers = None,
+        sysmem_watch = None,
     ):
         self._url = f"{base_url.rstrip('/')}/metrics"
         self._headers = dict(headers or {})
@@ -360,8 +360,8 @@ def _env_float(name, default, logger):
 def maybe_start_stats_logger(
     base_url,
     logger,
-    sysmem_watch = None,
     headers = None,
+    sysmem_watch = None,
 ):
     """Start a stats logger unless UNSLOTH_STUDIO_ENGINE_STATS disables it.
 
@@ -377,8 +377,8 @@ def maybe_start_stats_logger(
         logger,
         interval,
         stall_timeout_s = stall_timeout,
-        sysmem_watch = sysmem_watch,
         headers = headers,
+        sysmem_watch = sysmem_watch,
     )
     sl.start()
     return sl

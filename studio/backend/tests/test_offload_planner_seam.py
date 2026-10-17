@@ -583,12 +583,17 @@ def test_a_free_reading_above_the_cards_total_is_clamped(monkeypatch):
     assert over.vram_bytes == honest.vram_bytes, "the clamped card is budgeted as itself"
 
     # gpu_usable_mib comes off the same reading, so the budget is capped with it rather than
-    # left as the only unclamped way in.
+    # left as the only unclamped way in, and its reserve comes off the clamped figure: the same
+    # plan as the honest card with that reserve.
     over_usable = _plan(
         _Stub(), free_mib = 64 * 1024, usable_mib = 63 * 1024, gpu_total_mib = {0: 14 * 1024}
     )
-    assert over_usable is not None
-    assert over_usable.ot_patterns == honest.ot_patterns
+    honest_usable = _plan(
+        _Stub(), free_mib = 14 * 1024, usable_mib = 13 * 1024, gpu_total_mib = {0: 14 * 1024}
+    )
+    assert over_usable is not None and honest_usable is not None
+    assert over_usable.ot_patterns == honest_usable.ot_patterns
+    assert over_usable.reason == honest_usable.reason
 
     # Once per device, not once per load.
     warned = _warnings_of(monkeypatch)
@@ -1037,7 +1042,7 @@ def test_the_layout_cache_notices_a_gguf_replaced_in_place(tmp_path, monkeypatch
 
     reads: list[int] = []
 
-    def _fake(path):
+    def _fake(path, **_kw):
         reads.append(len(reads))
         return ModelLayout(arch = "llama", n_layers = len(reads), complete = True)
 
@@ -1895,12 +1900,11 @@ def test_a_recurrent_hybrid_stays_on_the_abstain_path():
 
 
 def test_flash_disabled_v_padding_reaches_the_layer_weights():
-    """With flash attention OFF llama.cpp cannot keep a ragged V cache: every
-    layer's V is padded to hparams.n_embd_v_gqa_max() over the whole model, which
-    is what _estimate_kv_cache_bytes charges via _max_kv_value_width. V goes
-    constant while K stays per-layer, so an unpadded vector prices a ratio the
-    total does not have. Reached whenever the resolved launch runs without flash
-    attention (_planned_flash_attn_state), which is exactly when llama.cpp pads."""
+    """With flash attention OFF llama.cpp cannot keep a ragged V cache: every layer's V is padded
+    to hparams.n_embd_v_gqa_max() over the whole model, which is what _estimate_kv_cache_bytes
+    charges via _max_kv_value_width. V goes constant while K stays per-layer, so an unpadded
+    vector prices a ratio the total does not have. Reached whenever the resolved launch runs without
+    flash attention (_planned_flash_attn_state), which is exactly when llama.cpp pads."""
     b = _swa_backend()
     # SWA layers wider than global ones, so the model-wide max is the SWA width
     # and the padding actually moves: n_embd_v_gqa_max = 8 * 256.
@@ -3491,7 +3495,7 @@ def _qwen4exp_backend(**extra):
 
 @pytest.mark.parametrize("n_ctx,before_mib,after_mib", [(8192, 304, 377), (65536, 1648, 2225)])
 def test_the_indexer_cache_is_charged_on_the_architecture_that_builds_one(
-    n_ctx, before_mib, after_mib
+    monkeypatch, n_ctx, before_mib, after_mib
 ):
     """llama-model.cpp:create_memory routes qwen4exp to llama_memory_hybrid_idx, which allocates
     a THIRD cache over the dense-attention rows: one head of attention.indexer.key_length for K
@@ -3502,6 +3506,11 @@ def test_the_indexer_cache_is_charged_on_the_architecture_that_builds_one(
     sized by llama-hparams.cpp:ple_conv_state) and was missing too."""
     from test_offload_planner import _StubReader, _StubTensor, _layout_from_reader
 
+    # The K + V widths below are the unknown-build charge; a host llama-server at b10889 or later
+    # drops the V half (test_offload_planner_review_r5 covers those builds).
+    monkeypatch.setattr(
+        LlamaCppBackend, "probe_build_number", classmethod(lambda cls, b = None: None)
+    )
     b = _qwen4exp_backend()
     total = b._estimate_kv_cache_bytes(
         n_ctx, "f16", n_parallel = 1, kv_unified = False, flash_attn = False
@@ -3542,3 +3551,26 @@ def test_the_windowed_half_reaches_the_planner_as_a_callable_too(monkeypatch):
     assert plain.kv_swa_bytes_at is None
     stale, _ = _captured_opts(monkeypatch, _Stub(), free_mib = 14 * 1024, kv_swa_bytes_at = 7)
     assert stale.kv_swa_bytes_at is None, "a snapshot that carries a number is not a callable"
+
+
+def test_a_larger_micro_batch_compute_buffer_spills_more_experts(monkeypatch):
+    """The expert-spill raise (ubatch 512 -> 2048) adds ~0.5-0.9 GiB of compute
+    buffer. Priced into compute_buffer_flat, it comes out of the experts kept on the
+    GPU instead of becoming a graph_reserve OOM.
+
+    The cost gate is passed through: it leaves this MoE cell to --fit on, and what is
+    under test is the placement it would rank, not the ranking."""
+    import core.inference.offload_planner as planner_mod
+
+    monkeypatch.setattr(planner_mod, "_cost_gate", lambda *a, **k: (None, 0.0, 0.0))
+    stub = _Stub(moe = 40)
+    at_512 = _plan(
+        stub, model_size = 30 * GIB, kv = 2 * GIB, free_mib = 12 * 1024, compute_flat = 300 * MIB
+    )
+    at_2048 = _plan(
+        stub, model_size = 30 * GIB, kv = 2 * GIB, free_mib = 12 * 1024, compute_flat = 1100 * MIB
+    )
+
+    assert at_512.spills_anything and at_2048.spills_anything
+    assert len(at_2048.spilled_blocks) > len(at_512.spilled_blocks)
+    assert at_2048.vram_bytes < at_512.vram_bytes

@@ -140,6 +140,19 @@ def _forget_mxc_isolation_settings():
 
 
 @pytest.fixture(autouse = True)
+def _forget_embedding_device_setting():
+    # Same one-store-per-test reason as above.
+    def _forget():
+        settings = sys.modules.get("utils.embedding_model_settings")
+        if settings is not None:
+            settings.forget_cached_embedding_device()
+
+    _forget()
+    yield
+    _forget()
+
+
+@pytest.fixture(autouse = True)
 def _no_background_sandbox_probes(monkeypatch):
     # No warm-up thread and no background re-probe; each test starts with no cached tool answer.
     monkeypatch.setenv("UNSLOTH_DISABLE_SANDBOX_WARMUP", "1")
@@ -1315,6 +1328,23 @@ def _drop_the_settings_memo_between_tests():
         yield
     finally:
         _settings._cache.clear()
+
+
+@pytest.fixture(autouse = True)
+def _drop_the_model_memory_memo_between_tests():
+    """The same 2 s clock for the Model Memory toggles (utils.model_memory_settings).
+
+    test_an_uncontended_read_still_caches reads keep_resident=True through a patched store and
+    leaves it memoized, so the next test on that worker inside the TTL sees "Keep model in GPU
+    memory" on: model_memory_owns_placement() turns true and the spill planner stands down.
+    """
+    settings = sys.modules.get("utils.model_memory_settings")
+    if settings is not None:
+        settings._cache.clear()
+    yield
+    settings = sys.modules.get("utils.model_memory_settings")
+    if settings is not None:
+        settings._cache.clear()
 
 
 @pytest.fixture(autouse = True)
