@@ -940,6 +940,17 @@ def parse_tool_calls_from_text(
     def _in_blocked(pos: int) -> bool:
         return any(begin <= pos < stop for begin, stop in _blocked_spans)
 
+    def _end_tag_is_param_data(end_tag) -> bool:
+        # Quoted inside a parameter whose own close follows before any new opener. A parameter
+        # that never closes still ends at the tag, so a call missing its </parameter> still heals.
+        if not _inside_open_parameter(content, end_tag.start()):
+            return False
+        close = content.find(_PARAM_CLOSE_TAG, end_tag.end())
+        return close >= 0 and not (
+            _TC_FUNC_START_RE.search(content, end_tag.end(), close)
+            or _TC_PARAM_START_RE.search(content, end_tag.end(), close)
+        )
+
     markers = [
         mk for mk in _build_markers(content) if not _in_think(mk[0]) and not _in_blocked(mk[0])
     ]
@@ -1004,9 +1015,16 @@ def parse_tool_calls_from_text(
         func_name = fm.group(1)
         body_start = fm.end()
         next_func = func_starts[idx + 1].start() if idx + 1 < len(func_starts) else len(content)
-        end_tag = _TC_END_TAG_RE.search(content[body_start:])
+        end_tag = next(
+            (
+                m
+                for m in _TC_END_TAG_RE.finditer(content, body_start)
+                if not _end_tag_is_param_data(m)
+            ),
+            None,
+        )
         if end_tag:
-            body_end = body_start + end_tag.start()
+            body_end = end_tag.start()
         else:
             body_end = len(content)
         body_end = min(body_end, next_func)
