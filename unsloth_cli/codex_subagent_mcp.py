@@ -51,10 +51,11 @@ def _config() -> dict:
     return config
 
 
-def _events(stdout: str) -> tuple[list[str], list[str], list[dict]]:
+def _events(stdout: str) -> tuple[list[str], list[str], list[dict], str | None]:
     messages = []
     errors = []
     commands = []
+    turn = None
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -77,18 +78,21 @@ def _events(stdout: str) -> tuple[list[str], list[str], list[dict]]:
             and item.get("type") == "command_execution"
         ):
             commands.append(item)
+        if event.get("type") in ("turn.completed", "turn.failed"):
+            turn = event["type"]
         if event.get("type") in ("error", "turn.failed"):
             detail = event.get("message") or event.get("error")
             if isinstance(detail, dict):
                 detail = detail.get("message") or json.dumps(detail)
             if detail:
                 errors.append(str(detail))
-    return messages, errors, commands
+    return messages, errors, commands, turn
 
 
 def _result_text(stdout: str, show_last_command: bool = False) -> str:
-    messages, errors, commands = _events(stdout)
-    if errors:
+    messages, errors, commands, turn = _events(stdout)
+    # codex exec also reports each reconnect it retries as an error; a completed turn outranks those.
+    if errors and not (turn == "turn.completed" and messages):
         raise RuntimeError(_bounded(errors[-1]))
     if not messages:
         raise RuntimeError("The local Codex agent returned no readable result.")
