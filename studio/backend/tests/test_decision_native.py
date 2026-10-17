@@ -526,6 +526,33 @@ def test_freest_gpu_follows_the_visibility_order(stub, monkeypatch, mask, expect
     assert native_worker._pick_device("llama-server", rocr) == expected.replace("CUDA", "ROCm")
 
 
+@pytest.mark.parametrize("order", [None, "FASTEST_FIRST"])
+def test_freest_gpu_is_numbered_in_pci_order(monkeypatch, order):
+    # PCI 0 is a 3060 (12 GB free), PCI 1 a 4090 (24 GB free); fastest-first CUDA would call the 4090 CUDA0.
+    seen = []
+
+    def enumerate_devices(_binary, env):
+        seen.append(env.get("CUDA_DEVICE_ORDER"))
+        return ["CUDA0", "CUDA1"]
+
+    monkeypatch.setattr(LlamaCppBackend, "_enumerated_gpu_devices", staticmethod(enumerate_devices))
+    monkeypatch.setattr(
+        LlamaCppBackend,
+        "_get_gpu_free_memory",
+        staticmethod(lambda *_, **__: [(0, 12000), (1, 24000)]),
+    )
+    env = {} if order is None else {"CUDA_DEVICE_ORDER": order}
+    picked = native_worker._pick_device("llama-server", env)
+    pci = env.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID"
+    physical = {"CUDA0": 0, "CUDA1": 1} if pci else {"CUDA0": 1, "CUDA1": 0}
+    assert physical[picked] == 1
+    assert seen == ["PCI_BUS_ID"]
+    # A mask is read in the inherited order, so pinning would change which cards it names.
+    masked = {"CUDA_DEVICE_ORDER": "FASTEST_FIRST", "CUDA_VISIBLE_DEVICES": "0,1"}
+    native_worker._pick_device("llama-server", masked)
+    assert masked["CUDA_DEVICE_ORDER"] == "FASTEST_FIRST"
+
+
 @pytest.mark.parametrize("mode", ["nodecisions", "wrongalias"])
 def test_a_server_without_a_decisions_output_is_not_capable(home, stub, tmp_path, mode):
     model = tmp_path / "m.gguf"
