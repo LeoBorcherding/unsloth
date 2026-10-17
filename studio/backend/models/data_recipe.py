@@ -127,7 +127,8 @@ class UnstructuredFileUploadResponse(BaseModel):
 
 class McpToolsListRequest(BaseModel):
     mcp_providers: list[dict[str, Any]] = Field(default_factory = list)
-    timeout_sec: float | None = Field(default = None, gt = 0)
+    # The editor's blank-Timeout default; with no default a hung server held the request for minutes.
+    timeout_sec: float | None = Field(default = 30, gt = 0)
 
 
 class McpToolsProviderResult(BaseModel):
