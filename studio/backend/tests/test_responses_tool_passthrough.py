@@ -3552,14 +3552,14 @@ class TestReasoningPrefilledExtractor:
             pytest.param(
                 "</think>hi", True, True, "", "hi", id = "prefilled_close_at_start_empty_reasoning"
             ),
-            # T9: without prefilled, a lone close tag keeps the pre-fix behavior (parity guard).
+            # T9: without prefilled, a lone close tag after visible text is the answer's own text.
             pytest.param(
                 "reasoning</think>ans",
                 True,
                 False,
                 "",
-                "reasoningans",
-                id = "not_prefilled_lone_close_preserves_current_behavior",
+                "reasoning</think>ans",
+                id = "not_prefilled_lone_close_is_literal_text",
             ),
             # T10: normal explicit <think>..</think> (GGUF / Harmony) unchanged.
             pytest.param(

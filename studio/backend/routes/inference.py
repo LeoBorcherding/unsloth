@@ -39540,6 +39540,9 @@ class _ResponsesReasoningExtractor:
         # Splitting requires marker parsing; a prefilled open implies it.
         self._parse_think_markers = parse_think_markers or reasoning_prefilled
         self._single_block = single_block
+        # Reasoning only ever arrives as one leading block. Once it has closed or visible
+        # text has started, a later <think> / </think> is the answer's own text.
+        self._block_consumed = False
 
     def feed(
         self,
@@ -39567,6 +39570,7 @@ class _ResponsesReasoningExtractor:
                     )
                     self._buffer = self._buffer[close_idx + len(_RESPONSES_THINK_CLOSE) :]
                     self._in_reasoning = False
+                    self._block_consumed = True
                     continue
                 # Hold back a trailing partial of either marker: the close (clean split across chunks)
                 # and a stray open (a re-emitted <think> is suppressed, not leaked).
@@ -39578,6 +39582,11 @@ class _ResponsesReasoningExtractor:
                 emit = self._buffer[:-keep] if keep else self._buffer
                 reasoning_parts.append(emit.replace(_RESPONSES_THINK_OPEN, ""))
                 self._buffer = self._buffer[-keep:] if keep else ""
+                break
+
+            if self._block_consumed:
+                visible_parts.append(self._buffer)
+                self._buffer = ""
                 break
 
             if self._single_block:
@@ -39593,25 +39602,23 @@ class _ResponsesReasoningExtractor:
                 break
 
             open_idx = self._buffer.find(_RESPONSES_THINK_OPEN)
-            close_idx = self._buffer.find(_RESPONSES_THINK_CLOSE)
-            if close_idx != -1 and (open_idx == -1 or close_idx < open_idx):
-                visible_parts.append(self._buffer[:close_idx])
-                self._buffer = self._buffer[close_idx + len(_RESPONSES_THINK_CLOSE) :]
+            if open_idx == -1:
+                keep = _responses_marker_holdback(self._buffer, (_RESPONSES_THINK_OPEN,))
+                lead = self._buffer[: len(self._buffer) - keep]
+            else:
+                lead = self._buffer[:open_idx]
+            if lead.strip():
+                self._block_consumed = True
                 continue
             if open_idx != -1:
-                visible_parts.append(self._buffer[:open_idx])
+                visible_parts.append(lead)
                 self._buffer = self._buffer[open_idx + len(_RESPONSES_THINK_OPEN) :]
                 self._in_reasoning = True
                 continue
-
-            keep = _responses_marker_holdback(
-                self._buffer,
-                (_RESPONSES_THINK_OPEN, _RESPONSES_THINK_CLOSE),
-            )
-            if keep == len(self._buffer):
+            if not lead:
                 break
-            visible_parts.append(self._buffer[:-keep] if keep else self._buffer)
-            self._buffer = self._buffer[-keep:] if keep else ""
+            visible_parts.append(lead)
+            self._buffer = self._buffer[len(lead) :]
             break
 
         return "".join(reasoning_parts), "".join(visible_parts)
@@ -39626,7 +39633,7 @@ class _ResponsesReasoningExtractor:
         if self._in_reasoning:
             self._in_reasoning = False
             return remaining.replace(_RESPONSES_THINK_OPEN, ""), ""
-        return "", remaining.replace(_RESPONSES_THINK_CLOSE, "")
+        return "", remaining
 
 
 def _extract_responses_reasoning(
