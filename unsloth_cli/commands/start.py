@@ -3551,7 +3551,19 @@ def write_codex_parent_overlay(overlay: Path, auto_route: bool = False) -> Path:
                 entries.append(source.name)
             except OSError:
                 if source.is_file():
-                    shutil.copy2(source, target)
+                    # A copy forks the login: Codex rotates refresh tokens, so a refresh here would sign
+                    # plain `codex` out. A hard link needs no privilege on NTFS.
+                    try:
+                        os.link(source, target)
+                    except OSError:
+                        shutil.copy2(source, target)
+                        if source.name == "auth.json":
+                            typer.echo(
+                                f"Warning: could not link {source} into this session, so it uses a "
+                                "copy; if Codex refreshes your sign-in here, plain `codex` may ask "
+                                "you to log in again. Turning on Windows Developer Mode avoids this.",
+                                err = True,
+                            )
                     entries.append(source.name)
                 elif source.is_dir():
                     if _create_directory_junction(source, target):
