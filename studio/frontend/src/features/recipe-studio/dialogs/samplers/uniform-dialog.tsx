@@ -66,7 +66,7 @@ export function UniformDialog({
         <FieldLabel
           label="Convert to"
           htmlFor={convertId}
-          hint="Optionally cast sampled values before output."
+          hint="Optionally cast sampled values before output. int gives whole numbers from Low to High, each equally likely."
         />
         <Select
           value={config.convert_to ?? "none"}

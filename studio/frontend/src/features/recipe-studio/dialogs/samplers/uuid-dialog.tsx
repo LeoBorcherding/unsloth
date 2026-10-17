@@ -33,7 +33,7 @@ export function UuidDialog({
         <FieldLabel
           label="UUID format (optional)"
           htmlFor={uuidId}
-          hint="Optional formatter e.g. prefix:, short, uppercase."
+          hint="short, upper or prefix:<text>, combined with commas (short, upper). Other text is used as a prefix."
         />
         <Input
           id={uuidId}
