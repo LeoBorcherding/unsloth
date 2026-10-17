@@ -4430,7 +4430,11 @@ class UnslothTrainer:
                 import wandb
                 wandb.init(project = training_args.get("wandb_project", "unsloth-training"))
 
-            output_dir = str(resolve_output_dir(training_args.get("output_dir")))
+            output_dir = training_args.get("output_dir")
+            # Only `unsloth train` sets this, after resolving the user's path itself.
+            if not training_args.get("allow_external_output_dir"):
+                output_dir = resolve_output_dir(output_dir)
+            output_dir = str(output_dir)
             ensure_dir(Path(output_dir))
 
             if self._audio_type == "csm":

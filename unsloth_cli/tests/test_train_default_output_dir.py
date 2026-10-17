@@ -24,8 +24,10 @@ class _SavingTrainer:
     def __init__(self):
         self.output_dirs = []
         self.requested = []
+        self.loads = 0
 
     def load_model(self, **kwargs):
+        self.loads += 1
         return True
 
     def prepare_model_for_training(self, **kwargs):
@@ -38,7 +40,10 @@ class _SavingTrainer:
         from utils.paths import ensure_dir, resolve_output_dir
 
         self.requested.append(kwargs.get("output_dir"))
-        output_dir = resolve_output_dir(kwargs.get("output_dir"))
+        if kwargs.get("allow_external_output_dir"):
+            output_dir = Path(kwargs["output_dir"])
+        else:
+            output_dir = resolve_output_dir(kwargs.get("output_dir"))
         ensure_dir(output_dir)
         (output_dir / "adapter_config.json").write_text(
             '{"base_model_name_or_path": "unsloth/Qwen3-0.6B", "peft_type": "LORA", "r": 16}',
@@ -98,7 +103,44 @@ def test_explicit_outputs_is_not_treated_as_default(tmp_path, monkeypatch):
 
     assert _train(monkeypatch, trainer, "--output-dir", "./outputs").exit_code == 0
 
-    assert trainer.requested == ["outputs"]
+    from utils.paths import outputs_root
+
+    assert trainer.output_dirs == [outputs_root()]
+
+
+def test_absolute_output_dir_is_used_as_given(tmp_path, monkeypatch):
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path / "studio"))
+    target = tmp_path / "elsewhere" / "my_run"
+    trainer = _SavingTrainer()
+
+    result = _train(monkeypatch, trainer, "--output-dir", str(target))
+
+    assert result.exit_code == 0, result.output
+    assert trainer.output_dirs == [target.resolve()]
+    assert (target / "adapter_config.json").is_file()
+
+
+def test_home_relative_output_dir_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path / "studio"))
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "user"))
+    trainer = _SavingTrainer()
+
+    result = _train(monkeypatch, trainer, "--output-dir", "~/runs/my_run")
+
+    assert result.exit_code == 0, result.output
+    assert trainer.output_dirs == [(tmp_path / "user" / "runs" / "my_run").resolve()]
+
+
+def test_bad_output_dir_fails_before_the_model_load(tmp_path, monkeypatch):
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path / "studio"))
+    trainer = _SavingTrainer()
+
+    result = _train(monkeypatch, trainer, "--output-dir", "../my_run")
+
+    assert result.exit_code == 2
+    assert "'..'" in result.output
+    assert trainer.loads == 0
 
 
 def test_runs_started_in_the_same_second_get_separate_folders(tmp_path, monkeypatch):

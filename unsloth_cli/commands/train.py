@@ -171,6 +171,18 @@ def _default_output_dir(model_name: str) -> str:
     return store.get(key).decode()
 
 
+def _explicit_output_dir(value) -> str:
+    # Absolute and ~ paths are used as given; a relative one is a run name under Unsloth Studio's outputs.
+    ensure_studio_backend_path()
+    from utils.paths import ensure_dir, resolve_output_dir
+
+    raw = str(value).strip()
+    path = Path(raw).expanduser()
+    path = path.resolve() if os.path.isabs(path) else resolve_output_dir(raw)
+    ensure_dir(path)
+    return str(path)
+
+
 @add_options_from_config(Config)
 def train(
     config: Optional[Path] = typer.Option(
@@ -246,6 +258,15 @@ def train(
         )
         raise typer.Exit(code = 2)
 
+    # Checked before the model load, so a bad path fails in a second rather than after it.
+    explicit_output_dir = None
+    if "output_dir" in cfg.training.model_fields_set:
+        try:
+            explicit_output_dir = _explicit_output_dir(cfg.training.output_dir)
+        except (OSError, ValueError) as e:
+            typer.echo(f"Error: --output-dir {cfg.training.output_dir}: {e}", err = True)
+            raise typer.Exit(code = 2)
+
     trainer = _create_cli_trainer(cfg.model, hf_token)
 
     if not trainer.load_model(
@@ -278,8 +299,11 @@ def train(
     ds, eval_ds = result
 
     training_kwargs = cfg.training_kwargs()
-    if "output_dir" not in cfg.training.model_fields_set:
+    if explicit_output_dir is None:
         training_kwargs["output_dir"] = _default_output_dir(cfg.model)
+    else:
+        training_kwargs["output_dir"] = explicit_output_dir
+        training_kwargs["allow_external_output_dir"] = True
     training_kwargs["wandb_token"] = wandb_token
     training_kwargs["optim"] = _optimizer_for_host(training_kwargs.get("optim"))
     started = trainer.start_training(dataset = ds, eval_dataset = eval_ds, **training_kwargs)
