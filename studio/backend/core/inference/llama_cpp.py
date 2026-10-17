@@ -7434,6 +7434,8 @@ _MOE_CACHE_USER_OWNED_ENV = (
     "LLAMA_ARG_TENSOR_SPLIT",
     "LLAMA_ARG_RPC",
 )
+# llama-server's bind failure: the port _find_free_port released was taken before the child bound it.
+_PORT_TAKEN_RE = re.compile(r"couldn't bind HTTP server socket")
 # Exact startup errors: healthy launches also log "moe cache auto:" and "MoE cache size =".
 _MOE_CACHE_ERROR_RE = re.compile(
     r"MoE cache (?:requires a GPU backend|does not support tensor parallelism"
@@ -19158,6 +19160,15 @@ class LlamaCppBackend:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
+
+    @staticmethod
+    def _with_port(cmd: list, port: int) -> list:
+        """*cmd* with Unsloth's own ``--port`` (the first) set to *port*."""
+        if "--port" not in cmd:
+            return cmd
+        cmd = list(cmd)
+        cmd[cmd.index("--port") + 1] = str(port)
+        return cmd
 
     # ── Stdout drain (prevents pipe deadlock on Windows) ─────────
 
@@ -32431,6 +32442,8 @@ class LlamaCppBackend:
                     # read below an UnboundLocalError instead.
                     nonlocal _last_spawn_cmd, _mem_host_resident, _did_rocm_retry
                     nonlocal _sched_abort_seen
+                    # A port re-picked on an earlier spawn reaches the fallbacks built from `cmd`.
+                    run_cmd = self._with_port(run_cmd, self._port)
                     # One revocation point for the tensor-spill plan instead of a
                     # strip per retry site. `label` is empty ONLY on the first
                     # spawn, so a retry added later is covered automatically. The
@@ -32590,6 +32603,19 @@ class LlamaCppBackend:
                         _capability_crash = _capability_crash or (
                             self._cuda_kernel_image_error("\n".join(self._stdout_lines)) is not None
                         )
+                        if _startup_crashed and _PORT_TAKEN_RE.search(_startup_output):
+                            # Not a model or VRAM failure: same launch, fresh port.
+                            _taken = self._port
+                            self._port = self._find_free_port()
+                            run_cmd = self._with_port(run_cmd, self._port)
+                            logger.warning(
+                                "llama-server could not bind port %s (another process took "
+                                "it); retrying on port %s. Crash log: %s",
+                                _taken,
+                                self._port,
+                                self._llama_log_path,
+                            )
+                            continue
                         if (
                             not _did_rocm_retry
                             and _startup_crashed
