@@ -44,6 +44,7 @@ class ParsedUpdate:
     usage_rpm: float | None = None
     usage_section_start: bool | None = None
     source_progress: SourceProgress | None = None
+    record_failure: tuple[str, str] | None = None
 
 
 # Best-effort parser from data-designer logs -> structured status for UI.
@@ -53,6 +54,9 @@ _RE_SAMPLERS = re.compile(
 # Newer data-designer phrasing for the same stage; no column count is reported here.
 _RE_SAMPLING_SEED = re.compile(
     r"Sampling (?P<rows>\d+) records from .*?seed dataset", re.IGNORECASE
+)
+_RE_RECORD_FAILED = re.compile(
+    r"Generation for record at index \S+ failed in column '(?P<col>[^']+)' \((?P<kind>[^)]+)\)"
 )
 _RE_COLCFG = re.compile(r"model config for column '(?P<col>[^']+)'")
 _RE_PROCESSING_COL = re.compile(r"Processing .* column '(?P<col>[^']+)'")
@@ -255,6 +259,10 @@ def parse_log_message(msg: str) -> ParsedUpdate | None:
         col = m.group("col")
         return ParsedUpdate(stage = STAGE_GENERATING, current_column = col)
 
+    m = _RE_RECORD_FAILED.search(msg)
+    if m:
+        return ParsedUpdate(record_failure = (m.group("col"), m.group("kind")))
+
     m = _RE_PROGRESS.search(msg)
     if m:
         p = Progress(
@@ -305,6 +313,10 @@ def parse_log_message(msg: str) -> ParsedUpdate | None:
 
 
 def apply_update(job: Job, update: ParsedUpdate) -> None:
+    if update.record_failure is not None:
+        column, kind = update.record_failure
+        kinds = job.record_failures.setdefault(column, {})
+        kinds[kind] = kinds.get(kind, 0) + 1
     if update.stage is not None:
         job.stage = update.stage
     if update.current_column is not None:

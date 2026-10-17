@@ -96,5 +96,7 @@ class Job:
     _in_usage_summary: bool = False
     _seen_generation_columns: list[str] = field(default_factory = list)
     _column_done: dict[str, int] = field(default_factory = dict)
+    # column -> failure kind -> records the engine dropped, from its per-record warnings.
+    record_failures: dict[str, dict[str, int]] = field(default_factory = dict)
     _source_counts: dict[str, int] = field(default_factory = dict)
     _source_seen_pages: set[str] = field(default_factory = set)
