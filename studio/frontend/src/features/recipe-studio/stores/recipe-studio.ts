@@ -26,23 +26,18 @@ import type {
   RecipeNode,
   RecipeProcessorConfig,
   SamplerType,
-  SeedSourceType,
 } from "../types";
 import { applyRecipeConnection, isValidRecipeConnection } from "../utils/graph";
-import { deriveDisplayGraph } from "../utils/graph/derive-display-graph";
 import {
   HANDLE_IDS,
   normalizeRecipeHandleId,
   remapRecipeEdgeHandlesForLayout,
 } from "../utils/handles";
 import type { RecipeSnapshot } from "../utils/import";
-import { getLayoutedElements } from "../utils/layout";
 import { makeUnstructuredUploadUid } from "../utils/config-factories";
-import {
-  centerModelInfraNodes,
-  optimizeModelInfraEdgeHandles,
-} from "./helpers/model-infra-layout";
+import { layoutRecipeGraph } from "./helpers/auto-layout";
 import { applyEdgeRemovals, applyNodeRemovals } from "./helpers/removals";
+import { seedSourceTypeForBlock } from "./helpers/seed-replace";
 import {
   applyLayoutDirectionToNodes,
   applyRenameToConfigs,
@@ -79,6 +74,8 @@ type RecipeStudioState = {
   nextId: number;
   nextY: number;
   fitViewTick: number;
+  // Imported blocks had no stored position; the canvas runs Auto layout once their sizes are measured.
+  autoLayoutPending: boolean;
   // Upload-uid directories whose owning block dropped them; server-side deletion is deferred until
   // a save no longer references them, so a reload before autosave cannot leave a saved recipe
   // pointing at deleted files.
@@ -145,6 +142,7 @@ const INITIAL_STATE = {
   nextId: 3,
   nextY: 280,
   fitViewTick: 0,
+  autoLayoutPending: false,
   pendingUploadCleanups: [],
 } satisfies Pick<
   RecipeStudioState,
@@ -163,6 +161,7 @@ const INITIAL_STATE = {
   | "nextId"
   | "nextY"
   | "fitViewTick"
+  | "autoLayoutPending"
   | "pendingUploadCleanups"
 >;
 
@@ -342,57 +341,8 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       if (state.executionLocked) {
         return state;
       }
-      const isTopBottom = state.layoutDirection === "TB";
-
-      const displayGraph = deriveDisplayGraph({
-        nodes: state.nodes,
-        edges: state.edges,
-        configs: state.configs,
-        layoutDirection: state.layoutDirection,
-        auxNodePositions: {},
-        llmAuxVisibility: state.llmAuxVisibility,
-      });
-      const { nodes } = getLayoutedElements(
-        displayGraph.nodes,
-        displayGraph.edges,
-        {
-          direction: state.layoutDirection,
-          nodesep: isTopBottom ? 120 : 80,
-          ranksep: isTopBottom ? 140 : 80,
-          configs: state.configs,
-        },
-      );
-      const layoutedPositions = new Map(
-        nodes.map((node) => [node.id, node.position] as const),
-      );
-      const nextNodes = state.nodes.map((node) => {
-        const position = layoutedPositions.get(node.id);
-        if (!position) {
-          return node;
-        }
-        return { ...node, position };
-      });
-      const centeredNodes = centerModelInfraNodes(
-        nextNodes,
-        state.edges,
-        state.configs,
-        state.layoutDirection,
-      );
-      const optimizedEdges = optimizeModelInfraEdgeHandles(
-        state.edges,
-        centeredNodes,
-        state.configs,
-        state.layoutDirection,
-      );
-      return {
-        auxNodePositions: {},
-        edges: optimizedEdges,
-        nodes: applyLayoutDirectionToNodes(
-          centeredNodes,
-          state.configs,
-          state.layoutDirection,
-        ),
-      };
+      const { nodes, edges } = layoutRecipeGraph(state);
+      return { auxNodePositions: {}, edges, nodes, autoLayoutPending: false };
     }),
   setLlmAuxVisibility: (id, visible) =>
     set((state) => {
@@ -415,12 +365,30 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
     }),
   addSeedNode: (type, position, openDialog = true) => {
     const current = get();
+    const currentSeed = Object.values(current.configs).find(
+      (config) => config.kind === "seed",
+    );
+    // Same source type: open the configured seed instead of blanking it.
+    if (
+      currentSeed?.kind === "seed" &&
+      currentSeed.seed_source_type === seedSourceTypeForBlock(type)
+    ) {
+      if (!current.executionLocked) {
+        set((state) => ({
+          nodes: state.nodes.map((node) => ({
+            ...node,
+            selected: node.id === currentSeed.id,
+          })),
+          activeConfigId: currentSeed.id,
+          dialogOpen: openDialog,
+        }));
+      }
+      return;
+    }
     if (!current.executionLocked) {
       // The reset below clears the block's upload uid and file list; queue
       // its server-side directory for deletion after the next save.
-      const uid = seedUploadCleanupUid(
-        Object.values(current.configs).find((config) => config.kind === "seed"),
-      );
+      const uid = seedUploadCleanupUid(currentSeed);
       if (uid) {
         current.queueUploadCleanup(uid);
       }
@@ -435,14 +403,7 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       if (!existing) {
         return buildAddedNodeState(state, "seed", type, position, openDialog);
       }
-      let nextSourceType: SeedSourceType = "hf";
-      if (type === "seed_local") {
-        nextSourceType = "local";
-      } else if (type === "seed_unstructured") {
-        nextSourceType = "unstructured";
-      } else if (type === "seed_github") {
-        nextSourceType = "github_repo";
-      }
+      const nextSourceType = seedSourceTypeForBlock(type);
 
       const nextConfig: typeof existing = {
         ...existing,
@@ -726,28 +687,38 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       );
     }),
   loadRecipe: (snapshot) =>
-    set((state) => ({
-      configs: snapshot.configs,
-      nodes: applyLayoutDirectionToNodes(
-        snapshot.nodes,
-        snapshot.configs,
-        snapshot.layoutDirection,
-      ),
-      edges: snapshot.edges,
-      processors: snapshot.processors,
-      layoutDirection: snapshot.layoutDirection,
-      nextId: snapshot.nextId,
-      nextY: snapshot.nextY,
-      auxNodePositions: snapshot.auxNodePositions ?? {},
-      llmAuxVisibility: {},
-      activeConfigId: null,
-      dialogOpen: false,
-      sheetView: "root",
-      fitViewTick: state.fitViewTick + 1,
-      // Queued cleanups belong to the previous recipe; draining them after
-      // a save of this one could delete files its saved payload still uses.
-      pendingUploadCleanups: [],
-    })),
+    set((state) => {
+      // Lay out at default sizes now so nothing stacks, and again once measured.
+      const laidOut = snapshot.needsLayout
+        ? layoutRecipeGraph({ ...snapshot, llmAuxVisibility: {} })
+        : {
+            nodes: applyLayoutDirectionToNodes(
+              snapshot.nodes,
+              snapshot.configs,
+              snapshot.layoutDirection,
+            ),
+            edges: snapshot.edges,
+          };
+      return {
+        configs: snapshot.configs,
+        nodes: laidOut.nodes,
+        edges: laidOut.edges,
+        autoLayoutPending: Boolean(snapshot.needsLayout),
+        processors: snapshot.processors,
+        layoutDirection: snapshot.layoutDirection,
+        nextId: snapshot.nextId,
+        nextY: snapshot.nextY,
+        auxNodePositions: snapshot.auxNodePositions ?? {},
+        llmAuxVisibility: {},
+        activeConfigId: null,
+        dialogOpen: false,
+        sheetView: "root",
+        fitViewTick: state.fitViewTick + 1,
+        // Queued cleanups belong to the previous recipe; draining them after
+        // a save of this one could delete files its saved payload still uses.
+        pendingUploadCleanups: [],
+      };
+    }),
   setAuxNodePosition: (id, position) =>
     set((state) => {
       const current = state.auxNodePositions[id];

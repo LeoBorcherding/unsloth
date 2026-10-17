@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { applyAuxNodeChanges, filterEdgeChangesByIds, filterNodeChangesByIds } from "../utils/reactflow-changes";
 import type { RecipeGraphAuxNodeData } from "../components/recipe-graph-aux-node";
+import { seedSwitchLosesData } from "../stores/helpers/seed-replace";
 
 const SUPPORTED_DRAG_KINDS: RecipeBlockDragPayload["kind"][] = [
   "sampler",
@@ -35,6 +36,20 @@ const SUPPORTED_DRAG_KINDS: RecipeBlockDragPayload["kind"][] = [
   "expression",
   "note",
 ];
+
+// A recipe has one seed, so a new source block replaces the configured one.
+function confirmSeedSwitch(
+  configs: Record<string, NodeConfig>,
+  type: SeedBlockType,
+): boolean {
+  const seed = Object.values(configs).find((config) => config.kind === "seed");
+  if (!(seed?.kind === "seed" && seedSwitchLosesData(seed, type))) {
+    return true;
+  }
+  return window.confirm(
+    "Replace the current source data? Its dataset, files and preview will be cleared.",
+  );
+}
 
 function parseRecipeBlockDragPayload(raw: string): RecipeBlockDragPayload | null {
   try {
@@ -210,7 +225,10 @@ export function useRecipeEditorGraph({
         return;
       }
       if (payload.kind === "seed") {
-        addSeedNode(payload.type as SeedBlockType, position, false);
+        const type = payload.type as SeedBlockType;
+        if (confirmSeedSwitch(configs, type)) {
+          addSeedNode(type, position, false);
+        }
         return;
       }
       if (payload.kind === "expression") {
@@ -253,6 +271,7 @@ export function useRecipeEditorGraph({
       addSamplerNode,
       addSeedNode,
       addValidatorNode,
+      configs,
       reactFlowInstance,
     ],
   );
@@ -277,9 +296,11 @@ export function useRecipeEditorGraph({
 
   const handleAddSeedFromSheet = useCallback(
     (type: SeedBlockType) => {
-      addSeedNode(type, getViewportCenterPosition());
+      if (confirmSeedSwitch(configs, type)) {
+        addSeedNode(type, getViewportCenterPosition());
+      }
     },
-    [addSeedNode, getViewportCenterPosition],
+    [addSeedNode, configs, getViewportCenterPosition],
   );
 
   const handleAddLlmFromSheet = useCallback(
