@@ -178,3 +178,52 @@ def test_a_cancel_landing_right_after_the_op_starts_is_never_erased(orchestrator
         orch.export_gguf(save_directory = "out", op_id = "op-1")
     assert cancelled == [True]
     assert orch.get_last_op()["status"] == "cancelled"
+
+
+def _gguf_save_dir(tmp_path):
+    save_dir = tmp_path / "exports" / "gguf"
+    save_dir.mkdir(parents = True)
+    # Not this op's: an earlier leftover and a finished export.
+    (save_dir / "_tmp_model_older").mkdir()
+    (save_dir / "model.Q4_K_M.gguf").write_bytes(b"GGUF")
+    return save_dir
+
+
+def _merge_into_a_temp_checkpoint(save_dir):
+    tmp = save_dir / "_tmp_model_abc123"
+    (tmp / "model").mkdir(parents = True)
+    (tmp / "model" / "model-00001-of-00002.safetensors").write_bytes(b"\0" * 64)
+    (tmp / "model.BF16.gguf").write_bytes(b"GGUF")
+
+
+def test_a_cancelled_gguf_export_leaves_no_temp_checkpoint(orchestrator, monkeypatch, tmp_path):
+    orch, _sent, _loaded, _module = orchestrator
+    save_dir = _gguf_save_dir(tmp_path)
+    worker = orch._proc = _Worker()
+    monkeypatch.setattr(orch, "_ensure_subprocess_alive", worker.is_alive)
+
+    def _cancelled_mid_merge(kind, timeout = None):
+        _merge_into_a_temp_checkpoint(save_dir)
+        assert orch.cancel_export() is True
+        raise RuntimeError("Export subprocess crashed during wait")
+
+    monkeypatch.setattr(orch, "_wait_response", _cancelled_mid_merge)
+
+    assert orch.export_gguf(save_directory = str(save_dir))[0] is False
+    assert sorted(p.name for p in save_dir.iterdir()) == ["_tmp_model_older", "model.Q4_K_M.gguf"]
+
+
+def test_a_live_worker_keeps_its_temp_checkpoint(orchestrator, monkeypatch, tmp_path):
+    # The worker's own finally owns the cleanup while it runs, and keeps GGUFs it could not move.
+    orch, _sent, _loaded, _module = orchestrator
+    save_dir = _gguf_save_dir(tmp_path)
+    orch._proc = _Worker()
+
+    def _timed_out(kind, timeout = None):
+        _merge_into_a_temp_checkpoint(save_dir)
+        raise RuntimeError("Timeout waiting for 'export_gguf_done' response")
+
+    monkeypatch.setattr(orch, "_wait_response", _timed_out)
+
+    assert orch.export_gguf(save_directory = str(save_dir))[0] is False
+    assert (save_dir / "_tmp_model_abc123" / "model.BF16.gguf").is_file()
