@@ -6,7 +6,6 @@ from __future__ import annotations
 from core.training.account_jobs import account_hf_token
 import json
 from pathlib import Path
-import tempfile
 
 from utils.paths import recipe_datasets_root, resolve_dataset_path
 
@@ -19,8 +18,21 @@ _UNSLOTH_STUDIO_FOOTER = (
 )
 
 
+# Top-level folders the main dataset owns on the Hub; a processor uploaded there would replace them.
+_RESERVED_REPO_FOLDERS = frozenset({"data", "images"})
+_HUB_ERRORS = {
+    401: "Hugging Face rejected the token (401). Check the token saved in Settings or the one entered here.",
+    403: "This token can't write to {repo_id} (403). Use a token with write access to it.",
+    429: "Hugging Face is rate limiting uploads (429). Wait a few minutes, then publish again.",
+}
+
+
 class RecipeDatasetPublishError(ValueError):
     """Raised when a recipe dataset cannot be published to Hugging Face."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _resolve_recipe_artifact_path(artifact_path: str) -> Path:
@@ -73,6 +85,50 @@ def _ensure_hub_repo_private(hf_api, repo_id: str) -> None:
         ) from exc
 
 
+def _repo_files(folder: Path, path_in_repo: str) -> dict[str, Path]:
+    if not folder.is_dir():
+        return {}
+    return {
+        f"{path_in_repo}/{path.relative_to(folder).as_posix()}": path
+        for path in sorted(folder.rglob("*"))
+        if path.is_file() and ".git" not in path.relative_to(folder).parts
+    }
+
+
+def _hub_file_paths(file_paths: dict, final_folder: str, processors_folder: str) -> dict:
+    # The engine's own rewrite only matches "/", so Windows paths kept their local prefix.
+    def posix(paths):
+        return [str(path).replace("\\", "/") for path in paths]
+
+    hub_paths = {}
+    if final_folder in file_paths:
+        hub_paths["data"] = [
+            path.replace(f"{final_folder}/", "data/", 1)
+            for path in posix(file_paths[final_folder])
+        ]
+    if "processor-files" in file_paths:
+        hub_paths["processor-files"] = {
+            name: [
+                path.replace(f"{processors_folder}/{name}/", f"{name}/", 1)
+                for path in posix(paths)
+            ]
+            for name, paths in file_paths["processor-files"].items()
+        }
+    return hub_paths
+
+
+def _hub_error(exc: Exception, repo_id: str, created: bool) -> RecipeDatasetPublishError:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    message = _HUB_ERRORS.get(status, "Upload to {repo_id} failed: {exc}").format(
+        repo_id = repo_id, exc = exc
+    )
+    if created:
+        message += f" The repo {repo_id} was created on the Hub, but nothing from this run is in it."
+    else:
+        message += f" Nothing in {repo_id} was changed."
+    return RecipeDatasetPublishError(message, 429 if status == 429 else 400)
+
+
 def publish_recipe_dataset(
     *,
     artifact_path: str,
@@ -105,12 +161,35 @@ def publish_recipe_dataset(
         ) from exc
 
     try:
+        from huggingface_hub import CommitOperationAdd, CommitOperationDelete
+    except ImportError as exc:
+        raise RecipeDatasetPublishError("huggingface_hub is not installed.") from exc
+
+    try:
         client = HuggingFaceHubClient(token = hf_token)
         client._validate_repo_id(repo_id = repo_id)
         client._validate_dataset_path(base_dataset_path = dataset_path)
+        processors_folder = dataset_path / PROCESSORS_OUTPUTS_FOLDER_NAME
+        processor_dirs = (
+            sorted(path for path in processors_folder.iterdir() if path.is_dir())
+            if processors_folder.is_dir()
+            else []
+        )
+        for processor_dir in processor_dirs:
+            if processor_dir.name in _RESERVED_REPO_FOLDERS:
+                raise RecipeDatasetPublishError(
+                    f"A processor named '{processor_dir.name}' would replace the dataset's own "
+                    f"'{processor_dir.name}' folder on the Hub. Rename the processor and run the recipe again."
+                )
+
+        api = client._api
+        try:
+            existed = bool(api.repo_exists(repo_id = repo_id, repo_type = "dataset"))
+        except Exception:
+            existed = True
         client._create_or_get_repo(repo_id = repo_id, private = private)
         if private:
-            _ensure_hub_repo_private(client._api, repo_id)
+            _ensure_hub_repo_private(api, repo_id)
 
         metadata_path = dataset_path / METADATA_FILENAME
         builder_config_path = dataset_path / SDG_CONFIG_FILENAME
@@ -132,31 +211,53 @@ def publish_recipe_dataset(
             tags = None,
         )
         card.text = card.text.replace(_DATA_DESIGNER_FOOTER, _UNSLOTH_STUDIO_FOOTER)
-        # Data Designer drops the explicit token, so push the card ourselves to keep auth request-local.
-        card.push_to_hub(repo_id, token = hf_token, repo_type = "dataset")
 
-        client._upload_main_dataset_files(
-            repo_id = repo_id,
-            parquet_folder = dataset_path / FINAL_DATASET_FOLDER_NAME,
-        )
-        client._upload_images_folder(
-            repo_id = repo_id,
-            images_folder = dataset_path / "images",
-        )
-        client._upload_processor_files(
-            repo_id = repo_id,
-            processors_folder = dataset_path / PROCESSORS_OUTPUTS_FOLDER_NAME,
-        )
-        with tempfile.TemporaryDirectory() as scrubbed_dir:
-            scrubbed_config_path = Path(scrubbed_dir) / SDG_CONFIG_FILENAME
-            if builder_config is not None:
-                with scrubbed_config_path.open("w", encoding = "utf-8") as fh:
-                    json.dump(builder_config, fh, indent = 2, ensure_ascii = False)
-            client._upload_config_files(
-                repo_id = repo_id,
-                metadata_path = metadata_path,
-                builder_config_path = scrubbed_config_path,
+        files = _repo_files(dataset_path / FINAL_DATASET_FOLDER_NAME, "data")
+        files.update(_repo_files(dataset_path / "images", "images"))
+        for processor_dir in processor_dirs:
+            files.update(_repo_files(processor_dir, processor_dir.name))
+        hub_metadata = dict(metadata)
+        if isinstance(metadata.get("file_paths"), dict):
+            hub_metadata["file_paths"] = _hub_file_paths(
+                metadata["file_paths"],
+                FINAL_DATASET_FOLDER_NAME,
+                PROCESSORS_OUTPUTS_FOLDER_NAME,
             )
+        blobs = {
+            "README.md": str(card).encode("utf-8"),
+            METADATA_FILENAME: json.dumps(hub_metadata, indent = 2).encode("utf-8"),
+        }
+        if builder_config is not None:
+            blobs[SDG_CONFIG_FILENAME] = json.dumps(
+                builder_config, indent = 2, ensure_ascii = False
+            ).encode("utf-8")
+
+        # One commit with the client's token, so a failure leaves the repo as it was and a
+        # re-publish drops the last run's files from every folder. Other top-level files stay.
+        try:
+            stale = [
+                path
+                for path in api.list_repo_files(repo_id = repo_id, repo_type = "dataset")
+                if "/" in path and path not in files
+            ]
+            api.create_commit(
+                repo_id = repo_id,
+                repo_type = "dataset",
+                operations = [
+                    *(CommitOperationDelete(path_in_repo = path) for path in stale),
+                    *(
+                        CommitOperationAdd(path_in_repo = name, path_or_fileobj = str(path))
+                        for name, path in files.items()
+                    ),
+                    *(
+                        CommitOperationAdd(path_in_repo = name, path_or_fileobj = data)
+                        for name, data in blobs.items()
+                    ),
+                ],
+                commit_message = "Upload dataset from Unsloth Studio",
+            )
+        except Exception as exc:
+            raise _hub_error(exc, repo_id, created = not existed) from exc
 
         from utils.hf_endpoint import get_hf_endpoint
 

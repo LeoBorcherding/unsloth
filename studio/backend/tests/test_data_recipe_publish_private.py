@@ -34,6 +34,16 @@ class _Hub:
     def repo_info(self, *, repo_id, repo_type):
         return SimpleNamespace(private = self.private)
 
+    def repo_exists(self, *, repo_id, repo_type):
+        return True
+
+    def list_repo_files(self, *, repo_id, repo_type):
+        return []
+
+    def create_commit(self, *, operations, **kwargs):
+        for op in operations:
+            self.upload(op.path_in_repo)
+
     def upload(self, name):
         self.uploads.append((name, self.private))
 
@@ -55,24 +65,10 @@ def _stub_data_designer(monkeypatch, hub):
         def _create_or_get_repo(self, *, repo_id, private):
             hub.create_repo(repo_id = repo_id, repo_type = "dataset", exist_ok = True, private = private)
 
-        def _upload_main_dataset_files(self, *, repo_id, parquet_folder):
-            hub.upload("data")
-
-        def _upload_images_folder(self, *, repo_id, images_folder):
-            hub.upload("images")
-
-        def _upload_processor_files(self, *, repo_id, processors_folder):
-            hub.upload("processors")
-
-        def _upload_config_files(self, *, repo_id, metadata_path, builder_config_path):
-            hub.upload("metadata.json")
-
     class _Card:
         @classmethod
         def from_metadata(cls, **kwargs):
-            return SimpleNamespace(
-                text = "", push_to_hub = lambda *args, **kwargs: hub.upload("README.md")
-            )
+            return SimpleNamespace(text = "")
 
     modules = {
         "data_designer.engine.storage.artifact_storage": {

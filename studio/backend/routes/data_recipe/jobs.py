@@ -12,7 +12,7 @@ from utils.account_context import (
     current_account,
     reset_account,
 )
-from core.training.account_jobs import account_event_stream
+from core.training.account_jobs import account_event_stream, managed_account
 import copy
 import hashlib
 import hmac
@@ -919,6 +919,12 @@ def publish_job_dataset(
             status_code = 400,
             detail = "Hugging Face token is required to publish datasets when authenticated via API key.",
         )
+    # A managed account never gets the host's login, so without a token the Hub would refuse it anyway.
+    if hf_token is None and managed_account():
+        raise HTTPException(
+            status_code = 403,
+            detail = "Supply your own Hugging Face token to publish",
+        )
     artifact_path = (
         payload.artifact_path.strip() if isinstance(payload.artifact_path, str) else None
     )
@@ -960,7 +966,7 @@ def publish_job_dataset(
     except RecipeDatasetPublishError as exc:
         raise log_and_http_error(
             exc,
-            400,
+            exc.status_code,
             safe_curated_detail(exc),
             event = "data_recipe.jobs.publish_failed",
             log = logger,
