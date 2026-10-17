@@ -1269,10 +1269,11 @@ class GgmlSttSidecar:
         )
         parts.append(f"--{boundary}--\r\n".encode())
         body = b"".join(parts)
+        # whisper-server answers only when the whole clip is done, and a CPU run of a large model is about real time.
+        audio_seconds = max(len(wav_bytes) - 44, 0) / (2 * _TARGET_SAMPLE_RATE)
+        timeout = max(_TRANSCRIBE_TIMEOUT_SECONDS, 4 * audio_seconds)
         # http.client, not urllib: a cancel needs the socket, and urlopen exposes none.
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", self._port, timeout = _TRANSCRIBE_TIMEOUT_SECONDS
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", self._port, timeout = timeout)
         cancel_done = threading.Event()
         if cancel_event is not None:
             threading.Thread(
@@ -1295,6 +1296,12 @@ class GgmlSttSidecar:
                 payload = json.loads(response.read().decode("utf-8"))
         except (SttAudioDecodeError, SttEngineUnavailableError):
             raise
+        except TimeoutError as exc:
+            # A slow clip is not a broken runtime, so it fails this request only.
+            raise SttEngineUnavailableError(
+                f"The local transcription runtime did not finish within {timeout:.0f} seconds. "
+                "Try a shorter recording."
+            ) from exc
         except Exception as exc:
             # A cancel closes this socket deliberately, so it is not evidence of a broken runtime and must not disable
             # the engine.
