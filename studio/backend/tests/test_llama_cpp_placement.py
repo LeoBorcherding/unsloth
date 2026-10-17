@@ -320,6 +320,72 @@ def test_dspark_composed_argv_respects_placement_fit_decision(tmp_path, use_fit)
     assert backend.spec_fallback_reason is None
 
 
+@pytest.mark.parametrize(
+    "stdout, reason",
+    [
+        (
+            [
+                "ggml_backend_cuda_buffer_type_alloc_buffer: allocating 10944.00 MiB on device 0: "
+                "cudaMalloc failed: out of memory",
+                "llama_model_load: error loading model: unable to allocate CUDA0 buffer",
+            ],
+            "drafter_oom",
+        ),
+        (["error loading model: unknown model architecture: 'x'"], "binary_outdated"),
+        (["common_init_from_params: failed to load draft model"], "runtime_error"),
+    ],
+)
+def test_a_dspark_crash_under_fit_names_its_cause(tmp_path, stdout, reason):
+    # Auto falls back to --fit on, which cannot size the sidecar, so a VRAM-tight host
+    # dies allocating the draft buffer: that is memory, not an outdated llama.cpp build.
+    backend, gguf = _backend_non_vulkan(tmp_path, memory = [(0, 24_000, 24_000)])
+    sidecar = tmp_path / "dspark-model-Q8_0.gguf"
+    sidecar.write_bytes(b"draft")
+    backend._select_gpus = lambda *args, **kwargs: (None, True)
+    backend.probe_server_capabilities = lambda _binary = None: {
+        "supports_dspark": True,
+        "spec_draft_n_max_flag": "--spec-draft-n-max",
+    }
+    cmds = []
+
+    def fake_popen(cmd, **kwargs):
+        if not cmd or str(cmd[0]) != "/fake/llama-server":
+            return _REAL_POPEN(cmd, **kwargs)
+        cmds.append(list(cmd))
+        return type(
+            "Process",
+            (),
+            {
+                "pid": 123,
+                "stdout": (),
+                "poll": lambda self: None,
+                "terminate": lambda self: None,
+                "wait": lambda self, timeout = None: 0,
+                "kill": lambda self: None,
+            },
+        )()
+
+    def fake_health(timeout = None, **_kw):
+        failing = "draft-dspark" in cmds[-1]
+        backend._stdout_lines = list(stdout) if failing else []
+        return not failing
+
+    backend._wait_for_health = fake_health
+    with patch.object(subprocess, "Popen", side_effect = fake_popen):
+        assert backend.load_model(
+            GgufLoadIntent(
+                gguf_path = str(gguf),
+                model_identifier = "test",
+                dspark_draft_path = str(sidecar),
+                speculative_type = "auto",
+            )
+        )
+
+    assert cmds[0][cmds[0].index("--fit") + 1] == "on"
+    assert "draft-dspark" in cmds[0] and "draft-dspark" not in cmds[-1]
+    assert backend.spec_fallback_reason == reason
+
+
 def test_dspark_keeps_a_user_fit_flag(tmp_path):
     """A caller's --fit is theirs to set: the sidecar loads under either value,
     so Unsloth has no reason to rewrite it."""

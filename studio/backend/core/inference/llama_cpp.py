@@ -8401,7 +8401,7 @@ class LlamaCppBackend:
         # Why MTP was disabled on the last load that asked for it (auto on an
         # MTP model, or forced mtp / mtp+ngram), else None. Drives the "update
         # llama.cpp" hint in the UI. "binary_no_mtp" / "binary_outdated" ->
-        # a newer prebuilt would help; "runtime_error" -> it may not.
+        # a newer prebuilt would help; "runtime_error" -> it may not; "drafter_oom" -> out of VRAM.
         self._spec_fallback_reason: Optional[str] = None
 
         # How a requested multimodal projector recovered at startup. `cpu_offload`
@@ -9807,7 +9807,10 @@ class LlamaCppBackend:
             return False
 
         compared_draft_n_max = self._spec_draft_n_max
-        if self._spec_fallback_reason == "runtime_error" and self._last_load_intent is not None:
+        if (
+            self._spec_fallback_reason in ("runtime_error", "drafter_oom")
+            and self._last_load_intent is not None
+        ):
             # The MTP-free recovery clears the runtime value but retains the
             # user's prior value in its intent. Only a changed value should retry MTP.
             compared_draft_n_max = self._last_load_intent.spec_draft_n_max
@@ -9816,7 +9819,7 @@ class LlamaCppBackend:
             # Auto's Hybrid Mamba partial-offload stand-down engaged nothing, so the
             # types above cannot see it. The depth priced the rollback copies that
             # made the placement partial, so a change can re-enable MTP.
-            or self._spec_fallback_reason in ("runtime_error", "mtp_partial_offload")
+            or self._spec_fallback_reason in ("runtime_error", "drafter_oom", "mtp_partial_offload")
         )
         if draft_depth_matters:
             requested_draft_n_max = intent.spec_draft_n_max
@@ -33908,6 +33911,11 @@ class LlamaCppBackend:
                         self._spec_fallback_reason = (
                             "binary_outdated" if _arch_unsupported else "runtime_error"
                         )
+                    elif self._is_gpu_memory_start_failure(_lo):
+                        # The drafter's buffers did not fit (an unsized DSpark sidecar under
+                        # --fit on): the build is fine, so don't send the user to update it.
+                        _retry_reason = "the drafter ran out of GPU memory; retrying without it"
+                        self._spec_fallback_reason = "drafter_oom"
                     else:
                         _retry_reason = (
                             "retrying without speculative decoding in case the drafter is the cause"
