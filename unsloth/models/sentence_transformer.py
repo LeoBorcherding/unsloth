@@ -191,6 +191,8 @@ def _merged_dense_copy(peft_model, dtype):
     from peft.tuners.lora import LoraLayer
     from peft.utils.integrations import dequantize_bnb_weight
 
+    if not hasattr(peft_model, "get_base_model"):
+        return None
     base = peft_model.get_base_model()
     sources = dict(base.named_modules())
     for module in sources.values():
@@ -215,7 +217,9 @@ def _merged_dense_copy(peft_model, dtype):
     config = copy.deepcopy(base.config)
     if hasattr(config, "quantization_config"):
         del config.quantization_config
-    dense = type(base)._from_config(config).to(dtype)
+    dense = type(base)._from_config(config)
+    if dtype is not None:
+        dense = dense.to(dtype)
     with torch.no_grad():
         for name, tensor in [*dense.named_parameters(), *dense.named_buffers()]:
             module_name, _, leaf = name.rpartition(".")
@@ -2652,7 +2656,7 @@ class FastSentenceTransformer(FastModel):
                     if hasattr(inner, "_orig_mod"):
                         inner = inner._orig_mod
                     if hasattr(inner, "merge_and_unload"):
-                        merged = _merged_dense_copy(inner, self._dtype) or inner.merge_and_unload()
+                        merged = _merged_dense_copy(inner, getattr(self, "_dtype", None)) or inner.merge_and_unload()
                         merged.save_pretrained(save_directory)
                     elif hasattr(inner, "save_pretrained"):
                         inner.save_pretrained(save_directory)
