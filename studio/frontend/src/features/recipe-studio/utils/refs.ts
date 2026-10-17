@@ -5,9 +5,14 @@ const JINJA_REF_RE = /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g;
 const JINJA_EXPR_RE = /{{\s*([^{}]+?)\s*}}/g;
 const SIMPLE_JINJA_EXPR_RE = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 const PLAIN_JINJA_EXPR_RE = /^[a-zA-Z0-9_.\s-]+$/;
-const NESTED_REFERENCE_ROOTS = new Set(["user"]);
+const JINJA_BLOCK_RE = /({{|{%)([\s\S]*?)(}}|%})/g;
+const JINJA_STRING_RE = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/;
 
-function isValidNestedReference(expr: string, validSet: Set<string>): boolean {
+function isValidNestedReference(
+  expr: string,
+  validSet: Set<string>,
+  nestedRoots: Set<string>,
+): boolean {
   if (!expr.includes(".")) {
     return false;
   }
@@ -16,7 +21,7 @@ function isValidNestedReference(expr: string, validSet: Set<string>): boolean {
     return false;
   }
   const root = parts[0];
-  return validSet.has(root) && NESTED_REFERENCE_ROOTS.has(root);
+  return validSet.has(root) && nestedRoots.has(root);
 }
 
 function escapeRegExp(value: string): string {
@@ -36,9 +41,11 @@ export function extractRefs(template: string): string[] {
   return Array.from(refs);
 }
 
+/** `nestedRoots`: columns whose values are objects, so `{{ name.field }}` is valid. */
 export function findInvalidJinjaReferences(
   template: string,
   validReferences: string[],
+  nestedRoots: string[] = [],
 ): string[] {
   if (!template) {
     return [];
@@ -46,6 +53,7 @@ export function findInvalidJinjaReferences(
   const validSet = new Set(
     validReferences.map((name) => name.trim()).filter(Boolean),
   );
+  const nestedSet = new Set(nestedRoots);
   const invalid = new Set<string>();
 
   for (const match of template.matchAll(JINJA_EXPR_RE)) {
@@ -54,7 +62,7 @@ export function findInvalidJinjaReferences(
       continue;
     }
     if (SIMPLE_JINJA_EXPR_RE.test(expr)) {
-      if (!validSet.has(expr) && !isValidNestedReference(expr, validSet)) {
+      if (!validSet.has(expr) && !isValidNestedReference(expr, validSet, nestedSet)) {
         invalid.add(expr);
       }
       continue;
@@ -67,16 +75,25 @@ export function findInvalidJinjaReferences(
   return Array.from(invalid);
 }
 
+/** Renames `from` wherever it is a variable inside `{{ }}` or `{% %}` (bare, dotted, filtered or in a
+ * statement), leaving attribute names and string literals alone. */
 export function replaceRef(
   template: string,
   from: string,
   to: string,
 ): string {
-  if (!template || from === to) {
+  if (!template || !from || from === to) {
     return template;
   }
-  const pattern = new RegExp(`{{\\s*${escapeRegExp(from)}\\s*}}`, "g");
-  return template.replace(pattern, `{{ ${to} }}`);
+  const name = new RegExp(`(?<![\\w.])${escapeRegExp(from)}(?!\\w)`, "g");
+  return template.replace(
+    JINJA_BLOCK_RE,
+    (_block, open: string, body: string, close: string) =>
+      `${open}${body
+        .split(JINJA_STRING_RE)
+        .map((part, index) => (index % 2 === 1 ? part : part.replace(name, to)))
+        .join("")}${close}`,
+  );
 }
 
 export function removeRef(template: string, ref: string): string {

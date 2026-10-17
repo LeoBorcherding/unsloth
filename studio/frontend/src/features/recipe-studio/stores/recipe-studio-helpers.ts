@@ -13,8 +13,10 @@ export {
   syncSubcategoryConfigsForCategoryUpdate,
 } from "./helpers/edge-sync";
 export {
+  applyNameEdit,
   applyRemovalToConfig,
   applyRemovalToConfigs,
   applyRenameToConfig,
   applyRenameToConfigs,
+  isFreeName,
 } from "./helpers/reference-sync";

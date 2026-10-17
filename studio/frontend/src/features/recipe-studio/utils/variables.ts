@@ -83,6 +83,34 @@ export function getAvailableVariableEntries(
   return vars;
 }
 
+/** Columns whose values are objects, so `{{ name.field }}` is valid Jinja. */
+export function getNestedReferenceRoots(
+  configs: Record<string, NodeConfig>,
+  currentId: string,
+): string[] {
+  const roots: string[] = [];
+  for (const config of Object.values(configs)) {
+    if (config.id === currentId) {
+      continue;
+    }
+    if (
+      (config.kind === "sampler" &&
+        (config.sampler_type === "person" ||
+          config.sampler_type === "person_from_faker")) ||
+      (config.kind === "llm" &&
+        (config.llm_type === "structured" || config.llm_type === "judge")) ||
+      config.kind === "validator"
+    ) {
+      roots.push(config.name);
+    } else if (config.kind === "seed") {
+      for (const col of config.seed_columns ?? []) {
+        if (col.trim()) roots.push(col.trim());
+      }
+    }
+  }
+  return roots;
+}
+
 export function getAvailableVariables(
   configs: Record<string, NodeConfig>,
   currentId: string,
