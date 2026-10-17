@@ -10,7 +10,7 @@ from utils.datasets.cells import text_cell_check, unwrap_message_column
 from utils.datasets.format_detection import (
     detect_dataset_format,
     has_message_prompt_completion,
-    is_judge_result,
+    is_recipe_side_column,
 )
 from utils.datasets.pretokenized import PRETOKENIZED_FORMAT, is_pretokenized_dataset
 
@@ -229,7 +229,9 @@ def detect_custom_format_heuristic(dataset):
         )
 
     content_columns = [
-        col for col in all_columns if not is_metadata(col) and not is_judge_result(sample.get(col))
+        col
+        for col in all_columns
+        if not is_metadata(col) and not is_recipe_side_column(col, sample.get(col))
     ]
     system_named = [
         col

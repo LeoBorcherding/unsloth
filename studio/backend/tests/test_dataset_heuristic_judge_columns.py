@@ -66,3 +66,22 @@ def test_a_structured_answer_is_still_an_answer(heuristic):
     row = {"question": _MID, "reply": {"next_action": "ask_logs", "response": _MID}}
 
     assert heuristic(Dataset.from_list([row])) == {"question": "user", "reply": "assistant"}
+
+
+@pytest.mark.parametrize("heuristic", _HEURISTICS)
+@pytest.mark.parametrize(
+    "side",
+    [
+        {"answer__reasoning_content": _LONG},
+        {
+            "answer__trace": [
+                {"role": "user", "content": _MID},
+                {"role": "assistant", "content": _LONG},
+            ]
+        },
+    ],
+)
+def test_reasoning_and_trace_columns_are_never_a_turn(heuristic, side):
+    row = {"question": _MID, "answer": _MID, **side}
+
+    assert heuristic(Dataset.from_list([row])) == {"question": "user", "answer": "assistant"}

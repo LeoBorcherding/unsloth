@@ -13,8 +13,11 @@ def _keyword_in_column(keyword: str, col_name: str) -> bool:
     return re.search(r"\b" + re.escape(keyword) + r"\b", col_name, re.IGNORECASE) is not None
 
 
-def is_judge_result(value) -> bool:
-    """A data recipe judge ({criterion: {score, reasoning}}) or validator ({is_valid, ...}) cell."""
+def is_recipe_side_column(name: str, value) -> bool:
+    """A data recipe judge ({criterion: {score, reasoning}}) or validator ({is_valid, ...}) cell,
+    or a column's __trace / __reasoning_content companion."""
+    if name.lower().endswith(("__trace", "__reasoning_content")):
+        return True
     if not isinstance(value, dict) or not value:
         return False
     return "is_valid" in value or all(
@@ -444,7 +447,9 @@ def detect_custom_format_heuristic(dataset):
         )
 
     content_columns = [
-        col for col in all_columns if not is_metadata(col) and not is_judge_result(sample.get(col))
+        col
+        for col in all_columns
+        if not is_metadata(col) and not is_recipe_side_column(col, sample.get(col))
     ]
     system_named = [
         col
