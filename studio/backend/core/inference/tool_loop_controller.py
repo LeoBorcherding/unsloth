@@ -393,7 +393,7 @@ _SCHEMA_TRUE_WORDS = frozenset({"true", "yes"})
 _SCHEMA_FALSE_WORDS = frozenset({"false", "no"})
 # not ValueErrors, so a decode-shaped except would let deep model output escape as a 500
 _DECODE_ERRORS = (ValueError, RecursionError)
-_LITERAL_ERRORS = (*_DECODE_ERRORS, SyntaxError, MemoryError)
+_LITERAL_ERRORS = (*_DECODE_ERRORS, SyntaxError, MemoryError, TypeError)
 
 
 # A JSON string, open or closed; group 1 is the closing quote, which `endswith` cannot stand in for because an open
