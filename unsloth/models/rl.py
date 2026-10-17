@@ -3189,6 +3189,8 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
     RLTrainer_call_args = call_args
 
     arguments, call_args = processed[1]
+    # Whole names: DDPO and AlignProp have train_learning_rate and no learning_rate.
+    call_arg_names = set(re.findall(r"^\s*(\w+) = ", call_args, re.M))
     extra_args = ""
 
     replacements = {
@@ -3266,7 +3268,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             y = f"{k} = {y},\n"
             arguments = re.sub(x, y, arguments)
 
-    if "learning_rate" in call_args:
+    if "learning_rate" in call_arg_names:
         learning_rate_check = (
             "if learning_rate < 1e-7: print(f'Unsloth: Your learning rate of `{learning_rate}` is too small and less than 1e-7! "
             "Consider increasing it, otherwise gradient updates will be close to 0!')\n"
@@ -3277,9 +3279,9 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
 
     # bitsandbytes' 8-bit optimizers step plain tensors, but FSDP2 shards parameters as DTensors, so the
     # first step dies with "got mixed torch.Tensor and DTensor" (unsloth#3551).
-    if "optim" in call_args:
+    if "optim" in call_arg_names:
         extra_args += "_unsloth_fsdp2 = os.environ.get('FSDP_VERSION', '').strip() == '2'\n"
-        if "fsdp" in call_args and "fsdp_config" in call_args:
+        if "fsdp" in call_arg_names and "fsdp_config" in call_arg_names:
             # TrainingArguments(fsdp = ..., fsdp_config = {"fsdp_version": 2} or a JSON path) without the launcher.
             extra_args += (
                 "_unsloth_fsdp_cfg = fsdp_config\n"
@@ -3306,14 +3308,14 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         )
 
     # Fix num_train_epochs = None causing a TypeError in Trainer.__init__, which does `args.num_train_epochs > 0`.
-    if "num_train_epochs" in call_args:
+    if "num_train_epochs" in call_arg_names:
         num_train_epochs_check = (
             "if num_train_epochs is None:\n"
             "    num_train_epochs = 3.0  # Default to 3 epochs if None, max_steps will override\n"
         )
         extra_args += num_train_epochs_check
 
-    if "max_seq_length" not in call_args and "max_length" in call_args:
+    if "max_seq_length" not in call_arg_names and "max_length" in call_arg_names:
         max_seq_length_pre = """max_seq_length : Optional[int] = field(
         default = None,
         metadata = {'help': 'Maximum sequence length to truncate to.'},
@@ -3326,7 +3328,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         max_seq_length_post = ""
 
     # Read by unsloth.context_parallel; a field here keeps SFTConfig itself unpatched (pickling).
-    if trainer_file == "sft_trainer" and "context_parallel_size" not in call_args:
+    if trainer_file == "sft_trainer" and "context_parallel_size" not in call_arg_names:
         max_seq_length_pre += """
     context_parallel_size : Optional[int] = field(
         default = 1,
@@ -3351,7 +3353,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             "\n        self.context_parallel_rotate_method = context_parallel_rotate_method"
         )
 
-    if "output_dir" in call_args:
+    if "output_dir" in call_arg_names:
         saving_check = (
             "if output_dir is None and save_strategy == 'steps' and save_steps == 500:\n"
             "    output_dir = 'unsloth_training_checkpoints'\n"
@@ -3360,7 +3362,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         extra_args += saving_check
 
     # The worker-count policy lives in unsloth_zoo.dataset_num_proc: it had drifted into four inline copies, two wrong (stdlib multiprocessing start method, and `1` as the serial sentinel when datasets >= 4.1 builds a Pool(1)). In the zoo so generated source never imports back into its generator. serial_as_none depends on the reader: unsloth_zoo.sft_prepare_dataset reads a config None as "auto-size me", so SFT writes serial as 1 and the map() call site turns it back, while DPO, KTO, CPO, ORPO, Reward and PRM pass it straight to Dataset.map, where 1 is a Pool(1).
-    if "dataset_num_proc" in call_args:
+    if "dataset_num_proc" in call_arg_names:
         _serial_as_none = "False" if trainer_file == "sft_trainer" else "True"
         num_proc_check = (
             "try:\n"
@@ -3376,7 +3378,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         )
         extra_args += num_proc_check
 
-    if "pad_to_multiple_of" in call_args:
+    if "pad_to_multiple_of" in call_arg_names:
         pad_to_multiple_of = (
             "if os.environ.get('UNSLOTH_ENABLE_FLEX_ATTENTION', '0') == '1':\n"
             "    from unsloth_zoo.flex_attention import HAS_FLEX_ATTENTION\n"
@@ -3388,24 +3390,24 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         extra_args += pad_to_multiple_of
 
     # Resolve the None loss_type / beta sentinels before any check reads them.
-    if trainer_file == "grpo_trainer" and "loss_type" in call_args:
+    if trainer_file == "grpo_trainer" and "loss_type" in call_arg_names:
         _default_loss_type = "dapo" if trl_version >= Version("0.22.0") else "bnpo"
         extra_args += (
             "_unsloth_default_loss_type = loss_type is None\n"
             "if _unsloth_default_loss_type:\n"
             f"    loss_type = '{_default_loss_type}'\n"
         )
-        if _default_loss_type == "dapo" and "beta" in call_args:
+        if _default_loss_type == "dapo" and "beta" in call_arg_names:
             extra_args += (
                 "    if beta is None:\n"
                 "        print(\"Unsloth: GRPO now defaults to TRL's loss_type = 'dapo' with beta = 0.0. Set loss_type = 'bnpo', beta = 0.001 for Unsloth's previous default.\")\n"
             )
-    if trainer_file == "grpo_trainer" and "beta" in call_args:
+    if trainer_file == "grpo_trainer" and "beta" in call_arg_names:
         extra_args += (
             "if beta is None:\n"
             + (
                 "    beta = 0.0 if str(loss_type).lower() in ('dapo', 'dr_grpo') else 0.001\n"
-                if "loss_type" in call_args
+                if "loss_type" in call_arg_names
                 else "    beta = 0.001\n"
             )
             + "\n"
@@ -3413,7 +3415,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
 
     # Check for loss_type = dr_grpo and scale_rewards for GRPO; DAPO uses per-token loss, so BNPO loss is used. See huggingface/trl#3130 (comment 2746947835).
     # TRL >= 0.22 defaults scale_rewards to "group" (= True).
-    if "loss_type" in call_args and "scale_rewards" in call_args:
+    if "loss_type" in call_arg_names and "scale_rewards" in call_arg_names:
         check_dr_grpo = (
             "if loss_type.lower() == 'dr_grpo':\n"
             "    loss_type = 'dr_grpo'\n"
@@ -3456,10 +3458,10 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         extra_args += f"raise ImportError('Unsloth: GRPO needs trl >= 0.20.0, but trl=={trl_version} is installed. Please do `pip install --upgrade trl`.')\n"
 
     if (
-        "per_device_train_batch_size" in call_args
-        and "num_generations" in call_args
-        and "steps_per_generation" in call_args
-        and "generation_batch_size" in call_args
+        "per_device_train_batch_size" in call_arg_names
+        and "num_generations" in call_arg_names
+        and "steps_per_generation" in call_arg_names
+        and "generation_batch_size" in call_arg_names
     ):
         check_num_generations = (
             "if steps_per_generation is None and generation_batch_size is None:\n"
@@ -3474,13 +3476,13 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         extra_args += check_num_generations
     # GOLD: TRL already checks generation_batch_size * num_generations == batch * grad accum.
     elif (
-        "per_device_train_batch_size" in call_args
-        and "num_generations" in call_args
+        "per_device_train_batch_size" in call_arg_names
+        and "num_generations" in call_arg_names
         and trainer_file != "gold_trainer"
     ):
-        if "steps_per_generation" not in call_args:
+        if "steps_per_generation" not in call_arg_names:
             print(f"Unsloth: Could not find `steps_per_generation` in {trainer_file}")
-        if "generation_batch_size" not in call_args:
+        if "generation_batch_size" not in call_arg_names:
             print(f"Unsloth: Could not find `generation_batch_size` in {trainer_file}")
 
         check_num_generations = (
@@ -3492,7 +3494,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         )
         extra_args += check_num_generations
 
-    if "eval_steps" in call_args and "eval_strategy" in call_args:
+    if "eval_steps" in call_arg_names and "eval_strategy" in call_arg_names:
         check_eval_steps = (
             "if eval_steps is not None and eval_strategy != 'steps':\n"
             '    print(f\'Unsloth: `eval_steps = {eval_steps}` is ignored because `eval_strategy` is {getattr(eval_strategy, "value", eval_strategy)!r}. Set `eval_strategy = "steps"` to evaluate every `eval_steps` steps.\')\n'
@@ -3500,7 +3502,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         )
         extra_args += check_eval_steps
 
-    if "temperature" in call_args:
+    if "temperature" in call_arg_names:
         check_temperature = (
             "if temperature <= 0:\n"
             "    raise ValueError('Unsloth: Please set a positive non-zero temperature since your results will be wrong.')\n"
@@ -3558,7 +3560,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         "                self.gradient_checkpointing_kwargs = _gc_kwargs\n"
     )
 
-    if "optim" in call_args:
+    if "optim" in call_arg_names:
         RLConfig_post += (
             "        from unsloth.optimizers.flash_adamw import is_flash_adamw_marked, mark_flash_adamw, unmark_flash_adamw\n"
             "        if _unsloth_flash_adamw or is_flash_adamw_marked(self):\n"
