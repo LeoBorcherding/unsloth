@@ -96,5 +96,10 @@ class Job:
     _in_usage_summary: bool = False
     _seen_generation_columns: list[str] = field(default_factory = list)
     _column_done: dict[str, int] = field(default_factory = dict)
+    _column_failed: dict[str, int] = field(default_factory = dict)
+    _batch_rows: int | None = None
+    _rows_before_batch: int = 0
+    _failed_before_batch: int = 0
+    _progress_started_at: float | None = None
     _source_counts: dict[str, int] = field(default_factory = dict)
     _source_seen_pages: set[str] = field(default_factory = set)

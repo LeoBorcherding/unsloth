@@ -183,6 +183,13 @@ class JobManager:
             job_id = uuid.uuid4().hex
             self._job = Job(job_id = job_id, status = "pending", started_at = time.time())
             self._job.progress_columns_total = llm_column_count
+            # The whole run's size: data-designer only logs each batch's.
+            try:
+                requested_rows = int(run.get("rows") or 1000)
+            except (TypeError, ValueError):
+                requested_rows = 0
+            if requested_rows > 0:
+                self._job.rows = requested_rows
             self._job.source_progress_estimated_total = _github_source_estimated_total(recipe)
             self._job.internal_api_key_id = internal_api_key_id
             self._events.clear()
