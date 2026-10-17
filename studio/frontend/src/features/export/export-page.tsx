@@ -136,15 +136,25 @@ function buildRelativeSaveDirectory(
   checkpoint: string | null,
 ): string {
   if (exportMethod === "gguf") {
+    // A numbered checkpoint ("checkpoint-60") is not unique across runs; a run's final model is.
+    if (
+      sourceMode === "checkpoint" &&
+      selectedModelIdx &&
+      checkpoint &&
+      checkpoint !== selectedModelIdx
+    ) {
+      return `${selectedModelIdx}/${safePathSegment(checkpoint)}-GGUF`;
+    }
     const rawName =
       sourceMode === "checkpoint"
         ? (checkpoint ?? selectedModelIdx ?? sourceBaseModelName)
         : sourceBaseModelName;
     return `${safePathSegment(rawName)}-GGUF`;
   }
-  // Merged / LoRA: a checkpoint keeps the "<run>/<checkpoint>" layout under outputs.
+  // Merged / LoRA: a checkpoint keeps the "<run>/<checkpoint>" layout under outputs, suffixed by
+  // method so a LoRA export does not land in (and turn into) a merged one.
   if (sourceMode === "checkpoint" && selectedModelIdx && checkpoint) {
-    return `${selectedModelIdx}/${checkpoint}`;
+    return `${selectedModelIdx}/${checkpoint}-${exportMethod === "lora" ? "adapter" : "merged"}`;
   }
   // Local / HF source (no checkpoint): name from the model id to avoid "model/null".
   const rawName =
