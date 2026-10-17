@@ -19,6 +19,7 @@ from core.data_recipe.service import (
     recipe_has_stdio_mcp,
     validate_recipe,
 )
+from core.data_recipe.public_errors import public_error_text, redact_server_paths
 from loggers import get_logger
 from models.data_recipe import RecipePayload, ValidateError, ValidateResponse
 from utils.utils import safe_error_detail, safe_curated_detail, log_and_http_error
@@ -216,7 +217,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
             error = str(exc),
             exc_info = True,
         )
-        detail = safe_curated_detail(exc, fallback = "Validation failed.")
+        detail = redact_server_paths(safe_curated_detail(exc, fallback = "Validation failed."))
         try:
             parsed_errors = _collect_validation_errors(recipe)
         except Exception:
@@ -225,7 +226,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
             parsed_errors = []
         return ValidateResponse(
             valid = False,
-            errors = parsed_errors or [ValidateError(message = detail)],
+            errors = parsed_errors or [ValidateError(message = public_error_text(exc))],
             raw_detail = detail,
         )
 
