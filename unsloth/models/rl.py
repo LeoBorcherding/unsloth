@@ -99,6 +99,34 @@ except Exception:
 # TrainingArguments falls back to this FSDP version when fsdp_config names none (1 -> 2 in transformers 5.10.0).
 _FSDP_DEFAULT_VERSION = 2 if transformers_version >= Version("5.10.0") else 1
 
+_VLLM_WEIGHT_LOAD_LINE = re.compile(
+    r"^(?P<indent>[ \t]+)(?P<stmt>[^#\s][^\n]*(?:model_executor\.driver_worker|load_weights\()[^\n]*)$",
+    re.MULTILINE,
+)
+
+
+def _guard_vllm_weight_loads(function, source):
+    # fast_inference shares weights with vLLM, so TRL's weight push is skipped there; TRL's own vLLM still needs it.
+    shared = "getattr(getattr(self, 'llm', None), 'shared_weights', False)"
+    source = _VLLM_WEIGHT_LOAD_LINE.sub(
+        lambda m: f"{m.group('indent')}if not {shared}: {m.group('stmt')}",
+        source,
+    )
+    if function != "_move_model_to_vllm":
+        return source
+    # Also skips the merge_adapter / unmerge_adapter round trip on the shared weights.
+    match = re.search(
+        r"^[ \t]*def _move_model_to_vllm\(.*?\).*?:[ \t]*\n",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    body = re.search(r"^([ \t]+)\S", source[match.end() :], re.MULTILINE) if match else None
+    if body is None:
+        return source
+    indent = body.group(1)
+    guard = f"{indent}if {shared}:\n{indent}    return None\n"
+    return source[: match.end()] + guard + source[match.end() :]
+
 
 def vLLMSamplingParams(**kwargs):
     from vllm import SamplingParams
@@ -4194,23 +4222,7 @@ def patch_functions(RLTrainer, trainer_file, RLTrainer_name, all_imports, import
             source,
         )
 
-        source = re.sub(
-            r"(\n[\s]{4,}).+?model_executor\.driver_worker.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"(\n[\s]{4,}).+?load_weights\(.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"\.state_dict\(\)",
-            r"",
-            source,
-        )
+        source = _guard_vllm_weight_loads(function, source)
 
         if "CUDA_VISIBLE_DEVICES" in os.environ:
             lora_name = (
