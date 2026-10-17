@@ -1992,6 +1992,26 @@ def studio_default(
     _export_models_dirs(models_dir)
     if ctx.invoked_subcommand is not None:
         # Typer does not forward parent options, so `unsloth studio --parallel N run` would drop N.
+        for _flag, _value, _default in (
+            ("--port", port, 8888),
+            ("--host", host, "127.0.0.1"),
+            ("--frontend", frontend, None),
+            ("--silent", silent, False),
+        ):
+            if _value != _default:
+                _arg = "" if _value is True else f" {_value}"
+                # Only `run` has these options; the other subcommands take none of them.
+                _hint = (
+                    f"put it after the subcommand: `unsloth studio run {_flag}{_arg} ...`"
+                    if ctx.invoked_subcommand == "run"
+                    else f"`unsloth studio {ctx.invoked_subcommand}` does not take it"
+                )
+                typer.echo(
+                    f"Error: {_flag} on `unsloth studio` applies to the plain-server "
+                    f"path only; {_hint}.",
+                    err = True,
+                )
+                raise typer.Exit(2)
         if parallel != _PARALLEL_DEFAULT_PLAIN:
             typer.echo(
                 f"Error: --parallel on `unsloth studio` applies to the "
