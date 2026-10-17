@@ -176,7 +176,7 @@
         "width": 782,
         "node_type": "markdown_note",
         "name": "note_1",
-        "markdown": "## Expression columns \nAre like lightweight spreadsheet formulas.\nUse them when you want to transform existing columns quickly, without calling an LLM.\n\n### What you can do:\n\n- Use values from other columns: `{{ first_name }} {{ last_name }}`\n- Clean/format text: `{{ city | upper }}`, `{{ product_name | trim }}`\n- Conditional logic:\n  - `{% if order_total >= 100 %}VIP{% elif order_total >= 50 %}Standard{% else %}Starter{% endif %}`\n- Simple math:\n  - `{{ quantity * unit_price }}`\n  - `{{ (subtotal - discount) | round(2) }}`\n\n### Good rule:\n- If the value can be computed from existing data, use Expression first.\n- Use LLM only when you need true language generation.",
+        "markdown": "## Expression columns \nAre like lightweight spreadsheet formulas.\nUse them when you want to transform existing columns quickly, without calling an LLM.\n\n### What you can do:\n\n- Use values from other columns: `{{ first_name }} {{ last_name }}`\n- Clean/format text: `{{ city | title }}`, `{{ product_name | trim }}`\n- Conditional logic:\n  - `{% if order_total >= 100 %}VIP{% elif order_total >= 50 %}Standard{% else %}Starter{% endif %}`\n- Simple math:\n  - `{{ quantity * unit_price }}`\n  - `{{ (subtotal - discount) | round(2) }}`\n\n### Good rule:\n- If the value can be computed from existing data, use Expression first.\n- Use LLM only when you need true language generation.",
         "note_color": "#CFFAFE",
         "note_opacity": "35"
       },
