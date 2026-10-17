@@ -159,11 +159,12 @@ def _merge_concatenated_wav_segments(
         return audio
 
 
-def _append_provider_path(base_url: str, endpoint: str) -> str:
-    """Append an API path without moving it behind a base URL's query string."""
+def _append_provider_path(base_url: str, endpoint: str, query: str = "") -> str:
+    """Append an API path (and query) without moving it behind a base URL's query string."""
     parts = urlsplit(base_url)
     path = f"{parts.path.rstrip('/')}/{endpoint.lstrip('/')}"
-    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+    query = "&".join(q for q in (parts.query, query) if q)
+    return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
 
 
 def caches_at_the_last_block(
@@ -1934,7 +1935,7 @@ class ExternalProviderClient:
         if response_format is not None:
             body["response_format"] = response_format
 
-        url = f"{self.base_url}/chat/completions"
+        url = _append_provider_path(self.base_url, "/chat/completions")
         logger.info(
             "Proxying chat completion to %s (provider=%s, model=%s)",
             url,
@@ -2201,7 +2202,7 @@ class ExternalProviderClient:
         (with any url_citation annotations the second stream emits) before [DONE], so the chat UI
         shows the same web-search tool card as other providers.
         """
-        url = f"{self.base_url}/chat/completions"
+        url = _append_provider_path(self.base_url, "/chat/completions")
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -3152,7 +3153,7 @@ class ExternalProviderClient:
         if fast_mode_active:
             body["speed"] = "fast"
 
-        url = f"{self.base_url}/messages"
+        url = _append_provider_path(self.base_url, "/messages")
         completion_id = f"chatcmpl-anthropic-{model.replace('/', '-')}"
 
         # Log outgoing config keys (not messages) to prove which thinking / effort fields reached the wire.
@@ -4993,7 +4994,9 @@ class ExternalProviderClient:
 
         # Model id is already validated at the top of _stream_gemini so we never reach a path-traversed URL segment
         # here.
-        url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
+        url = _append_provider_path(
+            self.base_url, f"/models/{model}:streamGenerateContent", "alt=sse"
+        )
         completion_id = f"chatcmpl-gemini-{model.replace('/', '-')}"
 
         logger.info(
@@ -7439,7 +7442,7 @@ class ExternalProviderClient:
             else:
                 body["max_tokens"] = max_tokens
 
-        url = f"{self.base_url}/chat/completions"
+        url = _append_provider_path(self.base_url, "/chat/completions")
         response = await _client().post(
             url,
             json = body,
@@ -7548,7 +7551,7 @@ class ExternalProviderClient:
         headers = self._auth_headers()
         headers.pop("Content-Type", None)
         response = await _client().post(
-            f"{self.base_url}/audio/transcriptions",
+            _append_provider_path(self.base_url, "/audio/transcriptions"),
             headers = headers,
             files = {"file": (filename, audio, content_type)},
             data = data,
@@ -7626,7 +7629,9 @@ class ExternalProviderClient:
 
     async def _models_payload(self, timeout: Any) -> tuple[Any, list[dict[str, Any]]]:
         response = await _client().get(
-            f"{self.base_url}/models", headers = self._auth_headers(), timeout = timeout
+            _append_provider_path(self.base_url, "/models"),
+            headers = self._auth_headers(),
+            timeout = timeout,
         )
         response.raise_for_status()
         data = response.json()
@@ -7818,7 +7823,7 @@ class ExternalProviderClient:
         """Confirm GET /models returns 200 without buffering the full response body. Used for
         providers with enormous catalogs (e.g. OpenRouter, Hugging Face router) where downloading
         the full JSON would be prohibitive."""
-        url = f"{self.base_url}/models"
+        url = _append_provider_path(self.base_url, "/models")
         try:
             async with _client().stream(
                 "GET",
@@ -7850,7 +7855,7 @@ class ExternalProviderClient:
         them). Only valid against api.openai.com (caller guards is_openai_cloud).
         """
         response = await _client().get(
-            f"{self.base_url}/containers",
+            _append_provider_path(self.base_url, "/containers"),
             headers = self._container_headers(),
             timeout = self._timeout,
         )
@@ -7876,7 +7881,7 @@ class ExternalProviderClient:
             },
         }
         response = await _client().post(
-            f"{self.base_url}/containers",
+            _append_provider_path(self.base_url, "/containers"),
             json = body,
             headers = self._container_headers(),
             timeout = self._timeout,
@@ -7889,7 +7894,7 @@ class ExternalProviderClient:
         (shared-pool DELETEs returned deleted:true but left the container alive), and verifies
         the body reports deleted:true, since OpenAI 2xx-returns that even when silently rejecting
         the request."""
-        url = f"{self.base_url}/containers/{container_id}"
+        url = _append_provider_path(self.base_url, f"/containers/{container_id}")
         headers = self._container_headers()
         logger.info(
             "openai_container_delete.outbound url=%s has_auth=%s openai_beta=%s",
