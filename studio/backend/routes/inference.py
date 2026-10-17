@@ -35592,22 +35592,21 @@ async def produce_openai_chat_completions(
                 # Request-scoped holder, so concurrent streams cannot
                 # read each other's stats.
                 _stats = stats_holder.get("stats")
-                # A healed tool call wins: the turn ended on a call, not at the cap. A
-                # cancelled one stopped on request, so it is never "length".
+                # A healed tool call only upgrades "stop": one cut off at the cap keeps
+                # "length" so the client knows its arguments may be incomplete (GGUF
+                # passthrough parity). A cancelled turn stopped on request, never "length".
                 _finish = (
-                    "tool_calls"
-                    if (healer is not None and not _cancelled and healer.healed)
-                    else (
-                        "stop"
-                        if _cancelled
-                        else _safetensors_finish_reason(
-                            _stats,
-                            payload,
-                            is_mlx = bool(_sf_model_info.get("is_mlx", False)),
-                            durable_run = not cancel_on_disconnect,
-                        )
+                    "stop"
+                    if _cancelled
+                    else _safetensors_finish_reason(
+                        _stats,
+                        payload,
+                        is_mlx = bool(_sf_model_info.get("is_mlx", False)),
+                        durable_run = not cancel_on_disconnect,
                     )
                 )
+                if healer is not None and not _cancelled and healer.healed and _finish == "stop":
+                    _finish = "tool_calls"
                 yield _chat_final_chunk(completion_id, created, model_name, _finish)
                 # Reuse the reason already sent to the client. Outside the stats block
                 # below: a run whose token count is unknown reports no stats.
@@ -35844,7 +35843,9 @@ async def produce_openai_chat_completions(
                 )
                 if _sf_heal:
                     if heal_openai_message(_msg, _sf_heal, _sf_healing_tools):
-                        _finish = "tool_calls"
+                        # A call cut off at the cap keeps "length" (GGUF passthrough parity).
+                        if _finish == "stop":
+                            _finish = "tool_calls"
                     elif nudge_enabled(
                         payload.nudge_tool_calls,
                         response_format = _sf_response_format,
@@ -35903,10 +35904,11 @@ async def produce_openai_chat_completions(
                                 # The winning attempt's prompt is the one reported;
                                 # the completions of both are summed.
                                 if heal_openai_message(retry_msg, _sf_heal, _sf_healing_tools):
+                                    _retry_finish = _stats_finish_reason(stats_holder.get("stats"))
                                     _visible_text, _msg, _finish = (
                                         _retry_visible,
                                         retry_msg,
-                                        "tool_calls",
+                                        "tool_calls" if _retry_finish == "stop" else _retry_finish,
                                     )
                                     stats_holder["stats"] = _summed_tool_loop_stats(
                                         _first_stats, stats_holder.get("stats")
