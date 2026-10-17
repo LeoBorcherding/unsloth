@@ -162,6 +162,7 @@ def _extract(i):
             "F", (), {"_add_unsloth_branding": staticmethod(lambda d: branding.append(d))}
         ),
     }
+    exec(ast.get_source_segment(src, _defs("_merged_dense_copy", ST_PY)[0]), ns)
     exec(textwrap.dedent(ast.get_source_segment(src, node)), ns)
     return ns["_save_pretrained_merged"], branding
 
