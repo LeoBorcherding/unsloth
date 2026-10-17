@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,7 @@ from auth.authentication import (
     authenticated_via_api_key,
     require_ui_session_for_local_commands,
 )
+from core.training.account_jobs import managed_account
 from core.data_recipe.service import (
     build_config_builder,
     create_data_designer,
@@ -36,6 +38,10 @@ _GITHUB_VALIDATE_NOTE = (
     "Recipe shape is valid. GitHub access and rate limits are checked when the run starts."
 )
 _GITHUB_ITEM_TYPES = {"issues", "pulls", "commits"}
+# The scraper's own message: it is GraphQL-only, and GitHub's GraphQL API refuses anonymous requests.
+_GITHUB_TOKEN_REQUIRED = (
+    "GitHub token is required. Set it in the recipe config or the GH_TOKEN / GITHUB_TOKEN env var."
+)
 
 
 def _github_seed_source(recipe: dict[str, Any]) -> dict[str, Any] | None:
@@ -76,6 +82,22 @@ def _validate_github_seed_static(source: dict[str, Any]) -> list[ValidateError]:
         limit = 0
     if limit < 1 or limit > 5000:
         errors.append(ValidateError(message = "GitHub limit must be from 1 to 5000."))
+
+    try:
+        max_comments = int(source.get("max_comments_per_item", 30))
+    except (TypeError, ValueError):
+        max_comments = -1
+    if max_comments < 0 or max_comments > 30:
+        errors.append(
+            ValidateError(message = "GitHub max comments per item must be from 0 to 30.")
+        )
+
+    # Same rule as /seed/github/env-token: a managed account's run never sees the server's env token.
+    has_env_token = not managed_account() and bool(
+        os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    )
+    if not str(source.get("token") or "").strip() and not has_env_token:
+        errors.append(ValidateError(message = _GITHUB_TOKEN_REQUIRED))
 
     return errors
 

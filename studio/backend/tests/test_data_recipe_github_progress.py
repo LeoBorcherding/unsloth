@@ -78,6 +78,7 @@ def test_github_validate_skips_live_access_with_honest_note():
                     "source": {
                         "seed_type": "github_repo",
                         "repos": ["unslothai/unsloth"],
+                        "token": "test-token-not-real",
                         "item_types": ["issues"],
                         "limit": 1,
                     }
