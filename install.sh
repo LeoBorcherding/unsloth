@@ -6126,6 +6126,14 @@ get_torch_index_url() {
     elif [ "$_major" -ge 12 ]; then _cuda_tag=cu124
     elif [ "$_major" -ge 11 ]; then _cuda_tag=cu118
     else echo "$_base/cpu"; return; fi
+    # aarch64 CUDA torch starts at cu126 (cu124 has only CPU builds, cu118 none); cu126 runs on any 12.x driver.
+    case "$_ARCH:$_cuda_tag" in
+        aarch64:cu124|arm64:cu124) _cuda_tag=cu126 ;;
+        aarch64:cu118|arm64:cu118)
+            echo "[WARN] The NVIDIA driver supports CUDA $_cuda_ver, and PyTorch publishes no aarch64 CUDA wheels below CUDA 12.6 -- installing CPU-only PyTorch." >&2
+            echo "[WARN] Upgrade the driver to R525 or newer (CUDA 12.x) and re-run this installer for GPU PyTorch." >&2
+            echo "$_base/cpu"; return ;;
+    esac
     _cuda_tag=$(_cap_cuda_family_for_pre_turing "$_cuda_tag" "$_smi" "$_inventory_caps")
     if [ -n "$_cuda_from_driver" ]; then
         echo "[WARN] nvidia-smi and the NVIDIA driver libraries did not answer in time; the driver supports CUDA $_cuda_ver." >&2

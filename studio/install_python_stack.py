@@ -4279,6 +4279,8 @@ def _cap_cuda_family_for_pre_turing(
 
 def _torch_family_for_cuda_version(major: int, minor: int) -> str:
     """install.sh::get_torch_index_url's CUDA ladder, from the driver's CUDA version."""
+    # aarch64 CUDA torch starts at cu126 (cu124 has only CPU builds, cu118 none).
+    arm = sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64")
     if major >= 13:
         return "cu130"
     if major == 12 and minor >= 8:
@@ -4286,9 +4288,9 @@ def _torch_family_for_cuda_version(major: int, minor: int) -> str:
     if major == 12 and minor >= 6:
         return "cu126"
     if major >= 12:
-        return "cu124"
+        return "cu126" if arm else "cu124"
     if major >= 11:
-        return "cu118"
+        return "cpu" if arm else "cu118"
     return "cpu"  # ancient driver: no usable CUDA wheels
 
 
