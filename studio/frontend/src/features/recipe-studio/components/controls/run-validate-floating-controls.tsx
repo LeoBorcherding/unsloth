@@ -12,6 +12,7 @@ type RunValidateFloatingControlsProps = {
   runDialogKind: RecipeExecutionKind;
   validateLoading: boolean;
   executionLocked: boolean;
+  emptyRecipe: boolean;
   onOpenRunDialog: (kind: RecipeExecutionKind) => void;
   onValidate: () => void;
 };
@@ -21,20 +22,24 @@ export function RunValidateFloatingControls({
   runDialogKind,
   validateLoading,
   executionLocked,
+  emptyRecipe,
   onOpenRunDialog,
   onValidate,
 }: RunValidateFloatingControlsProps): ReactElement {
+  const emptyHint = emptyRecipe ? "Add a block to run or check this recipe" : undefined;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center">
       <div
         data-tour="recipe-run"
         className="pointer-events-auto flex items-center gap-2"
+        // The buttons ignore the pointer while disabled, so the hint sits here.
+        title={emptyHint}
       >
         <Button
           type="button"
           className="corner-squircle h-11 px-5"
           onClick={() => onOpenRunDialog(runDialogKind)}
-          disabled={runBusy}
+          disabled={runBusy || emptyRecipe}
         >
           <HugeiconsIcon icon={CookBookIcon} className="size-4" />
           {runBusy ? "Running..." : "Run"}
@@ -44,7 +49,7 @@ export function RunValidateFloatingControls({
           variant="outline"
           className="corner-squircle h-11 px-5"
           onClick={onValidate}
-          disabled={validateLoading || executionLocked}
+          disabled={validateLoading || executionLocked || emptyRecipe}
         >
           <HugeiconsIcon icon={TestTube01Icon} className="size-4" />
           {validateLoading ? "Checking..." : "Check"}

@@ -17,16 +17,19 @@ type EditRecipePageProps = {
 type LoadState =
   | { status: "loading" }
   | { status: "missing" }
+  | { status: "error"; message: string }
   | { status: "ready"; record: RecipeRecord };
 
 function RecipeLoadState({
   title,
   description,
   onBack,
+  onRetry,
 }: {
   title: string;
   description: string;
   onBack: () => void;
+  onRetry?: () => void;
 }): ReactElement {
   return (
     <div className="min-h-[calc(100dvh-var(--studio-titlebar-height,0px))] bg-background">
@@ -34,9 +37,16 @@ function RecipeLoadState({
         <div className="w-full rounded-2xl border bg-card p-8 text-center">
           <h1 className="text-lg font-semibold">{title}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{description}</p>
-          <Button type="button" variant="outline" className="mt-5" onClick={onBack}>
-            Back to Recipes
-          </Button>
+          <div className="mt-5 flex justify-center gap-2">
+            {onRetry ? (
+              <Button type="button" onClick={onRetry}>
+                Retry
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" onClick={onBack}>
+              Back to Recipes
+            </Button>
+          </div>
         </div>
       </main>
     </div>
@@ -47,6 +57,7 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
   const signalReady = useAppShellReadySignal();
   const navigate = useNavigate();
   const reloadReadySent = useRef(false);
+  const [attempt, setAttempt] = useState(0);
   const [loadState, setLoadState] = useState<LoadState>(() => {
     const cachedRecipe = getCachedRecipe(recipeId);
     if (cachedRecipe) {
@@ -80,12 +91,17 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
       .catch((error) => {
         // biome-ignore lint/suspicious/noConsole: the load state below is what the user sees
         console.error("Load recipe failed:", error);
-        if (active) setLoadState({ status: "missing" });
+        if (active) {
+          setLoadState({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
       });
     return () => {
       active = false;
     };
-  }, [recipeId]);
+  }, [attempt, recipeId]);
 
   useEffect(() => {
     if (loadState.status === "loading" || reloadReadySent.current) {
@@ -123,6 +139,17 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
         title="Loading recipe..."
         description="Please wait while we load your recipe."
         onBack={() => void navigate({ to: "/data-recipes" })}
+      />
+    );
+  }
+
+  if (loadState.status === "error") {
+    return (
+      <RecipeLoadState
+        title="Couldn't load this recipe"
+        description={loadState.message}
+        onBack={() => void navigate({ to: "/data-recipes" })}
+        onRetry={() => setAttempt((value) => value + 1)}
       />
     );
   }

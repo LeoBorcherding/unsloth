@@ -786,6 +786,7 @@ export function RecipeStudioPage({
           runDialogKind={runDialogKind}
           validateLoading={validateLoading}
           executionLocked={executionLocked}
+          emptyRecipe={nodes.length === 0}
           onOpenRunDialog={openRunDialog}
           onValidate={() => {
             openRunDialog(runDialogKind);
