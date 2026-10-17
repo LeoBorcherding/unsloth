@@ -2,6 +2,16 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useAppShellReadySignal } from "@/components/app-readiness";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,6 +55,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { RecipeRecord } from "../types";
 import {
   createRecipeDraft,
   createRecipeFromLearningRecipe,
@@ -316,16 +327,30 @@ function LearningRecipeCards({
 export function DataRecipesPage(): ReactElement {
   const signalReady = useAppShellReadySignal();
   const navigate = useNavigate();
-  const { recipes, ready } = useRecipes();
+  const {
+    recipes,
+    ready: listReady,
+    error: listError,
+    retry: retryList,
+  } = useRecipes();
+  // A failed first load settles the page too; it shows the error with Retry.
+  const ready = listReady || listError !== null;
   const [creatingRecipe, setCreatingRecipe] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<RecipeRecord | null>(
+    null,
+  );
   const [learningDialogOpen, setLearningDialogOpen] = useState(false);
   const [loadingTemplateId, setLoadingTemplateId] = useState<string | null>(
     null,
   );
   const reloadReadySent = useRef(false);
   const tourSteps = useMemo(
-    () => buildDataRecipesTourSteps({ ready, hasRecipes: recipes.length > 0 }),
-    [ready, recipes.length],
+    () =>
+      buildDataRecipesTourSteps({
+        ready: listReady,
+        hasRecipes: recipes.length > 0,
+      }),
+    [listReady, recipes.length],
   );
   const tour = useGuidedTourController({
     id: "data-recipes",
@@ -341,6 +366,13 @@ export function DataRecipesPage(): ReactElement {
   }, [ready, signalReady]);
 
   useEffect(() => {
+    // Without a list the error panel below says it; with a cached one, say it was not refreshed.
+    if (listError && listReady) {
+      toastError("Couldn't refresh recipes.", listError);
+    }
+  }, [listError, listReady]);
+
+  useEffect(() => {
     if (sessionStorage.getItem(OPEN_LEARNING_RECIPES_ON_ARRIVAL_KEY) !== "1") {
       return;
     }
@@ -354,8 +386,8 @@ export function DataRecipesPage(): ReactElement {
     }
     setCreatingRecipe(true);
     try {
-      const recipe = await createRecipeDraft();
-      primeRecipeCache(recipe);
+      // Saved on the first edit, so leaving right away leaves nothing behind.
+      const recipe = createRecipeDraft();
       await navigate({
         to: "/data-recipes/$recipeId",
         params: { recipeId: recipe.id },
@@ -411,8 +443,15 @@ export function DataRecipesPage(): ReactElement {
     }).catch(() => undefined);
   }
 
-  async function handleDeleteRecipe(recipeId: string): Promise<void> {
-    await deleteRecipe(recipeId);
+  async function handleDeleteRecipe(recipe: RecipeRecord): Promise<void> {
+    try {
+      await deleteRecipe(recipe.id);
+    } catch (error) {
+      toastError(
+        `Couldn't delete ${recipe.name}.`,
+        error instanceof Error ? error.message : undefined,
+      );
+    }
   }
 
   const isBusy = creatingRecipe || Boolean(loadingTemplateId);
@@ -463,7 +502,22 @@ export function DataRecipesPage(): ReactElement {
         </div>
 
         {ready ? (
-          recipes.length === 0 ? (
+          !listReady ? (
+            <div className="mt-8 rounded-2xl border border-border/70 bg-card px-6 py-10 text-center">
+              <p className="text-sm font-medium text-foreground">
+                Couldn't load your recipes
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{listError}</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4"
+                onClick={retryList}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : recipes.length === 0 ? (
             <Empty
               data-tour="recipes-templates"
               className="mt-8 border border-dashed border-border/70 dark:border-none"
@@ -535,15 +589,28 @@ export function DataRecipesPage(): ReactElement {
                     variant="ghost"
                     size="icon"
                     className="size-8"
-                    onClick={() => {
-                      handleDeleteRecipe(recipe.id).catch(() => undefined);
-                    }}
-                    aria-label={`Delete ${recipe.name}`}
+                    onClick={() => setPendingDelete(recipe)}
+                    aria-label={`Delete ${recipe.name}, updated ${formatRelativeTime(recipe.updatedAt)}`}
                   >
                     <HugeiconsIcon icon={Delete02Icon} className="size-4" />
                   </Button>
                 </div>
               ))}
+              <section className="pt-8">
+                <h2 className="text-sm font-semibold text-foreground">
+                  Learning Recipes
+                </h2>
+                <p className="mt-0.5 mb-4 text-xs text-muted-foreground">
+                  Start from a prebuilt recipe to learn patterns, then edit and
+                  run.
+                </p>
+                <LearningRecipeCards
+                  onSelect={(template) => {
+                    openLearningRecipe(template).catch(() => undefined);
+                  }}
+                  loadingTemplateId={loadingTemplateId}
+                />
+              </section>
             </div>
           )
         ) : (
@@ -557,6 +624,38 @@ export function DataRecipesPage(): ReactElement {
           </div>
         )}
       </main>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete
+                ? `Last updated ${formatRelativeTime(pendingDelete.updatedAt)}. `
+                : null}
+              This can't be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingDelete) {
+                  handleDeleteRecipe(pendingDelete).catch(() => undefined);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={learningDialogOpen} onOpenChange={setLearningDialogOpen}>
         <DialogContent
