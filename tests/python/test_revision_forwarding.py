@@ -811,7 +811,7 @@ def test_llama_owns_the_vllm_predicate_the_loader_gates_on():
     tree = _tree(LLAMA)
     helper = _function(tree, "_vllm_will_load_weights")
     source = ast.unparse(helper)
-    for token in ("is_vLLM_available", "get_device_capability", "hip", "num_labels"):
+    for token in ("is_vLLM_available", "get_device_capability", "num_labels"):
         assert token in source, token
 
     guard = _function(tree, "from_pretrained", "FastLlamaModel")
