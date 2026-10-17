@@ -85,6 +85,12 @@ function buildInferenceParameters(
     config.inference_timeout,
     Math.trunc,
   );
+  assignFiniteNumber(
+    inference,
+    "max_parallel_requests",
+    config.inference_max_parallel_requests,
+    Math.trunc,
+  );
 
   const extraBody = parseJsonObject(
     config.inference_extra_body,
