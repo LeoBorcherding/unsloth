@@ -107,9 +107,6 @@ export function validateModelConfigProviders(
       errors.push(`Model config ${alias}: model is required.`);
       continue;
     }
-    if (isLocal && isUsed && !model) {
-      errors.push(`Model config ${alias}: choose a local model.`);
-    }
     if (!isLocal && isUsed && !model) {
       errors.push(`Model config ${alias}: model is required.`);
     }
