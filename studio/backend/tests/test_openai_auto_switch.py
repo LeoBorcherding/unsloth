@@ -5855,7 +5855,7 @@ def test_chat_count_tokens_collapses_system_turns(monkeypatch):
         pytest.param(
             "reasoning_effort",
             {"chat_template_kwargs": {"reasoning_effort": "none"}},
-            {"reasoning_effort": "none"},
+            {"reasoning_effort": "low"},
             id = "nested_effort",
         ),
         pytest.param(
