@@ -151,7 +151,8 @@ type SettingCheck = {
 /** Fallback reasons the backend retries on an IDENTICAL next load, from the arms of
  *  `LlamaCppBackend._runtime_matches_intent` that return False to force a repair. The rest are
  *  excluded on purpose: "drafter_no_vram" and "mla_mtp_disabled" are Auto-mode policy, and
- *  "runtime_error" only reopens when the draft count changes, which the comparison sees.
+ *  "runtime_error" and "drafter_oom" only reopen when the draft count changes, which the
+ *  comparison sees.
  *
  *  "drafter_unloadable" is here because the sheet's remedy is to replace the sidecar in place,
  *  and `adoptable` in use-chat-model-runtime would otherwise skip `/load`, so the backend's
@@ -325,6 +326,7 @@ const SETTING_CHECKS: SettingCheck[] = [
       // still compares against _last_load_intent's count, so null here is "unknown",
       // not "the default". Let /load answer, as RETRYABLE_SPEC_FALLBACKS assumes.
       s.spec_fallback_reason !== "runtime_error" &&
+      s.spec_fallback_reason !== "drafter_oom" &&
       (c.specDraftNMax ?? null) === (s.spec_draft_n_max ?? null),
   },
   {

@@ -459,6 +459,9 @@ function specFallbackMessage({
       return `This model fits in VRAM but its ${drafter} drafter does not, so Auto kept your context length and turned ${drafter} off for this load. Choose ${drafter} in Settings to force it, at a smaller context.`;
     case "runtime_error":
       return `${drafter} could not start for this model on the installed llama.cpp build, so it is running without speculative decoding.`;
+    case "drafter_oom":
+      // The build runs it fine; the drafter's buffers did not fit beside the model.
+      return `${drafter} ran out of GPU memory loading beside this model, so it is running without speculative decoding. Set GPU Layers in Manual mode to leave room for it, then reload the model.`;
     case "drafter_unloadable":
       // The file IS beside the model; it just cannot be opened as a draft. So no "place
       // the sidecar" and no "check your network": both name a remedy that changes
