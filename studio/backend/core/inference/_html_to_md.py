@@ -345,6 +345,12 @@ _IMPLICIT_CLOSE_BARRIERS = {
     | (_BUTTON_SCOPE_BARRIERS if tag in _P_CLOSING_TAGS else frozenset())
     for tag in _CLOSE_BARRIERS.keys() | _P_CLOSING_TAGS
 }
+# start tag -> open tags it implicitly closes, so recovery looks up positions instead of scanning the stack
+_IMPLICITLY_CLOSED_BY = {
+    tag: frozenset(name for name, closers in _IMPLICIT_CLOSERS.items() if tag in closers)
+    for tag in _IMPLICIT_CLOSE_BARRIERS
+}
+_IMPLICIT_CLOSE_INDEXED = _IMPLICIT_CLOSERS.keys() | frozenset().union(*_IMPLICIT_CLOSE_BARRIERS.values())
 _TABLE_SCOPE_BARRIERS = frozenset({"html", "table", "template"})
 _TABLE_END_TAGS = frozenset({"caption", "table", "tbody", "td", "tfoot", "th", "thead", "tr"})
 _TABLE_CONTEXT_END_TAGS = _TABLE_END_TAGS - {"table"}
@@ -353,7 +359,7 @@ _TABLE_CELL_TAGS = frozenset({"td", "th"})
 _TABLE_NESTING_TAGS = _TABLE_CELL_TAGS | {"caption"}
 _TABLE_SECTION_TAGS = frozenset({"tbody", "tfoot", "thead"})
 _TABLE_SECTION_START_TAGS = _TABLE_SECTION_TAGS | {"caption", "col", "colgroup"}
-_INDEXED_OPEN_TAGS = _SKIP_RECOVERY_END_TAGS | _SCOPE_BARRIERS
+_INDEXED_OPEN_TAGS = _SKIP_RECOVERY_END_TAGS | _SCOPE_BARRIERS | _IMPLICIT_CLOSE_INDEXED
 # repeated span cells use half the 16k fetch limit to leave room for text after the table
 _MAX_SPAN_CHARS = 8_000
 # long rowspan cells usually encode layout, so only their first row keeps the text
@@ -383,6 +389,20 @@ _SUPERIOR_ABBREVIATIONS = {
     "C": frozenset({"ie", "ies"}),
 }
 _LAST_WORD = re.compile(r"(?<![^\W\d_])[^\W\d_]+$")
+
+
+def _implicit_close_at(tag: str, open_at: dict) -> int:
+    """Stack index of the nearest open element *tag* implicitly closes with no barrier above it, else -1."""
+    closed = _IMPLICITLY_CLOSED_BY.get(tag)
+    if not closed:
+        return -1
+    close_at = max((p[-1] for name in closed if (p := open_at.get(name))), default = -1)
+    if close_at < 0:
+        return -1
+    barrier = max(
+        (p[-1] for name in _IMPLICIT_CLOSE_BARRIERS[tag] if (p := open_at.get(name))), default = -1
+    )
+    return close_at if close_at >= barrier else -1
 
 
 def _last_word(text: str) -> str:
@@ -679,6 +699,7 @@ class _TitleButtonScan:
     def __init__(self) -> None:
         self.keep: set[tuple[int, int]] = set()  # HTMLParser.getpos() of each kept <button>
         self._open: list[str] = []
+        self._open_at: dict[str, list[int]] = {}
         self._namespaces: list[str] = []
         self._html_integration: list[bool] = []
         self._closable_open = (
@@ -699,6 +720,8 @@ class _TitleButtonScan:
         if tag in _VOID_TAGS:
             return
         namespace = self._next_namespace(tag)
+        if tag in _IMPLICIT_CLOSE_INDEXED:
+            self._open_at.setdefault(tag, []).append(len(self._open))
         self._open.append(tag)
         self._namespaces.append(namespace)
         self._html_integration.append(self._is_html_integration_point(tag, namespace, attr_dict))
@@ -769,19 +792,9 @@ class _TitleButtonScan:
 
     def _close_implicit(self, tag: str) -> None:
         """The renderer's optional-end-tag recovery (``_MarkdownRenderer._close_implicit``), so both see one tree."""
-        if not self._closable_open:
-            return
-        barriers = _IMPLICIT_CLOSE_BARRIERS.get(tag, frozenset())
-        while True:
-            close_at = None
-            for i in range(len(self._open) - 1, -1, -1):
-                name = self._open[i]
-                if tag in _IMPLICIT_CLOSERS.get(name, ()):
-                    close_at = i
-                    break
-                if name in barriers:
-                    break
-            if close_at is None:
+        while self._closable_open:
+            close_at = _implicit_close_at(tag, self._open_at)
+            if close_at < 0:
                 return
             self._pop_to(close_at)
 
@@ -795,7 +808,11 @@ class _TitleButtonScan:
         while self._muted and self._muted[-1] >= i:
             self._muted.pop()
         self._close_headings(i)
-        self._closable_open -= sum(1 for name in self._open[i:] if name in _IMPLICIT_CLOSERS)
+        for name in self._open[i:]:
+            if positions := self._open_at.get(name):
+                positions.pop()
+            if name in _IMPLICIT_CLOSERS:
+                self._closable_open -= 1
         del self._open[i:]
         del self._namespaces[i:]
         del self._html_integration[i:]
@@ -1298,25 +1315,15 @@ class _MarkdownRenderer(HTMLParser):
     def _close_implicit(self, tag: str) -> None:
         """HTML5 optional-end-tag recovery for a start tag about to open.
 
-        Pops each implicitly-closed ancestor (and its hidden marks), scanning the
-        whole stack so an open ``<p>``/``<li>`` still closes under an unclosed inline
-        ``<span>``. Stops at a ``_CLOSE_BARRIERS`` container so recovery never crosses
-        a nested list/table/dl and leaks the outer item's hidden content. Runs even
-        for skipped ``<nav>``/``<footer>``, which also close ``<p>``."""
-        if not self._closable_open:
-            return
-        barriers = _IMPLICIT_CLOSE_BARRIERS.get(tag, frozenset())
-        while True:
-            close_at = None
-            for i in range(len(self._open_tags) - 1, -1, -1):
-                name = self._open_tags[i]
-                if tag in _IMPLICIT_CLOSERS.get(name, ()):
-                    close_at = i
-                    break
-                # A barrier container re-scopes the item; stop before it.
-                if name in barriers:
-                    break
-            if close_at is None:
+        Pops each implicitly-closed ancestor (and its hidden marks), found by position
+        so an open ``<p>``/``<li>`` still closes under unclosed inline ``<span>``s
+        without a stack scan per start tag. Stops at a ``_CLOSE_BARRIERS`` container
+        so recovery never crosses a nested list/table/dl and leaks the outer item's
+        hidden content. Runs even for skipped ``<nav>``/``<footer>``, which also close
+        ``<p>``."""
+        while self._closable_open:
+            close_at = _implicit_close_at(tag, self._open_at)
+            if close_at < 0:
                 break
             self._truncate_open_tags(close_at)
             while self._hidden_marks and self._hidden_marks[-1] >= close_at:
