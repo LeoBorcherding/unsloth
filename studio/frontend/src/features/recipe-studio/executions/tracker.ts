@@ -39,6 +39,7 @@ type TrackRecipeExecutionParams = {
   onUpsert: (record: RecipeExecutionRecord) => void;
   onSetPreviewErrors: (errors: string[]) => void;
   onPreviewSuccess?: () => void;
+  signal?: AbortSignal;
 };
 
 export type TrackRecipeExecutionResult = {
@@ -96,10 +97,16 @@ export async function trackRecipeExecution({
   jobId,
   initialExecution,
   notify,
-  onUpsert,
+  onUpsert: upsert,
   onSetPreviewErrors,
   onPreviewSuccess,
+  signal,
 }: TrackRecipeExecutionParams): Promise<TrackRecipeExecutionResult> {
+  const onUpsert = (record: RecipeExecutionRecord): void => {
+    if (!signal?.aborted) {
+      upsert(record);
+    }
+  };
   let done = false;
   let lastStatus: RecipeExecutionStatus = initialExecution.status;
   let completedEventPayload: Record<string, unknown> | null = null;
@@ -107,6 +114,9 @@ export async function trackRecipeExecution({
   let lastDatasetPollAt = 0;
 
   const eventsAbortController = new AbortController();
+  signal?.addEventListener("abort", () => eventsAbortController.abort(), {
+    once: true,
+  });
   void streamRecipeJobEvents({
     jobId,
     signal: eventsAbortController.signal,
@@ -210,7 +220,7 @@ export async function trackRecipeExecution({
   });
 
   try {
-    while (!done) {
+    while (!(done || signal?.aborted)) {
       const status = await getRecipeJobStatus(jobId);
       if (done && isTerminalStatus(lastStatus)) {
         break;
@@ -256,7 +266,7 @@ export async function trackRecipeExecution({
     }
   } catch (error) {
     const terminal = isTerminalStatus(lastStatus);
-    if (!terminal) {
+    if (!(terminal || signal?.aborted)) {
       const message = toErrorMessage(error, `${label} failed.`);
       latestExecution = {
         ...latestExecution,
@@ -270,6 +280,10 @@ export async function trackRecipeExecution({
     }
   } finally {
     eventsAbortController.abort();
+  }
+
+  if (signal?.aborted) {
+    return { success: false, terminal: false };
   }
 
   if (lastStatus === "completed") {
@@ -321,6 +335,9 @@ export async function trackRecipeExecution({
             total: eventDatasetRows.length,
           }),
     ]);
+    if (signal?.aborted) {
+      return { success: false, terminal: false };
+    }
 
     const analysis =
       analysisResult.status === "fulfilled"
