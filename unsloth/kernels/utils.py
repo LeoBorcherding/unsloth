@@ -676,6 +676,9 @@ if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
             return nvfp4_dequantize(
                 W, quant_state.scale, quant_state.global_scale, quant_state.dtype
             )
+        # The kernels below only decode double-quantized NF4.
+        if _quant_type(quant_state) != "nf4" or _unpack_quant_state(quant_state)[5] is None:
+            return bnb_functional.dequantize_4bit(W, quant_state, out = out)
         if type(quant_state) is not list:
             # New quant_state as a class, per TimDettmers/bitsandbytes#763.
             absmax = quant_state.absmax
@@ -1033,6 +1036,8 @@ if DEVICE_TYPE == "xpu" and HAS_XPU_STREAM:
     ):
         if quant_state is None:
             return torch_matmul(X, W, out = out)
+        if _quant_type(quant_state) != "nf4" or _unpack_quant_state(quant_state)[5] is None:
+            return torch_matmul(X, fast_dequantize(W, quant_state).t(), out = out)
         # Fast X @ W where seq_len == 1, from bitsandbytes functional.py#L1469 and TimDettmers/bitsandbytes#763.
         _, q_len, hd = X.shape
 
