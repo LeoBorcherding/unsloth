@@ -78,7 +78,7 @@ def _isolated_paths() -> list:
 
 
 def _test_files() -> list:
-    return sorted(str(path.relative_to(REPO_ROOT)) for path in _TESTS_DIR.rglob("test_*.py"))
+    return sorted(path.relative_to(REPO_ROOT).as_posix() for path in _TESTS_DIR.rglob("test_*.py"))
 
 
 class TestEveryTestFileLandsInExactlyOneShard:
