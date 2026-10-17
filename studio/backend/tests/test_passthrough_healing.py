@@ -1526,6 +1526,42 @@ class TestOpenaiStreamingRoute:
 
         asyncio.run(_run())
 
+    @pytest.mark.parametrize("parallel", [None, False])
+    def test_native_args_after_healed_stay_off_healed_index(self, monkeypatch, parallel):
+        async def _run():
+            # The native call's later argument deltas arrive after the healer
+            # went dormant and must get the same remap as its first delta.
+            lines = [
+                'data: {"id":"c1","choices":[{"index":0,"delta":{"content":'
+                + json.dumps(LOOKUP_XML)
+                + "}}]}",
+                'data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":'
+                '[{"index":0,"id":"call_native","type":"function","function":'
+                '{"name":"lookup","arguments":"{\\"q\\":"}}]}}]}',
+                'data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":'
+                '[{"index":0,"function":{"arguments":"\\"native\\"}"}}]}}]}',
+                'data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+                "data: [DONE]",
+            ]
+            kwargs = {} if parallel is None else {"parallel_tool_calls": parallel}
+            chunks = await _drive_stream(monkeypatch, _payload(stream = True, **kwargs), lines)
+            merged = {}
+            for p in _stream_payloads(chunks):
+                for c in p.get("choices", []):
+                    for tc in (c.get("delta") or {}).get("tool_calls") or []:
+                        call = merged.setdefault(tc["index"], {"id": None, "args": ""})
+                        call["id"] = call["id"] or tc.get("id")
+                        call["args"] += (tc.get("function") or {}).get("arguments") or ""
+            args = {i: json.loads(call["args"]) for i, call in merged.items()}
+            if parallel is False:
+                assert list(merged) == [0] and merged[0]["id"] == "call_0"
+            else:
+                assert merged[1]["id"] == "call_native"
+                assert args[1] == {"q": "native"}
+            assert merged[0]["id"] != "call_native"
+
+        asyncio.run(_run())
+
     def test_false_alarm_text_flushes(self, monkeypatch):
         async def _run():
             lines = [
