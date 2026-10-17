@@ -703,15 +703,15 @@ def test_worker_drain_skip_emits_cancelled_gen_done_when_draining():
 
 def test_worker_generate_branches_check_drain_before_clearing_cancel():
     # Guarded branches check the drain skip before clearing cancel_event and
-    # again after, so a queued command can't erase an unload's cancel. Four
-    # today: MLX generate + generate_audio_input, GPU generate, and GPU TTS.
+    # again after, so a queued command can't erase an unload's cancel. Five
+    # today: MLX and GPU generate + generate_audio_input, and GPU TTS.
     import inspect
 
     from core.inference import worker
 
     src = inspect.getsource(worker.run_inference_process)
     audio_prepare = inspect.getsource(worker._prepare_generate_audio)
-    assert src.count("_drain_skip_generate(cmd, resp_queue, drain_event") == 6
+    assert src.count("_drain_skip_generate(cmd, resp_queue, drain_event") == 8
     assert audio_prepare.count("_drain_skip_generate(cmd, resp_queue, drain_event") == 2
 
 

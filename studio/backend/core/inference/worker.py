@@ -2609,7 +2609,12 @@ def run_inference_process(
                 _handle_generate_audio(backend, cmd, resp_queue, cancel_event)
 
             elif cmd_type == "generate_audio_input":
+                # Same drain checks as generate: the clear must not erase an unload's cancel.
+                if _drain_skip_generate(cmd, resp_queue, drain_event):
+                    continue
                 cancel_event.clear()
+                if _drain_skip_generate(cmd, resp_queue, drain_event):
+                    continue
                 _handle_generate_audio_input(backend, cmd, resp_queue, cancel_event)
 
             elif cmd_type == "unload":
