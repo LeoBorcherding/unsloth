@@ -3,17 +3,18 @@
     "model_providers": [
       {
         "name": "provider_1",
-        "endpoint": "https://openrouter.ai/api/v1",
+        "endpoint": "",
         "provider_type": "openai",
         "extra_headers": {},
-        "extra_body": {}
+        "extra_body": {},
+        "is_local": true
       }
     ],
     "mcp_providers": [],
     "model_configs": [
       {
         "alias": "model_1",
-        "model": "mistralai/ministral-8b-2512",
+        "model": "",
         "provider": "provider_1",
         "inference_parameters": {
           "temperature": 0.7,
@@ -85,44 +86,35 @@
       },
       {
         "column_type": "llm-structured",
-        "name": "output_format",
+        "name": "messages",
         "drop": false,
         "model_alias": "model_1",
         "prompt": "Generate a realistic multi-turn conversation.\nUser goal:\n{{ user_goal }}\nConstraints:\n- Exactly {{ conversation_length }} messages total.\n- Alternate roles strictly: user, assistant, user, assistant...\n- First message must be user.\n- Last message must be assistant.\n- Keep responses grounded in {{ domain }} / {{ topic }}.\n- End naturally with resolution or clear next step.\n- No markdown, no extra keys.",
         "output_format": {
-          "type": "object",
-          "properties": {
-            "conversation": {
-              "type": "array",
-              "minItems": 4,
-              "maxItems": 6,
-              "items": {
-                "type": "object",
-                "properties": {
-                  "role": {
-                    "type": "string",
-                    "enum": [
-                      "user",
-                      "assistant"
-                    ]
-                  },
-                  "content": {
-                    "type": "string",
-                    "minLength": 1
-                  }
-                },
-                "required": [
-                  "role",
-                  "content"
-                ],
-                "additionalProperties": false
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              },
+              "content": {
+                "type": "string",
+                "minLength": 1
               }
-            }
-          },
-          "required": [
-            "conversation"
-          ],
-          "additionalProperties": false
+            },
+            "required": [
+              "role",
+              "content"
+            ],
+            "additionalProperties": false
+          }
         }
       }
     ],
@@ -174,7 +166,7 @@
         "width": 400
       },
       {
-        "id": "output_format",
+        "id": "messages",
         "x": 1.1486983549970375,
         "y": 754.4221089431811,
         "width": 400
@@ -208,7 +200,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_3",
-        "markdown": "The **LLM Structured** block (`output_format`) generates the conversation as strict JSON.\n\nIn this recipe, schema enforces:\n\n- `conversation` array\n- message objects with `role` + `content`\n- role enum: `user` / `assistant`\n- no extra keys\n\nPrompt constraints also enforce:\n\n- exact length (`{{ conversation_length }}`)\n- alternating roles\n- first user message, last assistant message\n- natural ending\n\nThis is key for training data: same shape, less cleanup.",
+        "markdown": "The **LLM Structured** block (`messages`) generates the conversation as a strict JSON list, the shape training reads as chat turns.\n\nIn this recipe, schema enforces:\n\n- a list of 4 to 6 messages\n- message objects with `role` + `content`\n- role enum: `user` / `assistant`\n- no extra keys\n\nPrompt constraints also enforce:\n\n- exact length (`{{ conversation_length }}`)\n- alternating roles\n- first user message, last assistant message\n- natural ending\n\nThis is key for training data: same shape, less cleanup.",
         "note_color": "#FFE4E6",
         "note_opacity": "35"
       },
@@ -219,7 +211,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_4",
-        "markdown": "Sampler columns are useful during generation but usually noisy in final export.\n\nSet helper columns to `drop=true`, keep only core outputs such as:\n\n- `user_goal`\n- `output_format`\n\nTip: Keep final schema close to your training format, not your generation scaffolding.\n",
+        "markdown": "Sampler columns are useful during generation but usually noisy in final export.\n\nSet helper columns to `drop=true`, keep only core outputs such as:\n\n- `user_goal`\n- `messages`\n\nTip: Keep final schema close to your training format, not your generation scaffolding.\n",
         "note_color": "#FFE4E6",
         "note_opacity": "35"
       }
@@ -248,7 +240,7 @@
       },
       {
         "from": "user_goal",
-        "to": "output_format",
+        "to": "messages",
         "type": "canvas",
         "source_handle": "data-out-bottom",
         "target_handle": "data-in-top"
@@ -269,7 +261,7 @@
       },
       {
         "from": "model_1",
-        "to": "output_format",
+        "to": "messages",
         "type": "semantic",
         "source_handle": "semantic-out-bottom",
         "target_handle": "data-in"
