@@ -203,3 +203,25 @@ def test_a_latin1_csv_preview_says_it_is_not_utf8(tmp_path, monkeypatch):
 
     assert caught.value.status_code == 422
     assert "UTF-8" in caught.value.detail
+
+
+def test_check_shows_the_plain_reason_not_the_sql(monkeypatch):
+    from models.data_recipe import RecipePayload
+    from routes.data_recipe import validate as route
+
+    class CatalogException(Exception):
+        pass
+
+    def missing_seed(recipe, *_, **__):
+        raise CatalogException(
+            "Catalog Error: Table with name hf://unsloth/nope does not exist!\n"
+            "LINE 1: DESCRIBE SELECT * FROM 'hf://unsloth/nope'"
+        )
+
+    monkeypatch.setattr(route, "validate_recipe", missing_seed)
+    monkeypatch.setattr(route, "_collect_validation_errors", lambda *a, **k: [])
+    result = route.validate(RecipePayload(recipe = {"columns": [{"name": "a"}]}))
+
+    assert not result.valid
+    assert result.errors[0].message.startswith("Seed dataset hf://unsloth/nope wasn't found.")
+    assert "SELECT" not in (result.raw_detail or "")
