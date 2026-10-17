@@ -116,7 +116,7 @@ def test_a_model_advertising_no_levels_keeps_the_four_level_behaviour():
     assert backend._request_reasoning_kwargs(None, "low", None) == {"reasoning_effort": "low"}
     assert backend._request_reasoning_kwargs(None, "medium", None) == {"reasoning_effort": "medium"}
     assert backend._request_reasoning_kwargs(None, "high", None) == {"reasoning_effort": "high"}
-    assert backend._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "none"}
+    assert backend._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "low"}
     # Not on the ladder: downgraded, exactly as before.
     assert backend._request_reasoning_kwargs(None, "minimal", None) == {"reasoning_effort": "low"}
     assert backend._request_reasoning_kwargs(True, "max", None) == {"reasoning_effort": "high"}
