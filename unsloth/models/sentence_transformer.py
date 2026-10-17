@@ -66,6 +66,7 @@ unsloth_save_pretrained_gguf._unsloth_deferred_shim = True
 
 
 import contextlib
+import copy
 import shutil
 
 
@@ -181,6 +182,55 @@ def _normalize_save_method(save_method):
         # strip before replacing spaces so " lora " does not become "_lora_" and bypass the adapter guard.
         return save_method.strip().lower().replace(" ", "_")
     return save_method
+
+
+def _merged_dense_copy(peft_model, dtype):
+    """LoRA merged into a new dense model, leaving the live model's adapters in place. A 4-bit
+    base is dequantized first; PEFT's own merge would re-quantize it. None when an adapter needs
+    PEFT's merge (DoRA, lora_bias, modules_to_save)."""
+    from peft.tuners.lora import LoraLayer
+    from peft.utils.integrations import dequantize_bnb_weight
+
+    base = peft_model.get_base_model()
+    sources = dict(base.named_modules())
+    for module in sources.values():
+        if any(
+            c.__name__ in ("ModulesToSaveWrapper", "AuxiliaryTrainingWrapper")
+            for c in type(module).__mro__
+        ):
+            return None
+        if isinstance(module, LoraLayer) and any(
+            getattr(module, attr, {}).get(adapter, False)
+            for attr in ("use_dora", "lora_bias")
+            for adapter in module.active_adapters
+        ):
+            return None
+
+    def dense_weight(module):
+        weight = module.weight
+        if getattr(weight, "quant_state", None) is not None:
+            return dequantize_bnb_weight(weight, state = weight.quant_state)
+        return weight.detach()
+
+    config = copy.deepcopy(base.config)
+    if hasattr(config, "quantization_config"):
+        del config.quantization_config
+    dense = type(base)._from_config(config).to(dtype)
+    with torch.no_grad():
+        for name, tensor in [*dense.named_parameters(), *dense.named_buffers()]:
+            module_name, _, leaf = name.rpartition(".")
+            source = sources[module_name]
+            if isinstance(source, LoraLayer):
+                layer = source.get_base_layer()
+                value = dense_weight(layer).float() if leaf == "weight" else getattr(layer, leaf)
+                if leaf == "weight":
+                    for adapter in source.active_adapters:
+                        if adapter in source.lora_A and adapter not in source.merged_adapters:
+                            value = value + source.get_delta_weight(adapter).float()
+            else:
+                value = dense_weight(source) if leaf == "weight" else getattr(source, leaf)
+            tensor.copy_(value.to(device = tensor.device, dtype = tensor.dtype))
+    return dense
 
 
 def _save_pretrained_torchao(
@@ -2602,7 +2652,7 @@ class FastSentenceTransformer(FastModel):
                     if hasattr(inner, "_orig_mod"):
                         inner = inner._orig_mod
                     if hasattr(inner, "merge_and_unload"):
-                        merged = inner.merge_and_unload()
+                        merged = _merged_dense_copy(inner, self._dtype) or inner.merge_and_unload()
                         merged.save_pretrained(save_directory)
                     elif hasattr(inner, "save_pretrained"):
                         inner.save_pretrained(save_directory)
