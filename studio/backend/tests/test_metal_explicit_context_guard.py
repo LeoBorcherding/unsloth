@@ -1307,6 +1307,90 @@ class TestInputEmbeddingsLeftInTheFileMapping:
         assert self._fit_tokens(cmd)[:4] == ["-ngl", "-1", "--fit", "off"]
         assert not fit_is_effectively_on(cmd, {})
 
+    def test_a_tied_output_the_probe_measured_is_not_charged_twice(self, tmp_path, monkeypatch):
+        """llama-fit-params already counts the tied output duplicate in its Metal rows."""
+        embd = 6 * _GIB
+        # 7 GiB on Metal: the 6 GiB of layers plus the 1 GiB tied output duplicate.
+        measured = (7 * 1024, embd // _MIB, 2)
+        untied, _ = self._published(tmp_path, monkeypatch, n_ctx = 0, embd = embd, measured = measured)
+        monkeypatch.setattr(LlamaCppBackend, "_tied_output_bytes", staticmethod(lambda _path: _GIB))
+        tied, _ = self._published(tmp_path, monkeypatch, n_ctx = 0, embd = embd, measured = measured)
+        # Same measured residency, same ceiling: the extra charge is already in the rows.
+        assert tied == untied > _FIT_MIN_CTX
+
+    @pytest.mark.parametrize(
+        "extra_args, shared",
+        [
+            (None, True),
+            # mmap+mlock still builds the Metal buffers from the locked mapping.
+            (["--mlock"], True),
+            (["--load-mode", "mmap+mlock"], True),
+            (["--no-mmap"], False),
+            # "mlock" alone is a locked full host copy, not a mapping.
+            (["--load-mode", "mlock"], False),
+        ],
+    )
+    def test_a_mapped_tied_output_shares_the_files_pages_without_a_measurement(
+        self, tmp_path, monkeypatch, extra_args, shared
+    ):
+        """Mapped, the output's Metal buffer wraps token_embd's pages: no extra bytes.
+        Unmapped (--no-mmap) the duplicate is a real copy and stays charged."""
+        untied, _ = self._published(
+            tmp_path,
+            monkeypatch,
+            n_ctx = 0,
+            measured = None,
+            extra_args = extra_args,
+            budget_bytes = 20 * _GIB,
+        )
+        monkeypatch.setattr(
+            LlamaCppBackend, "_tied_output_bytes", staticmethod(lambda _path: 2 * _GIB)
+        )
+        tied, _ = self._published(
+            tmp_path,
+            monkeypatch,
+            n_ctx = 0,
+            measured = None,
+            extra_args = extra_args,
+            budget_bytes = 20 * _GIB,
+        )
+        assert untied > _FIT_MIN_CTX
+        assert (tied == untied) is shared
+        if not shared:
+            assert tied < untied
+
+    @pytest.mark.parametrize("load_args, shared", [([], True), (["--no-mmap"], False)])
+    def test_a_mapped_tied_drafter_shares_its_files_pages(
+        self, tmp_path, monkeypatch, load_args, shared
+    ):
+        """The separate drafter's tied output is the same mapped page story as the target's."""
+        import utils.hardware as hardware
+
+        monkeypatch.setattr(hardware, "is_apple_silicon", lambda: True)
+        draft = tmp_path / "draft-tied.gguf"
+        draft.write_bytes(b"x")
+        extra_args = ["--spec-type", "draft-simple", "--model-draft", str(draft), *load_args]
+
+        def published(tied_bytes):
+            monkeypatch.setattr(
+                LlamaCppBackend,
+                "_tied_output_bytes",
+                staticmethod(lambda path: tied_bytes if "draft" in str(path) else 0),
+            )
+            return self._published(
+                tmp_path,
+                monkeypatch,
+                n_ctx = 0,
+                measured = None,
+                extra_args = extra_args,
+                budget_bytes = 40 * _GIB,
+            )[0]
+
+        untied = published(0)
+        tied = published(2 * _GIB)
+        assert untied > _FIT_MIN_CTX
+        assert (tied == untied) is shared
+
     def test_a_placement_it_did_not_measure_keeps_the_fitter(self, tmp_path, monkeypatch):
         _, _, cmd = self._launched(
             tmp_path, monkeypatch, n_ctx = 32768, extra_args = ["--load-mode", "none"]
@@ -1754,3 +1838,192 @@ def test_every_forced_full_offload_arm_owes_the_fit_on_retry():
     ]
     assert len(arms) == 2, f"expected the two forced full-offload arms, found {len(arms)}"
     assert all(claims_full_offload(arm) for arm in arms)
+
+
+class TestFitterKeepsTheWiredHeadroom:
+    """Weights over the budget still launch, and llama.cpp's fitter places them against
+    ggml-metal's free report: recommendedMaxWorkingSetSize minus this process's own
+    allocations, blind to what WindowServer and other apps hold. On a 24 GB Mac that
+    packs a 27B Q4 to within 1 GiB of the 16 GiB ceiling and the display starves
+    (#9279), so the launch carries the measured gap as --fit-target."""
+
+    GiB = 1024**3
+    OVER_BUDGET = dict(real_fit = True, budget_bytes = 9 * 1024**3, weights_bytes = 16 * 1024**3)
+
+    @pytest.fixture
+    def fit_caps(self, monkeypatch):
+        probe = LlamaCppBackend.probe_server_capabilities.__func__
+        monkeypatch.setattr(
+            LlamaCppBackend,
+            "probe_server_capabilities",
+            classmethod(
+                lambda cls, binary = None: {
+                    **probe(cls, binary),
+                    "supports_fit_target": True,
+                    "supports_fit_ctx": True,
+                }
+            ),
+        )
+
+    @staticmethod
+    def _floor(monkeypatch, mib):
+        calls = []
+
+        def floor():
+            calls.append(1)
+            return mib
+
+        monkeypatch.setattr(LlamaCppBackend, "_metal_fit_target_floor_mib", staticmethod(floor))
+        return calls
+
+    @staticmethod
+    def _fit_target(cmd):
+        values = [cmd[i + 1] for i, t in enumerate(cmd) if t == "--fit-target"]
+        return values[-1] if values else None
+
+    @pytest.mark.parametrize("n_ctx", [0, 32768])
+    def test_an_over_budget_load_keeps_the_gap(self, tmp_path, monkeypatch, fit_caps, n_ctx):
+        self._floor(monkeypatch, 2764.8)
+        cmd = _launch(tmp_path, monkeypatch, n_ctx = n_ctx, **self.OVER_BUDGET)["cmd"]
+        assert "--fit" in cmd and cmd[cmd.index("--fit") + 1] == "on"
+        assert self._fit_target(cmd) == "2764"
+
+    def test_a_margin_below_llama_cpps_own_leaves_argv_alone(self, tmp_path, monkeypatch, fit_caps):
+        self._floor(monkeypatch, 0.0)
+        cmd = _launch(tmp_path, monkeypatch, n_ctx = 0, **self.OVER_BUDGET)["cmd"]
+        assert self._fit_target(cmd) is None
+
+    def test_a_pass_through_fit_target_still_wins(self, tmp_path, monkeypatch, fit_caps):
+        self._floor(monkeypatch, 2764.8)
+        cmd = _launch(
+            tmp_path,
+            monkeypatch,
+            n_ctx = 0,
+            extra_args = ["--fit-target", "4096"],
+            **self.OVER_BUDGET,
+        )["cmd"]
+        assert self._fit_target(cmd) == "4096"
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"gpu_memory_mode": "manual", "gpu_layers": 20},
+            {"paravirtual": True},
+        ],
+        ids = ["caller_owns_layers", "paravirtual_cpu_pin"],
+    )
+    def test_loads_that_do_not_place_on_metal_are_untouched(
+        self, tmp_path, monkeypatch, fit_caps, kwargs
+    ):
+        calls = self._floor(monkeypatch, 2764.8)
+        cmd = _launch(tmp_path, monkeypatch, n_ctx = 0, **self.OVER_BUDGET, **kwargs)["cmd"]
+        assert not calls
+        assert self._fit_target(cmd) is None
+
+    def test_off_apple_silicon_the_floor_is_never_read(self, tmp_path, monkeypatch, fit_caps):
+        calls = self._floor(monkeypatch, 2764.8)
+        _launch(tmp_path, monkeypatch, n_ctx = 0, metal = False, **self.OVER_BUDGET)
+        assert not calls
+
+    def test_the_floor_is_not_a_budget_price(self, tmp_path, monkeypatch, fit_caps):
+        """A VRAM slider change must not evict a Mac child over the machine's margin."""
+        self._floor(monkeypatch, 2764.8)
+        backend = _launch(tmp_path, monkeypatch, n_ctx = 0, **self.OVER_BUDGET)["backend"]
+        assert getattr(backend, "_vram_fraction_launched", None) is None
+
+    @staticmethod
+    def _fake_mlx(
+        monkeypatch,
+        seen_bytes,
+        available = True,
+    ):
+        mlx = _types.ModuleType("mlx")
+        core = _types.ModuleType("mlx.core")
+        core.metal = _types.SimpleNamespace(is_available = lambda: available)
+        core.device_info = lambda: {"max_recommended_working_set_size": seen_bytes}
+        mlx.core = core
+        monkeypatch.setitem(sys.modules, "mlx", mlx)
+        monkeypatch.setitem(sys.modules, "mlx.core", core)
+        # The working-set reader falls back to torch.mps; keep the host's torch out of it.
+        monkeypatch.setitem(sys.modules, "torch", None)
+
+    @pytest.mark.parametrize(
+        "seen_gib,headroom_gib,expected_mib",
+        [(16, 13.3, (16 - 13.3) * 1024), (16, 16, 0.0), (16, 20, 0.0)],
+    )
+    def test_the_floor_is_the_gap_between_what_ggml_sees_and_the_headroom(
+        self, monkeypatch, seen_gib, headroom_gib, expected_mib
+    ):
+        self._fake_mlx(monkeypatch, int(seen_gib * self.GiB))
+        monkeypatch.setattr(
+            LlamaCppBackend,
+            "_apple_metal_wired_ceiling_bytes",
+            staticmethod(lambda: int(headroom_gib * self.GiB)),
+        )
+        assert LlamaCppBackend._metal_fit_target_floor_mib() == pytest.approx(expected_mib, abs = 1)
+
+    @pytest.mark.parametrize(
+        "headroom,seen,available", [(0, 16, True), (13, 0, True), (13, 16, False)]
+    )
+    def test_an_unreadable_side_keeps_llama_cpps_margin(
+        self, monkeypatch, headroom, seen, available
+    ):
+        self._fake_mlx(monkeypatch, seen * self.GiB, available)
+        monkeypatch.setattr(
+            LlamaCppBackend,
+            "_apple_metal_wired_ceiling_bytes",
+            staticmethod(lambda: headroom * self.GiB),
+        )
+        assert LlamaCppBackend._metal_fit_target_floor_mib() == 0.0
+
+    def test_an_old_server_without_the_flag_gets_none(self):
+        assert "--fit-target" not in LlamaCppBackend._ctx_integrity_flags(
+            1, True, False, 0, 8192, {"supports_fit_target": False}, fit_target_floor_mib = 4096
+        )
+
+
+class TestAutoGivesUpContextBeforeLayers:
+    """Auto launches a fixed -c, so past the wired headroom llama.cpp's fitter can only
+    move layers to CPU. The context the headroom holds is already measured; Auto launches
+    at it while that stays at or above the Auto floor."""
+
+    GiB = 1024**3
+    # Footprint here is 6 GiB plus 64 KiB per token: the 9 GiB budget holds 49,152,
+    # 7.5 GiB of headroom 24,576, and 6.4 GiB less than the 8,192 floor.
+    FITS = dict(
+        real_fit = True,
+        budget_bytes = 9 * 1024**3,
+        weights_bytes = 1024**3,
+        kv_per_token = 64 * 1024,
+        native = 131072,
+    )
+
+    def _ctx(
+        self,
+        tmp_path,
+        monkeypatch,
+        wired_gib,
+        n_ctx = 0,
+    ):
+        cap = _launch(
+            tmp_path, monkeypatch, n_ctx = n_ctx, wired_bytes = int(wired_gib * self.GiB), **self.FITS
+        )
+        return int(_ctx_values(cap["cmd"])[-1]), cap["backend"]
+
+    def test_auto_launches_at_the_wired_ceiling(self, tmp_path, monkeypatch):
+        budget_ctx, _ = self._ctx(tmp_path, monkeypatch, 0)
+        ctx, backend = self._ctx(tmp_path, monkeypatch, 7.5)
+        assert _FIT_MIN_CTX <= ctx <= 24576 < budget_ctx
+        assert backend._max_context_length == ctx
+
+    def test_ample_headroom_keeps_the_budget_context(self, tmp_path, monkeypatch):
+        assert self._ctx(tmp_path, monkeypatch, 20)[0] == self._ctx(tmp_path, monkeypatch, 0)[0]
+
+    def test_a_ceiling_under_the_auto_floor_leaves_it_to_the_fitter(self, tmp_path, monkeypatch):
+        """Under 8,192 the context is worth more than the layers the fitter would move."""
+        assert self._ctx(tmp_path, monkeypatch, 6.4)[0] == self._ctx(tmp_path, monkeypatch, 0)[0]
+
+    def test_a_hand_set_context_is_not_lowered(self, tmp_path, monkeypatch):
+        """The explicit path refuses against the wired limit instead (#10804)."""
+        with pytest.raises(RuntimeError, match = "24,576"):
+            self._ctx(tmp_path, monkeypatch, 7.5, n_ctx = 32768)

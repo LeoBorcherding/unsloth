@@ -238,6 +238,47 @@ def test_a_quant_type_the_pinned_gguf_package_predates_is_still_charged(backend,
     assert expected <= last < expected + 32
 
 
+def _write_reordered_gguf(path: Path, ggml_type: int) -> Path:
+    """token_embd described first and stored first, but the descriptor after it is stored
+    LAST: offsets, not descriptor order, say where token_embd's data ends."""
+    sizes = {"token_embd.weight": 256 * 64 // 256 * 144, "blk.0.ffn_down.weight": 4096}
+    sizes["blk.0.attn_q.weight"] = 2048
+    data_order = ["token_embd.weight", "blk.0.ffn_down.weight", "blk.0.attn_q.weight"]
+    offsets, at = {}, 0
+    for name in data_order:
+        offsets[name] = at
+        at += -(-sizes[name] // 32) * 32
+    shapes = {
+        "token_embd.weight": (256, 64),
+        "blk.0.attn_q.weight": (256, 8),
+        "blk.0.ffn_down.weight": (256, 16),
+    }
+    infos = bytearray()
+    for name in ["token_embd.weight", "blk.0.attn_q.weight", "blk.0.ffn_down.weight"]:
+        raw = name.encode()
+        infos += struct.pack("<Q", len(raw)) + raw + struct.pack("<I", 2)
+        infos += struct.pack("<QQ", *shapes[name]) + struct.pack("<I", ggml_type)
+        infos += struct.pack("<Q", offsets[name])
+    key = b"general.alignment"
+    kv = struct.pack("<Q", len(key)) + key + struct.pack("<II", 4, 32)
+    body = struct.pack("<II", _GGUF_MAGIC, 3) + struct.pack("<QQ", 3, 1) + kv + bytes(infos)
+    path.write_bytes(body + b"\0" * ((-len(body)) % 32) + b"\0" * at)
+    return path
+
+
+def test_an_unknown_quant_type_is_bounded_by_file_order_not_descriptor_order(backend, tmp_path):
+    from gguf.constants import GGML_QUANT_SIZES
+
+    expected = 256 * 64 // 256 * 144
+    known = _write_reordered_gguf(tmp_path / "known.gguf", _TYPE_Q4_K)
+    assert backend._tied_output_bytes(str(known)) == expected
+    unknown = _write_reordered_gguf(tmp_path / "unknown.gguf", max(GGML_QUANT_SIZES) + 1)
+    assert backend._tied_output_bytes(str(unknown)) == expected
+    assert dict(backend._gguf_scan_host_pinned_tensors(str(unknown))) == {
+        "token_embd.weight": expected
+    }
+
+
 def test_an_encoder_only_architecture_is_charged_nothing(backend, tmp_path):
     """BERT ships token_embd and no output.weight, yet nothing is duplicated (bert.cpp)."""
     path = _write_gguf(
@@ -406,7 +447,7 @@ def test_the_budget_sizes_from_what_lands_in_vram(backend, tied_gguf):
 
     src = inspect.getsource(backend)
     assert (
-        "+ self._tied_output_bytes(model_path)" in src
+        "+ LlamaCppBackend._tied_output_vram_bytes(" in src
     ), "the context budget no longer charges the tied-embedding duplicate"
     assert "- _host_pinned" in src, "the context budget no longer discounts host-pinned embeddings"
     assert "_host_pinned_vram_discount(" in src
@@ -791,7 +832,7 @@ def test_every_site_that_prices_the_weights_carries_both_corrections(backend):
     import inspect
 
     src = inspect.getsource(backend.load_model)
-    assert "_tied_output_charge = self._tied_output_bytes(model_path)" in src
+    assert "_tied_output_charge = self._tied_output_vram_bytes(" in src
     assert "weights_size = gguf_size + _tied_output_charge" in src
     assert "_model_weight_vram_bytes = max(0, weights_size - _host_pinned)" in src
     assert "model_size = _model_weight_vram_bytes + mmproj_size" in src
@@ -952,18 +993,48 @@ def test_the_emitters_do_not_agree_on_pinning_the_drafter(monkeypatch, tmp_path)
     )
 
 
-def test_a_cpu_pinned_drafter_is_not_charged_the_tied_duplicate(backend, mib_embd_pair):
-    """-ngld 0 reuses token_embd for the tied output: tied and untied drafters cost the same."""
-    tied, untied = mib_embd_pair
+_TYPE_F16 = 1
+
+
+@pytest.mark.parametrize(
+    "ggml_type, charged",
+    [
+        # CPU_REPACK (and AMX/KleidiAI/IME) take the output's MUL_MAT but not the input's
+        # GET_ROWS, so the tied output gets its own repacked copy in host RAM.
+        (_TYPE_Q4_K, True),
+        # KleidiAI repacks F32 weights too.
+        (_TYPE_F32, True),
+        # No CPU extra buffer accepts F16: input and output share one CPU tensor.
+        (_TYPE_F16, False),
+    ],
+)
+def test_a_cpu_pinned_drafter_is_charged_the_duplicate_a_repack_allocates(
+    backend, tmp_path, ggml_type, charged
+):
+    rows = (256, 1024)
+    paths = []
+    for name, tensors in (
+        ("tied", [("token_embd.weight", rows), ("blk.0.attn_q.weight", (256, 8))]),
+        (
+            "untied",
+            [
+                ("token_embd.weight", rows),
+                ("output.weight", rows),
+                ("blk.0.attn_q.weight", (256, 8)),
+            ],
+        ),
+    ):
+        paths.append(_write_gguf(tmp_path / f"{name}.gguf", tensors, ggml_type = ggml_type))
     instance = object.__new__(backend)
     instance._get_gguf_size_bytes = lambda _path: 8 * 1024**3
     # Synthetic GGUF cannot size draft KV; hold it flat.
     instance._mtp_draft_kv_bytes = lambda *_a, **_kw: 0
-    priced = [
-        instance._cpu_resident_draft_bytes(4096, drafter_path = str(path)) for path in (tied, untied)
-    ]
-    assert None not in priced
-    assert priced[0] == priced[1], "the tied drafter is charged a duplicate it never allocates"
+    tied, untied = (
+        instance._cpu_resident_draft_bytes(4096, drafter_path = str(path)) for path in paths
+    )
+    duplicate = backend._tied_output_bytes(str(paths[0]))
+    assert duplicate > 0
+    assert tied - untied == (duplicate if charged else 0)
 
 
 def test_a_cpu_device_target_is_not_charged_the_tied_duplicate(backend):
@@ -1151,3 +1222,26 @@ def test_the_load_mode_fit_removes_a_lazy_table_once():
     footprint -= table - min(table, embd + table)  # lazy_read_bytes left for the footprint
     spill = max(0, footprint - host_only - vram) + host_only
     assert spill == (device - vram) + embd
+
+
+@pytest.mark.parametrize(
+    "extra_args, env, draft_model",
+    [
+        (["-ot", "=Vulkan0"], {}, False),
+        (["--override-tensor=,=CUDA0"], {}, False),
+        ([], {"LLAMA_ARG_OVERRIDE_TENSOR": "=CUDA0"}, False),
+        (["-otd", "=Vulkan0"], {}, True),
+    ],
+)
+def test_an_empty_override_pattern_matches_every_tensor(
+    backend, tied_gguf, extra_args, env, draft_model
+):
+    """arg.cpp splits at the first '=' and keeps an empty pattern, and std::regex_search
+    with an empty regex matches every tensor, token_embd.weight included."""
+    assert backend._override_moves_host_pinned(extra_args, env, draft_model = draft_model)
+    assert (
+        backend._host_pinned_vram_discount(
+            str(tied_gguf), extra_args, env = env, draft_model = draft_model
+        )
+        == 0
+    )
