@@ -252,6 +252,10 @@ def map_error(status: int, detail: str) -> NativeError:
 def _pick_device(binary: str, env: dict[str, str]) -> str:
     from core.inference.llama_cpp import LlamaCppBackend
 
+    # Free rows are nvidia-smi (PCI) indices. main.py only setdefaults this order, so an inherited
+    # override would number CUDA devices fastest-first; with no mask to reinterpret, pin it (#5025).
+    if not env.get("CUDA_VISIBLE_DEVICES"):
+        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     devices = LlamaCppBackend._enumerated_gpu_devices(binary, env)
     if not devices:
         raise NativeError("llama.cpp sees no usable GPU under this Studio's device visibility.")
