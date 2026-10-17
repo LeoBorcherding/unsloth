@@ -6,14 +6,15 @@
         "endpoint": "",
         "provider_type": "openai",
         "extra_headers": {},
-        "extra_body": {}
+        "extra_body": {},
+        "is_local": true
       }
     ],
     "mcp_providers": [],
     "model_configs": [
       {
         "alias": "provider_column",
-        "model": "",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
         "provider": "provider_1",
         "inference_parameters": {
           "temperature": 0.7
@@ -112,7 +113,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_2",
-        "markdown": "##### Chunking settings:\n\n- **Chunk size**: how much text per chunk\n- **Chunk overlap**: shared text between neighboring chunks to preserve context\n\n##### Sampling settings:\n\n- **Ordered**: keep original document order\n- **Shuffle**: randomize chunk order\n- **Selection index / selection settings**: choose which part/subset of seed data to use",
+        "markdown": "##### Chunking settings:\n\n- **Chunk size**: how much text per chunk\n- **Chunk overlap**: shared text between neighboring chunks to preserve context\n\n##### Sampling settings:\n\n- **Ordered**: keep original document order. Asking for more rows than there are chunks starts over at the first chunk, so the same chunk gets more than one question\n- **Shuffle**: randomize chunk order\n- **Selection index / selection settings**: choose which part/subset of seed data to use",
         "note_color": "#F3E8FF",
         "note_opacity": "35"
       },
