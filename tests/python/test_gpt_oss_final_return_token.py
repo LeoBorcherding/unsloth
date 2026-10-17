@@ -62,3 +62,15 @@ def test_earlier_turns_and_generation_prompt_keep_end():
     assert "<|return|>" not in text
     prompt = _render([USER, REPLY, {"role": "user", "content": "Bye"}], add_generation_prompt = True)
     assert prompt == text + "<|start|>assistant"
+
+
+@pytest.mark.parametrize("add_generation_prompt", [True, False])
+def test_an_earlier_answer_with_thinking_stays_final(add_generation_prompt):
+    """Earlier turns drop the thinking, not the answer: it must not be relabelled as analysis."""
+    earlier = {"role": "assistant", "content": "Hello!", "thinking": "Greet back."}
+    messages = [USER, earlier, {"role": "user", "content": "Bye"}]
+    if not add_generation_prompt:
+        messages.append({"role": "assistant", "content": "See you."})
+    text = _render(messages, add_generation_prompt)
+    assert "<|start|>assistant<|channel|>final<|message|>Hello!<|end|><|start|>user" in text
+    assert "<|channel|>analysis" not in text and "Greet back." not in text
