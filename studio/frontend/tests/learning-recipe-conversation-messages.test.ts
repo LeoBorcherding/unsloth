@@ -64,3 +64,13 @@ test("Multi-Turn Chat writes a flat messages list of role/content turns", () => 
     payload.ui.nodes.some((node: { id: string }) => node.id === "messages"),
   );
 });
+
+test("Multi-Turn Chat runs on the local model, not a hardcoded endpoint", () => {
+  const payload = JSON.parse(
+    readFileSync(new URL("conversation.json", RECIPES_DIR), "utf8"),
+  );
+  for (const provider of payload.recipe.model_providers) {
+    assert.equal(provider.is_local, true);
+    assert.equal(provider.endpoint, "");
+  }
+});

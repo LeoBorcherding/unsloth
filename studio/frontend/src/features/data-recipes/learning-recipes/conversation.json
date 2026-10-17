@@ -3,17 +3,18 @@
     "model_providers": [
       {
         "name": "provider_1",
-        "endpoint": "https://openrouter.ai/api/v1",
+        "endpoint": "",
         "provider_type": "openai",
         "extra_headers": {},
-        "extra_body": {}
+        "extra_body": {},
+        "is_local": true
       }
     ],
     "mcp_providers": [],
     "model_configs": [
       {
         "alias": "model_1",
-        "model": "mistralai/ministral-8b-2512",
+        "model": "",
         "provider": "provider_1",
         "inference_parameters": {
           "temperature": 0.7,
