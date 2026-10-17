@@ -17,8 +17,6 @@ _TESTS_DIR = REPO_ROOT / "tests"
 # Directories under tests/ that no shard runs, and what runs them instead.
 _NOT_IN_ANY_SHARD = {
     "tests/qlora": "GPU-bound: needs real weights",
-    "tests/saving": "GPU-bound: needs real weights",
-    "tests/utils": "a helpers folder, not a suite",
     "tests/sh": "the shell suite, run by the shell-installer-tests job",
     "tests/vllm_compat": "multi-version drift canary, run by version-compat-ci.yml",
     "tests/version_compat": "multi-version drift canary, run by version-compat-ci.yml",

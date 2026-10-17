@@ -4,6 +4,7 @@ from typing import Dict
 
 import pytest
 import torch
+from real_accelerator import has_real_accelerator
 
 pytest.importorskip(
     "torchao.quantization.qat",
@@ -18,7 +19,11 @@ from torchao.quantization.qat.fake_quantizer import (
     IntxFakeQuantizer,
 )
 
-pytestmark = pytest.mark.gpu
+# The skip covers the CPU shard, whose own `-m` replaces the default marker filter.
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.skipif(not has_real_accelerator(), reason = "loads unsloth/Qwen3-1.7B"),
+]
 
 
 class _CountingFakeQuantizer(torch.nn.Module):
