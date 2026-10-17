@@ -19,7 +19,6 @@ const DATETIME_UNITS = [
   "minute",
   "hour",
   "day",
-  "week",
   "month",
   "year",
 ];
