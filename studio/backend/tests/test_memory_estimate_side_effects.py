@@ -989,3 +989,45 @@ class TestNoDeviceIsTouched:
         # equality: a CPU-only runner answers is_available() False and never reaches
         # device_count, and a Vulkan build short-circuits before either.
         assert set(enumerated) <= {"is_available", "device_count"}, enumerated
+
+
+# IA-1. The offline resolve is not process-wide
+
+
+class TestTheOfflineResolveStaysOnItsOwnRequest:
+    """A cache miss resolves offline, but only for itself."""
+
+    def test_another_thread_stays_online_while_an_estimate_resolves(self, monkeypatch):
+        # force_hf_offline flips os.environ and huggingface_hub's constant for the whole
+        # process, so a /load or training start downloading in another thread while the
+        # panel prices a model gets LocalEntryNotFoundError for anything not yet cached.
+        import os
+
+        import huggingface_hub.constants as _hf_constants
+
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising = False)
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising = False)
+        monkeypatch.setattr(_hf_constants, "HF_HUB_OFFLINE", False)
+        _pin_on_disk(monkeypatch)
+        seen_elsewhere = []
+
+        def _fake_from_identifier(**kwargs):
+            def _other_request():
+                seen_elsewhere.append(
+                    (_hf_constants.is_offline_mode(), os.environ.get("HF_HUB_OFFLINE"))
+                )
+
+            other = threading.Thread(target = _other_request)
+            other.start()
+            other.join()
+            return None
+
+        monkeypatch.setattr(ri.ModelConfig, "from_identifier", staticmethod(_fake_from_identifier))
+
+        ri._cached_estimate_config("org/Model", None, None, False)
+
+        assert seen_elsewhere, "the resolution never ran"
+        assert seen_elsewhere[0] == (False, None), (
+            "another thread saw the Hub offline while an estimate resolved: "
+            f"(is_offline_mode, HF_HUB_OFFLINE) = {seen_elsewhere[0]}"
+        )
