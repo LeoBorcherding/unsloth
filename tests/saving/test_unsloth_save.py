@@ -4,11 +4,16 @@ import shutil
 import tempfile
 import pytest
 import importlib
+from real_accelerator import has_real_accelerator
 
 from unsloth import FastLanguageModel, FastModel
 
 # Every param downloads and merges a checkpoint on the accelerator; CI runs it under `-m gpu`.
-pytestmark = pytest.mark.gpu
+# The skip covers the CPU shard, whose own `-m` replaces the default marker filter.
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.skipif(not has_real_accelerator(), reason = "downloads and merges checkpoints"),
+]
 
 # One model per save path, the smallest that still exercises it: this file runs in the default
 # `pytest tests/` walk, so every entry is paid by anyone running the suite.

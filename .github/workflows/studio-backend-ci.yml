@@ -459,8 +459,6 @@ jobs:
               --ignore=tests/studio
               --ignore=tests/python
               --ignore=tests/qlora
-              --ignore=tests/saving
-              --ignore=tests/utils
               --ignore=tests/sh
               --ignore=tests/vllm_compat
               --ignore=tests/version_compat
@@ -544,7 +542,7 @@ jobs:
           # Skip lazy compilation work the unsloth import chain wants to
           # do at import time on a real GPU.
           UNSLOTH_COMPILE_DISABLE: '1'
-        # --ignore: GPU-bound dirs, tests/sh, tests/utils, and the version-compat canaries (own workflow).
+        # --ignore: tests/qlora (GPU-bound), tests/sh, and the version-compat canaries (own workflow).
         # Spoofing and load_freeze files run isolated in later steps.
         #
         # The pytest steps below stay serial: hardware-spoof files mutate module globals.

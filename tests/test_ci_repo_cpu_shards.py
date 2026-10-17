@@ -17,8 +17,6 @@ _TESTS_DIR = REPO_ROOT / "tests"
 # Directories under tests/ that no shard runs, and what runs them instead.
 _NOT_IN_ANY_SHARD = {
     "tests/qlora": "GPU-bound: needs real weights",
-    "tests/saving": "GPU-bound: needs real weights",
-    "tests/utils": "a helpers folder, not a suite",
     "tests/sh": "the shell suite, run by the shell-installer-tests job",
     "tests/vllm_compat": "multi-version drift canary, run by version-compat-ci.yml",
     "tests/version_compat": "multi-version drift canary, run by version-compat-ci.yml",
@@ -80,7 +78,7 @@ def _isolated_paths() -> list:
 
 
 def _test_files() -> list:
-    return sorted(str(path.relative_to(REPO_ROOT)) for path in _TESTS_DIR.rglob("test_*.py"))
+    return sorted(path.relative_to(REPO_ROOT).as_posix() for path in _TESTS_DIR.rglob("test_*.py"))
 
 
 class TestEveryTestFileLandsInExactlyOneShard:
