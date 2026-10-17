@@ -242,6 +242,24 @@ def test_local_child_prioritizes_failed_turn_over_progress():
         bridge._result_text(output)
 
 
+def test_local_child_returns_a_completed_turn_despite_a_retried_reconnect():
+    events = [
+        {"type": "thread.started", "thread_id": "t"},
+        {"type": "turn.started"},
+        {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected)"},
+        {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "Done: fixed the bug in foo.py"},
+        },
+        {"type": "turn.completed", "usage": {}},
+    ]
+    output = "\n".join(json.dumps(event) for event in events)
+    assert bridge._result_text(output) == "Done: fixed the bug in foo.py"
+    # Without the completed turn the error still stands.
+    with pytest.raises(RuntimeError, match = "Reconnecting"):
+        bridge._result_text("\n".join(json.dumps(event) for event in events[:-1]))
+
+
 def test_auto_route_result_shows_the_last_command_the_child_ran():
     events = [
         {
