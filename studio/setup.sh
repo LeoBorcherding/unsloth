@@ -2695,7 +2695,7 @@ fi
 
 # ── Python venv + deps ──
 
-[ -d "$REPO_ROOT/.venv" ] && rm -rf "$REPO_ROOT/.venv"
+# Not $REPO_ROOT/.venv: in a source checkout that is the developer's own venv.
 [ -d "$REPO_ROOT/.venv_overlay" ] && rm -rf "$REPO_ROOT/.venv_overlay"
 [ -d "$REPO_ROOT/.venv_t5" ] && rm -rf "$REPO_ROOT/.venv_t5"
 [ -d "$REPO_ROOT/.venv_t5_530" ] && rm -rf "$REPO_ROOT/.venv_t5_530"
