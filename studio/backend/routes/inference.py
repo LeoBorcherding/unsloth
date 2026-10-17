@@ -48045,6 +48045,9 @@ async def _openai_passthrough_stream_admitted(
                 StreamToolCallHealer(_allowed_tools, body.get("tools")) if _allowed_tools else None
             )
             healed_call_index = 0
+            # Set once a native call follows a healed one: the healer is dormant
+            # from then on, so later native deltas are remapped in the main loop.
+            native_index_offset = 0
 
             def _synthetic_finish_line() -> str:
                 healed = healer is not None and healer.healed
@@ -48109,8 +48112,34 @@ async def _openai_passthrough_stream_admitted(
                     )
                 return stall_timeout_s
 
+            def _remap_native_tool_calls(chunk_data: dict, raw_line: str) -> list:
+                choices = chunk_data.get("choices")
+                if not (isinstance(choices, list) and choices and isinstance(choices[0], dict)):
+                    return [raw_line]
+                choice = choices[0]
+                delta = choice.get("delta")
+                if not (isinstance(delta, dict) and delta.get("tool_calls")):
+                    return [raw_line]
+                if payload.parallel_tool_calls is False:
+                    # A healed call already consumed the single allowed
+                    # slot; the upstream SSE cap keeps native index 0, so
+                    # drop the native call here or the client gets two.
+                    del delta["tool_calls"]
+                    if delta or choice.get("finish_reason") or chunk_data.get("usage"):
+                        return ["data: " + json.dumps(chunk_data, ensure_ascii = False)]
+                    return []
+                # A healed call already went out on index 0..n-1; OpenAI
+                # clients merge tool-call deltas by index, so shift the
+                # native calls into the next indexes or they would merge
+                # into the healed call.
+                for tc in delta["tool_calls"]:
+                    if isinstance(tc, dict) and isinstance(tc.get("index"), int):
+                        tc["index"] += native_index_offset
+                return ["data: " + json.dumps(chunk_data, ensure_ascii = False)]
+
             def _heal_transform(chunk_data: dict, raw_line: str) -> list:
                 """SSE lines to emit in place of one upstream line (healing on)."""
+                nonlocal native_index_offset
                 choices = chunk_data.get("choices")
                 if not (isinstance(choices, list) and choices and isinstance(choices[0], dict)):
                     return [raw_line]
@@ -48122,22 +48151,8 @@ async def _openai_passthrough_stream_admitted(
                     # text (it preceded the call) and relay verbatim from here on.
                     lines = _healer_sse_lines(healer.structured_tool_call_seen())
                     if healed_call_index:
-                        if payload.parallel_tool_calls is False:
-                            # A healed call already consumed the single allowed
-                            # slot; the upstream SSE cap keeps native index 0, so
-                            # drop the native call here or the client gets two.
-                            del delta["tool_calls"]
-                            if delta or choice.get("finish_reason") or chunk_data.get("usage"):
-                                lines.append("data: " + json.dumps(chunk_data, ensure_ascii = False))
-                            return lines
-                        # A healed call already went out on index 0..n-1; OpenAI
-                        # clients merge tool-call deltas by index, so shift the
-                        # native calls into the next indexes or they would merge
-                        # into the healed call.
-                        for tc in delta["tool_calls"]:
-                            if isinstance(tc, dict) and isinstance(tc.get("index"), int):
-                                tc["index"] += healed_call_index
-                        return lines + ["data: " + json.dumps(chunk_data, ensure_ascii = False)]
+                        native_index_offset = healed_call_index
+                        return lines + _remap_native_tool_calls(chunk_data, raw_line)
                     return lines + [raw_line]
                 content = delta.get("content")
                 finish = choice.get("finish_reason")
@@ -48458,6 +48473,12 @@ async def _openai_passthrough_stream_admitted(
                         and not saw_stream_error
                     ):
                         out_lines = _heal_transform(chunk_data, raw_line)
+                    elif (
+                        native_index_offset
+                        and isinstance(chunk_data, dict)
+                        and not saw_stream_error
+                    ):
+                        out_lines = _remap_native_tool_calls(chunk_data, raw_line)
                     else:
                         out_lines = [raw_line]
                     # If a trailing usage-only chunk (include_usage) arrives before
