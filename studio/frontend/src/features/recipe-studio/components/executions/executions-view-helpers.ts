@@ -159,6 +159,20 @@ export function formatMetricValue(value: number | null | undefined): string {
   return value.toLocaleString();
 }
 
+const PREPARING_STAGE_LABELS: Record<string, string> = {
+  source: "Reading the seed data",
+  sampling: "Sampling seed rows",
+  dag: "Setting up columns",
+  // biome-ignore lint/style/useNamingConvention: backend stage name
+  column_config: "Setting up columns",
+  healthcheck: "Checking the models",
+};
+
+/** What a run is doing before its first progress numbers arrive (backend `stage`). */
+export function preparingStageLabel(stage: string | null | undefined): string {
+  return (stage && PREPARING_STAGE_LABELS[stage]) || "Starting the run";
+}
+
 export function parseModelUsageRows(
   value: Record<string, unknown> | null,
 ): ModelUsageRow[] {
