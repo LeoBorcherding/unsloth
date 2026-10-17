@@ -1108,6 +1108,33 @@ def test_write_codex_parent_overlay_refreshes_fallback_copies(tmp_path, monkeypa
     assert (overlay / "history.jsonl").read_text() == "session state\n"
 
 
+def test_write_codex_parent_overlay_shares_auth_without_symlinks(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "user-codex"
+    source.mkdir()
+    auth = source / "auth.json"
+    auth.write_text('{"tokens": {"refresh_token": "RT-1"}}')
+    monkeypatch.setenv("CODEX_HOME", str(source))
+
+    def deny_symlink(*args, **kwargs):
+        raise OSError("symlinks unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", deny_symlink)
+    overlay = start.write_codex_parent_overlay(tmp_path / "managed" / "parent")
+    # Codex rewrites auth.json in place on a token refresh.
+    with open(overlay / "auth.json", "w") as file:
+        file.write('{"tokens": {"refresh_token": "RT-2"}}')
+    assert auth.read_text() == '{"tokens": {"refresh_token": "RT-2"}}'
+    assert capsys.readouterr().err == ""
+
+    def deny_link(*args, **kwargs):
+        raise OSError("hard links unavailable")
+
+    monkeypatch.setattr(start.os, "link", deny_link)
+    overlay = start.write_codex_parent_overlay(overlay)
+    assert (overlay / "auth.json").read_text() == auth.read_text()
+    assert "plain `codex` may ask you to log in again" in capsys.readouterr().err
+
+
 def test_create_directory_junction_uses_windows_mklink(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(start.os, "name", "nt")
