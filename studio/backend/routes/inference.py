@@ -25823,14 +25823,23 @@ async def stt_unload(
         # actually served by the Transformers fallback, so unload must target
         # that same engine or the resident model is never freed.
         engines = [_resolve_serving_stt_engine(engine)]
+    # A managed caller releases only the model the visibility check approved. Unpinned, an
+    # engine still mid-load (nothing resident yet, so nothing hidden) let the queued unload
+    # take the lock after the owner's load and release the owner's model.
+    pinned: Optional[dict[str, str]] = None
     if account_access.managed_account():
-        engines = [
-            candidate
-            for candidate in (engines or ["transformers", "gguf", "mtmd", "audiocpp"])
-            if not account_access.resident_hidden(
-                f"stt:{candidate}", _stt_sidecar_for(candidate).loaded_model
-            )
-        ]
+        pinned = {}
+        for candidate in engines or ["transformers", "gguf", "mtmd", "audiocpp"]:
+            sidecar = _stt_sidecar_for(candidate)
+            loaded = sidecar.loaded_model
+            if (
+                loaded is None
+                or sidecar.is_loading()
+                or account_access.resident_hidden(f"stt:{candidate}", loaded)
+            ):
+                continue
+            pinned[candidate] = model or loaded
+        engines = list(pinned)
     from core.inference.stt_registry import STT_ENGINES
 
     targets = list(STT_ENGINES if engines is None else engines)
@@ -25843,9 +25852,16 @@ async def stt_unload(
     # is not, and only the former takes it positionally. Registry-side it sits
     # behind a `*`, so passing it positionally raised TypeError, which is the
     # state a fresh process is in before anything has loaded.
-    failed: list[str] = await asyncio.to_thread(
-        unload_stt, engines, expected_model = model, wait = wait
-    )
+    if pinned is not None:
+        failed: list[str] = []
+        for name, expected in pinned.items():
+            failed += await asyncio.to_thread(
+                unload_stt, [name], expected_model = expected, wait = wait
+            )
+    else:
+        failed = await asyncio.to_thread(
+            unload_stt, engines, expected_model = model, wait = wait
+        )
     if failed:
         raise HTTPException(
             status_code = 500,
