@@ -19268,6 +19268,10 @@ async def _load_model_impl(
                 request, config, False if anonymous_hf_access else request.hf_token
             )
 
+        # The inference worker is not bound to the account, so refuse before anything is torn down.
+        if not config.is_gguf and request.trust_remote_code and managed_remote_code_refused():
+            raise HTTPException(status_code = 403, detail = MANAGED_REMOTE_CODE_REFUSAL)
+
         # Config-resolved dedupe must run first: a duplicate must not refuse/cancel active chats.
         # Refusal is non-destructive; defer forced cancellation past every remaining rejection.
         account_access.require_idle_other_accounts()
@@ -19791,9 +19795,6 @@ async def _load_model_impl(
         speech_codec_kw = (
             {"audio_codec_path": speech_codec_path} if speech_codec_path is not None else {}
         )
-        # The inference worker is not bound to the account, so refuse here.
-        if request.trust_remote_code and managed_remote_code_refused():
-            raise HTTPException(status_code = 403, detail = MANAGED_REMOTE_CODE_REFUSAL)
         try:
             success = await asyncio.to_thread(
                 backend.load_model,

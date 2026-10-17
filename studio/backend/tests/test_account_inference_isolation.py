@@ -809,3 +809,60 @@ def test_the_chat_load_refuses_managed_remote_code_before_the_worker_starts():
     check = src.index("managed_remote_code_refused()")
     assert check < src.index("backend.load_model,")
     assert "MANAGED_REMOTE_CODE_REFUSAL" in src[check : check + 200]
+
+
+def test_managed_remote_code_load_is_refused_before_anything_is_torn_down(monkeypatch):
+    from contextlib import nullcontext
+
+    from utils.security import consent
+
+    monkeypatch.delenv(consent.MANAGED_REMOTE_CODE_OVERRIDE, raising = False)
+    torn_down = []
+    resident = SimpleNamespace(_openai_advertised_id = "alias", active_model_name = "org/resident")
+    config = SimpleNamespace(
+        identifier = "org/public",
+        display_name = "org/public",
+        is_gguf = False,
+        is_lora = False,
+        is_vision = False,
+        is_audio = False,
+        is_local = False,
+        gguf_variant = None,
+    )
+
+    async def _inline(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    async def _record(name, *args, **kwargs):
+        torn_down.append(name)
+
+    monkeypatch.setattr(inference.asyncio, "to_thread", _inline)
+    monkeypatch.setattr(access, "require_model_access", lambda *a, **k: None)
+    monkeypatch.setattr(
+        inference, "ModelConfig", SimpleNamespace(from_identifier = lambda **k: config)
+    )
+    monkeypatch.setattr(inference, "_hf_offline_if_unreachable_for", lambda *a: nullcontext())
+    monkeypatch.setattr(inference, "get_inference_backend", lambda: resident)
+    for name in (
+        "_retire_kept_models",
+        "_unload_llama_before_standard_load",
+        "_unload_npu_before_local_load",
+        "_wait_for_model_switch_idle",
+    ):
+        monkeypatch.setattr(inference, name, lambda *a, _n = name, **k: _record(_n, *a, **k))
+
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(
+            arun_as(
+                BOB,
+                inference._load_model_impl(
+                    LoadRequest(model_path = "org/public", trust_remote_code = True),
+                    None,
+                    "bob",
+                    on_reload_confirmed = lambda *, cancel: torn_down.append(("chats", cancel)),
+                ),
+            )
+        )
+    assert err.value.status_code == 403
+    assert not [t for t in torn_down if t != ("chats", False)]
+    assert resident._openai_advertised_id == "alias"
