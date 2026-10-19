@@ -144,3 +144,28 @@ def test_unbreakable_run_keeps_the_overlap():
     for prev, nxt in zip(chunks, chunks[1:]):
         assert prev.page_char_end - nxt.page_char_start == 64 * 4
     assert chunks[0].page_char_start == 0 and chunks[-1].page_char_end == len(text)
+
+
+def test_unbreakable_run_counts_about_twice_per_window():
+    # llama-server counts over HTTP, one /tokenize per call: a uniform run must not pay a
+    # fresh search for every overlap-sized window.
+    calls = Counter()
+
+    def count(text):
+        calls["n"] += 1
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(300_000)
+    chunk_pages([_page(text)], max_tokens = 512, overlap = 64, count = count)
+    assert calls["n"] < 4_000
+
+
+def test_unbreakable_run_keeps_a_high_overlap():
+    def count(text):
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(2_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 100, overlap = 99, count = count)
+    assert all(c.token_count <= 100 for c in chunks)
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert prev.page_char_end - nxt.page_char_start == 99 * 4
