@@ -92,12 +92,14 @@ def test_local_csv_seed_keeps_its_values_as_written(monkeypatch, tmp_path):
     # The unnamed index column triggers the rewrite.
     path.write_text(",zip,country,qty,note\n0,01234,NA,3,None\n1,90210,DE,,N/A\n", encoding = "utf-8")
 
+    assert seed_route._drop_csv_index_column(path) == ["column0"]
     rows = seed_route._read_preview_rows_from_local_file(path, 10)
 
     assert [row["zip"] for row in rows] == ["01234", "90210"]
     assert [row["country"] for row in rows] == ["NA", "DE"]
     assert [row["note"] for row in rows] == ["None", "N/A"]
-    assert rows[0]["qty"] == "3"
+    # The run's DuckDB read types qty as a number.
+    assert [row["qty"] for row in rows] == [3, None]
     assert path.read_text(encoding = "utf-8").splitlines() == [
         "zip,country,qty,note",
         "01234,NA,3,None",
@@ -145,6 +147,106 @@ def test_local_parquet_seed_preview_reads_typed_rows(monkeypatch, tmp_path):
         {"question": "q0", "qty": 0, "tags": ["a"]},
         {"question": "q1", "qty": 1, "tags": ["b", "c"]},
     ]
+
+
+def _run_csv_columns(path: Path) -> list[str]:
+    duckdb = pytest.importorskip("duckdb")
+    with duckdb.connect() as conn:
+        return [row[0] for row in conn.execute(f"DESCRIBE SELECT * FROM '{path}'").fetchall()]
+
+
+def _upload_seed(monkeypatch, tmp_path, filename: str, content: str):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    monkeypatch.setattr(seed_route, "SEED_UPLOAD_DIR", tmp_path / "seed-uploads")
+    from models.data_recipe import SeedInspectUploadRequest
+
+    return seed_route.inspect_seed_upload(
+        SeedInspectUploadRequest(
+            filename = filename,
+            content_base64 = base64.b64encode(content.encode("utf-8")).decode("ascii"),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "columns"),
+    [
+        ("name;age;city\nAlice;30;Paris\nBob;40;Rome\n", ["name", "age", "city"]),
+        ("a,a,b\n1,2,3\n", ["a", "a_1", "b"]),
+        ("Unnamed: notes,text\nn1,t1\n", ["Unnamed: notes", "text"]),
+        (",name,,age\n,Alice,x1,30\n,Bob,x2,40\n", ["column0", "name", "column2", "age"]),
+        (",name,qty\n5,Alice,1\n9,Bob,2\n", ["column0", "name", "qty"]),
+    ],
+)
+def test_csv_seed_preview_has_the_columns_the_run_reads(monkeypatch, tmp_path, content, columns):
+    response = _upload_seed(monkeypatch, tmp_path, "seed.csv", content)
+    stored = Path(response.resolved_path)
+
+    assert stored.read_text(encoding = "utf-8") == content
+    assert _run_csv_columns(stored) == columns
+    assert response.columns == columns
+    assert len(response.preview_rows) == content.count("\n") - 1
+
+
+def test_seed_preview_caps_long_text_cells_but_not_images(monkeypatch, tmp_path):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    image = "data:image/png;base64," + "A" * 5000
+    path = tmp_path / "seed.jsonl"
+    path.write_text(json.dumps({"text": "x" * 50_000, "image": image, "short": "ok"}), encoding = "utf-8")
+
+    (row,) = seed_route._read_preview_rows_from_local_file(path, 10)
+
+    assert row["text"] == "x" * 2000 + "... (50000 chars)"
+    assert row["image"] == image
+    assert row["short"] == "ok"
+
+
+def test_seed_preview_caps_long_text_nested_in_objects_and_lists(monkeypatch, tmp_path):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    path = tmp_path / "seed.jsonl"
+    path.write_text(
+        json.dumps({"meta": {"body": "x" * 50_000, "n": 1}, "tags": ["y" * 50_000, "ok"]}),
+        encoding = "utf-8",
+    )
+
+    (row,) = seed_route._read_preview_rows_from_local_file(path, 10)
+
+    assert row["meta"] == {"body": "x" * 2000 + "... (50000 chars)", "n": 1}
+    assert row["tags"] == ["y" * 2000 + "... (50000 chars)", "ok"]
+
+
+def test_seed_preview_drops_an_image_too_large_for_the_editor_to_render(monkeypatch, tmp_path):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    # 300 KB decoded, past the editor's 200 KiB preview limit.
+    image = "data:image/png;base64," + "A" * 400_000
+    path = tmp_path / "seed.jsonl"
+    path.write_text(json.dumps({"image": image}), encoding = "utf-8")
+
+    (row,) = seed_route._read_preview_rows_from_local_file(path, 10)
+
+    assert row["image"] == f"(image, {len(image)} chars, too large to preview)"
+
+
+def test_csv_seed_with_a_long_file_name_uploads(monkeypatch, tmp_path):
+    filename = "n" * 250 + ".csv"
+
+    response = _upload_seed(monkeypatch, tmp_path, filename, "a,b\n1,2\n")
+
+    assert response.dataset_name == filename
+    assert response.columns == ["a", "b"]
+    assert len(Path(response.resolved_path).name) < 64
+
+
+def test_csv_seed_upload_reports_the_index_column_it_drops(monkeypatch, tmp_path):
+    response = _upload_seed(monkeypatch, tmp_path, "seed.csv", ",q,a\n0,x,y\n1,z,w\n")
+
+    assert response.columns == ["q", "a"]
+    assert response.dropped_columns == ["column0"]
+    assert _run_csv_columns(Path(response.resolved_path)) == ["q", "a"]
 
 
 def test_corrupt_parquet_seed_is_a_clear_422(monkeypatch, tmp_path):
