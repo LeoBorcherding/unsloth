@@ -254,6 +254,7 @@ def test_factory_builds_a_watch_on_windows_cuda(monkeypatch):
         LlamaCppBackend, "_nvidia_smi_free_total_mib", staticmethod(lambda *a, **k: _PEGGED)
     )
     monkeypatch.setattr(LlamaCppBackend, "_nvidia_link_gib_s", staticmethod(lambda *a, **k: 25.0))
+    monkeypatch.setattr(LlamaCppBackend, "_host_torch_is_rocm", staticmethod(lambda: False))
     w = _backend_stub()._windows_sysmem_fallback_watch(
         gpu_indices = [0],
         model_bytes = 8 * 1024**3,
