@@ -409,6 +409,17 @@ def test_a_quoted_think_tag_does_not_unhide_a_later_rehearsal():
     assert [name for name, _args in _nonstream_calls(_QUOTED_THINK_THEN_REHEARSAL)] == ["read"]
 
 
+def test_quoted_think_tags_in_many_calls_scan_in_linear_time():
+    import time
+
+    from core.tool_healing import _think_spans_outside_tool_markup
+
+    text = '<tool_call>{"name":"read","arguments":{"q":"<think>"}}</tool_call>' * 4000
+    started = time.monotonic()
+    assert _think_spans_outside_tool_markup(text) == []
+    assert time.monotonic() - started < 5.0
+
+
 def test_a_call_after_a_closed_think_block_is_still_promoted():
     text = '<think>plan: <tool_call>{"name":"bash","arguments":{"cmd":"rm"}}</tool_call></think>Reading.<tool_call>{"name":"read","arguments":{"q":"a"}}</tool_call>'
     calls, relayed = _stream_calls(text, 3)

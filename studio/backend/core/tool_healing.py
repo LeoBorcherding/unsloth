@@ -1209,16 +1209,22 @@ def _think_spans_outside_tool_markup(text: str) -> list[tuple[int, int]]:
     real call after it as rehearsed and leak the call's markup. START tested only, so
     a greedy unclosed <think> past the call is still that call's argument data."""
     call_spans = _tool_call_markup_spans(text)
+    ordered = sorted(call_spans)
+    call_starts = [cs for cs, _ce in ordered]
+    reach = []  # reach[i]: furthest end among the first i + 1 spans by start
+    for _cs, ce in ordered:
+        reach.append(max(ce, reach[-1]) if reach else ce)
     think_spans = []
     pos = 0
-    while (m := _THINK_TAG_RE.search(text, pos)) is not None:
-        inside = [ce for cs, ce in call_spans if cs <= m.start() < ce]
-        if inside:
+    while (opener := _THINK_OPEN_RE.search(text, pos)) is not None:
+        i = bisect.bisect_right(call_starts, opener.start()) - 1
+        if i >= 0 and reach[i] > opener.start():
             # A quoted opener's span can swallow a real think block later on; resume past the call.
-            pos = max(inside)
+            pos = reach[i]
             continue
+        m = _THINK_TAG_RE.match(text, opener.start())
         think_spans.append(m.span())
-        pos = max(m.end(), m.start() + 1)
+        pos = max(m.end(), opener.end())
     # Prefilled reasoning: the template opens <think> in the prompt, so a leading span skips calls rehearsed there.
     close = _THINK_CLOSE_RE.search(text)
     if close is not None:
