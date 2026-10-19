@@ -40,9 +40,11 @@ def _split(
     max_tokens: int,
     count: TokenCounter,
     token_count: int | None = None,
+    window: int | None = None,
 ) -> list[_Piece]:
     """Recursively split into pieces each <= max_tokens (best effort). Pieces
-    rejoin to ``text`` exactly, so offsets are a running length."""
+    rejoin to ``text`` exactly, so offsets are a running length. A run with no
+    separator is cut into ``window``-token pieces (default ``max_tokens``)."""
     if token_count is None:
         token_count = count(text)
     if token_count <= max_tokens:
@@ -61,22 +63,23 @@ def _split(
             out.extend(
                 [_Piece(p, tokens)]
                 if tokens <= max_tokens
-                else _split(p, seps[i + 1 :], max_tokens, count, tokens)
+                else _split(p, seps[i + 1 :], max_tokens, count, tokens, window)
             )
         return out
     # No separator left (minified code, base64, long URLs): each window is the largest
-    # prefix within max_tokens (never under one character, so it ends). Gallop up from a
+    # prefix within the budget (never under one character, so it ends). Gallop up from a
     # ~4 chars/token guess before bisecting, so each window tokenizes about its own size
     # rather than the rest of the run.
+    budget = window or max_tokens
     out = []
     start = 0
     while start < len(text):
         rest = len(text) - start
         lo, lo_tokens, bad = 0, None, rest + 1
-        probe = min(rest, max(1, max_tokens * 4))
+        probe = min(rest, max(1, budget * 4))
         while True:
             tokens = count(text[start : start + probe])
-            if tokens > max_tokens:
+            if tokens > budget:
                 bad = probe
                 break
             lo, lo_tokens = probe, tokens
@@ -86,7 +89,7 @@ def _split(
         while bad - lo > 1:
             mid = (lo + bad) // 2
             tokens = count(text[start : start + mid])
-            if tokens <= max_tokens:
+            if tokens <= budget:
                 lo, lo_tokens = mid, tokens
             else:
                 bad = mid
@@ -150,7 +153,9 @@ def chunk_pages(
     """Split each page into overlapping chunks, tracking per-page char offsets."""
     out: list[Chunk] = []
     for page_index, page in enumerate(pages):
-        pieces = _split(page.text, SEPARATORS, max_tokens, count)
+        # Overlap-sized windows in a separator-free run, so _merge can carry one as the overlap.
+        window = min(overlap, max_tokens) if overlap > 0 else None
+        pieces = _split(page.text, SEPARATORS, max_tokens, count, window = window)
         # _split preserves offsets, so a running cursor gives exact ones.
         starts: list[int] = []
         cursor = 0

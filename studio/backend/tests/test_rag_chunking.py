@@ -105,7 +105,7 @@ def test_unbreakable_run_fills_the_token_budget():
         return max(1, (len(text) + 3) // 4)
 
     text = _unbreakable(20_000)
-    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 64, count = count)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 0, count = count)
     assert len(chunks) == 10
     assert all(c.token_count <= 512 for c in chunks)
     assert min(c.token_count for c in chunks[:-1]) == 512
@@ -132,3 +132,15 @@ def test_unbreakable_run_tokenizes_about_its_own_length():
     chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 0, count = count)
     assert "".join(c.text for c in chunks) == text
     assert seen["chars"] < 40 * len(text)
+
+
+def test_unbreakable_run_keeps_the_overlap():
+    def count(text):
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(20_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 64, count = count)
+    assert all(c.token_count <= 512 for c in chunks)
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert prev.page_char_end - nxt.page_char_start == 64 * 4
+    assert chunks[0].page_char_start == 0 and chunks[-1].page_char_end == len(text)
