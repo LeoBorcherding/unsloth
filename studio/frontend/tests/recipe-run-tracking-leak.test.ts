@@ -340,3 +340,64 @@ test("leaving during a completed run's final status check fetches no results", a
   assert.equal(statusCalls, 2);
   assert.equal(resultCalls, 0);
 });
+
+test("leaving during a final check's wait starts no further status call", async (t) => {
+  let statusCalls = 0;
+  const api = {
+    getRecipeJobStatus: async (jobId: string) => {
+      statusCalls += 1;
+      return { job_id: jobId, status: "completed" };
+    },
+    getRecipeJobDataset: async () => ({ dataset: [], total: 0 }),
+    getRecipeJobAnalysis: async () => ({}),
+    streamRecipeJobEvents: ({ signal }: { signal: AbortSignal }) =>
+      new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve()),
+      ),
+  };
+  const { trackRecipeExecution } = loadWithStubs<{
+    trackRecipeExecution: (params: Record<string, unknown>) => Promise<unknown>;
+  }>(
+    new URL(
+      "../src/features/recipe-studio/executions/tracker.ts",
+      import.meta.url,
+    ),
+    {
+      "@/features/hub": { bumpInventoryVersion: () => {} },
+      "@/shared/toast": { toastError: () => {}, toastSuccess: () => {} },
+      "../api": api,
+    },
+    { relativePassthrough: true },
+  );
+  const leaving = new AbortController();
+  const win = (globalThis as { window: { setTimeout: unknown } }).window;
+  const original = win.setTimeout;
+  t.after(() => {
+    win.setTimeout = original;
+  });
+  // The first 250 ms wait between final checks is where the recipe is left.
+  win.setTimeout = (fn: () => void, ms: number) => {
+    if (ms === 250) leaving.abort();
+    return setTimeout(fn, ms / 100);
+  };
+
+  const result = await trackRecipeExecution({
+    label: "Preview",
+    kind: "preview",
+    rows: 1,
+    jobId: "job-A",
+    initialExecution: {
+      id: "exec-A",
+      recipeId: "recipe-A",
+      status: "running",
+      jobId: "job-A",
+    },
+    notify: false,
+    onUpsert: () => {},
+    onSetPreviewErrors: () => {},
+    signal: leaving.signal,
+  });
+
+  assert.deepEqual(result, { success: false, terminal: false });
+  assert.equal(statusCalls, 2);
+});

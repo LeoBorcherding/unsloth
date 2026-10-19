@@ -287,7 +287,7 @@ export async function trackRecipeExecution({
   }
 
   if (lastStatus === "completed") {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 3 && !signal?.aborted; attempt += 1) {
       try {
         const finalStatus = await getRecipeJobStatus(jobId);
         latestExecution = applyExecutionStatusSnapshot(
