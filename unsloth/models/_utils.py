@@ -4769,8 +4769,16 @@ def _remove_stale_offload_dirs(temporary_location):
         return
     for entry in entries:
         path = os.path.abspath(os.path.join(temporary_location, entry))
-        if path not in _OFFLOAD_DIRS and os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
-            shutil.rmtree(path, ignore_errors = True)
+        if path in _OFFLOAD_DIRS or not os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
+            continue
+        # The marker goes last, so a dir whose .pt is still locked stays marked for the next sweep.
+        try:
+            for name in os.listdir(path):
+                if name != _OFFLOAD_MARKER:
+                    os.remove(os.path.join(path, name))
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors = True)
 
 
 def offload_to_disk(

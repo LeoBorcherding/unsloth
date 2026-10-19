@@ -79,3 +79,32 @@ def test_a_dir_an_earlier_run_left_is_cleared(tmp_path, exit_hooks):
     assert not stale.exists()
     assert (unmarked / "input_embeddings.pt").read_bytes() == b"not ours to judge"
     assert os.path.exists(first._offloaded_file_location)
+
+
+def test_a_leftover_still_in_use_stays_marked(tmp_path, exit_hooks, monkeypatch):
+    # Windows refuses to delete a .pt another process still maps; the dir must be retried later.
+    from unsloth.models import _utils
+
+    buffers = tmp_path / "buffers"
+    stale = buffers / "my-model-abc123"
+    stale.mkdir(parents = True)
+    (stale / ".unsloth_offload").write_bytes(b"")
+    (stale / "input_embeddings.pt").write_bytes(b"old")
+    real_remove, real_unlink = os.remove, os.unlink
+
+    def locked(remove):
+        def wrapper(path, *args, **kwargs):
+            if str(path).endswith("input_embeddings.pt"):
+                raise PermissionError(32, "in use", str(path))
+            return remove(path, *args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(os, "remove", locked(real_remove))
+    monkeypatch.setattr(os, "unlink", locked(real_unlink))
+    _utils._remove_stale_offload_dirs(str(buffers))
+    assert (stale / ".unsloth_offload").exists()
+
+    monkeypatch.setattr(os, "remove", real_remove)
+    monkeypatch.setattr(os, "unlink", real_unlink)
+    _utils._remove_stale_offload_dirs(str(buffers))
+    assert not stale.exists()
