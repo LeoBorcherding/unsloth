@@ -13,7 +13,7 @@ import {
   Plus,
 } from "lucide-react";
 import { type ReactElement, useCallback } from "react";
-import { buildFitViewOptions } from "../../utils/graph/fit-view";
+import { buildFitViewOptions, fitViewPadding } from "../../utils/graph/fit-view";
 import { RECIPE_FLOATING_ICON_BUTTON_CLASS } from "../recipe-floating-icon-button-class";
 
 type ViewportControlsProps = {
@@ -22,6 +22,7 @@ type ViewportControlsProps = {
   onToggleInteractive: () => void;
   maximized: boolean;
   onToggleMaximize: () => void;
+  runIslandVisible?: boolean;
 };
 
 export function ViewportControls({
@@ -30,6 +31,7 @@ export function ViewportControls({
   onToggleInteractive,
   maximized,
   onToggleMaximize,
+  runIslandVisible = false,
 }: ViewportControlsProps): ReactElement {
   const { zoomIn, zoomOut, fitView, getNodes } = useReactFlow();
 
@@ -42,8 +44,12 @@ export function ViewportControls({
   }, [zoomOut]);
 
   const handleFitView = useCallback(() => {
-    fitView(buildFitViewOptions(getNodes()));
-  }, [fitView, getNodes]);
+    fitView(
+      buildFitViewOptions(getNodes(), {
+        padding: fitViewPadding(runIslandVisible),
+      }),
+    );
+  }, [fitView, getNodes, runIslandVisible]);
 
   // Stack vertically on narrow canvases to clear the Run / Check bar.
   return (

@@ -329,6 +329,84 @@ test("a fit while the island shows keeps its height clear at the top", () => {
   assert.match(page, /padding: fitViewPadding\(runIslandVisibleRef\.current\)/);
 });
 
+// Center view and Auto layout fit through their own controls, not the page's scheduled fit.
+test("Center view and Auto layout keep the island's clearance while it shows", () => {
+  const fits: Array<Record<string, unknown>> = [];
+  const stubs = {
+    "react/jsx-runtime": stubJsxRuntime(),
+    react: { useCallback: (fn: unknown) => fn },
+    "@xyflow/react": {
+      Panel: "Panel",
+      useReactFlow: () => ({
+        fitView: (options: Record<string, unknown>) => fits.push(options),
+        getNodes: () => [{ id: "a", type: "builder", data: {} }],
+        zoomIn: () => {},
+        zoomOut: () => {},
+      }),
+      useUpdateNodeInternals: () => () => {},
+    },
+    "@/components/ui/button": { Button: "Button" },
+    "lucide-react": new Proxy({}, { get: (_t, key) => String(key) }),
+    "../../utils/graph/fit-view": fitView,
+    "../recipe-floating-icon-button-class": {
+      // biome-ignore lint/style/useNamingConvention: constant name
+      RECIPE_FLOATING_ICON_BUTTON_CLASS: "",
+    },
+  };
+  const { ViewportControls } = loadWithStubs<{
+    ViewportControls: (props: Record<string, unknown>) => unknown;
+  }>(
+    new URL(
+      "../src/features/recipe-studio/components/controls/viewport-controls.tsx",
+      import.meta.url,
+    ),
+    stubs,
+  );
+  const { LayoutControls } = loadWithStubs<{
+    LayoutControls: (props: Record<string, unknown>) => unknown;
+  }>(
+    new URL(
+      "../src/features/recipe-studio/components/controls/layout-controls.tsx",
+      import.meta.url,
+    ),
+    stubs,
+  );
+  const previousRaf = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+    cb(0);
+    return 0;
+  }) as typeof requestAnimationFrame;
+  try {
+    for (const runIslandVisible of [true, false]) {
+      fits.length = 0;
+      const viewport = ViewportControls({
+        interactive: true,
+        onToggleInteractive: () => {},
+        maximized: false,
+        onToggleMaximize: () => {},
+        runIslandVisible,
+      });
+      const center = findAll(viewport, (props) => props["aria-label"] === "Center view");
+      (center[0].onClick as () => void)();
+      const layout = LayoutControls({
+        direction: "LR",
+        onLayout: () => {},
+        onToggleDirection: () => {},
+        runIslandVisible,
+      });
+      for (const button of findAll(layout, (props) => typeof props.onClick === "function")) {
+        (button.onClick as () => void)();
+      }
+      assert.equal(fits.length, 3);
+      for (const fit of fits) {
+        assert.deepEqual(fit.padding, fitView.fitViewPadding(runIslandVisible));
+      }
+    }
+  } finally {
+    globalThis.requestAnimationFrame = previousRaf;
+  }
+});
+
 test("the run payload no longer sends output_formats", () => {
   const built = buildRecipePayload({}, [], [], [], "LR", {});
   assert.equal("output_formats" in built.payload.run, false);

@@ -704,6 +704,7 @@ export function RecipeStudioPage({
           direction={layoutDirection}
           onLayout={applyLayout}
           onToggleDirection={handleToggleDirection}
+          runIslandVisible={runIslandVisible}
         />
         <InternalsSync nodeIds={displayNodeIds} />
         <Background
@@ -786,6 +787,7 @@ export function RecipeStudioPage({
           onToggleInteractive={toggleInteractive}
           maximized={maximized}
           onToggleMaximize={toggleMaximize}
+          runIslandVisible={runIslandVisible}
         />
         {islandExecution && runIslandVisible && (
           <Panel position="top-center" className="!m-0">
