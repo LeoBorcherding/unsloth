@@ -20,8 +20,9 @@ def is_recipe_side_column(name: str, value) -> bool:
         return True
     if not isinstance(value, dict) or not value:
         return False
+    # A judge criterion is exactly Data Designer's {reasoning, score}; validators add arbitrary extras.
     return "is_valid" in value or all(
-        isinstance(item, dict) and "score" in item for item in value.values()
+        isinstance(item, dict) and item.keys() == {"reasoning", "score"} for item in value.values()
     )
 
 

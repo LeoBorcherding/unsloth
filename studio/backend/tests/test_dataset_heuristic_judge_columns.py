@@ -62,8 +62,15 @@ def test_judge_and_validator_results_are_never_a_turn(heuristic, verdict):
 
 
 @pytest.mark.parametrize("heuristic", _HEURISTICS)
-def test_a_structured_answer_is_still_an_answer(heuristic):
-    row = {"question": _MID, "reply": {"next_action": "ask_logs", "response": _MID}}
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"next_action": "ask_logs", "response": _MID},
+        {"overall": {"score": 4, "comment": _MID}},
+    ],
+)
+def test_a_structured_answer_is_still_an_answer(heuristic, reply):
+    row = {"question": _MID, "reply": reply}
 
     assert heuristic(Dataset.from_list([row])) == {"question": "user", "reply": "assistant"}
 
