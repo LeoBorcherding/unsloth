@@ -48,7 +48,7 @@ def slow_server():
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target = server.serve_forever, daemon = True).start()
-    yield types.SimpleNamespace(_port = server.server_address[1], _route = "")
+    yield types.SimpleNamespace(_port = server.server_address[1], _route = "", _cpu_only = True)
     server.shutdown()
     server.server_close()
 
@@ -67,7 +67,7 @@ def test_a_timeout_fails_the_request_without_disabling_the_engine(monkeypatch, s
     assert "from now on" not in str(raised.value)
 
 
-def test_the_timeout_scales_with_clip_length(monkeypatch):
+def test_the_timeout_scales_with_clip_length_on_cpu_only(monkeypatch):
     seen: list[float] = []
 
     class RefusingConnection:
@@ -81,14 +81,17 @@ def test_the_timeout_scales_with_clip_length(monkeypatch):
             pass
 
     monkeypatch.setattr(stt_ggml_sidecar.http.client, "HTTPConnection", RefusingConnection)
-    fake = types.SimpleNamespace(_port = 1, _route = "")
+    cpu = types.SimpleNamespace(_port = 1, _route = "", _cpu_only = True)
+    gpu = types.SimpleNamespace(_port = 1, _route = "", _cpu_only = False)
 
-    for seconds in (5, 30 * 60):
+    for fake, seconds in ((cpu, 5), (cpu, 30 * 60), (gpu, 30 * 60)):
         with pytest.raises(stt_ggml_sidecar.SttEngineUnavailableError):
             stt_ggml_sidecar.GgmlSttSidecar._post_inference(fake, _wav(seconds), None, False)
 
     assert seen[0] == stt_ggml_sidecar._TRANSCRIBE_TIMEOUT_SECONDS
     # Thirty minutes of audio gets more than the fixed 600 s a CPU run of large-v3 needs.
     assert seen[1] >= 2 * 30 * 60
+    # A GPU server keeps the fixed bound: training waits on the sidecar lock to free its VRAM.
+    assert seen[2] == stt_ggml_sidecar._TRANSCRIBE_TIMEOUT_SECONDS
     # A refused connection is still a broken runtime.
     assert "ConnectionRefusedError" in (stt_ggml_sidecar.runtime_inference_failure() or "")

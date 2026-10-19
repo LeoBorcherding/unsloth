@@ -857,6 +857,7 @@ def test_training_forces_whisper_server_off_gpu(monkeypatch):
     idle = GgmlSttSidecar()
     idle.load("small")
     assert "--no-gpu" not in commands[0]
+    assert idle._cpu_only is False
     assert idle.is_loading() is False
     idle.unload()
 
@@ -864,7 +865,10 @@ def test_training_forces_whisper_server_off_gpu(monkeypatch):
     training = GgmlSttSidecar()
     training.load("small")
     assert "--no-gpu" in commands[1]
+    # Only a CPU server gets the clip-scaled transcription timeout.
+    assert training._cpu_only is True
     training.unload()
+    assert training._cpu_only is False
 
 
 def test_cpu_root_marker_forces_no_gpu_despite_inner_packaging_marker(monkeypatch, tmp_path):
