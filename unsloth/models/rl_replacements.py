@@ -2349,6 +2349,23 @@ def grpo_trainer_fix_maybe_apply_chat_template(function_name, function):
 RL_FUNCTIONS["grpo_trainer"].append(grpo_trainer_fix_maybe_apply_chat_template)
 
 
+def _unsloth_vllm_sync_unsafe(model):
+    # FSDP2 turns Params4bit into a DTensor, so also read the load flags the model keeps.
+    if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
+        return True
+    if getattr(model, "peft_config", None):
+        return True
+    for module in model.modules():
+        if hasattr(module, "lora_A") or hasattr(module, "base_layer"):
+            return True
+    for param in model.parameters():
+        if type(param).__name__ in ("Params4bit", "Int8Params"):
+            return True
+        if param.is_floating_point() and param.element_size() == 1:
+            return True
+    return False
+
+
 def grpo_trainer__move_model_to_vllm(function_name, function):
     if function_name != "_move_model_to_vllm":
         return function

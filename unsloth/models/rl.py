@@ -99,6 +99,48 @@ except Exception:
 # TrainingArguments falls back to this FSDP version when fsdp_config names none (1 -> 2 in transformers 5.10.0).
 _FSDP_DEFAULT_VERSION = 2 if transformers_version >= Version("5.10.0") else 1
 
+_VLLM_WEIGHT_LOAD_LINE = re.compile(
+    r"^(?P<indent>[ \t]+)(?P<stmt>[^#\s][^\n]*(?:model_executor\.driver_worker|load_weights\()[^\n]*)$",
+    re.MULTILINE,
+)
+
+
+def _guard_vllm_weight_loads(function, source):
+    # fast_inference shares weights with vLLM, and TRL's sync is lossy on LoRA and quantized bases:
+    # skip the weight push for both. Dense models on TRL's own vLLM still need it.
+    shared = "getattr(getattr(self, 'llm', None), 'shared_weights', False)"
+    skip = f"{shared} or self._unsloth_vllm_sync_skip"
+    source, guarded = _VLLM_WEIGHT_LOAD_LINE.subn(
+        lambda m: f"{m.group('indent')}if not ({skip}): {m.group('stmt')}",
+        source,
+    )
+    if not guarded and function != "_move_model_to_vllm":
+        return source
+    match = re.search(
+        rf"^[ \t]*def {re.escape(function)}\(.*?\).*?:[ \t]*\n",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    body = re.search(r"^([ \t]+)\S", source[match.end() :], re.MULTILINE) if match else None
+    if body is None:
+        return source
+    indent = body.group(1)
+    prelude = (
+        f"{indent}if not {shared} and getattr(self, '_unsloth_vllm_sync_skip', None) is None:\n"
+        f"{indent}    from unsloth.models.rl_replacements import _unsloth_vllm_sync_unsafe\n"
+        f"{indent}    self._unsloth_vllm_sync_skip = _unsloth_vllm_sync_unsafe(self.model)\n"
+        f"{indent}    if self._unsloth_vllm_sync_skip:\n"
+        f"{indent}        print('Unsloth: vLLM weight sync is skipped for a LoRA / PEFT or quantized model without fast_inference, so rollouts use the initial weights. Load with fast_inference = True to sample from the trained model.')\n"
+    )
+    if function == "_move_model_to_vllm":
+        # Returning early also skips the merge_adapter / unmerge_adapter round trip.
+        prelude = (
+            f"{indent}if {shared}:\n{indent}    return None\n"
+            + prelude
+            + f"{indent}if self._unsloth_vllm_sync_skip:\n{indent}    return None\n"
+        )
+    return source[: match.end()] + prelude + source[match.end() :]
+
 
 def vLLMSamplingParams(**kwargs):
     from vllm import SamplingParams
@@ -4194,23 +4236,7 @@ def patch_functions(RLTrainer, trainer_file, RLTrainer_name, all_imports, import
             source,
         )
 
-        source = re.sub(
-            r"(\n[\s]{4,}).+?model_executor\.driver_worker.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"(\n[\s]{4,}).+?load_weights\(.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"\.state_dict\(\)",
-            r"",
-            source,
-        )
+        source = _guard_vllm_weight_loads(function, source)
 
         if "CUDA_VISIBLE_DEVICES" in os.environ:
             lora_name = (
