@@ -245,6 +245,30 @@ def _config_scope(configs: list[dict[str, Any]], subset: str | None) -> str:
     return _config_folder(config) if config else ""
 
 
+def _config_holds_split(
+    config: dict[str, Any],
+    configs: list[dict[str, Any]],
+    name: str,
+    split: str,
+    data_files: list[str],
+) -> bool:
+    if config.get("data_files"):
+        return bool(_declared_split_patterns(configs, split, name))
+    folder = _config_folder(config)
+    if not folder:
+        return True
+    # A data_dir config's splits come from its file names; unlabelled files are all train.
+    inside = [f for f in data_files if f.startswith(f"{folder}/")]
+    split_lower = split.lower()
+    if any(_split_rank(f, split_lower) < 2 for f in inside):
+        return True
+    return (
+        bool(inside)
+        and _split_labels(split_lower) == _split_labels(DEFAULT_SPLIT)
+        and not any(_carries_another_split(f, split_lower) for f in inside)
+    )
+
+
 def _pick_config(configs: list[dict[str, Any]], subset: str | None) -> dict[str, Any] | None:
     """The config a bare request lands on, the way the Hub resolves it.
 
@@ -1168,17 +1192,16 @@ def inspect_seed_dataset(
     repo_files = _list_hf_repo_files(dataset_name = dataset_name, token = token)
     data_files = [file for file in repo_files if file.lower().endswith(DATA_EXTS)]
     configs = _list_hf_dataset_configs(dataset_name = dataset_name, token = token)
-    # Several configs and none the default: the first that can hold this split, returned as the
-    # subset so the run reads it too. The repo-root glob read every config at once (gsm8k twice
-    # over). Skipped only when its declared files leave the split out (glue's first, ax, is
-    # test-only); a data_dir-only config infers its splits from the folder, so it stays eligible.
+    # Several configs and none the default: the first that holds this split (glue's first, ax, is
+    # test-only), returned as the subset so the run reads it too. The repo-root glob read every
+    # config at once (gsm8k twice over).
     if not subset and len(configs) > 1 and _pick_config(configs, None) is None:
         names = [str(c.get("config_name") or DEFAULT_CONFIG) for c in configs]
         subset = next(
             (
                 name
                 for name, config in zip(names, configs)
-                if not config.get("data_files") or _declared_split_patterns(configs, split, name)
+                if _config_holds_split(config, configs, name, split, data_files)
             ),
             names[0],
         )

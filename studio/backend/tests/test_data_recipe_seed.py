@@ -1907,3 +1907,17 @@ def test_a_data_dir_only_config_first_is_still_the_implicit_subset(monkeypatch, 
     response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
     assert response.subset == "english"
     assert response.resolved_path.startswith("datasets/org/bilingual/en/")
+
+
+def test_a_data_dir_only_config_without_the_split_is_passed_over(monkeypatch, tmp_path):
+    files = [
+        "en/test-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "french"
+    assert response.resolved_path == "datasets/org/bilingual/fr/train-*.parquet"
