@@ -6968,7 +6968,7 @@ def fix_executorch():
         return
 
     try:
-        what = r"""
+        stub = r"""
         import sys
         import types
         import re
@@ -7000,17 +7000,34 @@ def fix_executorch():
         convert_weights.get_mapped_key = get_mapped_key
         torchtune.models = models
         models.convert_weights = convert_weights
+        """
+        stub = textwrap.dedent(stub)
+        # Older versions installed the stub unconditionally, replacing a real torchtune
+        old_what = stub + textwrap.dedent("""\
         sys.modules["torchtune"] = torchtune
         sys.modules["torchtune.models"] = models
         sys.modules["torchtune.models.convert_weights"] = convert_weights
-        """
-        what = textwrap.dedent(what)
+        """)
+        # A torchtune that is installed but fails to import (its torchao pin) still gets the stub
+        what = stub + textwrap.dedent("""\
+        try:
+            from torchtune.models.convert_weights import get_mapped_key as _get_mapped_key
+        except Exception:
+            sys.modules["torchtune"] = torchtune
+            sys.modules["torchtune.models"] = models
+            sys.modules["torchtune.models.convert_weights"] = convert_weights
+        """)
 
         with open(executorch, "r+", encoding = "utf-8") as f:
             text = f.read()
             bad = "from enum import Enum\n"
-            if bad in text and what not in text:
+            if old_what in text:
+                text = text.replace(old_what, what)
+            elif bad in text and what not in text:
                 text = text.replace(bad + "\n", bad + "\n" + what)
+            else:
+                text = None
+            if text is not None:
                 f.seek(0)
                 f.write(text)
                 f.truncate()
