@@ -79,6 +79,11 @@ except ValueError:
     _MAX_HOLD_CHARS = 256 * 1024
 # Every call form ends in one of these, so a held block can't become a closed call on a delta without one.
 _CLOSERS = (">", "}", "]")
+# After one of these a held call can be complete at once: its close tag, or the next call's signal.
+_CLOSE_TAGS = ("</tool_call>", "<tool_call|>", "</function>", "<|end_message|>") + _HEAL_SIGNALS
+_MAX_CLOSE_TAG_LEN = max(len(tag) for tag in _CLOSE_TAGS)
+# Signals whose body is JSON, which can close with no tag: its brackets balancing is the cue.
+_JSON_BODY_SIGNALS = ("[TOOL_CALLS]", "<|content_invoke_tool_json|>")
 
 
 def heal_gate(
@@ -344,6 +349,12 @@ class StreamToolCallHealer:
         self._tool_schemas = _tool_schemas_by_name(tools) if tools is not None else None
         self._buffer = ""
         self._holding = False
+        self._parsed_len = 0
+        # String-aware bracket scan of a held JSON body (None: not known yet to be JSON).
+        self._json: Optional[bool] = False
+        self._depth = 0
+        self._in_string = False
+        self._escaped = False
         self._id_offset = 0
         # Markup span each promoted call was cut from, keyed by its call id. Promotion is destructive -- the span
         # never reaches the client -- so a caller that ends up DISCARDING a promoted call (a turn truncated at
@@ -376,14 +387,63 @@ class StreamToolCallHealer:
         if self.dormant:
             return [("text", text)] if text else []
         self._buffer += text
-        # Re-parsing the whole held block on every token made a long call quadratic.
-        if (
-            self._holding
-            and len(self._buffer) <= _MAX_HOLD_CHARS
-            and not any(closer in text for closer in _CLOSERS)
-        ):
+        if self._holding and len(self._buffer) <= _MAX_HOLD_CHARS and not self._worth_parsing(text):
             return []
-        return self._drain()
+        events = self._drain()
+        self._parsed_len = len(self._buffer) if self._holding else 0
+        self._rescan()
+        return events
+
+    def _worth_parsing(self, text: str) -> bool:
+        # Re-parsing the whole held block on every token made a long call quadratic. A held call can
+        # complete on its close tag, the next signal, or its JSON body balancing; a bare closer can sit
+        # inside an argument (code, HTML), so on those alone the block is re-parsed only once it has
+        # grown by an eighth, which keeps a long call linear.
+        balanced = self._scan(text)
+        tail = self._buffer[-(len(text) + _MAX_CLOSE_TAG_LEN - 1) :]
+        if balanced or any(tag in tail for tag in _CLOSE_TAGS):
+            return True
+        grown = len(self._buffer) >= self._parsed_len + max(256, self._parsed_len // 8)
+        return grown and any(closer in text for closer in _CLOSERS)
+
+    def _rescan(self) -> None:
+        self._depth, self._in_string, self._escaped = 0, False, False
+        self._json = False
+        if not self._holding:
+            return
+        # From the last signal: an earlier block that never closed must not hide a later one's close.
+        start, signal = max((self._buffer.rfind(s), s) for s in _HEAL_SIGNALS)
+        if signal in _JSON_BODY_SIGNALS:
+            self._json = True
+        elif signal == "<tool_call>":
+            self._json = None
+        self._scan(self._buffer[max(start, 0) + len(signal) :])
+
+    def _scan(self, text: str) -> bool:
+        """Advance the bracket scan; True if the JSON body balanced within ``text``."""
+        balanced = False
+        for char in text:
+            if self._json is None:
+                if char.isspace():
+                    continue
+                self._json = char in "{["
+            if not self._json:
+                return balanced
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif char == "\\":
+                    self._escaped = True
+                elif char == '"':
+                    self._in_string = False
+            elif char == '"':
+                self._in_string = True
+            elif char in "{[":
+                self._depth += 1
+            elif char in "}]" and self._depth:
+                self._depth -= 1
+                balanced = balanced or not self._depth
+        return balanced
 
     def _drain(self) -> list:
         events: list = []

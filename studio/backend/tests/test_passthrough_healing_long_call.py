@@ -40,3 +40,22 @@ def test_a_call_over_64_kib_is_still_a_call():
     events = _stream(content, step = 4096)
     assert _calls(events) == [content]
     assert not any(e[0] == "text" and "x" * 100 in e[1] for e in events)
+
+
+def test_a_call_whose_argument_is_full_of_closers_is_fast():
+    # HTML or JSON source in a file write: every token carries a > } or ], none closes the call.
+    content = '<div class="a">{"x": [1, 2]}</div>\n' * 900
+    call = (
+        '<tool_call>{"name": "write", "arguments": '
+        + json.dumps({"content": content})
+        + "}</tool_call>"
+    )
+    healer = StreamToolCallHealer({"write"})
+    events = []
+    start = time.monotonic()
+    for i in range(0, len(call), 4):
+        events.extend(healer.feed(call[i : i + 4]))
+    events.extend(healer.finalize())
+    elapsed = time.monotonic() - start
+    assert _calls(events) == [content]
+    assert elapsed < 5, elapsed
