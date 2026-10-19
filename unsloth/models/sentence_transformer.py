@@ -228,8 +228,9 @@ def _merged_dense_copy(peft_model, dtype):
                 layer = source.get_base_layer()
                 value = dense_weight(layer).float() if leaf == "weight" else getattr(layer, leaf)
                 if leaf == "weight":
+                    trained = source.lora_A.keys() | getattr(source, "lora_embedding_A", {}).keys()
                     for adapter in source.active_adapters:
-                        if adapter in source.lora_A and adapter not in source.merged_adapters:
+                        if adapter in trained and adapter not in source.merged_adapters:
                             value = value + source.get_delta_weight(adapter).float()
             else:
                 value = dense_weight(source) if leaf == "weight" else getattr(source, leaf)

@@ -48,6 +48,34 @@ def test_dense_copy_matches_peft_merge_and_keeps_the_adapters():
     assert any("lora_" in name for name, _ in model.named_parameters())
 
 
+def test_dense_copy_keeps_an_embedding_adapter():
+    # PEFT keeps an Embedding adapter in lora_embedding_A/B, not lora_A/B.
+    from unsloth.models.sentence_transformer import _merged_dense_copy
+
+    torch.manual_seed(0)
+    config = BertConfig(
+        vocab_size = 64,
+        hidden_size = 32,
+        num_hidden_layers = 1,
+        num_attention_heads = 2,
+        intermediate_size = 64,
+    )
+    lora = peft.LoraConfig(r = 4, lora_alpha = 8, target_modules = ["query", "word_embeddings"])
+    model = peft.get_peft_model(BertModel(config), lora)
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if "lora_" in name:
+                param.normal_(0, 0.05)
+    reference = copy.deepcopy(model).merge_and_unload().state_dict()
+
+    merged = _merged_dense_copy(model, torch.float32).state_dict()
+
+    key = "embeddings.word_embeddings.weight"
+    base = model.get_base_model().embeddings.word_embeddings.get_base_layer().weight
+    assert not torch.equal(reference[key], base)
+    torch.testing.assert_close(merged[key], reference[key])
+
+
 def _cached(repo):
     try:
         from huggingface_hub import snapshot_download
