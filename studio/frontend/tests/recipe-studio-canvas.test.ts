@@ -127,6 +127,24 @@ test("each block header has a delete button", () => {
     /deleteElements\(/,
     "it removes the node through React Flow, same path as the key",
   );
+  // The canvas lock turns off selection, so the keys can't delete; the button mustn't either.
+  assert.match(
+    deleteButton.get("disabled")?.getText() ?? "",
+    /canvasLocked/,
+    "the button is off while the canvas is locked",
+  );
+  const source = readFileSync(
+    new URL(
+      "../src/features/recipe-studio/components/recipe-graph-node.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const canvasLocked = !useStore\(\s*\(state\) => state\.elementsSelectable/,
+    "canvasLocked follows React Flow's elementsSelectable",
+  );
 });
 
 test("the canvas and fit view can zoom out past 0.5x", async () => {

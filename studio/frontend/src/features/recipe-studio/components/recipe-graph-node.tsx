@@ -31,6 +31,7 @@ import {
   NodeResizer,
   Position,
   useReactFlow,
+  useStore,
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import { type ReactElement, memo, useEffect, useMemo } from "react";
@@ -383,6 +384,8 @@ function RecipeGraphNodeBase({
   );
   const updateNodeInternals = useUpdateNodeInternals();
   const { deleteElements } = useReactFlow();
+  // The canvas lock control turns selection off, which already stops the Delete keys.
+  const canvasLocked = !useStore((state) => state.elementsSelectable);
   const executionLocked = Boolean(data.executionLocked);
   const runtimeState = data.runtimeState ?? "idle";
   const connectionStatus = useNodeConnectionStatus(id, config);
@@ -549,7 +552,7 @@ function RecipeGraphNodeBase({
             size="icon-xs"
             variant="ghost"
             className="nodrag"
-            disabled={executionLocked}
+            disabled={executionLocked || canvasLocked}
             aria-label={`Delete ${data.name}`}
             title="Delete block"
             onClick={(event) => {
