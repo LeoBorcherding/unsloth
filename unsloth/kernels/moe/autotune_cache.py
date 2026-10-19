@@ -18,7 +18,6 @@ Auto-tuning cache system for MoE kernels to ensure tuning runs only once at trai
 import hashlib
 import json
 import logging
-import math
 import os
 import time
 from typing import Dict, List, Optional, Tuple, Any
@@ -160,7 +159,7 @@ def get_or_autotune_moe_kernels(
         logger.info(
             f"UNSLOTH_MOE_DISABLE_AUTOTUNE=1: Using Heuristic (Safe) MoE kernel configs for SM{device_capability[0]}{device_capability[1]}"
         )
-        return _get_heuristic_configs(N = 2 * intermediate_dim, K = hidden_dim)
+        return _get_heuristic_configs()
     if not force_autotune and cache_key in _kernel_config_cache:
         logger.info(f"Using in-memory cached MoE kernel configs: {cache_key}")
         return _kernel_config_cache[cache_key]
@@ -359,9 +358,9 @@ def _run_moe_autotuning(
     return config_fwd, config_bwd_dx, config_bwd_dw
 
 
-def _get_heuristic_configs(N: int = 0, K: int = 0) -> Tuple[Any, Any, Any]:
+def _get_heuristic_configs() -> Tuple[Any, Any, Any]:
     """
-    Get 'Safe Heuristic' kernel configurations for a GEMM with weight (E, N, K).
+    Get 'Safe Heuristic' kernel configurations.
     These are verified to be safe on A100 (SM80) and provide ~9x speedup on H100/B200.
     """
     from .grouped_gemm.kernels.tuning import (
@@ -370,16 +369,11 @@ def _get_heuristic_configs(N: int = 0, K: int = 0) -> Tuple[Any, Any, Any]:
         KernelConfigBackward_dW,
     )
 
-    # The kernels assert N % BLOCK_SIZE_N == 0 and K % BLOCK_SIZE_K == 0, so shrink a block to the
-    # largest power of two dividing its dim (K = 1408 takes 128, not 256). 0 keeps the block.
-    def fit(block, dim):
-        return math.gcd(block, dim) if dim else block
-
     # Safe forward config 64x128x128 fits A100 SMEM; the backward pair below is 64x64x256.
     config_fwd = KernelConfigForward(
         BLOCK_SIZE_M = 64,
-        BLOCK_SIZE_N = fit(128, N),
-        BLOCK_SIZE_K = fit(128, K),
+        BLOCK_SIZE_N = 128,
+        BLOCK_SIZE_K = 128,
         num_warps = 8,
         num_stages = 3,
         permute_x = True,
@@ -391,8 +385,8 @@ def _get_heuristic_configs(N: int = 0, K: int = 0) -> Tuple[Any, Any, Any]:
 
     config_bwd_dx = KernelConfigBackward_dX(
         BLOCK_SIZE_M = 64,
-        BLOCK_SIZE_N = fit(64, N),
-        BLOCK_SIZE_K = fit(256, K),
+        BLOCK_SIZE_N = 64,
+        BLOCK_SIZE_K = 256,
         num_warps = 8,
         num_stages = 4,
         permute_x = True,
@@ -404,8 +398,8 @@ def _get_heuristic_configs(N: int = 0, K: int = 0) -> Tuple[Any, Any, Any]:
 
     config_bwd_dw = KernelConfigBackward_dW(
         BLOCK_SIZE_M = 64,
-        BLOCK_SIZE_N = fit(64, N),
-        BLOCK_SIZE_K = fit(256, K),
+        BLOCK_SIZE_N = 64,
+        BLOCK_SIZE_K = 256,
         num_warps = 8,
         num_stages = 4,
         permute_x = True,
