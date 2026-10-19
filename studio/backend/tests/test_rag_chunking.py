@@ -118,3 +118,17 @@ def test_unbreakable_run_stays_within_budget_on_dense_text():
     chunks = chunk_pages([_page(text)], max_tokens = 100, overlap = 0, count = len)
     assert all(c.token_count <= 100 for c in chunks)
     assert "".join(c.text for c in chunks) == text
+
+
+def test_unbreakable_run_tokenizes_about_its_own_length():
+    # Each window must not re-tokenize the rest of the run: that is quadratic on a long blob.
+    seen = Counter()
+
+    def count(text):
+        seen["chars"] += len(text)
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(300_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 0, count = count)
+    assert "".join(c.text for c in chunks) == text
+    assert seen["chars"] < 40 * len(text)

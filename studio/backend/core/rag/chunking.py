@@ -64,19 +64,34 @@ def _split(
                 else _split(p, seps[i + 1 :], max_tokens, count, tokens)
             )
         return out
-    # No separator left (minified code, base64, long URLs): bisect each window to
-    # the largest prefix within max_tokens (never under one character, so it ends).
+    # No separator left (minified code, base64, long URLs): each window is the largest
+    # prefix within max_tokens (never under one character, so it ends). Gallop up from a
+    # ~4 chars/token guess before bisecting, so each window tokenizes about its own size
+    # rather than the rest of the run.
     out = []
     start = 0
     while start < len(text):
-        lo, hi, lo_tokens = 1, len(text) - start, None
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
+        rest = len(text) - start
+        lo, lo_tokens, bad = 0, None, rest + 1
+        probe = min(rest, max(1, max_tokens * 4))
+        while True:
+            tokens = count(text[start : start + probe])
+            if tokens > max_tokens:
+                bad = probe
+                break
+            lo, lo_tokens = probe, tokens
+            if probe == rest:
+                break
+            probe = min(rest, probe * 2)
+        while bad - lo > 1:
+            mid = (lo + bad) // 2
             tokens = count(text[start : start + mid])
             if tokens <= max_tokens:
                 lo, lo_tokens = mid, tokens
             else:
-                hi = mid - 1
+                bad = mid
+        if lo == 0:
+            lo = 1
         part = text[start : start + lo]
         out.append(_Piece(part, count(part) if lo_tokens is None else lo_tokens))
         start += lo
