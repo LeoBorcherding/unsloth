@@ -1760,9 +1760,7 @@ def test_validate_resolves_the_hf_seed_endpoint_like_jobs(monkeypatch):
     from routes.data_recipe import validate as validate_module
 
     seen = {}
-    monkeypatch.setattr(
-        validate_module, "validate_recipe", lambda recipe, **_: seen.update(recipe)
-    )
+    monkeypatch.setattr(validate_module, "validate_recipe", lambda recipe, **_: seen.update(recipe))
 
     response = validate_module.validate(
         RecipePayload(

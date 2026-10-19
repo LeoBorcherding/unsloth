@@ -507,9 +507,7 @@ def install_public_egress_guard() -> None:
     socket.gethostbyname = guarded_gethostbyname
 
 
-def build_model_providers(
-    recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None
-):
+def build_model_providers(recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None):
     """``local_endpoints``: provider name -> the endpoint the server itself filled in, never from the payload."""
     from data_designer.config.models import ModelProvider  # pyright: ignore[reportMissingImports]
 
@@ -735,7 +733,9 @@ def create_data_designer(
     )
 
 
-def validate_recipe(recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None) -> None:
+def validate_recipe(
+    recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None
+) -> None:
     builder = build_config_builder(recipe)
     designer = create_data_designer(recipe, local_endpoints = local_endpoints)
     designer.validate(builder)

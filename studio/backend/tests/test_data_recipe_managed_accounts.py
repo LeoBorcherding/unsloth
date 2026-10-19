@@ -45,11 +45,11 @@ def local_recipe(provider = None):
 def check(recipe, account = ALICE):
     from models.data_recipe import RecipePayload
     from routes.data_recipe import validate as route
-
     return run_as(account, route.validate, RecipePayload(recipe = recipe))
 
 
 def test_check_accepts_the_local_provider_for_a_managed_account():
+    pytest.importorskip("data_designer")
     owner = check(local_recipe(), OWNER)
     managed = check(local_recipe())
 
@@ -58,6 +58,7 @@ def test_check_accepts_the_local_provider_for_a_managed_account():
 
 
 def test_check_still_refuses_a_typed_loopback_endpoint_for_a_managed_account():
+    pytest.importorskip("data_designer")
     typed = {"name": "local", "endpoint": "http://127.0.0.1", "provider_type": "openai"}
     result = check(local_recipe(typed))
 
@@ -86,6 +87,7 @@ def test_a_github_seed_still_needs_the_managed_accounts_own_token():
 def test_a_managed_accounts_tokenless_hf_seed_never_uses_the_hosts_token(
     monkeypatch, account, token, expected
 ):
+    pytest.importorskip("data_designer")
     from fsspec.implementations.memory import MemoryFileSystem
     from data_designer.engine.resources import seed_reader
 
@@ -140,7 +142,5 @@ def test_an_unnamed_local_model_says_why_when_the_loaded_one_is_not_shared(monke
     ("account", "model", "hidden"),
     [(OWNER, "", True), (ALICE, "", False), (ALICE, MODEL, True)],
 )
-def test_an_unnamed_local_model_passes_when_it_would_be_served(
-    monkeypatch, account, model, hidden
-):
+def test_an_unnamed_local_model_passes_when_it_would_be_served(monkeypatch, account, model, hidden):
     resident_hidden_run(monkeypatch, model = model, hidden = hidden)(account)
