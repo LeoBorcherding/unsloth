@@ -2400,7 +2400,7 @@ def run(
         # No `-v`/`-y` short options: Click clusters `-ctv`/`-dev`/`-nkvo`. Exact `-v`/`-y` still work.
         rich_help_panel = _RUN_PANEL_ADVANCED,
         help = "Log every API request, including the high-frequency polling that is "
-        "deduplicated by default.",
+        "deduplicated by default. `-v` also works.",
     ),
     max_seq_length: int = typer.Option(
         0,
@@ -2551,7 +2551,8 @@ def run(
         False,
         "--yes",
         rich_help_panel = _RUN_PANEL_ADVANCED,
-        help = "Accepted for backward compatibility; the tool policy no longer prompts.",
+        help = "Accepted for backward compatibility; the tool policy no longer prompts. "
+        "`-y` also works.",
     ),
     parallel: int = typer.Option(
         _PARALLEL_DEFAULT_RUN,

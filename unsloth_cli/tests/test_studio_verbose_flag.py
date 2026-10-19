@@ -29,7 +29,9 @@ def test_run_exposes_verbose_option_default_off():
 
     opt = inspect.signature(_studio().run).parameters["verbose"].default
     decls = set(getattr(opt, "param_decls", []) or [])
-    assert "--verbose" in decls and "-v" in decls
+    # `-v` is taken from the passthrough tail so Click can't cluster `-ctv`; help still names it.
+    assert "--verbose" in decls and "-v" not in decls
+    assert "`-v`" in opt.help
     assert getattr(opt, "default", None) is False
 
 
