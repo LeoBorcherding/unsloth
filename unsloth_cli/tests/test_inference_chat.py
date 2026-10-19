@@ -23,6 +23,7 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+import unsloth_cli._inference as inference_module
 import unsloth_cli.commands.chat as chatmod
 from unsloth_cli._inference import (
     ChatBackend,
@@ -82,12 +83,18 @@ def _clear_mlx_distributed_env(monkeypatch):
         monkeypatch.delenv(name, raising = False)
 
 
+def _as_macos(monkeypatch):
+    # MLX launch env only counts on macOS; these tests run on any OS.
+    monkeypatch.setattr(inference_module, "_mlx_launch_possible", lambda: True)
+
+
 def _set_mlx_nccl_env(
     monkeypatch,
     *,
     rank: str = "0",
     size: str = "2",
 ):
+    _as_macos(monkeypatch)
     monkeypatch.setenv("MLX_RANK", rank)
     monkeypatch.setenv("MLX_WORLD_SIZE", size)
     monkeypatch.setenv("NCCL_HOST_IP", "127.0.0.1")
@@ -173,6 +180,7 @@ def test_inference_exposes_gguf_runtime_options():
 
 def test_mlx_distributed_info_reads_launch_env(monkeypatch, tmp_path):
     _clear_mlx_distributed_env(monkeypatch)
+    _as_macos(monkeypatch)
     assert mlx_distributed_info() == (False, 0, None)
     assert mlx_distributed_uses_mpi() is False
 
