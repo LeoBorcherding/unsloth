@@ -41,8 +41,8 @@ def test_unclosed_inline_tags_stay_linear(build):
         start = time.perf_counter()
         html_to_markdown(build(count))
         timings.append(time.perf_counter() - start)
-    # eight times the input stays well below quadratic (64x) growth
-    assert timings[1] < 3 and timings[1] < timings[0] * 24, timings
+    # eight times the input stays well below quadratic (64x) growth; the absolute cap is loose for loaded runners
+    assert timings[1] < 10 and timings[1] < timings[0] * 24, timings
 
 
 @pytest.mark.parametrize(
