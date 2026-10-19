@@ -106,17 +106,18 @@ _VLLM_WEIGHT_LOAD_LINE = re.compile(
 
 
 def _guard_vllm_weight_loads(function, source):
-    # fast_inference shares weights with vLLM, so TRL's weight push is skipped there; TRL's own vLLM still needs it.
+    # fast_inference shares weights with vLLM, and TRL's sync is lossy on LoRA and quantized bases:
+    # skip the weight push for both. Dense models on TRL's own vLLM still need it.
     shared = "getattr(getattr(self, 'llm', None), 'shared_weights', False)"
-    source = _VLLM_WEIGHT_LOAD_LINE.sub(
-        lambda m: f"{m.group('indent')}if not {shared}: {m.group('stmt')}",
+    skip = f"{shared} or self._unsloth_vllm_sync_skip"
+    source, guarded = _VLLM_WEIGHT_LOAD_LINE.subn(
+        lambda m: f"{m.group('indent')}if not ({skip}): {m.group('stmt')}",
         source,
     )
-    if function != "_move_model_to_vllm":
+    if not guarded and function != "_move_model_to_vllm":
         return source
-    # Also skips the merge_adapter / unmerge_adapter round trip on the shared weights.
     match = re.search(
-        r"^[ \t]*def _move_model_to_vllm\(.*?\).*?:[ \t]*\n",
+        rf"^[ \t]*def {re.escape(function)}\(.*?\).*?:[ \t]*\n",
         source,
         re.MULTILINE | re.DOTALL,
     )
@@ -124,19 +125,21 @@ def _guard_vllm_weight_loads(function, source):
     if body is None:
         return source
     indent = body.group(1)
-    # TRL's own vLLM: merge_adapter / unmerge_adapter is lossy on LoRA and quantized bases, keep the no-op there.
-    guard = (
-        f"{indent}if {shared}:\n"
-        f"{indent}    return None\n"
-        f"{indent}if getattr(self, '_unsloth_vllm_sync_skip', None) is None:\n"
+    prelude = (
+        f"{indent}if not {shared} and getattr(self, '_unsloth_vllm_sync_skip', None) is None:\n"
         f"{indent}    from unsloth.models.rl_replacements import _unsloth_vllm_sync_unsafe\n"
         f"{indent}    self._unsloth_vllm_sync_skip = _unsloth_vllm_sync_unsafe(self.model)\n"
         f"{indent}    if self._unsloth_vllm_sync_skip:\n"
         f"{indent}        print('Unsloth: vLLM weight sync is skipped for a LoRA / PEFT or quantized model without fast_inference, so rollouts use the initial weights. Load with fast_inference = True to sample from the trained model.')\n"
-        f"{indent}if self._unsloth_vllm_sync_skip:\n"
-        f"{indent}    return None\n"
     )
-    return source[: match.end()] + guard + source[match.end() :]
+    if function == "_move_model_to_vllm":
+        # Returning early also skips the merge_adapter / unmerge_adapter round trip.
+        prelude = (
+            f"{indent}if {shared}:\n{indent}    return None\n"
+            + prelude
+            + f"{indent}if self._unsloth_vllm_sync_skip:\n{indent}    return None\n"
+        )
+    return source[: match.end()] + prelude + source[match.end() :]
 
 
 def vLLMSamplingParams(**kwargs):

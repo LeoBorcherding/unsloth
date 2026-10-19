@@ -176,7 +176,7 @@ def test_rloo_fsdp2_sync_keeps_state_dict_and_loads_into_trl_vllm():
     method = _patched("_sync_fsdp2_params_to_vllm", _trl_rloo_methods()["_sync_fsdp2_params_to_vllm"])
     llm, rec = _trl_llm()
     module = types.SimpleNamespace(state_dict = lambda: {"w": _Param(), "b": _Param()})
-    method(_trainer(llm, None), module)
+    method(_trainer(llm, torch.nn.Linear(2, 2)), module)
     assert rec.loaded == ["w", "b"]
 
 
@@ -214,12 +214,24 @@ def test_inline_weight_load_outside_sync_methods(shared):
     method = _patched("_generate_vllm", _ONLINE_DPO_GENERATE_VLLM)
     if shared:
         llm = _SharedEngine()
-        assert method(types.SimpleNamespace(llm = llm), torch.nn.Linear(2, 2), ["p"]) == ["out"]
+        model = torch.nn.Linear(2, 2)
+        assert method(types.SimpleNamespace(llm = llm, model = model), model, ["p"]) == ["out"]
     else:
         llm, rec = _trl_llm()
         llm.generate = lambda prompts: ["out"] * len(prompts)
-        method(types.SimpleNamespace(llm = llm), torch.nn.Linear(2, 2), ["p"])
+        model = torch.nn.Linear(2, 2)
+        method(types.SimpleNamespace(llm = llm, model = model), model, ["p"])
         assert rec.loaded == ["weight", "bias"]
+
+
+def test_inline_weight_load_keeps_the_no_op_for_lora_on_trl_vllm():
+    method = _patched("_generate_vllm", _ONLINE_DPO_GENERATE_VLLM)
+    llm, rec = _trl_llm()
+    llm.generate = lambda prompts: ["out"] * len(prompts)
+    model = _PeftModel()
+    model.peft_config = {"default": object()}
+    assert method(types.SimpleNamespace(llm = llm, model = model), model, ["p"]) == ["out"]
+    assert rec.loaded == []
 
 
 def test_methods_without_vllm_weight_loads_are_untouched():
