@@ -806,7 +806,7 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         configs,
         refName,
         newName,
-        nameChanged && isFreeName(configs, id, newName),
+        nameChanged && isFreeName(configs, id, newName, state.renameSources),
       );
 
       let processors = state.processors;

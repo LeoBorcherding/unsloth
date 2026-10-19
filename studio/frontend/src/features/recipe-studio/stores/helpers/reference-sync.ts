@@ -222,13 +222,18 @@ export function applyRenameToProcessors(
   return changed ? next : processors;
 }
 
-/** A name references can follow: not empty and not another block's (notes aren't referenced). */
+/** A name references can follow: not empty, not another block's (notes aren't referenced), and not
+ * one another block's references still wait on. */
 export function isFreeName(
   configs: Record<string, NodeConfig>,
   id: string,
   name: string,
+  renameSources: Record<string, string> = {},
 ): boolean {
   if (!name.trim()) {
+    return false;
+  }
+  if (Object.entries(renameSources).some(([other, source]) => other !== id && source === name)) {
     return false;
   }
   return !Object.values(configs).some(
@@ -260,7 +265,7 @@ export function applyNameEdit(
     return state;
   }
   const source = state.renameSources[id] ?? oldName;
-  if (!isFreeName(state.configs, id, newName)) {
+  if (!isFreeName(state.configs, id, newName, state.renameSources)) {
     if (state.renameSources[id] === source) {
       return state;
     }
@@ -285,7 +290,7 @@ export function reconcileRenameSources(state: NameEditState): NameEditState {
       const renameSources = { ...next.renameSources };
       delete renameSources[id];
       next = { ...next, renameSources };
-    } else if (isFreeName(next.configs, id, config.name)) {
+    } else if (isFreeName(next.configs, id, config.name, next.renameSources)) {
       next = applyNameEdit(next, id, source, config.name);
     }
   }

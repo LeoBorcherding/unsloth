@@ -213,3 +213,17 @@ test("a block waiting on a taken name catches up when the other block is renamed
   assert.match(prompt(removed.configs, "q"), /^X \{\{ b \}\} Y\s*$/);
   assert.deepEqual(removed.renameSources, {});
 });
+
+test("a name another block's references still wait on stays taken", () => {
+  const configs = byId(column("a", "a"), column("b", "b"), llm("q", "q", "X {{ a }} Y {{ b }}"));
+  // a -> b while b is taken, then b is cleared before its new name is typed.
+  let state = typeName(configs, "a", ["b"]);
+  const cleared = { ...state.configs, b: { ...state.configs.b, name: "" } as NodeConfig };
+  state = sync.reconcileRenameSources(sync.applyNameEdit({ ...state, configs: cleared }, "b", "b", ""));
+  assert.equal(prompt(state.configs, "q"), "X {{ a }} Y {{ b }}");
+
+  const named = { ...state.configs, b: { ...state.configs.b, name: "c" } as NodeConfig };
+  state = sync.reconcileRenameSources(sync.applyNameEdit({ ...state, configs: named }, "b", "", "c"));
+  assert.equal(prompt(state.configs, "q"), "X {{ b }} Y {{ c }}");
+  assert.deepEqual(state.renameSources, {});
+});
