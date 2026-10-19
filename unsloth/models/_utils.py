@@ -4758,6 +4758,7 @@ import tempfile
 
 _OFFLOAD_MARKER = ".unsloth_offload"
 _OFFLOAD_DIRS = set()
+_isjunction = getattr(os.path, "isjunction", lambda path: False)
 
 
 def _remove_stale_offload_dirs(temporary_location):
@@ -4769,7 +4770,10 @@ def _remove_stale_offload_dirs(temporary_location):
         return
     for entry in entries:
         path = os.path.abspath(os.path.join(temporary_location, entry))
-        if path in _OFFLOAD_DIRS or not os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
+        # Never follow a link: its target isn't ours to empty.
+        if path in _OFFLOAD_DIRS or os.path.islink(path) or _isjunction(path):
+            continue
+        if not os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
             continue
         # The marker goes last, so a dir whose .pt is still locked stays marked for the next sweep.
         try:
@@ -4790,7 +4794,7 @@ def offload_to_disk(
     # Not os.path.join(temporary_location, _name_or_path): a local model's path is absolute, so the
     # join lands in the user's model folder. A fresh dir per call also keeps concurrent runs apart.
     model_name = os.path.basename(os.path.normpath(str(model.config._name_or_path)))
-    prefix = re.sub(r"[^\w.-]+", "_", model_name) or "model"
+    prefix = re.sub(r"[^\w.-]+", "_", model_name)[:64] or "model"
     os.makedirs(temporary_location, exist_ok = True)
     _remove_stale_offload_dirs(temporary_location)
     file_location = tempfile.mkdtemp(prefix = f"{prefix}-", dir = os.path.abspath(temporary_location))

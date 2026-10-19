@@ -108,3 +108,29 @@ def test_a_leftover_still_in_use_stays_marked(tmp_path, exit_hooks, monkeypatch)
     monkeypatch.setattr(os, "unlink", real_unlink)
     _utils._remove_stale_offload_dirs(str(buffers))
     assert not stale.exists()
+
+
+def test_a_marked_link_is_not_followed(tmp_path, exit_hooks):
+    from unsloth.models import _utils
+
+    target = tmp_path / "someone-elses"
+    target.mkdir()
+    (target / ".unsloth_offload").write_bytes(b"")
+    (target / "data.bin").write_bytes(b"keep")
+    buffers = tmp_path / "buffers"
+    buffers.mkdir()
+    link = buffers / "my-model-abc123"
+    try:
+        os.symlink(target, link, target_is_directory = True)
+    except OSError:
+        _winapi = pytest.importorskip("_winapi")
+        _winapi.CreateJunction(str(target), str(link))
+
+    _utils._remove_stale_offload_dirs(str(buffers))
+
+    assert (target / "data.bin").read_bytes() == b"keep"
+
+
+def test_a_very_long_model_name_still_offloads(tmp_path, exit_hooks):
+    W = offload_to_disk(torch.nn.Embedding(4, 2), _model("a" * 250), "input_embeddings", str(tmp_path))
+    assert len(os.path.basename(os.path.dirname(W._offloaded_file_location))) < 100
