@@ -4756,6 +4756,22 @@ import pickle
 import shutil
 import tempfile
 
+_OFFLOAD_MARKER = ".unsloth_offload"
+_OFFLOAD_DIRS = set()
+
+
+def _remove_stale_offload_dirs(temporary_location):
+    # Windows can't delete a .pt the live model still memory-maps, so the exit hook can leave its
+    # dir behind. Clear what earlier runs left; one a running process still maps just stays.
+    try:
+        entries = os.listdir(temporary_location)
+    except OSError:
+        return
+    for entry in entries:
+        path = os.path.abspath(os.path.join(temporary_location, entry))
+        if path not in _OFFLOAD_DIRS and os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
+            shutil.rmtree(path, ignore_errors = True)
+
 
 def offload_to_disk(
     W,
@@ -4768,6 +4784,7 @@ def offload_to_disk(
     model_name = os.path.basename(os.path.normpath(str(model.config._name_or_path)))
     prefix = re.sub(r"[^\w.-]+", "_", model_name) or "model"
     os.makedirs(temporary_location, exist_ok = True)
+    _remove_stale_offload_dirs(temporary_location)
     file_location = tempfile.mkdtemp(prefix = f"{prefix}-", dir = os.path.abspath(temporary_location))
     atexit.register(shutil.rmtree, file_location, ignore_errors = True)
 
@@ -4780,6 +4797,9 @@ def offload_to_disk(
         pickle_protocol = pickle.HIGHEST_PROTOCOL,
     )
     offloaded_W = torch.load(filename, map_location = "cpu", mmap = True, weights_only = False)
+    # Marked only once mapped, so another run's sweep can't delete it mid-save.
+    open(os.path.join(file_location, _OFFLOAD_MARKER), "wb").close()
+    _OFFLOAD_DIRS.add(file_location)
     offloaded_W._offloaded_file_location = filename
     return offloaded_W
 

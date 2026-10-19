@@ -59,3 +59,23 @@ def test_buffer_dir_is_removed_at_exit(tmp_path, exit_hooks):
     for fn, args, kwargs in exit_hooks:
         fn(*args, **kwargs)
     assert not os.path.exists(folder)
+
+
+def test_a_dir_an_earlier_run_left_is_cleared(tmp_path, exit_hooks):
+    # Windows keeps the .pt of a model still alive at exit, so the exit hook can't remove it.
+    buffers = tmp_path / "buffers"
+    stale = buffers / "my-model-abc123"
+    stale.mkdir(parents = True)
+    (stale / ".unsloth_offload").write_bytes(b"")
+    (stale / "input_embeddings.pt").write_bytes(b"old")
+    unmarked = buffers / "unsloth" / "llama-3.2-1b"
+    unmarked.mkdir(parents = True)
+    (unmarked / "input_embeddings.pt").write_bytes(b"not ours to judge")
+
+    model = _model("unsloth/x")
+    first = offload_to_disk(torch.nn.Embedding(4, 2), model, "input_embeddings", str(buffers))
+    offload_to_disk(torch.nn.Embedding(4, 2), model, "output_embeddings", str(buffers))
+
+    assert not stale.exists()
+    assert (unmarked / "input_embeddings.pt").read_bytes() == b"not ours to judge"
+    assert os.path.exists(first._offloaded_file_location)
