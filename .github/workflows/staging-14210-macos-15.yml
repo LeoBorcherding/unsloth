@@ -1,0 +1,58 @@
+name: "staging-14210 macos-15"
+on:
+  push:
+    branches: ["pr-14210-xplat-ci"]
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      UNSLOTH_COMPILE_DISABLE: '1'
+      UNSLOTH_IS_PRESENT: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: studio/frontend/package-lock.json
+      - name: Install frontend deps
+        working-directory: studio/frontend
+        run: npm ci --no-fund --no-audit
+      - name: Node tests
+        working-directory: studio/frontend
+        run: node --experimental-strip-types --test tests/same-model-reload-load-settings.test.ts
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: "jobs: install MLX (Apple Silicon)"
+        if: ${{ !cancelled() }}
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple torch
+          for attempt in 1 2 3; do python -m pip install "unsloth_zoo @ git+https://github.com/unslothai/unsloth-zoo" && break; [ "$attempt" = 3 ] && exit 1; sleep $((5 * attempt)); done
+          python -m pip install -e . --no-deps
+          python -m pip install -U transformers mlx-vlm mlx-lm
+          python -m pip list 2>/dev/null | grep -iE '^(transformers|mlx|mlx-lm|mlx-vlm|trl|peft|torch) '
+      - name: "job: mac_mlx_same_model_reload --base-sha a33463fb165b5ed09d9cbfd50108baae36fae468 (MLX (Apple Silicon))"
+        if: ${{ !cancelled() }}
+        run: |
+          env -u UNSLOTH_IS_PRESENT -u UNSLOTH_COMPILE_DISABLE python .github/scripts/jobs/mac_mlx_same_model_reload.py --base-sha a33463fb165b5ed09d9cbfd50108baae36fae468 --out job_0_mac_mlx_same_model_reload_macos-15.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: job-results-macos-15
+          path: job_*.json
+          if-no-files-found: warn
