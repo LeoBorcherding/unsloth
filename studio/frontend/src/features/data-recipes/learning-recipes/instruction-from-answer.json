@@ -6,14 +6,15 @@
         "endpoint": "",
         "provider_type": "openai",
         "extra_headers": {},
-        "extra_body": {}
+        "extra_body": {},
+        "is_local": true
       }
     ],
     "mcp_providers": [],
     "model_configs": [
       {
         "alias": "ministral",
-        "model": "",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
         "provider": "openai_provider",
         "inference_parameters": {
           "temperature": 0.7,
@@ -24,7 +25,7 @@
     "seed_config": {
       "source": {
         "seed_type": "hf",
-        "path": "unsloth/alpaca-cleaned"
+        "path": "datasets/unsloth/alpaca-cleaned/**/*.json"
       },
       "sampling_strategy": "ordered",
       "selection_strategy": {
@@ -71,7 +72,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_1",
-        "markdown": "#### Hugging Face seed block\nThis recipe uses a ** HuggingFace dataset ** as seed data.\nYou select a Hugging Face dataset, load columns, then generate new fields from seed columns. Each column in the Hugging Face dataset becomes a valid variable that you can reference eg. `{{ topic }}`\n\n##### Setup:\n\n1. Search for a dataset and select one in the dropdown (example: `unsloth/alpaca-cleaned`)\n2. Add token only if dataset is gated/private\n3. Load columns + preview rows so variables are available in prompts\n\n##### Why this matters:\n- Seed columns can drive generation quality\n- You can reference seed values directly in prompts (for example `{{ output }}`)",
+        "markdown": "#### Hugging Face seed block\nThis recipe uses a **Hugging Face dataset** as seed data.\nYou select a Hugging Face dataset, load columns, then generate new fields from seed columns. Each column in the Hugging Face dataset becomes a valid variable that you can reference eg. `{{ topic }}`\n\n##### Setup:\n\n1. Search for a dataset and select one in the dropdown (example: `unsloth/alpaca-cleaned`)\n2. Add token only if dataset is gated/private\n3. Load columns + preview rows so variables are available in prompts\n\n##### Why this matters:\n- Seed columns can drive generation quality\n- You can reference seed values directly in prompts (for example `{{ output }}`)",
         "note_color": "#DCFCE7",
         "note_opacity": "35"
       },
@@ -82,7 +83,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_2",
-        "markdown": "##### Drop columns behavior:\n\n- You can mark specific seed columns to **drop from final output**\n- Those columns are still used during generation\n- They are removed only from exported final dataset\n\n##### Example:\n- Keep `generated_instruction` from llm-text block\n- Drop original `instruction`, `input`, `output` from the hugginface dataset from final dataset\n- Result: clean training output while still using source columns as generation context\n",
+        "markdown": "##### Drop columns behavior:\n\n- You can mark specific seed columns to **drop from final output**\n- Those columns are still used during generation\n- They are removed only from exported final dataset\n\n##### Example:\n- Keep `generated_instruction` from llm-text block\n- Drop the original `instruction` and `input` from the final dataset, and keep `output` as the answer it pairs with\n- Result: clean training output while still using source columns as generation context\n",
         "note_color": "#DCFCE7",
         "note_opacity": "35"
       },
@@ -136,7 +137,7 @@
     ],
     "layout_direction": "LR",
     "seed_source_type": "hf",
-    "seed_columns": [],
+    "seed_columns": ["instruction", "input", "output"],
     "seed_drop_columns": [],
     "seed_preview_rows": [],
     "local_file_name": "",
