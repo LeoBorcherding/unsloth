@@ -124,7 +124,18 @@ def _guard_vllm_weight_loads(function, source):
     if body is None:
         return source
     indent = body.group(1)
-    guard = f"{indent}if {shared}:\n{indent}    return None\n"
+    # TRL's own vLLM: merge_adapter / unmerge_adapter is lossy on LoRA and quantized bases, keep the no-op there.
+    guard = (
+        f"{indent}if {shared}:\n"
+        f"{indent}    return None\n"
+        f"{indent}if getattr(self, '_unsloth_vllm_sync_skip', None) is None:\n"
+        f"{indent}    from unsloth.models.rl_replacements import _unsloth_vllm_sync_unsafe\n"
+        f"{indent}    self._unsloth_vllm_sync_skip = _unsloth_vllm_sync_unsafe(self.model)\n"
+        f"{indent}    if self._unsloth_vllm_sync_skip:\n"
+        f"{indent}        print('Unsloth: vLLM weight sync is skipped for a LoRA / PEFT or quantized model without fast_inference, so rollouts use the initial weights. Load with fast_inference = True to sample from the trained model.')\n"
+        f"{indent}if self._unsloth_vllm_sync_skip:\n"
+        f"{indent}    return None\n"
+    )
     return source[: match.end()] + guard + source[match.end() :]
 
 

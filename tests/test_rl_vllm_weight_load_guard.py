@@ -6,6 +6,7 @@
 import ast
 import importlib.util
 import re
+import sys
 import textwrap
 import types
 from contextlib import nullcontext
@@ -16,6 +17,22 @@ import torch
 
 
 RL_PATH = Path(__file__).resolve().parents[1] / "unsloth" / "models" / "rl.py"
+RL_REPLACEMENTS_PATH = RL_PATH.with_name("rl_replacements.py")
+
+
+@pytest.fixture(autouse = True)
+def _sync_unsafe_module(monkeypatch):
+    # The guard imports _unsloth_vllm_sync_unsafe at call time; serve it without importing unsloth.
+    text = RL_REPLACEMENTS_PATH.read_text(encoding = "utf-8")
+    nodes = [
+        n
+        for n in ast.parse(text).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_unsloth_vllm_sync_unsafe"
+    ]
+    module = types.ModuleType("unsloth.models.rl_replacements")
+    code = compile(ast.Module(body = nodes, type_ignores = []), str(RL_REPLACEMENTS_PATH), "exec")
+    exec(code, module.__dict__)
+    monkeypatch.setitem(sys.modules, "unsloth.models.rl_replacements", module)
 
 
 def _load_guard():
@@ -177,6 +194,19 @@ def test_rloo_move_model_is_skipped_when_fast_inference_shares_weights():
     method(_trainer(llm, model))
     assert model.merges == 0
     assert llm.resets == 0
+
+
+def test_rloo_move_model_keeps_the_no_op_for_lora_on_trl_vllm(capsys):
+    method = _patched("_move_model_to_vllm", _trl_rloo_methods()["_move_model_to_vllm"])
+    llm, rec = _trl_llm()
+    model = _PeftModel()
+    model.peft_config = {"default": object()}
+    trainer = _trainer(llm, model)
+    method(trainer)
+    method(trainer)
+    assert model.merges == 0
+    assert rec.loaded == []
+    assert capsys.readouterr().out.count("vLLM weight sync is skipped") == 1
 
 
 @pytest.mark.parametrize("shared", [False, True])
