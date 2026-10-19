@@ -1056,3 +1056,16 @@ class TestTheOfflineResolveStaysOnItsOwnRequest:
                 assert offline is True
                 assert not force_hf_offline_active()
         assert not _hf_constants.is_offline_mode()
+
+    def test_a_hub_without_a_per_request_check_falls_back_to_the_process_window(self, monkeypatch):
+        # huggingface_hub 0.36 (pinned on Python 3.9) has no constants.is_offline_mode: the scope
+        # cannot be per request there, but it must still be offline rather than raise and go online.
+        import huggingface_hub.constants as _hf_constants
+
+        import utils.utils as _utils
+
+        monkeypatch.delattr(_hf_constants, "is_offline_mode")
+        monkeypatch.setattr(_utils, "_hf_offline_scope_installed", False)
+        with _utils.hf_offline_scope():
+            assert _utils.force_hf_offline_active()
+        assert not _utils.force_hf_offline_active()

@@ -488,28 +488,35 @@ def hf_offline_scoped() -> bool:
     return _hf_offline_scope.get()
 
 
-def _install_hf_offline_scope() -> None:
+def _install_hf_offline_scope() -> bool:
     global _hf_offline_scope_installed
     with _hf_offline_scope_lock:
         if _hf_offline_scope_installed:
-            return
+            return True
         try:
             import huggingface_hub.constants as _hf_constants
         except Exception:
-            return
-        original = _hf_constants.is_offline_mode
+            return False
+        original = getattr(_hf_constants, "is_offline_mode", None)
+        if original is None:
+            return False
 
         def is_offline_mode() -> bool:
             return _hf_offline_scope.get() or original()
 
         _hf_constants.is_offline_mode = is_offline_mode
         _hf_offline_scope_installed = True
+        return True
 
 
 @contextmanager
 def hf_offline_scope():
     """Offline like force_hf_offline, but only for the calling context; other threads stay online."""
-    _install_hf_offline_scope()
+    if not _install_hf_offline_scope():
+        # huggingface_hub 0.x (pinned on Python 3.9) has no per-request offline check to scope.
+        with force_hf_offline():
+            yield
+        return
     token = _hf_offline_scope.set(True)
     try:
         yield
