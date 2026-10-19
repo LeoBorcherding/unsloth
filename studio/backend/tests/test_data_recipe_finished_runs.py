@@ -122,6 +122,22 @@ def test_finished_preview_stays_readable_after_the_next_run_starts(harness):
     assert m.get_status(second)["status"] == "pending"
 
 
+def test_events_still_queued_when_the_next_run_starts_land_on_the_kept_run(harness):
+    m = harness.manager
+    first = m.start(recipe = {}, run = {"execution_type": "preview"})
+    first_job = m._job
+    harness.procs[0].running = False  # exited; its completed event is still in the queue
+    second = m.start(recipe = {}, run = {})
+    seen_before = len(m._events)
+
+    m._handle_event(first_job, {"type": EVENT_JOB_COMPLETED, "dataset": [{"q": "a"}]})
+
+    assert m.get_status(first)["status"] == "completed"
+    assert m.get_dataset(first, limit = 10) == {"dataset": [{"q": "a"}], "total": 1}
+    assert m.get_status(second)["status"] == "pending"
+    assert len(m._events) == seen_before, "the old run's event must not reach the new run's stream"
+
+
 def test_only_the_last_few_finished_runs_are_kept(harness):
     m = harness.manager
     ids = []

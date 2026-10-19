@@ -619,28 +619,32 @@ class JobManager:
 
         terminal = False
         with self._lock:
-            if self._job is None or self._job.job_id != job.job_id:
+            current = self._job is not None and self._job.job_id == job.job_id
+            # A worker can exit with its last events still queued after the next run started: they
+            # still land on its kept run, just not on the new run's stream.
+            target = self._job if current else self._finished.get(job.job_id)
+            if target is None:
                 return
             if et == EVENT_JOB_STARTED:
-                self._job.status = "active"
-                self._job.artifact_path = event.get("artifact_path") or self._job.artifact_path
-                self._job.execution_type = event.get("execution_type") or self._job.execution_type
+                target.status = "active"
+                target.artifact_path = event.get("artifact_path") or target.artifact_path
+                target.execution_type = event.get("execution_type") or target.execution_type
             if et == EVENT_JOB_COMPLETED:
-                self._job.status = "completed"
-                self._job.finished_at = time.time()
-                self._job.analysis = event.get("analysis")
-                self._job.artifact_path = event.get("artifact_path")
-                self._job.execution_type = event.get("execution_type")
-                self._job.dataset = event.get("dataset")
-                self._job.processor_artifacts = event.get("processor_artifacts")
-                if self._job.progress.total and self._job.progress.total > 0:
-                    self._job.progress.done = self._job.progress.total
-                    self._job.progress.percent = 100.0
+                target.status = "completed"
+                target.finished_at = time.time()
+                target.analysis = event.get("analysis")
+                target.artifact_path = event.get("artifact_path")
+                target.execution_type = event.get("execution_type")
+                target.dataset = event.get("dataset")
+                target.processor_artifacts = event.get("processor_artifacts")
+                if target.progress.total and target.progress.total > 0:
+                    target.progress.done = target.progress.total
+                    target.progress.percent = 100.0
                 terminal = True
             if et == EVENT_JOB_ERROR:
-                self._job.status = "error"
-                self._job.finished_at = time.time()
-                self._job.error = event.get("error") or "error"
+                target.status = "error"
+                target.finished_at = time.time()
+                target.error = event.get("error") or "error"
                 terminal = True
             if et == EVENT_JOB_CANCELLED:
                 terminal = True
@@ -648,12 +652,13 @@ class JobManager:
             if msg:
                 upd = parse_log_message(msg)
                 if upd:
-                    apply_update(self._job, upd)
+                    apply_update(target, upd)
 
         if terminal:
             self._retire_workflow_key(job)
 
-        self._emit(event)
+        if current:
+            self._emit(event)
 
     def _retire_workflow_key(self, job: Job) -> None:
         """Revoke the workflow-scoped sk-unsloth-* key, if one was minted.
