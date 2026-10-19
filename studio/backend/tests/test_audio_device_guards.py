@@ -427,6 +427,23 @@ def test_whisper_cpp_still_exempts_a_server_started_with_no_gpu():
     )
 
 
+def test_whisper_cpp_started_without_the_gpu_by_training_or_a_cpu_install_holds_no_vram():
+    """Training and a cpu install add --no-gpu without the user's _forced_cpu; freeing such a server
+    for training would only wait behind its transcription, which on CPU may run for hours."""
+    assert (
+        _stt_sidecar_holds_no_vram(
+            types.SimpleNamespace(device = "whisper.cpp", _forced_cpu = False, _cpu_only = True)
+        )
+        is True
+    )
+    assert (
+        _stt_sidecar_holds_no_vram(
+            types.SimpleNamespace(device = "whisper.cpp", _forced_cpu = False, _cpu_only = False)
+        )
+        is False
+    )
+
+
 def test_a_forced_cpu_native_audio_load_selects_no_gpu():
     """Selection returns every card needed to hold the checkpoint, and the worker
     forwards that list to a backend that rejects more than one. Its required_gb also

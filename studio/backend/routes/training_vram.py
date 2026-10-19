@@ -546,9 +546,9 @@ def _stt_sidecar_holds_no_vram(sidecar) -> bool:
         gpu_disabled = getattr(sidecar, "_gpu_disabled", None)
         if gpu_disabled is not None:
             return gpu_disabled is True
-        # whisper.cpp sets _forced_cpu only alongside a spawned --no-gpu and clears it
-        # on release, so there it is the fact.
-        return getattr(sidecar, "_forced_cpu", False) is True
+        # whisper.cpp records every spawned --no-gpu (by request, during training, or on a cpu install) in _cpu_only
+        # and clears it on release; _forced_cpu alone misses the last two.
+        return getattr(sidecar, "_cpu_only", getattr(sidecar, "_forced_cpu", False)) is True
     except Exception:  # noqa: BLE001 - a probe must never fail the release it precedes
         return False
 
