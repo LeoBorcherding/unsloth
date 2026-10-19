@@ -39,6 +39,7 @@ type TrackRecipeExecutionParams = {
   onUpsert: (record: RecipeExecutionRecord) => void;
   onSetPreviewErrors: (errors: string[]) => void;
   onPreviewSuccess?: () => void;
+  signal?: AbortSignal;
 };
 
 export type TrackRecipeExecutionResult = {
@@ -96,10 +97,16 @@ export async function trackRecipeExecution({
   jobId,
   initialExecution,
   notify,
-  onUpsert,
+  onUpsert: upsert,
   onSetPreviewErrors,
   onPreviewSuccess,
+  signal,
 }: TrackRecipeExecutionParams): Promise<TrackRecipeExecutionResult> {
+  const onUpsert = (record: RecipeExecutionRecord): void => {
+    if (!signal?.aborted) {
+      upsert(record);
+    }
+  };
   let done = false;
   let lastStatus: RecipeExecutionStatus = initialExecution.status;
   let completedEventPayload: Record<string, unknown> | null = null;
@@ -107,6 +114,9 @@ export async function trackRecipeExecution({
   let lastDatasetPollAt = 0;
 
   const eventsAbortController = new AbortController();
+  signal?.addEventListener("abort", () => eventsAbortController.abort(), {
+    once: true,
+  });
   void streamRecipeJobEvents({
     jobId,
     signal: eventsAbortController.signal,
@@ -210,9 +220,9 @@ export async function trackRecipeExecution({
   });
 
   try {
-    while (!done) {
+    while (!(done || signal?.aborted)) {
       const status = await getRecipeJobStatus(jobId);
-      if (done && isTerminalStatus(lastStatus)) {
+      if (signal?.aborted || (done && isTerminalStatus(lastStatus))) {
         break;
       }
       const mappedStatus = mapJobStatus(status.status);
@@ -250,13 +260,13 @@ export async function trackRecipeExecution({
           // 404 until the first batch lands.
         }
       }
-      if (!done) {
+      if (!(done || signal?.aborted)) {
         await delay(1200);
       }
     }
   } catch (error) {
     const terminal = isTerminalStatus(lastStatus);
-    if (!terminal) {
+    if (!(terminal || signal?.aborted)) {
       const message = toErrorMessage(error, `${label} failed.`);
       latestExecution = {
         ...latestExecution,
@@ -272,8 +282,12 @@ export async function trackRecipeExecution({
     eventsAbortController.abort();
   }
 
+  if (signal?.aborted) {
+    return { success: false, terminal: false };
+  }
+
   if (lastStatus === "completed") {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 3 && !signal?.aborted; attempt += 1) {
       try {
         const finalStatus = await getRecipeJobStatus(jobId);
         latestExecution = applyExecutionStatusSnapshot(
@@ -283,9 +297,15 @@ export async function trackRecipeExecution({
       } catch {
         break;
       }
+      if (signal?.aborted) {
+        return { success: false, terminal: false };
+      }
       if (attempt < 2) {
         await delay(250);
       }
+    }
+    if (signal?.aborted) {
+      return { success: false, terminal: false };
     }
 
     const completedPayload = completedEventPayload as Record<
@@ -321,6 +341,9 @@ export async function trackRecipeExecution({
             total: eventDatasetRows.length,
           }),
     ]);
+    if (signal?.aborted) {
+      return { success: false, terminal: false };
+    }
 
     const analysis =
       analysisResult.status === "fulfilled"
