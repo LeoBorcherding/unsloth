@@ -100,6 +100,11 @@ def test_a_large_json_array_previews_from_its_first_rows(monkeypatch, tmp_path):
         (b'{"data": [{"a": 1}]}', None),
         (b"[1, 2, 3]", None),
         (b'[{"a": ', None),
+        # Malformed arrays fall back to the loader, which rejects them as the run would.
+        (b'[{"a": 1} {"a": 2}]', None),
+        (b'[, {"a": 1}]', None),
+        (b'[{"a": 1},, {"a": 2}]', None),
+        (b'[{"a": 1},]', None),
     ],
 )
 def test_json_head_reads_only_an_array_of_objects(monkeypatch, tmp_path, payload, expected):

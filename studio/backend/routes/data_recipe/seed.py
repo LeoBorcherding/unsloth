@@ -919,10 +919,13 @@ def _read_json_array_head(handle, preview_size: int) -> list[dict[str, Any]] | N
     buffer = ""
     consumed = 0
     opened = False
+    # One comma between rows, none before the first or the closing bracket, so a malformed
+    # array goes to the loader, which rejects it as the run would.
+    after_row = after_comma = False
     rows: list[dict[str, Any]] = []
     eof = False
     while len(rows) < preview_size:
-        buffer = buffer.lstrip(" \t\r\n,") if opened else buffer.lstrip()
+        buffer = buffer.lstrip()
         if buffer and not opened:
             if buffer[0] != "[":
                 return None
@@ -930,8 +933,18 @@ def _read_json_array_head(handle, preview_size: int) -> list[dict[str, Any]] | N
             buffer = buffer[1:]
             continue
         if buffer.startswith("]"):
+            if after_comma:
+                return None
             break
+        if buffer.startswith(","):
+            if not after_row:
+                return None
+            after_row, after_comma = False, True
+            buffer = buffer[1:]
+            continue
         if buffer:
+            if after_row:
+                return None
             try:
                 row, end = decoder.raw_decode(buffer)
             except json.JSONDecodeError:
@@ -941,6 +954,7 @@ def _read_json_array_head(handle, preview_size: int) -> list[dict[str, Any]] | N
                     return None
                 rows.append(row)
                 buffer = buffer[end:]
+                after_row, after_comma = True, False
                 continue
         if eof:
             return rows or None
