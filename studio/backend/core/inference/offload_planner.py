@@ -140,9 +140,10 @@ class PlanOptions:
     # Below this the term is zero, so the flat reserve is unchanged and no placement moves.
     overhead_free_ctx: int = 32768
     extra_resident_bytes: int = 0
-    # The vocab-width output buffer each slot past the first adds on top of
-    # ``extra_resident_bytes``, so dropping a slot (rung 1) gives it back.
-    output_bytes_per_extra_slot: int = 0
+    # The slot-dependent part of the compute buffer (the vocab-width output rows) at each slot
+    # count, on top of ``extra_resident_bytes``, so dropping a slot (rung 1) gives back what that
+    # count really frees. Output rows cap at the micro-batch, so it is not linear in the slots.
+    output_bytes_by_parallel: Mapping[int, int] = field(default_factory = dict)
     pipeline_overhead_bytes: int = 0
     # Host RAM this planner refuses to spend, so a spill does not push the box into swap.
     host_ram_headroom_bytes: int = 2 * GIB
@@ -329,16 +330,17 @@ class _Knobs:
 
 
 def _outside_layout_bytes(opts: PlanOptions, knobs: Optional[_Knobs] = None) -> int:
-    """Device bytes the layout cannot see: the caller's scalar, the output buffer of every slot
-    past the first, the projector unless rung 0 moved it, and the draft unless rung 2 dropped it."""
+    """Device bytes the layout cannot see: the caller's scalar, the output buffer at the knobs'
+    slot count, the projector unless rung 0 moved it, and the draft unless rung 2 dropped it."""
     total = max(0, opts.extra_resident_bytes)
     slots = knobs.n_parallel if knobs is not None else opts.n_parallel
-    total += max(0, opts.output_bytes_per_extra_slot) * max(0, slots - 1)
+    by_slots = opts.output_bytes_by_parallel
+    total += by_slots.get(slots, by_slots.get(opts.n_parallel, 0))
     if not (knobs and knobs.mmproj_to_host):
         total += max(0, opts.mmproj_bytes)
     if not (knobs and knobs.draft_dropped):
         total += max(0, opts.draft_bytes)
-    return total
+    return max(0, total)
 
 
 def _measured_cache_at(layout: ModelLayout, opts: PlanOptions, n_ctx: int, n_parallel: int) -> int:

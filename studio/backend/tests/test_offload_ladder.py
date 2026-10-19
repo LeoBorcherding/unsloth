@@ -1171,13 +1171,48 @@ def test_the_slot_rung_gives_back_each_slots_output_buffer():
         64 * GIB,
         ctx,
         kv_bytes_floor = floor,
-        opts = opts(**base, output_bytes_per_extra_slot = out),
+        opts = opts(**base, output_bytes_by_parallel = {_p: (_p - 1) * out for _p in (1, 2, 3, 4)}),
     )
     assert plan.n_parallel == 2 and not plan.spills_anything, plan.reason
     unpriced = plan_placement(
         layout, [card - 3 * out], 64 * GIB, ctx, kv_bytes_floor = floor, opts = opts(**base)
     )
     assert unpriced.n_parallel in (0, 4) and unpriced.spills_anything, unpriced.reason
+
+
+def test_the_slot_rung_credits_no_output_rows_the_micro_batch_already_capped():
+    """Output rows are min(ubatch, slots): at ubatch 2, four slots and three hold the same two
+    rows. A per-slot average of the one-to-four difference credited a third of a row for 4 -> 3,
+    so a card a quarter row short launched --fit off at 3 slots on bytes it never freed."""
+    from core.inference.offload_planner import all_resident_bytes
+
+    layout = graded_moe()
+    ctx, floor, row = 4096, GIB, GIB // 2
+    needed = all_resident_bytes(layout, ctx, kv_bytes_floor = floor, n_seq = 4)
+    card = needed + GIB + row - row // 4
+    base = dict(
+        overhead_bytes_per_device = GIB,
+        overhead_bytes_per_token = 0,
+        n_parallel = 4,
+        kv_unified = True,
+        kv_bytes_floor_by_parallel = {_p: floor for _p in (1, 2, 3, 4)},
+    )
+
+    def place(by_parallel):
+        return plan_placement(
+            layout,
+            [card],
+            64 * GIB,
+            ctx,
+            kv_bytes_floor = floor,
+            opts = opts(**base, output_bytes_by_parallel = by_parallel),
+        )
+
+    averaged = place({_p: (_p - 1) * row // 3 for _p in (1, 2, 3, 4)})
+    assert averaged.n_parallel == 3 and not averaged.spills_anything, averaged.reason
+    capped = place({1: 0, 2: row, 3: row, 4: row})
+    assert capped.n_parallel != 3, capped.reason
+    assert capped.spills_anything or capped.n_parallel == 1, capped.reason
 
 
 def test_the_slot_rung_still_fires_where_a_slot_really_is_a_cache():
