@@ -1891,3 +1891,19 @@ def test_the_implicit_subset_is_one_that_has_the_split(monkeypatch, tmp_path):
     assert response.subset == "cola"
     assert response.resolved_path == "datasets/nyu-mll/glue/cola/train-*.parquet"
     assert loads[0]["data_files"] == ["cola/train-00000-of-00001.parquet"]
+
+
+def test_a_data_dir_only_config_first_is_still_the_implicit_subset(monkeypatch, tmp_path):
+    # english names only a folder, so its splits come from the files there; it must not be
+    # passed over for a later config just because that one maps train explicitly.
+    files = [
+        "en/train-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "english"
+    assert response.resolved_path.startswith("datasets/org/bilingual/en/")

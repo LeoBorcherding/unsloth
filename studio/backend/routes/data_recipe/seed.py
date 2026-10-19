@@ -1168,12 +1168,20 @@ def inspect_seed_dataset(
     repo_files = _list_hf_repo_files(dataset_name = dataset_name, token = token)
     data_files = [file for file in repo_files if file.lower().endswith(DATA_EXTS)]
     configs = _list_hf_dataset_configs(dataset_name = dataset_name, token = token)
-    # Several configs and none the default: the first that declares this split (glue's first, ax,
-    # is test-only), returned as the subset so the run reads it too. The repo-root glob read every
-    # config at once (gsm8k twice over).
+    # Several configs and none the default: the first that can hold this split, returned as the
+    # subset so the run reads it too. The repo-root glob read every config at once (gsm8k twice
+    # over). Skipped only when its declared files leave the split out (glue's first, ax, is
+    # test-only); a data_dir-only config infers its splits from the folder, so it stays eligible.
     if not subset and len(configs) > 1 and _pick_config(configs, None) is None:
         names = [str(c.get("config_name") or DEFAULT_CONFIG) for c in configs]
-        subset = next((n for n in names if _declared_split_patterns(configs, split, n)), names[0])
+        subset = next(
+            (
+                name
+                for name, config in zip(names, configs)
+                if not config.get("data_files") or _declared_split_patterns(configs, split, name)
+            ),
+            names[0],
+        )
 
     # Preview the same files the recipe will read, so the rows on screen are not
     # from a config the resolved path excludes.
