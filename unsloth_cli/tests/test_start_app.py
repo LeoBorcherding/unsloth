@@ -168,6 +168,24 @@ def test_codex_app_switches_back_when_unsloth_stops_answering(studio, monkeypatc
     assert not config.with_name("unsloth-model-catalog.json").exists()
 
 
+def test_codex_app_interrupted_right_after_the_switch_switches_back(studio, monkeypatch, tmp_path):
+    config = _codex_config(studio)
+    real_save = start._save_app_config
+
+    def save_then_interrupt(*args):
+        # A Ctrl+C or console close landing after the write, before the hold loop's try.
+        real_save(*args)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(start, "_save_app_config", save_then_interrupt)
+
+    CliRunner().invoke(start.start_app, ["codex", "--app"])
+
+    assert config.read_text() == USER_CODEX
+    assert not (tmp_path / "agents" / "app" / "codex.json").exists()
+    assert APP_KEY not in studio["keys"]
+
+
 def test_codex_recovers_a_switch_left_by_a_dead_session(studio, monkeypatch, tmp_path):
     config = _codex_config(studio)
     with monkeypatch.context() as crash:

@@ -6307,7 +6307,7 @@ def _hold_codex_app(base: str) -> None:
 def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> None:
     target = _codex_app_target()
     catalog = target.path.with_name(_CODEX_APP_CATALOG)
-    state, key_id = {}, None
+    state, key_id, new_state = {}, None, None
     try:
         state_path, state, text, key, key_id = _open_app_config(target, base, explicit_key)
         new_text, previous = _codex_app_build(text, base, key, entry, None)
@@ -6327,7 +6327,12 @@ def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> N
         }
         _save_app_config(target, state_path, {}, new_state, text, new_text)
     except BaseException:
-        _revoke_new_app_key(base, key_id, state)
+        # Stopped once the state was saved (a console close lands here too): undo it now, as the
+        # next start's recovery would, instead of leaving config.toml on a revoked key.
+        if new_state is not None and (_read_json_object(state_path) or {}).get("key") == key:
+            _switch_codex_app_back(state_path, new_state)
+        else:
+            _revoke_new_app_key(base, key_id, state)
         _shutdown_auto_served()
         raise
     try:
