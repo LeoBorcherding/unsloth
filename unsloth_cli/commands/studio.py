@@ -2353,6 +2353,13 @@ def _consume_legacy_short_aliases(
     return value, out
 
 
+def _consume_exact_short_flags(args: List[str], flag: str) -> tuple[bool, List[str]]:
+    """Pop an exact boolean short flag, leaving clusters (`-ctv`) for the llama-server tail.
+    Click drops `--` from ctx.args, so a `-v` after it is popped too."""
+    out = [tok for tok in args if tok != flag]
+    return len(out) != len(args), out
+
+
 _RUN_PANEL_MODEL = "Model"
 _RUN_PANEL_SERVER = "Server & network"
 _RUN_PANEL_TOOLS = "Tool calls"
@@ -2390,10 +2397,10 @@ def run(
     verbose: bool = typer.Option(
         False,
         "--verbose",
-        "-v",
+        # No `-v`/`-y` short options: Click clusters `-ctv`/`-dev`/`-nkvo`. Exact `-v`/`-y` still work.
         rich_help_panel = _RUN_PANEL_ADVANCED,
         help = "Log every API request, including the high-frequency polling that is "
-        "deduplicated by default.",
+        "deduplicated by default. `-v` also works.",
     ),
     max_seq_length: int = typer.Option(
         0,
@@ -2543,9 +2550,9 @@ def run(
     yes: bool = typer.Option(
         False,
         "--yes",
-        "-y",
         rich_help_panel = _RUN_PANEL_ADVANCED,
-        help = "Accepted for backward compatibility; the tool policy no longer prompts.",
+        help = "Accepted for backward compatibility; the tool policy no longer prompts. "
+        "`-y` also works.",
     ),
     parallel: int = typer.Option(
         _PARALLEL_DEFAULT_RUN,
@@ -2674,6 +2681,10 @@ def run(
     secure = _resolve_secure(secure, not_secure)
     _preserve_cloudflare_intent(cloudflare, secure)
     extra_llama_args: List[str] = list(ctx.args) if ctx.args else []
+    short_verbose, extra_llama_args = _consume_exact_short_flags(extra_llama_args, "-v")
+    short_yes, extra_llama_args = _consume_exact_short_flags(extra_llama_args, "-y")
+    verbose = verbose or short_verbose
+    yes = yes or short_yes
 
     # Read from the env at backend import, so resolve before any re-exec; an omitted flag keeps a value the parent forwarded.
     _healing_disabled = (
