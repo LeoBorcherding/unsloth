@@ -152,6 +152,15 @@ def test_two_job_processes_scrape_once_and_leave_no_raw_runs(tmp_path):
     assert not list(tmp_path.rglob("raw-runs"))
 
 
+def _age(path: Path, seconds: int) -> None:
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime - seconds - 1))
+
+
+def _new_job(impl) -> None:
+    # Another recipe job is another process, with nothing from this one in memory.
+    getattr(impl, "_JOB_SCRAPES", {}).clear()
+
+
 def test_an_expired_scrape_is_replaced_and_removed(plugin, tmp_path, monkeypatch):
     from data_designer_github_repo_seed import impl
 
@@ -159,12 +168,31 @@ def test_an_expired_scrape_is_replaced_and_removed(plugin, tmp_path, monkeypatch
     reader = impl.GitHubRepoSeedReader()
     reader.attach(_source(), None)
     old = Path(reader.get_dataset_uri())
-    os.utime(old, (old.stat().st_atime, old.stat().st_mtime - impl._SCRAPE_TTL_SECONDS - 1))
+    _age(old, impl._SCRAPE_TTL_SECONDS)
+    _new_job(impl)
 
     new = Path(reader.get_dataset_uri())
 
-    assert new != old and new.exists() and not old.exists()
+    assert new != old and new.exists() and old.exists()
     assert sum("RepoMeta" in q for q in FakeGitHubClient.calls) == 2
+
+    _age(old, impl._SCRAPE_KEEP_SECONDS)
+    _new_job(impl)
+    assert Path(reader.get_dataset_uri()) == new and not old.exists()
+
+
+def test_a_long_run_keeps_reading_its_own_scrape(plugin, tmp_path, monkeypatch):
+    from data_designer_github_repo_seed import impl
+
+    monkeypatch.setattr(impl, "_CACHE_DIR", tmp_path / "cache")
+    reader = impl.GitHubRepoSeedReader()
+    reader.attach(_source(), None)
+    first = Path(reader.get_dataset_uri())
+    # The engine asks for the URI again when it cycles the seed, maybe hours into the run.
+    _age(first, impl._SCRAPE_TTL_SECONDS)
+
+    assert Path(reader.get_dataset_uri()) == first and first.exists()
+    assert sum("RepoMeta" in q for q in FakeGitHubClient.calls) == 1
 
 
 def _github_recipe(**source):

@@ -23,7 +23,11 @@ from .scraper import ScrapeConfig, materialize_to_jsonl
 # the preview and run that follow. The key holds a short SHA-256 of the token, never the token.
 _CACHE_DIR = LazyPath(github_seed_cache_root)
 _SCRAPE_TTL_SECONDS = 60 * 60
+# Deleted only well past the TTL: a run that started on a scrape keeps reading it for hours.
+_SCRAPE_KEEP_SECONDS = 24 * 60 * 60
 _SCRAPE_CACHE_LOCK = threading.Lock()
+# This job's scrape per key: the engine asks for the URI again when it cycles the seed mid-run.
+_JOB_SCRAPES: dict[str, str] = {}
 
 
 def _scrape_cache_key(cfg: ScrapeConfig) -> str:
@@ -42,20 +46,24 @@ def _scrape_cache_key(cfg: ScrapeConfig) -> str:
 
 
 def _fresh_cached_scrape(cache_dir: Path, key: str) -> Optional[Path]:
-    """The newest scrape for `key` younger than the TTL; expired scrapes of any key are removed."""
+    """The newest scrape for `key` younger than the TTL; scrapes of any key past the keep window are removed."""
     now = time.time()
     fresh: Optional[Path] = None
     fresh_mtime = 0.0
     for path in cache_dir.glob("github_*.jsonl"):
         try:
             mtime = path.stat().st_mtime
-            if now - mtime > _SCRAPE_TTL_SECONDS:
+            if now - mtime > _SCRAPE_KEEP_SECONDS:
                 path.unlink()
                 continue
         except OSError:
             # Gone already, or a job still has it open (Windows).
             continue
-        if path.name.startswith(f"github_{key}_") and mtime > fresh_mtime:
+        if (
+            now - mtime <= _SCRAPE_TTL_SECONDS
+            and path.name.startswith(f"github_{key}_")
+            and mtime > fresh_mtime
+        ):
             fresh, fresh_mtime = path, mtime
     return fresh
 
@@ -76,8 +84,12 @@ class GitHubRepoSeedReader(SeedReader[GitHubRepoSeedSource]):
         cache_dir = Path(_CACHE_DIR)
         key = _scrape_cache_key(cfg)
         with _SCRAPE_CACHE_LOCK:
+            path = _JOB_SCRAPES.get(key)
+            if path and Path(path).exists():
+                return path
             cache_dir.mkdir(parents = True, exist_ok = True)
             cached = _fresh_cached_scrape(cache_dir, key)
-            if cached is not None:
-                return str(cached)
-            return str(materialize_to_jsonl(cfg, cache_dir, stem = f"github_{key}"))
+            if cached is None:
+                cached = materialize_to_jsonl(cfg, cache_dir, stem = f"github_{key}")
+            _JOB_SCRAPES[key] = str(cached)
+            return str(cached)
