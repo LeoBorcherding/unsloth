@@ -131,3 +131,23 @@ def test_image_flag_holds_when_detection_fails(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert trainer.load_kwargs.get("is_dataset_image") is True
+
+
+def test_peek_retries_an_unwritable_datasets_cache(tmp_path, monkeypatch):
+    import datasets
+
+    real_load = datasets.load_dataset
+    calls = []
+
+    def _load(*args, **kwargs):
+        calls.append(kwargs.get("cache_dir"))
+        if len(calls) == 1:
+            raise PermissionError(13, "Permission denied", "_builder.lock")
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(datasets, "load_dataset", _load)
+    result, trainer = _train(monkeypatch, tmp_path, _rows(tmp_path, _IMAGE_ROWS))
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2 and calls[1]
+    assert trainer.load_kwargs.get("is_dataset_image") is True

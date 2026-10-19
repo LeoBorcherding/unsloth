@@ -177,9 +177,9 @@ def _detect_dataset_modalities(cfg: Config, hf_token: Optional[str]) -> tuple[bo
     It has to run before load_model, which picks the vision or audio path from it.
     """
     ensure_studio_backend_path()
-    from datasets import load_dataset
     from hub.utils.dataset_format import detect_multimodal_dataset
     from utils.datasets.audio_decode import ensure_audio_decoding
+    from utils.datasets.cache_safe import load_dataset_cache_safe as load_dataset
     from utils.paths import dataset_files_in_dir, resolve_dataset_path
 
     ensure_audio_decoding()
