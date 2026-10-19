@@ -39,6 +39,8 @@ type UiInput = {
   seed_drop_columns?: unknown;
   seed_preview_rows?: unknown;
   local_file_name?: unknown;
+  hf_subset?: unknown;
+  hf_split?: unknown;
   unstructured_upload_uid?: unknown;
   unstructured_file_ids?: unknown;
   unstructured_file_names?: unknown;
@@ -501,6 +503,8 @@ export function importRecipePayload(
           : payloadSeedDropColumns,
       seed_preview_rows: uiSeedPreviewRows,
       local_file_name: uiLocalFileName,
+      hf_subset: readString(ui?.hf_subset) ?? undefined,
+      hf_split: readString(ui?.hf_split) ?? undefined,
       unstructuredUploadUid: uiUnstructuredUploadUid,
       unstructuredFileIds: uiUnstructuredFileIds,
       unstructuredFileNames: uiUnstructuredFileNames,
