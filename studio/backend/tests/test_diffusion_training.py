@@ -381,8 +381,32 @@ def test_service_second_stop_ends_a_wedged_child_at_once():
     assert svc._proc.is_alive()
     t0 = time.monotonic()
     assert svc.stop() is True
-    assert not svc._proc.is_alive() and time.monotonic() - t0 < 2
     assert _wait_status(svc, "stopped", "error")["status"] == "stopped"
+    assert not svc._proc.is_alive() and time.monotonic() - t0 < 2
+
+
+class _TermIgnoringProc(_WedgedProc):
+    # A child in an uninterruptible call: SIGTERM stays pending, only kill() ends it.
+    def terminate(self):
+        self.terminated = True
+
+
+class _TermIgnoringCtx(_FakeCtx):
+    def Process(self, target, kwargs, daemon):
+        return _TermIgnoringProc(target, kwargs, daemon)
+
+
+def test_service_second_stop_does_not_block_the_caller():
+    # /diffusion/stop is async, so a stop() that waits out terminate's grace freezes every request.
+    svc = DiffusionTrainingService(ctx = _TermIgnoringCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    assert svc.stop() is True
+    t0 = time.monotonic()
+    assert svc.stop() is True
+    assert time.monotonic() - t0 < 1
+    assert _wait_status(svc, "stopped", "error", timeout = 10.0)["status"] == "stopped"
+    assert not svc._proc.is_alive()
 
 
 def test_service_crash_without_terminal_event_is_error():

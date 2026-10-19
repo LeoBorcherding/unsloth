@@ -783,7 +783,8 @@ class DiffusionTrainingService:
             # The child consumes the FIRST signal, so honouring a later stop-without-saving set a parent
             # discard the child never carried out: the run was marked discarded and its checkpoints deleted
             # while the adapter and catalog entry stayed on disk. A repeat only ends a child that ignored it.
-            self._force_stop(proc)
+            # Off this thread: the route is async, and terminate + join can take up to 7 s.
+            threading.Thread(target = self._force_stop, args = (proc,), daemon = True).start()
             return True
         with self._lock:
             if self._proc is not proc or self._stop_signalled:
