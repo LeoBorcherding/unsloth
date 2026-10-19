@@ -130,7 +130,27 @@ def _mark_seq_dynamic(seq_len, obj):
 _GDN_OP = [None]
 
 
+def _hub_forwarded_params(fn):
+    """The keywords transformers' hub-kernel wrapper passes on to fla (it drops the rest, e.g. the
+    decoder's num_items_in_batch), unwrapping Unsloth's disable wrappers; None if not a hub call."""
+    for _ in range(8):
+        code = getattr(fn, "__code__", None)
+        if code is not None and fn.__closure__:
+            cells = dict(zip(code.co_freevars, fn.__closure__))
+            if "implementation" in cells and "applicable_params" in cells:
+                try:
+                    return frozenset(cells["applicable_params"].cell_contents)
+                except (ValueError, TypeError):
+                    return None
+        fn = getattr(fn, "_unsloth_undisabled", None) or getattr(fn, "__wrapped__", None)
+        if fn is None:
+            break
+    return None
+
+
 def _gdn_chunk_adapter(original):
+    forwarded = _hub_forwarded_params(original)
+
     # updated = (): the original's __dict__ carries torch.compiler.disable's marker.
     @functools.wraps(original, updated = ())
     def chunk_gated_delta_rule(
@@ -149,7 +169,7 @@ def _gdn_chunk_adapter(original):
             and all(
                 value is None or value is False
                 for key, value in kwargs.items()
-                if key != "use_qk_l2norm_in_kernel"
+                if key != "use_qk_l2norm_in_kernel" and (forwarded is None or key in forwarded)
             )
         ):
             # Inductor pins a custom op's input strides; a sliced input fails at the next length.
@@ -169,6 +189,21 @@ def _route_fla_kernel():
     referrers), not by name. Closures are left alone: only namespace entries are swapped."""
     import gc
 
+    # gc.get_referrers skips the permanent generation, and Trainer.train() freezes the setup-time
+    # heap (_gc_train_scope) before the first GatedDeltaNet forward gets here: the walk found no
+    # caller and the op never engaged. Thaw for the walk; refreezing also freezes what train()
+    # allocated so far, which train()'s exit unfreezes with the rest.
+    frozen = gc.get_freeze_count() > 0
+    if frozen:
+        gc.unfreeze()
+    try:
+        return _route_fla_callers(gc)
+    finally:
+        if frozen:
+            gc.freeze()
+
+
+def _route_fla_callers(gc):
     kernels = []
     for name, module in list(sys.modules.items()):
         if module is not None and name.endswith("fla.ops.gated_delta_rule.chunk"):
@@ -206,10 +241,11 @@ def _route_fla_kernel():
             if not isinstance(space, dict) or space is adapter.__dict__:
                 continue
             for key, value in list(space.items()):
-                if (
-                    value is caller
-                    and isinstance(key, str)
-                    and key.endswith("chunk_gated_delta_rule")
+                if value is not caller or not isinstance(key, str):
+                    continue
+                # A packing varlen probe keeps the kernel as its `_fn` keyword default; route under it.
+                if key.endswith("chunk_gated_delta_rule") or (
+                    key == "_fn" and str(space.get("_name", "")).endswith("chunk_gated_delta_rule")
                 ):
                     space[key] = adapter
                     routed += 1
@@ -268,12 +304,38 @@ def _namespaces(fn, depth = 3):
     return out
 
 
+def _alias_namespace(space):
+    """The namespace Dynamo resolves `space`'s globals through: an inlined function's globals are
+    read as sys.modules[__name__], and Unsloth's compiled modules import transformers' __name__."""
+    module = (
+        sys.modules.get(space.get("__name__")) if isinstance(space.get("__name__"), str) else None
+    )
+    alias = getattr(module, "__dict__", None)
+    return alias if isinstance(alias, dict) and alias is not space else None
+
+
 def _route_causal_conv(gdn):
     from ._gdn_op import _causal_depthwise_conv
     for space in _namespaces(type(gdn).forward):
         fn = space.get("causal_conv1d_fn")
-        if callable(fn) and not getattr(fn, "_unsloth_block_adapter", False):
+        if not callable(fn) or getattr(fn, "_unsloth_block_adapter", False):
+            continue
+        probe_defaults = (
+            getattr(fn, "__kwdefaults__", None)
+            if getattr(fn, "_unsloth_varlen_probe_of", None) is not None
+            else None
+        )
+        if probe_defaults is not None:
+            # Packing's varlen probe stays outermost so its boundary handshake still sees the call.
+            inner = probe_defaults.get("_fn")
+            if callable(inner) and not getattr(inner, "_unsloth_block_adapter", False):
+                probe_defaults["_fn"] = _causal_conv1d_adapter(inner, _causal_depthwise_conv)
+        else:
             space["causal_conv1d_fn"] = _causal_conv1d_adapter(fn, _causal_depthwise_conv)
+        alias = _alias_namespace(space)
+        if alias is not None and callable(alias.get("causal_conv1d_fn")):
+            # Dynamo guards the alias binding: it must be the object the forward actually calls.
+            alias["causal_conv1d_fn"] = space["causal_conv1d_fn"]
 
 
 def _route_sm_count(modules = None):
@@ -637,6 +699,10 @@ def _wrap(cls, compile_options):
             except torch.OutOfMemoryError:
                 raise
             except Exception as e:
+                # Non-reentrant checkpoint ends a recompute by raising through the forward: control
+                # flow, not a compile failure (demoting on it left the stock forward in every block).
+                if type(e).__name__ == "_StopRecomputationError":
+                    raise
                 if os.environ.get("UNSLOTH_BLOCK_COMPILE_DEBUG") == "1":
                     import traceback
                     traceback.print_exc()
@@ -712,6 +778,19 @@ def _lora_would_fold(experts):
     return reads is False
 
 
+def _selective_dequant_requested(experts):
+    # zoo's selective / chunked bnb 4-bit expert dequant plans from host-read token counts, so it
+    # declines inside a trace: experts it should run on must stay out of the compiled block.
+    # Never getattr: on packed experts (MXFP4) gate_up_proj is a property that dequantizes the stack.
+    try:
+        chunked = int(os.environ.get("UNSLOTH_MOE_DEQUANT_CHUNK_EXPERTS", "0")) > 0
+    except ValueError:
+        chunked = False
+    if os.environ.get("UNSLOTH_MOE_SELECTIVE_DEQUANT", "0") != "1" and not chunked:
+        return False
+    return type(experts._parameters.get("gate_up_proj")).__name__ == "Params4bit"
+
+
 def _experts_outside(layer):
     # At the layer's first call, after get_peft_model wrapped the experts.
     layer.__dict__["_unsloth_block_moe_done"] = True
@@ -724,7 +803,11 @@ def _experts_outside(layer):
         experts = _experts_of(module)
         if experts is None:  # named_modules() is pre-order: the outermost wrapper comes first
             continue
-        if mode != "outside" and not _lora_would_fold(experts):
+        if (
+            mode != "outside"
+            and not _lora_would_fold(experts)
+            and not _selective_dequant_requested(experts)
+        ):
             continue
         module.forward = torch.compiler.disable(module.forward)
         for inner in module.modules():
