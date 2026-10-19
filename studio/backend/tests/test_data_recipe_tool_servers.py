@@ -249,3 +249,37 @@ def test_check_reports_broken_tool_wiring(stub, case, expected):
     valid, messages = _check(recipe)
     assert valid is False
     assert len(messages) == 1 and messages[0].startswith(expected), messages
+
+
+def _github_seeded(recipe):
+    recipe["seed_config"] = {
+        "source": {
+            "seed_type": "github_repo",
+            "repos": ["octo/repo"],
+            "item_types": ["issues"],
+            "limit": 5,
+            "token": "",
+        },
+    }
+    return recipe
+
+
+def test_check_reports_broken_tool_wiring_on_a_github_seed(stub):
+    pytest.importorskip("data_designer_github_repo_seed")
+    recipe = _github_seeded(_recipe(stub))
+    recipe["tool_configs"][0]["allow_tools"] = ["add", "divide"]
+    assert _check(recipe) == (
+        False,
+        ["Tool profile 'calc-tools' allows ['divide'], which its servers don't have."],
+    )
+    assert stub.alive() == []
+
+
+def test_check_refuses_stdio_on_a_github_seed_while_stdio_is_off(stub, monkeypatch):
+    pytest.importorskip("data_designer_github_repo_seed")
+    monkeypatch.setenv("UNSLOTH_STUDIO_ALLOW_STDIO_MCP", "0")
+    assert _check(_github_seeded(_recipe(stub))) == (
+        False,
+        ["Local (stdio) MCP servers are disabled on this host."],
+    )
+    assert stub.pids() == []
