@@ -786,6 +786,8 @@ class GgmlSttSidecar:
         self._model_id: Optional[str] = None
         # --no-gpu at the user's request, tracked because it varies per request.
         self._forced_cpu = False
+        # The live server was started with --no-gpu (by request, training or a cpu install).
+        self._cpu_only = False
         self._idle_timer: Optional[threading.Timer] = None
         self._idle_generation = 0
         self._keep_alive_seconds = keep_alive_seconds
@@ -804,7 +806,8 @@ class GgmlSttSidecar:
     @property
     def loaded_model(self) -> Optional[str]:
         # Lock-free status read (like stt_sidecar.py): transcribe() holds self._lock for the whole inference call (up
-        # to _TRANSCRIBE_TIMEOUT_SECONDS), and status polls plus training admission must not block behind it.
+        # to _TRANSCRIBE_TIMEOUT_SECONDS on a GPU, longer for a long clip on CPU), and status polls plus training
+        # admission must not block behind it.
         # _process_alive() snapshots self._process before poll(), which subprocess guards with _waitpid_lock, so a
         # concurrent unload is safe.
         return self._model_id if self._process_alive() else None
@@ -858,6 +861,7 @@ class GgmlSttSidecar:
         self._route = ""
         self._model_id = None
         self._forced_cpu = False
+        self._cpu_only = False
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -1119,6 +1123,7 @@ class GgmlSttSidecar:
                 self._route = route
                 self._model_id = model_id
                 self._forced_cpu = force_cpu
+                self._cpu_only = "--no-gpu" in command
                 self._schedule_idle_unload_locked()
             finally:
                 reservation.close()  # no-op when already released before spawn
@@ -1269,10 +1274,14 @@ class GgmlSttSidecar:
         )
         parts.append(f"--{boundary}--\r\n".encode())
         body = b"".join(parts)
+        # whisper-server answers only when the whole clip is done, and a CPU run of a large model is about real time.
+        # A GPU server keeps the fixed bound: training waits on this lock to free its VRAM.
+        timeout = _TRANSCRIBE_TIMEOUT_SECONDS
+        if self._cpu_only:
+            audio_seconds = max(len(wav_bytes) - 44, 0) / (2 * _TARGET_SAMPLE_RATE)
+            timeout = max(timeout, 4 * audio_seconds)
         # http.client, not urllib: a cancel needs the socket, and urlopen exposes none.
-        connection = http.client.HTTPConnection(
-            "127.0.0.1", self._port, timeout = _TRANSCRIBE_TIMEOUT_SECONDS
-        )
+        connection = http.client.HTTPConnection("127.0.0.1", self._port, timeout = timeout)
         cancel_done = threading.Event()
         if cancel_event is not None:
             threading.Thread(
@@ -1295,6 +1304,12 @@ class GgmlSttSidecar:
                 payload = json.loads(response.read().decode("utf-8"))
         except (SttAudioDecodeError, SttEngineUnavailableError):
             raise
+        except TimeoutError as exc:
+            # A slow clip is not a broken runtime, so it fails this request only.
+            raise SttEngineUnavailableError(
+                f"The local transcription runtime did not finish within {timeout:.0f} seconds. "
+                "Try a shorter recording."
+            ) from exc
         except Exception as exc:
             # A cancel closes this socket deliberately, so it is not evidence of a broken runtime and must not disable
             # the engine.
