@@ -267,6 +267,7 @@ export function useRecipePersistence({
     resetRecipe();
     setWorkflowName(nextName);
     setLastSavedAt(initialSavedAt);
+    setFailedSignature(null);
     setConflicted(false);
     setCopied(false);
 

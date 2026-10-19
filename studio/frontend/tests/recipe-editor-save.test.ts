@@ -163,7 +163,7 @@ function mountEditor(persist: (input: Persisted) => Promise<{ updatedAt: number 
 
   const initialPayload = { v: "saved" };
   let payload: unknown = initialPayload;
-  const params = {
+  const params: Record<string, unknown> = {
     recipeId: "r1",
     initialRecipeName: "Recipe",
     initialPayload,
@@ -175,7 +175,7 @@ function mountEditor(persist: (input: Persisted) => Promise<{ updatedAt: number 
     onReloadRecipe: () => reloads.push(1),
     resetRecipe: quiet,
     loadRecipe: quiet,
-    getCurrentPayloadFromStore: () => initialPayload,
+    getCurrentPayloadFromStore: () => params.initialPayload,
   };
   const render = () => {
     runtime.begin();
@@ -194,6 +194,14 @@ function mountEditor(persist: (input: Persisted) => Promise<{ updatedAt: number 
     edit(value: string) {
       payload = { v: value };
       return render();
+    },
+    // What Reload theirs does: the page hands the editor the server's record.
+    reload(value: string, savedAt: number) {
+      payload = { v: value };
+      params.initialPayload = payload;
+      params.initialSavedAt = savedAt;
+      render();
+      render();
     },
     unmount: runtime.unmount,
   };
@@ -427,4 +435,35 @@ test("an emptied recipe name falls back to Unnamed, and the input is capped", ()
   header.type("   ");
   header.key("Enter");
   assert.equal(header.name(), "Unnamed");
+});
+
+test("after Reload theirs, an edit matching the discarded copy still autosaves", async () => {
+  const conflict = Object.assign(new Error("changed in another window"), {
+    status: 409,
+  });
+  let refuse = true;
+  const editor = mountEditor(async () => {
+    if (refuse) throw conflict;
+    return { updatedAt: 9 };
+  });
+  const error = console.error;
+  console.error = () => undefined;
+  try {
+    editor.edit("mine");
+    editor.win.runTimers();
+    await settle();
+    editor.render();
+    editor.toasts[0].options.cancel?.onClick();
+    refuse = false;
+    editor.reload("theirs", 5);
+    editor.edit("mine");
+    editor.win.runTimers();
+    await settle();
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(
+    editor.saves.map((save) => save.payload),
+    [{ v: "mine" }, { v: "mine" }],
+  );
 });
