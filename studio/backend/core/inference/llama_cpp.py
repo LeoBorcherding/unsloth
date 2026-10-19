@@ -2741,11 +2741,20 @@ def _hf_offline_if_unreachable():
     mid-operation and drop this request back onto the retry path.
     """
     try:
-        from utils.utils import force_hf_offline, force_hf_offline_state, hf_env_offline
+        from utils.utils import (
+            force_hf_offline,
+            force_hf_offline_state,
+            hf_env_offline,
+            hf_offline_scoped,
+        )
     except Exception:
         yield False
         return
 
+    # Already offline for this call tree only; a process-wide window would undo that.
+    if hf_offline_scoped():
+        yield True
+        return
     ours, hf_hub_env_present = force_hf_offline_state()
     # Membership preserves HF_HUB_OFFLINE=0 as an explicit stay-online override.
     # Read it with the refcount so a concurrent guard cannot look user-owned.

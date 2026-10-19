@@ -3455,7 +3455,7 @@ class TestTheResolutionTriesOfflineFirst:
         monkeypatch.setitem(
             __import__("sys").modules,
             "utils.utils",
-            SimpleNamespace(force_hf_offline = _forced),
+            SimpleNamespace(hf_offline_scope = _forced),
         )
         cfg = SimpleNamespace(identifier = "org/cached", gguf_file = gguf, is_gguf = True)
         monkeypatch.setattr(ri.ModelConfig, "from_identifier", staticmethod(lambda **kw: cfg))
@@ -3488,7 +3488,7 @@ class TestTheResolutionTriesOfflineFirst:
         monkeypatch.setitem(
             __import__("sys").modules,
             "utils.utils",
-            SimpleNamespace(force_hf_offline = _forced),
+            SimpleNamespace(hf_offline_scope = _forced),
         )
         monkeypatch.setattr(ri.ModelConfig, "from_identifier", staticmethod(_from_identifier))
         ri._estimate_config_cache.clear()

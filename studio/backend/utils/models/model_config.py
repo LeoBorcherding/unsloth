@@ -1087,6 +1087,9 @@ def _vision_check_child_env(hf_token: HfTokenArg) -> Dict[str, str]:
     """Child environment for the vision-check probe, carrying the caller's credential."""
     env = utf8_child_env(get_hf_cache_paths().child_env(child_env_without_native_path_secret()))
     apply_token_to_child_env(env, hf_token)
+    from utils.utils import hf_offline_scoped
+    if hf_offline_scoped():
+        env["HF_HUB_OFFLINE"] = env["TRANSFORMERS_OFFLINE"] = "1"
     return env
 
 

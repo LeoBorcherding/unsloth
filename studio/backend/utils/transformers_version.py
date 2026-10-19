@@ -87,8 +87,8 @@ def _env_offline() -> bool:
     request the guard is holding back.
     """
     try:
-        from utils.utils import force_hf_offline_active
-        if force_hf_offline_active():
+        from utils.utils import force_hf_offline_active, hf_offline_scoped
+        if force_hf_offline_active() or hf_offline_scoped():
             return True
     except Exception:
         pass
