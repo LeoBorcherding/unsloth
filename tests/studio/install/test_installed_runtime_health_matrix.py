@@ -278,8 +278,6 @@ def required_runtime_files(platform: str, backend: str, marker: dict) -> list[st
             files.remove("libllama-server-impl.dylib")
             files.remove("libllama-quantize-impl.dylib")
     files += _BACKEND_PAYLOAD.get((platform, backend), [])
-    if backend == "vulkan" and source == "published":
-        files += _PUBLISHED_PAYLOAD[platform]
     return files
 
 
@@ -471,12 +469,24 @@ def test_the_structural_damage_cases_are_broken_and_never_kept(
 
 def test_removing_a_file_this_install_kind_does_not_owe_stays_healthy(tmp_path):
     """Over-strictness is the loop direction, so the deliberately-not-required files are
-    asserted too: the diffusion visual server outside a published Vulkan install, and
-    llama-server-impl.dll on a Windows archive built before the upstream impl split."""
+    asserted too: the diffusion visual server, which the fork builds best-effort (published
+    Vulkan included), and llama-server-impl.dll on a Windows archive built before the
+    upstream impl split."""
     cuda = shape_with_backend(S12, "cuda")
     root = build_tree(tmp_path / "cuda", host = LINUX, marker = cuda, backend = "cuda")
     (_runtime_dir(root, LINUX) / "llama-diffusion-gemma-visual-server").unlink()
     assert ILP.installed_runtime_health(root, host = LINUX) == (True, "")
+
+    for host, name in (
+        (LINUX, "llama-diffusion-gemma-visual-server"),
+        (WINDOWS, "llama-diffusion-gemma-visual-server.exe"),
+    ):
+        vulkan = shape_with_backend(S12, "vulkan")
+        root = build_tree(
+            tmp_path / f"vulkan-{name}", host = host, marker = vulkan, backend = "vulkan"
+        )
+        (_runtime_dir(root, host) / name).unlink()
+        assert ILP.installed_runtime_health(root, host = host) == (True, ""), name
 
     old_windows = shape_with_backend(S2, "cpu")  # tag b6099, before build 9283
     win = build_tree(tmp_path / "win", host = WINDOWS, marker = old_windows, backend = "cpu")

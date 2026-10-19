@@ -2913,19 +2913,16 @@ def test_every_reuse_path_syncs_the_arch_coverage():
 
 
 @pytest.mark.parametrize("visual_server", [True, False], ids = ["present", "missing"])
-def test_a_published_bundle_owes_its_visual_server(tmp_path, monkeypatch, visual_server):
-    """A published bundle must carry its source label, or an incomplete Vulkan tree reads as valid."""
+def test_a_published_bundle_does_not_owe_its_visual_server(tmp_path, monkeypatch, visual_server):
+    """The fork builds the visual server best-effort, so a published Vulkan tree without it is kept."""
     _listing_failure(monkeypatch, linux_host)
     install_dir = _complete_existing_llama_install(
         tmp_path, backend = "vulkan", source = "published", visual_server = visual_server
     )
 
-    if visual_server:
-        install_prebuilt(install_dir, "latest", "unslothai/llama.cpp", "")
-    else:
-        with pytest.raises(SystemExit) as caught:
-            install_prebuilt(install_dir, "latest", "unslothai/llama.cpp", "")
-        assert caught.value.code == INSTALL_LLAMA_PREBUILT.EXIT_FALLBACK
+    install_prebuilt(install_dir, "latest", "unslothai/llama.cpp", "")
+
+    assert (install_dir / "llama-server").exists()
 
 
 def test_an_upstream_bundle_does_not_owe_a_visual_server(tmp_path, monkeypatch):
