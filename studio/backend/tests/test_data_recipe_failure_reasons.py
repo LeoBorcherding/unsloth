@@ -140,6 +140,16 @@ def test_a_missing_seed_table_reads_as_a_missing_dataset():
     assert "pg_namespace" not in text and "SELECT" not in text
 
 
+def test_a_missing_local_seed_table_does_not_show_the_server_path():
+    from core.data_recipe.public_errors import public_error_text
+
+    path = studio_root() / "assets" / "datasets" / "uploads" / "seed"
+    text = public_error_text(RuntimeError(f"Catalog Error: Table with name {path} does not exist!"))
+
+    assert text.startswith("Seed dataset ")
+    assert str(studio_root()) not in text
+
+
 def test_a_config_validation_error_drops_the_pydantic_dump():
     from pydantic import BaseModel
 

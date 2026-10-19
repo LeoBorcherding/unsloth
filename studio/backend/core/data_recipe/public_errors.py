@@ -45,10 +45,10 @@ def public_error_text(exc: BaseException) -> str:
                 f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
                 for item in error.errors()[:3]
             ]
-            return "Invalid recipe settings. " + "; ".join(fields)
+            return redact_server_paths("Invalid recipe settings. " + "; ".join(fields))
         missing = _DUCKDB_MISSING_TABLE.search(str(error))
         if missing:
-            return (
+            return redact_server_paths(
                 f"Seed dataset {missing['name']} wasn't found. "
                 "Check the dataset path in the source data block."
             )
