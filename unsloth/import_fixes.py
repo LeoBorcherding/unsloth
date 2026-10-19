@@ -7008,9 +7008,11 @@ def fix_executorch():
         sys.modules["torchtune.models"] = models
         sys.modules["torchtune.models.convert_weights"] = convert_weights
         """)
+        # A torchtune that is installed but fails to import (its torchao pin) still gets the stub
         what = stub + textwrap.dedent("""\
-        import importlib.util
-        if "torchtune" not in sys.modules and importlib.util.find_spec("torchtune") is None:
+        try:
+            import torchtune.models.convert_weights
+        except Exception:
             sys.modules["torchtune"] = torchtune
             sys.modules["torchtune.models"] = models
             sys.modules["torchtune.models.convert_weights"] = convert_weights

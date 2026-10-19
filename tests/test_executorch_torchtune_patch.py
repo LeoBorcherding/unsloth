@@ -56,7 +56,7 @@ from torchtune.models.convert_weights import get_mapped_key
 '''
 
 
-def _make_site(root, with_torchtune, models_init = _MODELS_INIT):
+def _make_site(root, with_torchtune, models_init = _MODELS_INIT, torchtune_init = "REAL = True\n"):
     models = root / "executorch" / "examples" / "models"
     models.mkdir(parents = True)
     (root / "executorch" / "__init__.py").write_text("")
@@ -65,7 +65,7 @@ def _make_site(root, with_torchtune, models_init = _MODELS_INIT):
     if with_torchtune:
         tt = root / "torchtune" / "models"
         tt.mkdir(parents = True)
-        (root / "torchtune" / "__init__.py").write_text("REAL = True\n")
+        (root / "torchtune" / "__init__.py").write_text(torchtune_init)
         (tt / "__init__.py").write_text("")
         (tt / "convert_weights.py").write_text("def get_mapped_key(key, mapping):\n    return 'real'\n")
         (tt / "llama.py").write_text("")
@@ -104,6 +104,14 @@ def test_a_real_torchtune_survives_importing_executorch_models(tmp_path, monkeyp
 
 def test_without_torchtune_the_stub_still_supplies_get_mapped_key(tmp_path, monkeypatch):
     _make_site(tmp_path, with_torchtune = False)
+    _patch(monkeypatch, tmp_path)
+    code = "import executorch.examples.models as m\nprint(m.get_mapped_key('x', {'x': 'y'}))\n"
+    assert _run(tmp_path, code) == "y"
+
+
+def test_a_torchtune_that_fails_to_import_still_gets_the_stub(tmp_path, monkeypatch):
+    # torchtune raises at import when its torchao is missing or mismatched.
+    _make_site(tmp_path, with_torchtune = True, torchtune_init = "raise ImportError('no torchao')\n")
     _patch(monkeypatch, tmp_path)
     code = "import executorch.examples.models as m\nprint(m.get_mapped_key('x', {'x': 'y'}))\n"
     assert _run(tmp_path, code) == "y"
