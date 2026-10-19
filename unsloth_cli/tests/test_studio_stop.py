@@ -572,3 +572,24 @@ def test_graceful_shutdown_sends_the_token_only_to_a_verified_server(monkeypatch
     assert posted == [("http://127.0.0.1:8901/api/shutdown", "POST", "Bearer tok")]
     # The legacy studio.pid has no port, so there is nothing to ask.
     assert studio_mod._request_graceful_shutdown([tmp_path / "studio.pid"]) is False
+
+
+def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypatch, tmp_path):
+    # The 150 s wait outlives the identity check stop ran before asking, so it has to hold for the kill too.
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = True, exits = False)
+    reused = []
+    real_shutdown = studio_mod._request_graceful_shutdown
+
+    def shutdown_then_reuse(paths):
+        reused.append(True)
+        return real_shutdown(paths)
+
+    monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", shutdown_then_reuse)
+    monkeypatch.setattr(
+        studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): not reused
+    )
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("shutdown", ["studio-8901-8550.pid"])]

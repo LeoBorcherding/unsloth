@@ -3316,16 +3316,19 @@ def _request_graceful_shutdown(paths: "Sequence[Path]") -> bool:
     return False
 
 
-def _wait_for_exit(pid: int, timeout: float) -> bool:
+def _wait_for_exit(pid: int, timeout: float, created_times: "Sequence[float | None]" = ()) -> bool:
     deadline = time.monotonic() + timeout
-    while _pid_alive(pid):
+    # A PID reused by another process after the server exited counts as exited, never as one to kill.
+    while _pid_alive(pid) and _pid_is_studio_server(pid, created_times):
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.5)
     return True
 
 
-def _signal_stop(pid: int, paths: "Sequence[Path]" = ()) -> "str | None":
+def _signal_stop(
+    pid: int, paths: "Sequence[Path]" = (), created_times: "Sequence[float | None]" = ()
+) -> "str | None":
     import signal as _signal
 
     if pid < 2:
@@ -3337,7 +3340,7 @@ def _signal_stop(pid: int, paths: "Sequence[Path]" = ()) -> "str | None":
                     f"Asked Unsloth server (PID {pid}) to shut down; a running training "
                     "job is saved first."
                 )
-                if _wait_for_exit(pid, _GRACEFUL_STOP_WAIT_S):
+                if _wait_for_exit(pid, _GRACEFUL_STOP_WAIT_S, created_times):
                     return None
             # /T also stops llama-server children, which otherwise keep GPU and port.
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check = True)
@@ -3372,7 +3375,7 @@ def stop():
             for path in paths:
                 _unlink_quietly(path)
             continue
-        error = _signal_stop(pid, paths)
+        error = _signal_stop(pid, paths, created_times)
         if error is not None:
             failed.append((pid, error))
             typer.echo(f"Failed to stop Unsloth server (PID {pid}): {error}", err = True)
