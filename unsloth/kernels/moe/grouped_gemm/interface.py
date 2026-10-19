@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GNU Affero General Public License v3.0
 # Copyright 2023-present the Unsloth team. All rights reserved.
 
+import contextlib
 import functools
 import inspect
 import logging
@@ -66,6 +67,14 @@ def _is_tracing(*tensors):
         if name in ("FakeTensor", "FunctionalTensor", "FunctionalTensorWrapper"):
             return True
     return False
+
+
+def _launch_device(t):
+    # Triton launches on the current device, which need not be the operands' (device_map="auto").
+    # Entering torch.cuda.device costs a few us, so skip it when t's device is already current.
+    if t.device.index is None or t.device.index == torch.cuda.current_device():
+        return contextlib.nullcontext()
+    return torch.cuda.device(t.device)
 
 
 _per_device_alloc_fns = {}
@@ -213,7 +222,7 @@ def _grouped_gemm_forward_impl(
 
     y = torch.empty((total_tokens, N), device = X.device, dtype = X.dtype)
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties(X.device).multi_processor_count
 
     def grid(META):
         return (NUM_SMS,)
@@ -263,9 +272,10 @@ def _grouped_gemm_forward_impl(
 
     is_fake = _is_tracing(X, W)
     if not is_fake:
-        compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
-            **kernel_args, enable_fp_fusion = True
-        )
+        with _launch_device(X):
+            compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
+                **kernel_args, enable_fp_fusion = True
+            )
         if autotune:
             log_kernel_info(compiled_kernel, kernel.best_config)
         else:
@@ -358,7 +368,7 @@ def _grouped_gemm_dX_impl(
     output_shape = (total_tokens, K)
     dX = torch.zeros(output_shape, device = dY.device, dtype = dY.dtype)
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
+    NUM_SMS = torch.cuda.get_device_properties(dY.device).multi_processor_count
 
     def grid(META):
         return (NUM_SMS,)
@@ -405,9 +415,10 @@ def _grouped_gemm_dX_impl(
 
     is_fake = _is_tracing(dY, W)
     if not is_fake:
-        compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
-            **kernel_args, enable_fp_fusion = True
-        )
+        with _launch_device(dY):
+            compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
+                **kernel_args, enable_fp_fusion = True
+            )
 
         if autotune:
             log_kernel_info(compiled_kernel, kernel.best_config)
@@ -445,7 +456,7 @@ def _grouped_gemm_dW_impl(
     """
     assert not fuse_mul_pre, "fuse_mul_pre not supported"
     assert not fuse_mul_post, "fuse_mul_post not supported"
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count if not debug else 1
+    NUM_SMS = torch.cuda.get_device_properties(X.device).multi_processor_count if not debug else 1
     X = X.view(-1, X.shape[-1]).contiguous()
     dY = dY.contiguous()
     m_sizes = m_sizes.contiguous()
@@ -552,9 +563,10 @@ def _grouped_gemm_dW_impl(
 
     is_fake = _is_tracing(X, dY)
     if not is_fake:
-        compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
-            **kernel_args, enable_fp_fusion = True
-        )
+        with _launch_device(X):
+            compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
+                **kernel_args, enable_fp_fusion = True
+            )
 
         if autotune:
             log_kernel_info(compiled_kernel, kernel.best_config)
