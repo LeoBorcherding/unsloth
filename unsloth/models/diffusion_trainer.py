@@ -9,10 +9,12 @@ from typing import Optional
 
 import torch
 from trl import SFTConfig
+from trl.data_utils import is_conversational
 
 from ..trainer import UnslothTrainer
 from .diffusion_loss import compile_backbone_layers, diffusion_compile_mode
 from .diffusion_profiles import resolve_diffusion_profile, unwrap_diffusion_model
+from .llama import logger
 
 __all__ = ["DiffusionConfig", "DiffusionTrainer"]
 
@@ -21,6 +23,10 @@ __all__ = ["DiffusionConfig", "DiffusionTrainer"]
 class DiffusionConfig(SFTConfig):
     """``SFTConfig`` plus the diffusion objective knobs. ``None`` = the model family's reference value."""
 
+    assistant_only_loss: Optional[bool] = field(
+        default = None,
+        metadata = {"help": "Loss on assistant turns only. None = on for a `messages` dataset."},
+    )
     diffusion_eps: Optional[float] = field(
         default = None, metadata = {"help": "Noise level t is drawn from U(eps, 1 - eps)."}
     )
@@ -73,6 +79,16 @@ class DiffusionConfig(SFTConfig):
         super().__post_init__()
 
 
+def _is_messages_dataset(dataset):
+    try:
+        row = next(iter(dataset))
+    except Exception:
+        return False
+    if not isinstance(row, dict) or "messages" not in row:
+        return False
+    return is_conversational({"messages": row["messages"]})
+
+
 def _unwrap_config(model):
     for candidate in (model, getattr(model, "base_model", None), getattr(model, "module", None)):
         config = getattr(candidate, "config", None)
@@ -104,6 +120,17 @@ class DiffusionTrainer(UnslothTrainer):
             )
         args.packing = False
         args.padding_free = False
+        # The objective takes the response from the labels, so a chat row supervised end to end
+        # puts the denoising canvas on the system and user turns.
+        train_dataset = kwargs.get("train_dataset", pos[1] if len(pos) > 1 else None)
+        messages = _is_messages_dataset(train_dataset)
+        if args.assistant_only_loss is None:
+            args.assistant_only_loss = messages
+        elif messages and not args.assistant_only_loss:
+            logger.warning_once(
+                "Unsloth: assistant_only_loss = False on a `messages` dataset trains the diffusion "
+                "model to denoise the prompt as well as the answer. Set assistant_only_loss = True."
+            )
         profile = diffusion_profile or resolve_diffusion_profile(_unwrap_config(model))
         if profile is None:
             raise ValueError(
