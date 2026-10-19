@@ -70,22 +70,38 @@ def _operands():
     return dev, X, W, dY, m_sizes
 
 
-def test_forward_launches_under_the_operands_device(seen):
+def _current(monkeypatch, dev, elsewhere):
+    # Another device current: the launch must switch to the operands'. Same device: no context (it costs a few us).
+    index = dev.index + 1 if elsewhere else dev.index
+    monkeypatch.setattr(interface.torch.cuda, "current_device", lambda: index)
+    return [dev] if elsewhere else [None]
+
+
+current = pytest.mark.parametrize("elsewhere", [True, False], ids = ["other_device_current", "same_device_current"])
+
+
+@current
+def test_forward_launches_under_the_operands_device(seen, monkeypatch, elsewhere):
     dev, X, W, _, m_sizes = _operands()
+    expected = _current(monkeypatch, dev, elsewhere)
     interface._grouped_gemm_forward_impl(X, W, 1, m_sizes, autotune = False)
-    assert seen["launched_under"] == [dev]
+    assert seen["launched_under"] == expected
     assert seen["props"] == [dev]
 
 
-def test_dX_launches_under_the_gradients_device(seen):
+@current
+def test_dX_launches_under_the_gradients_device(seen, monkeypatch, elsewhere):
     dev, _, W, dY, m_sizes = _operands()
+    expected = _current(monkeypatch, dev, elsewhere)
     interface._grouped_gemm_dX_impl(dY, W, None, m_sizes, 1, autotune = False)
-    assert seen["launched_under"] == [dev]
+    assert seen["launched_under"] == expected
     assert seen["props"] == [dev]
 
 
-def test_dW_launches_under_the_operands_device(seen):
+@current
+def test_dW_launches_under_the_operands_device(seen, monkeypatch, elsewhere):
     dev, X, _, dY, m_sizes = _operands()
+    expected = _current(monkeypatch, dev, elsewhere)
     interface._grouped_gemm_dW_impl(X, dY, m_sizes, None, 1, autotune = False)
-    assert seen["launched_under"] == [dev]
+    assert seen["launched_under"] == expected
     assert seen["props"] == [dev]

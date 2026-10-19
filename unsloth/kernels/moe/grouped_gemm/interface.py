@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GNU Affero General Public License v3.0
 # Copyright 2023-present the Unsloth team. All rights reserved.
 
+import contextlib
 import functools
 import inspect
 import logging
@@ -66,6 +67,14 @@ def _is_tracing(*tensors):
         if name in ("FakeTensor", "FunctionalTensor", "FunctionalTensorWrapper"):
             return True
     return False
+
+
+def _launch_device(t):
+    # Triton launches on the current device, which need not be the operands' (device_map="auto").
+    # Entering torch.cuda.device costs a few us, so skip it when t's device is already current.
+    if t.device.index is None or t.device.index == torch.cuda.current_device():
+        return contextlib.nullcontext()
+    return torch.cuda.device(t.device)
 
 
 _per_device_alloc_fns = {}
@@ -263,8 +272,7 @@ def _grouped_gemm_forward_impl(
 
     is_fake = _is_tracing(X, W)
     if not is_fake:
-        # Triton launches on the current device, which need not be the operands' (device_map="auto").
-        with torch.cuda.device(X.device):
+        with _launch_device(X):
             compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
                 **kernel_args, enable_fp_fusion = True
             )
@@ -407,7 +415,7 @@ def _grouped_gemm_dX_impl(
 
     is_fake = _is_tracing(dY, W)
     if not is_fake:
-        with torch.cuda.device(dY.device):
+        with _launch_device(dY):
             compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
                 **kernel_args, enable_fp_fusion = True
             )
@@ -555,7 +563,7 @@ def _grouped_gemm_dW_impl(
 
     is_fake = _is_tracing(X, dY)
     if not is_fake:
-        with torch.cuda.device(X.device):
+        with _launch_device(X):
             compiled_kernel: triton.compiler.CompiledKernel = kernel[grid](
                 **kernel_args, enable_fp_fusion = True
             )
