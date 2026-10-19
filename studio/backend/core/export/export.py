@@ -2320,7 +2320,12 @@ class ExportBackend:
         env = os.environ.copy()
         apply_token_to_child_env(env, normalize_token(hf_token))
         logger.info(f"Converting adapter at '{save_directory}' to GGUF -> '{out_gguf}'")
-        from utils.process_lifetime import child_popen_kwargs, spawn_on_lifetime_thread
+        from utils.process_lifetime import (
+            adopt_pid,
+            child_popen_kwargs,
+            forget_pid,
+            spawn_on_lifetime_thread,
+        )
         from utils.subprocess_compat import windows_hidden_subprocess_kwargs
 
         # Dies with its parent, as in q4nx: a cancelled export must not leave it holding a model.
@@ -2337,7 +2342,10 @@ class ExportBackend:
                 **child_popen_kwargs(),
             )
         )
+        # macOS has no parent-death signal: the record lets the startup sweep reap an orphan.
+        adopt_pid(process.pid)
         stdout, stderr = process.communicate()
+        forget_pid(process.pid)
         if process.returncode != 0:
             raise RuntimeError(
                 f"LoRA -> GGUF conversion failed (exit {process.returncode}): "
