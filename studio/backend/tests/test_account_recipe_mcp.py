@@ -90,8 +90,8 @@ def test_single_account_installs_keep_recipe_mcp(monkeypatch):
     assert refused.value.status_code == 403
 
 
-def test_managed_recipe_stdio_provider_is_still_dropped(monkeypatch):
-    """The network refusal must not turn the host gate's silent drop of a local command into an error."""
+def test_managed_recipe_stdio_provider_gets_the_host_gate_message(monkeypatch):
+    """A local command is refused by the host gate, not the network refusal's 403."""
     from core.data_recipe.service import build_mcp_providers
 
     monkeypatch.setenv("UNSLOTH_STUDIO_ALLOW_STDIO_MCP", "1")
@@ -100,7 +100,8 @@ def test_managed_recipe_stdio_provider_is_still_dropped(monkeypatch):
             {"provider_type": "stdio", "name": "fs", "command": "npx", "args": [], "env": {}}
         ]
     }
-    assert run_as(ALICE, build_mcp_providers, recipe) == []
+    with pytest.raises(ValueError, match = "disabled on this host"):
+        run_as(ALICE, build_mcp_providers, recipe)
 
 
 def _provider_recipe(endpoint: str) -> dict:
