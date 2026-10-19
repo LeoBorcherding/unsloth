@@ -1886,7 +1886,9 @@ def _oom_error(config: dict, text: str | None) -> str | None:
     """The guided OOM message when an error text is a GPU OOM. The trainer and load_model turn
     exceptions into ``progress.error`` text, so most OOMs never reach the worker's except."""
     lower = (text or "").lower()
-    if "out of memory" in lower or "outofmemoryerror" in lower:
+    # A host-RAM "out of memory" keeps its own text; only an accelerator OOM gets VRAM advice.
+    accel = any(k in lower for k in ("cuda", "hip", "xpu", "mps", "gpu"))
+    if ("out of memory" in lower and accel) or "outofmemoryerror" in lower:
         return _with_vram_budget_hint(config, _OOM_MSG)
     return None
 

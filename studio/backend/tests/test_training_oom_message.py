@@ -27,7 +27,17 @@ def test_an_oom_error_text_gets_the_guided_message(text):
     assert "capped at a 12 GiB VRAM budget" in message
 
 
-@pytest.mark.parametrize("text", [None, "", "Failed to load dataset", "CUDA error: device-side assert"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        None,
+        "",
+        "Failed to load dataset",
+        "CUDA error: device-side assert",
+        "out of memory",  # str(MemoryError("out of memory")) from a host-RAM failure
+        "DefaultCPUAllocator: can't allocate memory: out of memory",
+    ],
+)
 def test_other_errors_are_left_alone(text):
     assert worker._oom_error(BUDGET, text) is None
 
