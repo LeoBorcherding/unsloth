@@ -36035,7 +36035,7 @@ async def produce_openai_chat_completions(
                     # timings describe only the last one, so they describe neither.
                     timings = _last_stats.get("timings") if len(_choices) <= 1 else None,
                 )
-            api_monitor.finish(monitor_id)
+            api_monitor.finish(monitor_id, "cancelled" if cancel_event.is_set() else "completed")
             return _model_json_response_with_context_truncation(
                 response, _sf_context_truncation_holder["value"]
             )

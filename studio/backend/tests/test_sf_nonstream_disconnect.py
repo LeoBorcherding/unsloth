@@ -57,7 +57,7 @@ class _SlowBackend(_ScriptedBackend):
 @pytest.mark.parametrize("tool_loop", [False, True], ids = ["plain", "tool_loop"])
 def test_a_gone_client_stops_the_non_streaming_generation(monkeypatch, tool_loop):
     backend = _SlowBackend()
-    _install(monkeypatch, backend, supports_tools = tool_loop)
+    monitor = _install(monkeypatch, backend, supports_tools = tool_loop)
     payload = _request(stream = False, enable_tools = True) if tool_loop else _request(stream = False)
 
     async def _run():
@@ -65,11 +65,12 @@ def test_a_gone_client_stops_the_non_streaming_generation(monkeypatch, tool_loop
 
     asyncio.run(_run())
     assert backend.steps < _STEPS, f"ran all {backend.steps} steps for a client that was gone"
+    assert [e.status for e in monitor._entries] == ["cancelled"]
 
 
 def test_a_durable_run_keeps_generating_after_the_client_leaves(monkeypatch):
     backend = _SlowBackend()
-    _install(monkeypatch, backend, supports_tools = False)
+    monitor = _install(monkeypatch, backend, supports_tools = False)
 
     async def _run():
         return await produce_openai_chat_completions(
@@ -81,3 +82,4 @@ def test_a_durable_run_keeps_generating_after_the_client_leaves(monkeypatch):
 
     asyncio.run(_run())
     assert backend.steps == _STEPS
+    assert [e.status for e in monitor._entries] == ["completed"]
