@@ -99,14 +99,19 @@ def _serialize_preview_value(value: Any) -> Any:
 
 _PREVIEW_CELL_MAX_CHARS = 2000
 _BASE64_IMAGE_PREFIXES = ("data:image/", "iVBORw0KGgo", "/9j/", "R0lGOD", "UklGR")
+# The editor's MAX_IMAGE_PREVIEW_BYTES: past it, it shows a note instead of the image.
+_PREVIEW_IMAGE_MAX_BYTES = 200 * 1024
 
 
 def _cap_preview_cell(value: Any) -> Any:
-    # The rows ride along in every saved recipe. Image strings stay whole: the editor renders them.
+    # The rows ride along in every saved recipe. Image strings the editor can render stay whole.
     if not isinstance(value, str) or len(value) <= _PREVIEW_CELL_MAX_CHARS:
         return value
     if value.startswith(_BASE64_IMAGE_PREFIXES):
-        return value
+        encoded = value.split("base64,", 1)[-1].rstrip("=")
+        if len(encoded) * 3 // 4 <= _PREVIEW_IMAGE_MAX_BYTES:
+            return value
+        return f"(image, {len(value)} chars, too large to preview)"
     return f"{value[:_PREVIEW_CELL_MAX_CHARS]}... ({len(value)} chars)"
 
 

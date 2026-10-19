@@ -203,6 +203,19 @@ def test_seed_preview_caps_long_text_cells_but_not_images(monkeypatch, tmp_path)
     assert row["short"] == "ok"
 
 
+def test_seed_preview_drops_an_image_too_large_for_the_editor_to_render(monkeypatch, tmp_path):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    # 300 KB decoded, past the editor's 200 KiB preview limit.
+    image = "data:image/png;base64," + "A" * 400_000
+    path = tmp_path / "seed.jsonl"
+    path.write_text(json.dumps({"image": image}), encoding = "utf-8")
+
+    (row,) = seed_route._read_preview_rows_from_local_file(path, 10)
+
+    assert row["image"] == f"(image, {len(image)} chars, too large to preview)"
+
+
 def test_csv_seed_with_a_long_file_name_uploads(monkeypatch, tmp_path):
     filename = "n" * 250 + ".csv"
 
