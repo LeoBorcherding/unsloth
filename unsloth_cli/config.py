@@ -17,6 +17,12 @@ class DataConfig(BaseModel):
 
     dataset: Optional[str] = None
     local_dataset: Optional[List[str]] = None
+    image_dataset: Optional[bool] = Field(
+        None, description = "Dataset has images (default: detect from its first row)."
+    )
+    audio_dataset: Optional[bool] = Field(
+        None, description = "Dataset has audio (default: detect from its first row)."
+    )
     # raw and conversational are handled by format_and_template_dataset (raw = continued pretraining).
     format_type: Literal["auto", "alpaca", "chatml", "sharegpt", "conversational", "raw"] = "auto"
 

@@ -20,6 +20,16 @@ def _plain_cli_output(monkeypatch):
     monkeypatch.delenv("UNSLOTH_DEBUG", raising = False)
 
 
+@pytest.fixture(autouse = True)
+def _no_train_dataset_peek(monkeypatch):
+    """`unsloth train` reads the dataset's first row before the model load; keep stub runs offline."""
+    train_module = sys.modules.get("unsloth_cli.commands.train")
+    if train_module is not None and hasattr(train_module, "_detect_dataset_modalities"):
+        monkeypatch.setattr(
+            train_module, "_detect_dataset_modalities", lambda cfg, hf_token: (False, False)
+        )
+
+
 @pytest.fixture
 def stub_tool_policy_state(monkeypatch):
     """Stub state.tool_policy so run() never depends on studio/backend already being on sys.path."""

@@ -171,6 +171,37 @@ def _default_output_dir(model_name: str) -> str:
     return store.get(key).decode()
 
 
+def _detect_dataset_modalities(cfg: Config, hf_token: Optional[str]) -> tuple[bool, bool]:
+    """(images, audio) for the dataset's first row, the check Unsloth Studio runs before a train.
+
+    It has to run before load_model, which picks the vision or audio path from it.
+    """
+    ensure_studio_backend_path()
+    from hub.utils.dataset_format import detect_multimodal_dataset
+    from utils.datasets.audio_decode import ensure_audio_decoding
+    from utils.datasets.cache_safe import load_dataset_cache_safe as load_dataset
+    from utils.paths import dataset_files_in_dir, resolve_dataset_path
+
+    ensure_audio_decoding()
+    if cfg.data.local_dataset:
+        files = []
+        for entry in cfg.data.local_dataset:
+            path = Path(entry).expanduser()
+            if not path.is_absolute():
+                path = path.resolve() if path.exists() else resolve_dataset_path(str(entry))
+            files.extend(dataset_files_in_dir(path) if path.is_dir() else [path])
+        suffix = Path(files[0]).suffix.lower()
+        loader = {".json": "json", ".jsonl": "json", ".csv": "csv"}.get(suffix, "parquet")
+        files = [str(f) for f in files]
+        rows = load_dataset(loader, data_files = files, split = "train", streaming = True)
+    else:
+        token = hf_token or None
+        rows = load_dataset(cfg.data.dataset, split = "train", streaming = True, token = token)
+    first = next(iter(rows), None)
+    info = detect_multimodal_dataset([first] if first is not None else [])
+    return info["is_image"], info["is_audio"]
+
+
 @add_options_from_config(Config)
 def train(
     config: Optional[Path] = typer.Option(
@@ -246,6 +277,22 @@ def train(
         )
         raise typer.Exit(code = 2)
 
+    is_dataset_image, is_dataset_audio = cfg.data.image_dataset, cfg.data.audio_dataset
+    if is_dataset_image is None or is_dataset_audio is None:
+        try:
+            detected_image, detected_audio = _detect_dataset_modalities(cfg, hf_token)
+        except Exception as e:  # noqa: BLE001 -- a hint only; the dataset load reports real errors
+            typer.echo(
+                f"Warning: could not inspect the dataset for images or audio ({e}); "
+                "training it as text. Pass --image-dataset or --audio-dataset to say otherwise.",
+                err = True,
+            )
+            detected_image = detected_audio = False
+        if is_dataset_image is None:
+            is_dataset_image = detected_image
+        if is_dataset_audio is None:
+            is_dataset_audio = detected_audio
+
     trainer = _create_cli_trainer(cfg.model, hf_token)
 
     if not trainer.load_model(
@@ -255,6 +302,8 @@ def train(
         full_finetuning = not use_lora,
         hf_token = hf_token,
         use_gradient_checkpointing = cfg.training.gradient_checkpointing,
+        is_dataset_image = is_dataset_image,
+        is_dataset_audio = is_dataset_audio,
     ):
         typer.echo("Model load failed", err = True)
         raise typer.Exit(code = 1)
