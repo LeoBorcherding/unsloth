@@ -297,9 +297,15 @@ export async function trackRecipeExecution({
       } catch {
         break;
       }
+      if (signal?.aborted) {
+        return { success: false, terminal: false };
+      }
       if (attempt < 2) {
         await delay(250);
       }
+    }
+    if (signal?.aborted) {
+      return { success: false, terminal: false };
     }
 
     const completedPayload = completedEventPayload as Record<

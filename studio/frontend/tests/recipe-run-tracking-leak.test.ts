@@ -272,3 +272,71 @@ test("a status reply that lands after leaving starts no more work", async () => 
   assert.equal(statusCalls, 1);
   assert.equal(datasetCalls, 0);
 });
+
+test("leaving during a completed run's final status check fetches no results", async () => {
+  let reply: () => void = () => {};
+  let statusCalls = 0;
+  let resultCalls = 0;
+  const api = {
+    getRecipeJobStatus: (jobId: string) => {
+      statusCalls += 1;
+      if (statusCalls !== 2) {
+        return Promise.resolve({ job_id: jobId, status: "completed" });
+      }
+      return new Promise((resolve) => {
+        reply = () => resolve({ job_id: jobId, status: "completed" });
+      });
+    },
+    getRecipeJobDataset: async () => {
+      resultCalls += 1;
+      return { dataset: [], total: 0 };
+    },
+    getRecipeJobAnalysis: async () => {
+      resultCalls += 1;
+      return {};
+    },
+    streamRecipeJobEvents: ({ signal }: { signal: AbortSignal }) =>
+      new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve()),
+      ),
+  };
+  const { trackRecipeExecution } = loadWithStubs<{
+    trackRecipeExecution: (params: Record<string, unknown>) => Promise<unknown>;
+  }>(
+    new URL(
+      "../src/features/recipe-studio/executions/tracker.ts",
+      import.meta.url,
+    ),
+    {
+      "@/features/hub": { bumpInventoryVersion: () => {} },
+      "@/shared/toast": { toastError: () => {}, toastSuccess: () => {} },
+      "../api": api,
+    },
+    { relativePassthrough: true },
+  );
+  const leaving = new AbortController();
+  const tracking = trackRecipeExecution({
+    label: "Preview",
+    kind: "preview",
+    rows: 1,
+    jobId: "job-A",
+    initialExecution: {
+      id: "exec-A",
+      recipeId: "recipe-A",
+      status: "running",
+      jobId: "job-A",
+    },
+    notify: false,
+    onUpsert: () => {},
+    onSetPreviewErrors: () => {},
+    signal: leaving.signal,
+  });
+  await tick(5);
+  assert.equal(statusCalls, 2, "the final status check is in flight");
+  leaving.abort();
+  reply();
+
+  assert.deepEqual(await tracking, { success: false, terminal: false });
+  assert.equal(statusCalls, 2);
+  assert.equal(resultCalls, 0);
+});
