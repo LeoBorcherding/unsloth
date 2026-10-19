@@ -3280,7 +3280,7 @@ def _graceful_shutdown_on_sigterm() -> None:
 _GRACEFUL_STOP_WAIT_S = 150.0
 
 
-def _request_graceful_shutdown(paths: "Sequence[Path]") -> bool:
+def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
     """POST /api/shutdown to the server behind a per-port record. Windows has no SIGTERM, and
     taskkill /F skips the handler that stops and saves a running training job."""
     from unsloth_cli._inference import (
@@ -3293,7 +3293,8 @@ def _request_graceful_shutdown(paths: "Sequence[Path]") -> bool:
     for path in paths:
         match = re.fullmatch(r"studio-(\d+)-\d+\.pid", path.name)
         record = _read_pid_record(path) if match else None
-        if record is None:
+        # A stale record grouped under this PID may name a port another server now holds.
+        if record is None or not _pid_is_studio_server(pid, [record[1]]):
             continue
         for base in _recorded_loopback_bases(record[2], match.group(1)):
             # The token is only sent to a listener that proves it holds this install's secret.
@@ -3335,7 +3336,7 @@ def _signal_stop(
         return f"refusing to signal PID {pid}"
     try:
         if sys.platform == "win32":
-            if _request_graceful_shutdown(paths):
+            if _request_graceful_shutdown(pid, paths):
                 typer.echo(
                     f"Asked Unsloth server (PID {pid}) to shut down; a running training "
                     "job is saved first."

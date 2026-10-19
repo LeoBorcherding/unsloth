@@ -497,7 +497,7 @@ def _install_windows(monkeypatch, tmp_path, *, shutdown_ok, exits):
         calls.append(("taskkill", argv))
         live.discard(int(argv[2]))
 
-    def fake_shutdown(paths):
+    def fake_shutdown(pid, paths):
         calls.append(("shutdown", sorted(p.name for p in paths)))
         if shutdown_ok and exits:
             live.discard(8550)
@@ -562,16 +562,17 @@ def test_graceful_shutdown_sends_the_token_only_to_a_verified_server(monkeypatch
 
     monkeypatch.setattr(_inference, "_studio_token", lambda: "tok")
     monkeypatch.setattr(_inference, "urlopen_no_redirect", fake_open)
+    monkeypatch.setattr(studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): True)
 
     monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: False)
-    assert studio_mod._request_graceful_shutdown([record]) is False
+    assert studio_mod._request_graceful_shutdown(8550, [record]) is False
     assert posted == []
 
     monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: True)
-    assert studio_mod._request_graceful_shutdown([record]) is True
+    assert studio_mod._request_graceful_shutdown(8550, [record]) is True
     assert posted == [("http://127.0.0.1:8901/api/shutdown", "POST", "Bearer tok")]
     # The legacy studio.pid has no port, so there is nothing to ask.
-    assert studio_mod._request_graceful_shutdown([tmp_path / "studio.pid"]) is False
+    assert studio_mod._request_graceful_shutdown(8550, [tmp_path / "studio.pid"]) is False
 
 
 def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypatch, tmp_path):
@@ -580,9 +581,9 @@ def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypat
     reused = []
     real_shutdown = studio_mod._request_graceful_shutdown
 
-    def shutdown_then_reuse(paths):
+    def shutdown_then_reuse(pid, paths):
         reused.append(True)
-        return real_shutdown(paths)
+        return real_shutdown(pid, paths)
 
     monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", shutdown_then_reuse)
     monkeypatch.setattr(
@@ -593,3 +594,38 @@ def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypat
 
     assert result.exit_code == 0, result.output
     assert calls == [("shutdown", ["studio-8901-8550.pid"])]
+
+
+def test_graceful_shutdown_skips_a_stale_record_grouped_under_the_pid(monkeypatch, tmp_path):
+    # The stale port may now belong to another Unsloth server, which would answer for this PID.
+    from unsloth_cli import _inference
+
+    studio_mod = _studio()
+    stale = tmp_path / "studio-8901-8550.pid"
+    stale.write_text("8550\n1600000000.0\n127.0.0.1", encoding = "utf-8")
+    live = tmp_path / "studio-8902-8550.pid"
+    live.write_text("8550\n1700000000.0\n127.0.0.1", encoding = "utf-8")
+    posted = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_open(request, timeout):
+        posted.append(request.full_url)
+        return _Response()
+
+    monkeypatch.setattr(_inference, "_studio_token", lambda: "tok")
+    monkeypatch.setattr(_inference, "urlopen_no_redirect", fake_open)
+    monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: True)
+    monkeypatch.setattr(
+        studio_mod,
+        "_pid_is_studio_server",
+        lambda pid, created_times = (): 1700000000.0 in created_times,
+    )
+
+    assert studio_mod._request_graceful_shutdown(8550, [stale, live]) is True
+    assert posted == ["http://127.0.0.1:8902/api/shutdown"]
