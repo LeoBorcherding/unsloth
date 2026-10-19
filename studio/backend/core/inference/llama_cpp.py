@@ -9434,11 +9434,18 @@ class LlamaCppBackend:
                     kwargs["reasoning_effort"] = effort
             elif self._reasoning_style == "reasoning_effort":
                 _levels = getattr(self, "_reasoning_effort_levels", None) or ()
-                # gpt-oss has no "none" level and would render it verbatim; read it as off. Keyed
-                # on the architecture: an empty scan doesn't prove a custom template lacks "none".
+                # gpt-oss has no "none" level and would render it verbatim; read it as off. The
+                # scan drops levels without "low"/"high", so also ask the active template itself.
+                _tpl = (
+                    getattr(self, "_chat_template_override", None)
+                    or getattr(self, "_chat_template", None)
+                    or ""
+                )
                 if (
                     reasoning_effort == "none"
                     and "none" not in _levels
+                    and "'none'" not in _tpl
+                    and '"none"' not in _tpl
                     and getattr(self, "_architecture", None) == "gpt-oss"
                 ):
                     kwargs["reasoning_effort"] = "low"

@@ -73,16 +73,28 @@ def test_a_template_offering_none_still_gets_it():
     }
 
 
+# Quotes "none" without both "low" and "high", so the scanned levels stay empty.
+NONE_BRANCH_TEMPLATE = (
+    '{%- if reasoning_effort == "none" %}Reasoning: off'
+    "{%- else %}Reasoning: {{ reasoning_effort }}{%- endif %}"
+)
+
+
 def test_a_custom_template_whose_levels_were_not_scanned_keeps_none():
-    # A template quoting "none" without both "low" and "high" leaves the scanned levels empty.
-    template = (
-        '{%- if reasoning_effort == "none" %}Reasoning: off'
-        "{%- else %}Reasoning: {{ reasoning_effort }}{%- endif %}"
-    )
     from core.inference.llama_cpp import detect_reasoning_flags
 
-    flags = detect_reasoning_flags(template, "someone/custom-model-GGUF")
+    flags = detect_reasoning_flags(NONE_BRANCH_TEMPLATE, "someone/custom-model-GGUF")
     assert flags["reasoning_effort_levels"] == []
     assert _shim([], None)._request_reasoning_kwargs(None, "none", None) == {
         "reasoning_effort": "none"
     }
+
+
+def test_a_gpt_oss_template_that_branches_on_none_keeps_it():
+    override = _shim()
+    override._chat_template = GPT_OSS_TEMPLATE
+    override._chat_template_override = NONE_BRANCH_TEMPLATE
+    assert override._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "none"}
+    stock = _shim()
+    stock._chat_template = GPT_OSS_TEMPLATE
+    assert stock._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "low"}
