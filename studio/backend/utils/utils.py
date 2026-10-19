@@ -32,7 +32,7 @@ _HF_OFFLINE_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 def hf_env_offline() -> bool:
     """True when HF_HUB_OFFLINE or TRANSFORMERS_OFFLINE asks for offline mode. TRANSFORMERS_OFFLINE counts too (the hub reads only HF_HUB_OFFLINE), as does an open force_hf_offline window: hf_environment_restored_for_spawn briefly puts the user's values back, and an env-only check on another thread would then read "online"."""
-    if force_hf_offline_active():
+    if force_hf_offline_active() or _hf_offline_scope.get():
         return True
     for var in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
         if os.environ.get(var, "").strip().lower() in _HF_OFFLINE_TRUE_VALUES:
@@ -473,6 +473,48 @@ def force_hf_offline():
                         os.environ[key] = val
                 _force_offline_saved_env = {}
                 _reset_hf_sessions()
+
+
+# Offline for one call tree only: force_hf_offline is process-wide, so a read-only lookup holding it
+# would fail a download running on another thread. Hub HTTP is gated per request by
+# huggingface_hub.constants.is_offline_mode, which is wrapped once to honour this flag.
+_hf_offline_scope: ContextVar[bool] = ContextVar("_hf_offline_scope", default = False)
+_hf_offline_scope_lock = threading.Lock()
+_hf_offline_scope_installed = False
+
+
+def hf_offline_scoped() -> bool:
+    """True inside hf_offline_scope on this thread or a context copied from it."""
+    return _hf_offline_scope.get()
+
+
+def _install_hf_offline_scope() -> None:
+    global _hf_offline_scope_installed
+    with _hf_offline_scope_lock:
+        if _hf_offline_scope_installed:
+            return
+        try:
+            import huggingface_hub.constants as _hf_constants
+        except Exception:
+            return
+        original = _hf_constants.is_offline_mode
+
+        def is_offline_mode() -> bool:
+            return _hf_offline_scope.get() or original()
+
+        _hf_constants.is_offline_mode = is_offline_mode
+        _hf_offline_scope_installed = True
+
+
+@contextmanager
+def hf_offline_scope():
+    """Offline like force_hf_offline, but only for the calling context; other threads stay online."""
+    _install_hf_offline_scope()
+    token = _hf_offline_scope.set(True)
+    try:
+        yield
+    finally:
+        _hf_offline_scope.reset(token)
 
 
 def st_repo_id_candidates(model_name: str) -> list:

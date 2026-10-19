@@ -21304,11 +21304,12 @@ def _cached_estimate_config(
     # detect_gguf_model_remote and list_gguf_variants, an hf_model_info each: two Hub
     # round trips per cache miss on a route the panel fires on every change, and a rate
     # limit waiting to happen. The reachable path stays as the fallback, because a slow
-    # right answer beats a fast blank row.
+    # right answer beats a fast blank row. Scoped to this request: the process-wide guard
+    # would fail a /load or training download running on another thread meanwhile.
     config = None
     try:
-        from utils.utils import force_hf_offline
-        with force_hf_offline():
+        from utils.utils import hf_offline_scope
+        with hf_offline_scope():
             config = _resolve()
     except Exception as exc:
         logger.debug(

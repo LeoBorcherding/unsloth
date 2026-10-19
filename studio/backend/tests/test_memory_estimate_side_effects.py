@@ -189,14 +189,15 @@ def _pin_on_disk(monkeypatch):
 
 
 def _hub_offline_now() -> bool:
-    """Whether the in-process HF offline switch is currently thrown.
+    """Whether a Hub call made right here would be refused as offline.
 
-    ``force_hf_offline`` flips ``huggingface_hub.constants.HF_HUB_OFFLINE`` rather than
-    only the env var, because the env var is read once at import. So the constant is
-    the honest observable for "would this call have gone to the network".
+    ``is_offline_mode`` is what huggingface_hub's request hook asks before every HTTP
+    call, and it answers for both ``force_hf_offline`` and the per-request
+    ``hf_offline_scope``, so it is the honest observable for "would this call have gone
+    to the network".
     """
     import huggingface_hub.constants as _hf_constants
-    return bool(_hf_constants.HF_HUB_OFFLINE)
+    return bool(_hf_constants.is_offline_mode())
 
 
 # D6. The on-disk gate and the network
@@ -245,9 +246,9 @@ class TestTheOnDiskGateAndTheNetwork:
         # config.json writing blob, ref, snapshot and lock -- for a request whose answer
         # is "not on this disk".
         #
-        # The observable is the offline switch, not a socket: force_hf_offline flips
-        # huggingface_hub's own constant, so a resolution seeing it False was allowed to
-        # dial out.
+        # The observable is the offline switch, not a socket: huggingface_hub asks
+        # is_offline_mode before every request, so a resolution seeing it False was
+        # allowed to dial out.
         monkeypatch.setattr(ri, "_estimate_hf_cache_roots", list)
         offline_at_each_call = []
 
@@ -1010,8 +1011,11 @@ class TestTheOfflineResolveStaysOnItsOwnRequest:
         monkeypatch.setattr(_hf_constants, "HF_HUB_OFFLINE", False)
         _pin_on_disk(monkeypatch)
         seen_elsewhere = []
+        seen_here = []
 
         def _fake_from_identifier(**kwargs):
+            seen_here.append(_hub_offline_now())
+
             def _other_request():
                 seen_elsewhere.append(
                     (_hf_constants.is_offline_mode(), os.environ.get("HF_HUB_OFFLINE"))
@@ -1027,7 +1031,28 @@ class TestTheOfflineResolveStaysOnItsOwnRequest:
         ri._cached_estimate_config("org/Model", None, None, False)
 
         assert seen_elsewhere, "the resolution never ran"
+        assert seen_here[0] is True, "the estimate's first resolve must still be offline"
         assert seen_elsewhere[0] == (False, None), (
             "another thread saw the Hub offline while an estimate resolved: "
             f"(is_offline_mode, HF_HUB_OFFLINE) = {seen_elsewhere[0]}"
         )
+
+    def test_the_scope_refuses_hub_requests_without_a_process_window(self, monkeypatch):
+        # Hub HTTP is gated by the request hook, not by the estimate's own code, and a guard
+        # nested inside the resolve must not reopen the process-wide window.
+        import huggingface_hub.constants as _hf_constants
+        from huggingface_hub.errors import OfflineModeIsEnabled
+        from huggingface_hub.utils import get_session
+
+        from core.inference.llama_cpp import _hf_offline_if_unreachable_for
+        from utils.utils import force_hf_offline_active, hf_offline_scope
+
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising = False)
+        monkeypatch.setattr(_hf_constants, "HF_HUB_OFFLINE", False)
+        with hf_offline_scope():
+            with pytest.raises(OfflineModeIsEnabled):
+                get_session().get("https://huggingface.co/api/models/org/Model")
+            with _hf_offline_if_unreachable_for("org/Model") as offline:
+                assert offline is True
+                assert not force_hf_offline_active()
+        assert not _hf_constants.is_offline_mode()
