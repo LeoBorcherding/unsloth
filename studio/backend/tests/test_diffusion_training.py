@@ -328,6 +328,106 @@ def test_service_stop_for_shutdown_wait_is_bounded():
     assert 0.4 < time.monotonic() - t0 < 2
 
 
+class _WedgedProc(_FakeProc):
+    """A child stuck where it never reads stop_queue (a download, a hung CUDA call)."""
+
+    def __init__(self, target, kwargs, daemon):
+        self.killed = threading.Event()
+        self.terminated = False
+
+        def wedged(*, event_queue, stop_queue, config):
+            event_queue.put({"type": "model_load_started"})
+            self.killed.wait(timeout = 10)
+
+        super().__init__(wedged, kwargs, daemon)
+
+    def terminate(self):
+        self.terminated = True
+        self.killed.set()
+
+    def kill(self):
+        self.killed.set()
+
+    def join(self, timeout = None):
+        self._thread.join(timeout)
+
+
+class _WedgedCtx(_FakeCtx):
+    def Process(self, target, kwargs, daemon):
+        return _WedgedProc(target, kwargs, daemon)
+
+
+@pytest.mark.parametrize("save", [True, False])
+def test_service_stop_escalates_when_the_child_ignores_it(monkeypatch, save):
+    import core.training.diffusion_training_service as dts
+
+    monkeypatch.setattr(dts, "_STOP_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(dts, "_CANCEL_TIMEOUT_S", 0.5)
+    svc = DiffusionTrainingService(ctx = _WedgedCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    assert svc.stop(save = save) is True
+    st = _wait_status(svc, "stopped", "error", timeout = 5.0)
+    assert svc._proc.terminated
+    assert st["status"] == "stopped" and st["active"] is False
+    assert "did not respond" in st["message"]
+
+
+def test_service_second_stop_ends_a_wedged_child_at_once():
+    svc = DiffusionTrainingService(ctx = _WedgedCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    assert svc.stop() is True
+    assert svc._proc.is_alive()
+    t0 = time.monotonic()
+    assert svc.stop() is True
+    assert _wait_status(svc, "stopped", "error")["status"] == "stopped"
+    assert not svc._proc.is_alive() and time.monotonic() - t0 < 2
+
+
+class _TermIgnoringProc(_WedgedProc):
+    # A child in an uninterruptible call: SIGTERM stays pending, only kill() ends it.
+    def terminate(self):
+        self.terminated = True
+
+
+class _TermIgnoringCtx(_FakeCtx):
+    def Process(self, target, kwargs, daemon):
+        return _TermIgnoringProc(target, kwargs, daemon)
+
+
+def test_shutdown_racing_a_first_stop_does_not_kill_the_save(monkeypatch):
+    import utils.account_context as account_context
+
+    svc = DiffusionTrainingService(ctx = _WedgedCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    real_run_as = account_context.run_as
+
+    def stop_lands_first(account, fn, /, *args, **kwargs):
+        # /diffusion/stop sets the flag between shutdown's liveness check and its own stop call.
+        svc.stop(save = True)
+        return real_run_as(account, fn, *args, **kwargs)
+
+    monkeypatch.setattr(account_context, "run_as", stop_lands_first)
+    assert svc.stop_for_shutdown(timeout = 0.5) is False
+    assert not svc._proc.terminated and svc._proc.is_alive()
+    svc._proc.kill()
+
+
+def test_service_second_stop_does_not_block_the_caller():
+    # /diffusion/stop is async, so a stop() that waits out terminate's grace freezes every request.
+    svc = DiffusionTrainingService(ctx = _TermIgnoringCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    assert svc.stop() is True
+    t0 = time.monotonic()
+    assert svc.stop() is True
+    assert time.monotonic() - t0 < 1
+    assert _wait_status(svc, "stopped", "error", timeout = 10.0)["status"] == "stopped"
+    assert not svc._proc.is_alive()
+
+
 def test_service_crash_without_terminal_event_is_error():
     svc = DiffusionTrainingService(ctx = _FakeCtx(), target = _crashing_target)
     svc.start(dict(_CFG))

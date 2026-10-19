@@ -48,6 +48,12 @@ _CTX = mp.get_context("spawn")
 # Terminal event types after which the pump stops.
 _TERMINAL = ("complete", "error")
 
+# A stop only lands between steps, so a child wedged in a download or a CUDA call is ended after this
+# (same caps as the LLM trainer's backstop); a second Stop ends it right away.
+_STOP_TIMEOUT_S = 600.0
+_CANCEL_TIMEOUT_S = 120.0
+_FORCED_STOP_MESSAGE = "Stopped: the trainer did not respond to Stop, so it was ended (no adapter saved)."
+
 
 def _finite_or_none(value: Any) -> Optional[float]:
     """Coerce a numeric progress field to a finite float, or None. A divergent run (or a
@@ -545,6 +551,8 @@ class DiffusionTrainingService:
         self._persist_interim = False
         # Only the first stop reaches the child, so only the first may set the parent's disposition.
         self._stop_signalled = False
+        # Set when the parent ended a child that ignored the stop, so its exit reads as stopped, not a crash.
+        self._forced_stop = False
         # GPU load admissions in flight (a load between its training guard and its arbiter registration).
         # Same two-sided rule as the dataset mutations.
         self._gpu_admissions = 0
@@ -697,6 +705,7 @@ class DiffusionTrainingService:
             self._own_checkpoints = []
             self._child_cleared_own = False
             self._stop_signalled = False
+            self._forced_stop = False
             event_queue = self._ctx.Queue()
             self._stop_queue = self._ctx.Queue()
             if self.job_account is not None:
@@ -760,18 +769,27 @@ class DiffusionTrainingService:
 
     @_invalidates_gpu_memory("diffusion training stop")
     @job_control
-    def stop(self, save: bool = True) -> bool:
+    def stop(self, save: bool = True, escalate: bool = True) -> bool:
         """Request a clean stop: the trainer finishes the current step, then either saves
         a partial adapter (``save=True``, the default) or discards the run (``save=False``,
         matching the LLM trainer's cancel). Returns True if a stop was signalled, False if
-        nothing was running."""
+        nothing was running. ``escalate=False`` never turns a repeat into a kill."""
         with self._lock:
-            if self._proc is None or not self._proc.is_alive() or self._stop_queue is None:
+            proc = self._proc
+            if proc is None or not proc.is_alive() or self._stop_queue is None:
                 return False
-            if self._stop_signalled:
-                # The child consumes the FIRST signal, so honouring a later stop-without-saving set a parent
-                # discard the child never carried out: the run was marked discarded and its checkpoints deleted
-                # while the adapter and catalog entry stayed on disk.
+            repeat = self._stop_signalled
+        if repeat:
+            if not escalate:
+                return True
+            # The child consumes the FIRST signal, so honouring a later stop-without-saving set a parent
+            # discard the child never carried out: the run was marked discarded and its checkpoints deleted
+            # while the adapter and catalog entry stayed on disk. A repeat only ends a child that ignored it.
+            # Off this thread: the route is async, and terminate + join can take up to 7 s.
+            threading.Thread(target = self._force_stop, args = (proc,), daemon = True).start()
+            return True
+        with self._lock:
+            if self._proc is not proc or self._stop_signalled:
                 return True
             try:
                 # Bare True = older wire format; the dict form carries the no-save cancel flag.
@@ -789,7 +807,30 @@ class DiffusionTrainingService:
                 else "Cancel requested; finishing the current step (no adapter will be saved)..."
             )
             self._state["updated_at"] = time.time()
-            return True
+        threading.Thread(
+            target = self._stop_watchdog,
+            args = (proc, _STOP_TIMEOUT_S if save else _CANCEL_TIMEOUT_S),
+            daemon = True,
+        ).start()
+        return True
+
+    def _stop_watchdog(self, proc: Any, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while proc.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.5)
+        self._force_stop(proc)
+
+    def _force_stop(self, proc: Any) -> None:
+        """End a child that did not act on its stop; the pump then finalizes it as stopped."""
+        with self._lock:
+            if self._proc is not proc or not proc.is_alive():
+                return
+            self._forced_stop = True
+        proc.terminate()
+        proc.join(timeout = 5.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout = 2.0)
 
     def stop_for_shutdown(self, timeout: float) -> bool:
         from utils.account_context import run_as
@@ -807,7 +848,8 @@ class DiffusionTrainingService:
             return True
         if proc is not None and proc.is_alive():
             # The signal path runs as the owner, which job_control refuses for a managed account's run.
-            run_as(account, self.stop, save = True)
+            # Never escalates: after a Stop already sent, the child is left to finish saving.
+            run_as(account, self.stop, save = True, escalate = False)
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
             if settled():
@@ -893,8 +935,10 @@ class DiffusionTrainingService:
                         if self._state.get("status") not in ("completed", "stopped", "error"):
                             self._state.update(
                                 active = False,
-                                status = "error",
-                                message = self._unexpected_exit_message(proc),
+                                status = "stopped" if self._forced_stop else "error",
+                                message = _FORCED_STOP_MESSAGE
+                                if self._forced_stop
+                                else self._unexpected_exit_message(proc),
                                 updated_at = time.time(),
                             )
                         discarding = self._discard_requested
