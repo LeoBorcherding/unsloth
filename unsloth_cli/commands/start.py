@@ -5,6 +5,7 @@
 
 import atexit
 import base64
+import collections
 import contextlib
 import errno
 import functools
@@ -5919,6 +5920,100 @@ def _parse_app_config(path: Path, text: Optional[str]) -> Optional[dict]:
         _fail(f"Couldn't parse {path}, so it was left as is. Fix it and re-run.")
 
 
+_JSONC_GAP = re.compile(r"(?:\s+|//[^\n]*|/\*.*?\*/)*", re.S)
+_JSON_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
+_JSON_LITERAL = re.compile(r"[^\s,:\[\]{}/]+")
+
+
+def _jsonc_comments(text: str) -> list:
+    return [m.group() for m in _JSONC_COMMENT.finditer(text) if not m.group(1)]
+
+
+def _jsonc_skip(text: str, i: int) -> int:
+    return _JSONC_GAP.match(text, i).end()
+
+
+def _jsonc_value_end(text: str, i: int) -> int:
+    if text[i] == '"':
+        return _JSON_STRING.match(text, i).end()
+    if text[i] == "[":
+        i = _jsonc_skip(text, i + 1)
+        while text[i] != "]":
+            i = _jsonc_skip(text, _jsonc_value_end(text, i))
+            if text[i] == ",":
+                i = _jsonc_skip(text, i + 1)
+        return i + 1
+    if text[i] == "{":
+        return _jsonc_members(text, i)[1] + 1
+    return _JSON_LITERAL.match(text, i).end()
+
+
+def _jsonc_members(text: str, start: int) -> tuple:
+    """(key, key start, value start, value end) per member of the object at start, plus its closing brace."""
+    members = []
+    i = _jsonc_skip(text, start + 1)
+    while text[i] != "}":
+        key = _JSON_STRING.match(text, i)
+        colon = _jsonc_skip(text, key.end())
+        if text[colon] != ":":
+            raise ValueError("expected ':'")
+        value = _jsonc_skip(text, colon + 1)
+        end = _jsonc_value_end(text, value)
+        members.append((json.loads(key.group()), i, value, end))
+        i = _jsonc_skip(text, end)
+        if text[i] == ",":
+            i = _jsonc_skip(text, i + 1)
+    return members, i
+
+
+def _jsonc_set(text: str, keys, value) -> str:
+    """Set keys to value by editing only that span of a JSONC text, so comments elsewhere survive."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+
+    def indent_at(i):
+        line = text.rfind("\n", 0, i) + 1
+        return re.match(r"[ \t]*", text[line:]).group()
+
+    def dump(new, indent):
+        return json.dumps(new, indent = 2, ensure_ascii = False).replace("\n", newline + indent)
+
+    start = _jsonc_skip(text, 0)
+    if text[start] != "{":
+        raise ValueError("not an object")
+    for depth, key in enumerate(keys):
+        new = value
+        for inner in reversed(keys[depth + 1 :]):
+            new = {inner: new}
+        members, close = _jsonc_members(text, start)
+        found = [m for m in members if m[0] == key]
+        if found:
+            _, key_at, value_at, value_end = found[-1]
+            if depth < len(keys) - 1 and text[value_at] == "{":
+                start = value_at
+                continue
+            return text[:value_at] + dump(new, indent_at(key_at)) + text[value_end:]
+        if not members:
+            indent = indent_at(start) + "  "
+            member = f"{newline}{indent}{json.dumps(key)}: {dump(new, indent)}"
+            if text[start + 1 : close].strip():
+                return text[: start + 1] + member + text[start + 1 :]
+            return text[: start + 1] + member + newline + indent_at(start) + text[close:]
+        _, key_at, _, value_end = members[-1]
+        line = text.rfind("\n", 0, key_at) + 1
+        indent = text[line:key_at] if not text[line:key_at].strip() else indent_at(start) + "  "
+        after = _jsonc_skip(text, value_end)
+        comma = text[after] == ","
+        at = after + 1 if comma else value_end
+        # Land after a same-line `// note`, so it stays with the member it describes.
+        tail = re.compile(r"[ \t]*(?://[^\r\n]*)?").match(text, at).end()
+        if text[tail : tail + 1] in ("\r", "\n"):
+            at = tail
+        member = f"{newline}{indent}{json.dumps(key)}: {dump(new, indent)}" + ("," if comma else "")
+        text = text[:at] + member + text[at:]
+        return text if comma else text[:value_end] + "," + text[value_end:]
+    return text
+
+
 def _set_app_values(text: Optional[str], path: Path, updates: list) -> Optional[str]:
     config = _parse_app_config(path, text)
     before = json.dumps(config, sort_keys = True)
@@ -5936,7 +6031,24 @@ def _set_app_values(text: Optional[str], path: Path, updates: list) -> Optional[
     if json.dumps(config, sort_keys = True) == before:
         return text
     if path.suffix != ".yaml":
-        return json.dumps(config, indent = 2, ensure_ascii = False) + "\n"
+        # Edit only the touched members so the user's comments and layout survive.
+        new_text = json.dumps(config, indent = 2, ensure_ascii = False) + "\n"
+        with contextlib.suppress(Exception):
+            candidate = text or ""
+            for keys, value in updates:
+                candidate = _jsonc_set(candidate, keys, value)
+            if _load_app_config(path, candidate) == config:
+                new_text = candidate
+        # A replaced list or object takes the comments inside it along.
+        if collections.Counter(_jsonc_comments(text or "")) - collections.Counter(
+            _jsonc_comments(new_text)
+        ):
+            typer.echo(
+                f"Couldn't keep every comment in {path} while updating it. The copy from before "
+                f"Unsloth first changed it is {path.name}.unsloth-backup next to it.",
+                err = True,
+            )
+        return new_text
     import yaml
 
     # Rewrite only the touched top-level blocks so the rest of the file keeps its comments.

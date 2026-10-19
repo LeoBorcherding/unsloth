@@ -407,14 +407,20 @@ def test_opencode_app_reads_a_commented_jsonc(studio, monkeypatch):
     monkeypatch.setattr(start, "_opencode_command", lambda *_: ("opencode", False))
     config = studio["home"] / ".config" / "opencode" / "opencode.jsonc"
     config.parent.mkdir(parents = True)
-    config.write_text('{\n  // mine\n  "model": "openai/gpt-5.5", /* x */\n  "theme": "a//b",\n}\n')
+    config.write_text(
+        '{\n  // mine\n  "model": "openai/gpt-5.5", /* x */\n  "theme": "a//b",\n'
+        '  "provider": {\n    "anthropic": {}, // primary\n  },\n}\n'
+    )
 
     result = CliRunner().invoke(start.start_app, ["opencode", "--app"])
 
     assert result.exit_code == 0, result.output
-    data = json.loads(config.read_text())
+    text = config.read_text()
+    data = start._load_app_config(config, text)
     assert (data["model"], data["theme"]) == ("openai/gpt-5.5", "a//b")
-    assert "unsloth-studio" in data["provider"]
+    assert set(data["provider"]) == {"anthropic", "unsloth-studio"}
+    for comment in ("// mine", "/* x */", "// primary"):
+        assert comment in text
 
 
 def test_opencode_app_reenables_a_disabled_unsloth(studio, monkeypatch):
@@ -439,9 +445,23 @@ def test_openclaw_app_reads_a_commented_config(studio):
     result = CliRunner().invoke(start.start_app, ["openclaw", "--app"])
 
     assert result.exit_code == 0, result.output
-    data = json.loads(config.read_text())
+    text = config.read_text()
+    data = start._load_app_config(config, text)
     assert data["agents"]["defaults"] == {"model": "openai/gpt-5.5"}
     assert data["models"]["providers"]["unsloth"]["apiKey"] == APP_KEY
+    assert "// mine" in text
+
+
+def test_app_keeps_comments_when_it_updates_a_jsonc_config():
+    text = '{\n  // my notes about this config\n  "provider": {\n    "anthropic": {}, // primary\n  },\n}\n'
+
+    out = start._set_app_values(text, Path("opencode.jsonc"), [(["model"], "unsloth/demo")])
+
+    assert "// my notes about this config" in out and "// primary" in out
+    assert start._load_app_config(Path("opencode.jsonc"), out) == {
+        "provider": {"anthropic": {}},
+        "model": "unsloth/demo",
+    }
 
 
 def test_opencode_app_keeps_each_config_dirs_backup_and_key(studio, monkeypatch, tmp_path):
@@ -902,3 +922,18 @@ def test_vscode_warns_when_the_context_is_too_small_for_agent_mode(
 
     assert result.exit_code == 0, result.output
     assert ("--context-length 32768" in result.output) is warned
+
+
+def test_app_warns_when_a_replaced_list_drops_a_comment(capsys):
+    text = (
+        '{\n  // keep me\n  "disabled_providers": [\n    "unsloth-studio", // was off\n'
+        '    "openai",\n  ],\n}\n'
+    )
+
+    out = start._set_app_values(
+        text, Path("opencode.jsonc"), [(["disabled_providers"], ["openai"])]
+    )
+
+    assert "// keep me" in out
+    assert start._load_app_config(Path("opencode.jsonc"), out) == {"disabled_providers": ["openai"]}
+    assert "Couldn't keep every comment" in capsys.readouterr().err
