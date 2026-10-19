@@ -14192,18 +14192,23 @@ class LlamaCppBackend:
             return None
         if int(model_bytes or 0) <= 0:
             return None
-        if not self._nvidia_smi_free_total_mib(gpu_indices):
+        rows = self._nvidia_smi_free_total_mib(gpu_indices)
+        if not rows:
             return None
+        # The cards that sample answered for, already through the visibility mask: the link probe
+        # reads every card nvidia-smi lists, so passing None there lets a masked-off card on a
+        # slower slot set the floor, as the planner's own probe (_link_indices) does not.
+        watched = [idx for idx, _free, _total in rows]
         from core.inference.offload_cost_model import PREFILL_STREAM_GIB_S
 
-        link_gib_s = self._nvidia_link_gib_s(gpu_indices) or PREFILL_STREAM_GIB_S
+        link_gib_s = self._nvidia_link_gib_s(watched) or PREFILL_STREAM_GIB_S
         floor_tok_s = float(link_gib_s) / (int(model_bytes) / float(1024**3))
         if not (floor_tok_s > 0.0):
             return None
         from core.inference.llama_stats import SysmemFallbackWatch
 
         return SysmemFallbackWatch(
-            lambda: LlamaCppBackend._nvidia_smi_free_total_mib(gpu_indices),
+            lambda: LlamaCppBackend._nvidia_smi_free_total_mib(watched),
             floor_tok_s,
             logger,
         )
@@ -30328,6 +30333,14 @@ class LlamaCppBackend:
                         if gpu_indices is not None
                         else [_idx for _idx, _free in (gpus or ())]
                     )
+                    # -sm none keeps one device, the first row _planned_tensor_spill keeps, so a
+                    # card the plan never streams to does not bound its link.
+                    if _extra_args_split_mode(extra_args, {}) == "none":
+                        _link_indices = [
+                            int(_idx)
+                            for _idx, _free in (gpus or ())
+                            if int(_idx) in {int(i) for i in _link_indices}
+                        ][:1]
                     _spill_inputs = {
                         "model_size": model_size,
                         "kv_cache_bytes": (
@@ -31488,6 +31501,8 @@ class LlamaCppBackend:
                 # A spill plan that moved no weight (fewer slots, the projector on the CPU, the
                 # draft dropped, a shorter context) pins every layer on the GPU.
                 _spill_keeps_every_layer_on_gpu = False
+                # The one card an -sm none plan budgets, which the paging watch then samples.
+                _spill_sm_none_gpu_indices: Optional[list[int]] = None
                 # Set when a positional --tensor-split is emitted, so the env block
                 # can pin CUDA to PCI order even without a GPU subset (see below).
                 manual_tensor_split_emitted = False
@@ -31590,15 +31605,62 @@ class LlamaCppBackend:
                     # card and not the plan's row 0. The same rule the probe applies
                     # (_cuda_compute_caps). It holds for ONE device too: the plan's VRAM and its
                     # PCIe link rate (_nvidia_link_gib_s) were read off that row.
+                    # Unmasked, a split across every card pins PCI_BUS_ID on the child
+                    # (_pin_visible_gpu_order_for_split), which matches the rows only when they
+                    # ARE PCI indices: the torch fallback's ordinals follow the parent's
+                    # FASTEST_FIRST order instead, so the shares would land on other cards.
                     _cuda_order_unverified = bool(
                         not is_vulkan_backend
                         and not gpu_ids
                         and not self._host_torch_is_rocm()
-                        and os.environ.get("CUDA_VISIBLE_DEVICES") is not None
                         and os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID"
+                        and (
+                            os.environ.get("CUDA_VISIBLE_DEVICES") is not None
+                            or (
+                                gpu_indices is None
+                                and len(getattr(_spill, "device_layer_counts", ()) or ()) > 1
+                                and LlamaCppBackend._GPU_IDS_ARE_PCI_INDICES is False
+                            )
+                        )
+                    )
+                    # -sm none keeps only the child's device 0, which _planned_tensor_spill budgets
+                    # as the first row it kept. A pick's order, or a parent mask reordering the same
+                    # cards, makes another card device 0, and the multi-device clause below never
+                    # sees a one-device plan.
+                    _sm_none_rows = (
+                        [
+                            int(_idx)
+                            for _idx, _free in ((_spill_inputs or {}).get("gpus") or ())
+                            if int(_idx)
+                            not in set((_spill_inputs or {}).get("shared_gpu_ids") or ())
+                            and (gpu_indices is None or int(_idx) in {int(i) for i in gpu_indices})
+                        ]
+                        if _extra_args_split_mode(extra_args, {}) == "none"
+                        else []
+                    )
+                    _sm_none_moves_device_0 = len(_sm_none_rows) > 1 and (
+                        (gpu_indices is not None and int(list(gpu_indices)[0]) != _sm_none_rows[0])
+                        or (
+                            not is_vulkan_backend
+                            and not gpu_ids
+                            and (self._inherited_child_gpu_order(_sm_none_rows) or _sm_none_rows)[0]
+                            != _sm_none_rows[0]
+                        )
+                        # No mask and no pick: nothing pins the child's order, so under the
+                        # parent's FASTEST_FIRST its device 0 is the fastest card, not PCI row 0.
+                        # Torch-fallback rows are ordinals in that same order, so they still hold.
+                        or (
+                            not is_vulkan_backend
+                            and gpu_indices is None
+                            and not self._host_torch_is_rocm()
+                            and os.environ.get("CUDA_VISIBLE_DEVICES") is None
+                            and os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID"
+                            and LlamaCppBackend._GPU_IDS_ARE_PCI_INDICES is not False
+                        )
                     )
                     if _spill is not None and (
                         _cuda_order_unverified
+                        or _sm_none_moves_device_0
                         or (
                             len(getattr(_spill, "device_layer_counts", ()) or ()) > 1
                             and gpu_indices is not None
@@ -31673,6 +31735,7 @@ class LlamaCppBackend:
                         _spill_ctx_locals_before = None
                         cmd.extend(self._spill_plan_flags)
                         _spill_keeps_every_layer_on_gpu = "-ot" not in _spill_flags
+                        _spill_sm_none_gpu_indices = _sm_none_rows[:1] or None
                         # The plan's other decisions rewrite values this argv already carries, IN
                         # PLACE, with the fitter's own value recorded so a retry that revokes the
                         # plan can put it back.
@@ -35799,7 +35862,10 @@ class LlamaCppBackend:
                         and not _load_cancelled()
                         and (_projector_msg or _projector_memory or _signal_mmproj_guess)
                     ):
-                        _vision_gpu_cmd = list(_last_spawn_cmd)
+                        # A first spawn that failed without crashing never reached the in-loop
+                        # revocation, so _last_spawn_cmd can still carry the plan `cmd` dropped
+                        # above, and the text-only retry spawns from this outside _spawn_and_wait.
+                        _vision_gpu_cmd = list(_revoke_spill_plan(_last_spawn_cmd, "mmproj"))
                         _cpu_projector_cmd = None
                         if not _projector_msg and _paravirtual_mmproj_pinnable(server_caps):
                             _cpu_projector_cmd = self._with_mmproj_offload_disabled(
@@ -36285,7 +36351,14 @@ class LlamaCppBackend:
                             headers = self._auth_headers,
                             # Windows CUDA only; None elsewhere, which is the previous call.
                             sysmem_watch = self._windows_sysmem_fallback_watch(
-                                gpu_indices = gpu_indices,
+                                # An -sm none plan keeps every layer on its one card; the others
+                                # hold none of these weights.
+                                gpu_indices = (
+                                    _spill_sm_none_gpu_indices
+                                    if _spill_keeps_every_layer_on_gpu
+                                    and _spill_sm_none_gpu_indices
+                                    else gpu_indices
+                                ),
                                 model_bytes = int(model_size or 0),
                                 is_vulkan_backend = is_vulkan_backend,
                                 # A plan that moved no weight pins every layer on the card under

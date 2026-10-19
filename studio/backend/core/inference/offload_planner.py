@@ -634,6 +634,13 @@ def _swa_floor_at(opts: PlanOptions, n_ctx: int, n_seq: int) -> int:
     return base * slots // at
 
 
+def _recurrent_rows(layout: ModelLayout, weights: Sequence[int]) -> set[int]:
+    """The rows ``weights`` gives no cache, less any the file says hold no recurrent state either
+    (nemotron_h's MLP-only rows, which would otherwise take a share of the Mamba state)."""
+    rows = {i for i, w in enumerate(weights) if w == 0}
+    return rows & set(layout.recurrent_rows) if layout.recurrent_rows else rows
+
+
 def _fit_fallback_placement(
     layout: ModelLayout,
     opts: PlanOptions,
@@ -711,11 +718,18 @@ def _fit_fallback_placement(
     weights = [max(0, int(w)) for w in kv_layer_weights]
     if len(weights) != layout.n_layers or not any(weights):
         weights = []
+    if not weights and not (layout.has_swa or layout.has_mla):
+        # No caller vector (the seam supplies one for a windowed cache only), but the file says
+        # which rows hold the cache. Spread evenly, a hybrid's leading recurrent rows carried cache
+        # they do not hold, and host attention traffic the real fitter never pays.
+        weights = list(layout.kv_heads_by_layer)
+        if len(weights) != layout.n_layers or not any(weights):
+            weights = []
     # The recurrent state sits on the rows that hold no cache and the fitter moves a LEADING
     # prefix, so an interleaved hybrid's prefix carries the share of those rows it spans, not
     # ``moved / n_layers`` of the state. Uniform only when no vector says which rows they are.
     state_total = 0 if kv_on_host else layout.recurrent_bytes * max(1, n_seq)
-    recurrent_rows = {b.index for b in blocks if weights and weights[b.index] == 0}
+    recurrent_rows = {b.index for b in blocks} & _recurrent_rows(layout, weights)
     if state_total > 0 and recurrent_rows:
         recurrent_prefix: list[int] = []
         seen_rows = 0
@@ -1531,8 +1545,12 @@ def _per_device_usage(
         return None, [], []
     # These three shapes are only a problem when the cache has to be spread evenly for want of
     # anything better. A vector removes that guess; without one they abstain.
+    unequal_heads = len({h for h in layout.kv_heads_by_layer if h > 0}) > 1
     uneven_cache = (
-        layout.recurrent_bytes > 0 or layout.n_attention_layers != layout.n_layers or layout.has_swa
+        layout.recurrent_bytes > 0
+        or layout.n_attention_layers != layout.n_layers
+        or layout.has_swa
+        or unequal_heads
     )
     weights = [max(0, int(w)) for w in kv_layer_weights]
     if len(weights) != layout.n_layers or not any(weights):
@@ -1544,6 +1562,16 @@ def _per_device_usage(
             return (
                 f"only {layout.n_attention_layers} of {layout.n_layers} layers hold a cache "
                 "and the layout does not say which",
+                [],
+                [],
+            )
+        if not layout.has_swa:
+            # OpenELM: 3 to 6 KV heads a row, so an even spread under-books the card that takes
+            # the wide rows. Not used as the vector here: with flash attention off every V is
+            # padded to the widest row (_max_kv_value_width), which head counts alone do not say.
+            return (
+                "the per-layer KV head counts differ and no per-layer vector was supplied to "
+                "say which device holds the wider caches",
                 [],
                 [],
             )
@@ -1581,7 +1609,7 @@ def _per_device_usage(
     # The recurrent state is one copy per slot on the rows that hold no cache, and the pooled fit
     # charges it in full.
     if layout.recurrent_bytes > 0 and not opts.kv_on_host:
-        recurrent_rows = [i for i, w in enumerate(weights) if w == 0]
+        recurrent_rows = sorted(_recurrent_rows(layout, weights))
         if not recurrent_rows:
             return "the recurrent state's per-layer split is not visible in the layout", [], []
         state = layout.recurrent_bytes * max(1, n_seq)
@@ -2722,12 +2750,14 @@ def smart_offload_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
     paired cells on a 6-core desktop and the planner was slower in 40 of the 43
     it planned, by up to 8x on generation.
 
-    The mechanism is not the host size alone. ``rank`` in offload_cost_model
-    scores a placement as prefill PLUS generation, but the planner only ever
-    calls ``generation_penalty_ms``, so prefill is not priced at all -- which is
-    why #9861 measured prefill slower in 43 of 43 planned cells, without one
-    exception. A gate that does not count half the request cannot be trusted to
-    fire by default, so it goes back behind the flag until it does.
+    The mechanism is not the host size alone. The planner #9861 measured only
+    ever called ``generation_penalty_ms``, so prefill was not priced at all --
+    which is why prefill was slower in 43 of 43 planned cells, without one
+    exception. Both gates now price prefill PLUS generation (``_cost_gate`` and
+    ``_knob_only_gate`` score each arm with ``rank`` through ``_score_arms``),
+    and ``generation_penalty_ms`` only fills the informational
+    ``Plan.predicted_gen_penalty_ms``. It stays behind the flag until that
+    gate is calibrated on the small desktop hosts #9861 measured.
 
     Off does not mean the load is unplaced: every path that would have consulted
     the planner falls through to ``--fit on``, which is what the same report
