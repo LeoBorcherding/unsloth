@@ -803,8 +803,8 @@ class GgmlSttSidecar:
 
     @property
     def loaded_model(self) -> Optional[str]:
-        # Lock-free status read (like stt_sidecar.py): transcribe() holds self._lock for the whole inference call (up
-        # to _TRANSCRIBE_TIMEOUT_SECONDS), and status polls plus training admission must not block behind it.
+        # Lock-free status read (like stt_sidecar.py): transcribe() holds self._lock for the whole inference call (the
+        # socket timeout scales with the clip), and status polls plus training admission must not block behind it.
         # _process_alive() snapshots self._process before poll(), which subprocess guards with _waitpid_lock, so a
         # concurrent unload is safe.
         return self._model_id if self._process_alive() else None
