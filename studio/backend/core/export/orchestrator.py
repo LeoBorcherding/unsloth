@@ -15,6 +15,8 @@ from core.training.account_jobs import (
     validate_job_paths,
 )
 import atexit
+import contextlib
+import glob
 import os
 import structlog
 from collections import deque
@@ -150,7 +152,17 @@ class ExportOrchestrator:
         return self._export_active
 
     def paths_in_use(self) -> List[str]:
-        return [p for p in (self.current_checkpoint, *self._op_paths) if p]
+        op_paths = self._op_paths
+        paths = [p for p in (self.current_checkpoint, *op_paths) if p]
+        # A compressed or torchao merge writes to a "<save_directory>-<suffix>" sibling.
+        out = op_paths[0] if op_paths and self._active_op_kind == "export_merged" else None
+        if out:
+            out = Path(out)
+            with contextlib.suppress(OSError):
+                paths += sorted(
+                    str(p) for p in out.parent.glob(f"{glob.escape(out.name)}-*") if p.is_dir()
+                )
+        return paths
 
     def is_worker_alive(self) -> bool:
         proc = self._proc

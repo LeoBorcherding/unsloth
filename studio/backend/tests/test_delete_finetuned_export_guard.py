@@ -137,3 +137,28 @@ def test_the_orchestrator_reports_the_in_flight_output_folder(tmp_path, monkeypa
     assert ok
     assert seen["during"] == [orch.current_checkpoint, str(out)]
     assert orch.paths_in_use() == [orch.current_checkpoint]
+
+
+def test_a_compressed_merge_also_holds_its_suffixed_sibling(tmp_path, monkeypatch):
+    import utils.paths as paths_module
+
+    out = tmp_path / "exports" / "merged"
+    sibling = tmp_path / "exports" / "merged-torchao-fp8"
+    unrelated = tmp_path / "exports" / "other"
+    for d in (sibling, unrelated):
+        d.mkdir(parents = True)
+    monkeypatch.setattr(paths_module, "resolve_export_write_dir", lambda _p: out)
+    orch = ExportOrchestrator()
+    monkeypatch.setattr(orch, "_ensure_subprocess_alive", lambda: True)
+    monkeypatch.setattr(orch, "_send_cmd", lambda cmd: None)
+    seen = {}
+
+    def _wait_response(_kind, timeout = None):
+        seen["during"] = orch.paths_in_use()
+        return {"success": True, "message": "ok", "output_path": str(sibling)}
+
+    monkeypatch.setattr(orch, "_wait_response", _wait_response)
+    ok, _, _ = orch.export_merged_model(save_directory = "merged", format_type = "FP8 (torchao)")
+
+    assert ok
+    assert seen["during"] == [str(out), str(sibling)]
