@@ -114,9 +114,10 @@ def publish_recipe_dataset(
 
         with metadata_path.open(encoding = "utf-8") as fh:
             metadata = json.load(fh)
-        if require_all_batches and metadata.get("num_completed_batches") != metadata.get(
-            "total_num_batches"
-        ):
+        done = metadata.get("num_completed_batches")
+        total = metadata.get("total_num_batches")
+        # Missing counters would compare equal (None == None), so they count as unfinished.
+        if require_all_batches and (not isinstance(total, int) or done != total):
             raise RecipeDatasetPublishError(
                 "This run did not finish all of its batches, so it can't be published."
             )

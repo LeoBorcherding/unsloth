@@ -277,16 +277,24 @@ def _stub_hub(monkeypatch, created):
         monkeypatch.setitem(sys.modules, name, stub)
 
 
-@pytest.mark.parametrize("completed_batches, published", [(1, False), (6, True)])
+@pytest.mark.parametrize(
+    "metadata, published",
+    [
+        ({"num_completed_batches": 1, "total_num_batches": 6}, False),
+        ({"num_completed_batches": 6, "total_num_batches": 6}, True),
+        ({}, False),
+        ({"num_completed_batches": None, "total_num_batches": None}, False),
+    ],
+)
 def test_publish_after_replacement_needs_every_batch(
-    harness, monkeypatch, tmp_path, completed_batches, published
+    harness, monkeypatch, tmp_path, metadata, published
 ):
     created: list[str] = []
     _stub_hub(monkeypatch, created)
     monkeypatch.setattr(recipe_hf, "_resolve_recipe_artifact_path", lambda _: tmp_path)
     monkeypatch.setattr(route, "allow_ambient_hf_token", lambda: True)
     (tmp_path / "metadata.json").write_text(
-        json.dumps({"num_completed_batches": completed_batches, "total_num_batches": 6}),
+        json.dumps(metadata),
         encoding = "utf-8",
     )
     payload = SimpleNamespace(
