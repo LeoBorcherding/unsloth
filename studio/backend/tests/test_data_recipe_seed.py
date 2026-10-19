@@ -203,6 +203,21 @@ def test_seed_preview_caps_long_text_cells_but_not_images(monkeypatch, tmp_path)
     assert row["short"] == "ok"
 
 
+def test_seed_preview_caps_long_text_nested_in_objects_and_lists(monkeypatch, tmp_path):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "account_path", lambda path: None)
+    path = tmp_path / "seed.jsonl"
+    path.write_text(
+        json.dumps({"meta": {"body": "x" * 50_000, "n": 1}, "tags": ["y" * 50_000, "ok"]}),
+        encoding = "utf-8",
+    )
+
+    (row,) = seed_route._read_preview_rows_from_local_file(path, 10)
+
+    assert row["meta"] == {"body": "x" * 2000 + "... (50000 chars)", "n": 1}
+    assert row["tags"] == ["y" * 2000 + "... (50000 chars)", "ok"]
+
+
 def test_seed_preview_drops_an_image_too_large_for_the_editor_to_render(monkeypatch, tmp_path):
     seed_route = _load_seed_route(monkeypatch, tmp_path)
     monkeypatch.setattr(seed_route, "account_path", lambda path: None)

@@ -105,6 +105,10 @@ _PREVIEW_IMAGE_MAX_BYTES = 200 * 1024
 
 def _cap_preview_cell(value: Any) -> Any:
     # The rows ride along in every saved recipe. Image strings the editor can render stay whole.
+    if isinstance(value, dict):
+        return {key: _cap_preview_cell(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cap_preview_cell(item) for item in value]
     if not isinstance(value, str) or len(value) <= _PREVIEW_CELL_MAX_CHARS:
         return value
     if value.startswith(_BASE64_IMAGE_PREFIXES):
