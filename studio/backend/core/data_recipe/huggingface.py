@@ -81,6 +81,7 @@ def publish_recipe_dataset(
     hf_token: str | None = None,
     private: bool = False,
     link_endpoint: str | None = None,
+    require_all_batches: bool = False,
 ) -> str:
     hf_token = account_hf_token(hf_token)
     dataset_path = _resolve_recipe_artifact_path(artifact_path)
@@ -108,15 +109,22 @@ def publish_recipe_dataset(
         client = HuggingFaceHubClient(token = hf_token)
         client._validate_repo_id(repo_id = repo_id)
         client._validate_dataset_path(base_dataset_path = dataset_path)
-        client._create_or_get_repo(repo_id = repo_id, private = private)
-        if private:
-            _ensure_hub_repo_private(client._api, repo_id)
-
         metadata_path = dataset_path / METADATA_FILENAME
         builder_config_path = dataset_path / SDG_CONFIG_FILENAME
 
         with metadata_path.open(encoding = "utf-8") as fh:
             metadata = json.load(fh)
+        done = metadata.get("num_completed_batches")
+        total = metadata.get("total_num_batches")
+        # Missing counters would compare equal (None == None), so they count as unfinished.
+        if require_all_batches and (not isinstance(total, int) or done != total):
+            raise RecipeDatasetPublishError(
+                "This run did not finish all of its batches, so it can't be published."
+            )
+
+        client._create_or_get_repo(repo_id = repo_id, private = private)
+        if private:
+            _ensure_hub_repo_private(client._api, repo_id)
 
         builder_config = None
         if builder_config_path.exists():
