@@ -31,6 +31,7 @@ const { isExecutionInProgress } = await import(
 
 type Hook = {
   runPreview: () => Promise<boolean>;
+  runFull: () => Promise<boolean>;
 };
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -41,15 +42,16 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
-function mountExecutionsHook() {
+function mountExecutionsHook({ holdJob = false } = {}) {
   const calls = { validate: 0, createJob: 0, loading: [] as boolean[] };
   const validations: Array<ReturnType<typeof deferred<unknown>>> = [];
+  const jobs: Array<ReturnType<typeof deferred<unknown>>> = [];
   const state = {
     runDialogOpen: false,
     runDialogKind: "preview",
     previewRows: 5,
     fullRows: 10,
-    fullRunName: "",
+    fullRunName: "named run",
     runErrors: [],
     runSettings: {},
     previewLoading: false,
@@ -100,6 +102,11 @@ function mountExecutionsHook() {
         },
         createRecipeJob: () => {
           calls.createJob += 1;
+          if (holdJob) {
+            const next = deferred<unknown>();
+            jobs.push(next);
+            return next.promise;
+          }
           // biome-ignore lint/style/useNamingConvention: api schema
           return Promise.resolve({ job_id: "job-1" });
         },
@@ -140,7 +147,7 @@ function mountExecutionsHook() {
     currentSignature: "sig",
     payloadResult: { errors: [], payload: { recipe: {}, run: {}, ui: {} } },
   });
-  return { hook, calls, validations };
+  return { hook, calls, validations, jobs };
 }
 
 // Both clicks reach /validate synchronously if nothing guards re-entry, so count before awaiting.
@@ -154,6 +161,29 @@ test("a second Run click while validation is pending starts nothing", { timeout:
   validations[0].resolve({ valid: true, errors: [] });
   assert.equal(await first, true);
   assert.equal(calls.createJob, 1);
+});
+
+// Easy's Run reads only fullLoading and the job lock, and a preview has neither until /jobs answers.
+test("Run stays refused while the job request is in flight, from any Run button", { timeout: 10_000 }, async () => {
+  const { hook, calls, validations, jobs } = mountExecutionsHook({ holdJob: true });
+  const first = hook.runPreview();
+  validations[0].resolve({ valid: true, errors: [] });
+  for (let i = 0; i < 100 && calls.createJob === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+  assert.equal(calls.createJob, 1);
+
+  const second = hook.runFull();
+  assert.equal(calls.validate, 1, "a second run must not start while /jobs is pending");
+  assert.equal(await second, false);
+
+  // biome-ignore lint/style/useNamingConvention: api schema
+  jobs[0].resolve({ job_id: "job-1" });
+  assert.equal(await first, true);
+  const next = hook.runPreview();
+  assert.equal(calls.validate, 2, "a run after the first settles must go through");
+  validations[1].resolve({ valid: false, errors: [] });
+  await next;
 });
 
 test("the Run buttons read busy from the first click, and free up after a failed check", { timeout: 10_000 }, async () => {

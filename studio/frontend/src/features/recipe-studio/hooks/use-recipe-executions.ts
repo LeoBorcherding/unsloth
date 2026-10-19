@@ -910,7 +910,7 @@ export function useRecipeExecutions({
     [setRunErrors],
   );
 
-  // Set before the first await, so a second click during validation or the model load is refused.
+  // Set before the first await and held until the run settles, so a second Run is refused.
   const startingRef = useRef(false);
 
   const runWithValidation = useCallback(
@@ -949,12 +949,12 @@ export function useRecipeExecutions({
         runName,
       });
 
-      // runExecution keeps the loading flag up from here on; this covers the time before it.
+      // runExecution keeps the loading flag up once it starts; this covers the time before it.
       const setLoading =
         kind === "preview" ? setPreviewLoading : setFullLoading;
       startingRef.current = true;
       setLoading(true);
-      let restorePrevious: (() => Promise<void>) | null | false;
+      let started = false;
       try {
         if (!(await validateExecutionPayload(executionPayload))) {
           return false;
@@ -964,23 +964,28 @@ export function useRecipeExecutions({
         // point-in-time handoff to job creation, not a lease: if Chat swaps models after this
         // succeeds, the backend runs against current state. A future generation token should be
         // validated across this load and the `/jobs` loaded-model gate.
-        restorePrevious = await prepareLocalModelForExecution(payload);
+        const restorePrevious = await prepareLocalModelForExecution(payload);
         if (restorePrevious === false) {
           return false;
         }
+
+        started = true;
+        // Held until the run settles: Easy's Run doesn't read previewLoading, and there's no
+        // job id to lock on until /jobs answers.
+        return await runExecution({
+          kind,
+          payload,
+          rows: normalizedRows,
+          settings: runSettings,
+          runName,
+          restorePrevious,
+        });
       } finally {
         startingRef.current = false;
-        setLoading(false);
+        if (!started) {
+          setLoading(false);
+        }
       }
-
-      return runExecution({
-        kind,
-        payload,
-        rows: normalizedRows,
-        settings: runSettings,
-        runName,
-        restorePrevious,
-      });
     },
     [
       onExecutionStart,
