@@ -355,6 +355,9 @@ class StreamToolCallHealer:
         self._depth = 0
         self._in_string = False
         self._escaped = False
+        # The JSON body's text outside quoted strings, last few chars, and how many this delta added.
+        self._outside = ""
+        self._outside_added = 0
         self._id_offset = 0
         # Markup span each promoted call was cut from, keyed by its call id. Promotion is destructive -- the span
         # never reaches the client -- so a caller that ends up DISCARDING a promoted call (a turn truncated at
@@ -400,7 +403,9 @@ class StreamToolCallHealer:
         # inside an argument (code, HTML), so on those alone the block is re-parsed only once it has
         # grown by an eighth, which keeps a long call linear.
         balanced = self._scan(text)
-        tail = self._buffer[-(len(text) + _MAX_CLOSE_TAG_LEN - 1) :]
+        # Only text outside quoted JSON arguments counts: a file that mentions </tool_call> closes nothing.
+        added = self._outside_added
+        tail = self._outside[-(added + _MAX_CLOSE_TAG_LEN - 1) :] if added else ""
         if balanced or any(tag in tail for tag in _CLOSE_TAGS):
             return True
         grown = len(self._buffer) >= self._parsed_len + max(256, self._parsed_len // 8)
@@ -408,27 +413,20 @@ class StreamToolCallHealer:
 
     def _rescan(self) -> None:
         self._depth, self._in_string, self._escaped = 0, False, False
+        self._outside, self._outside_added = "", 0
         self._json = False
-        if not self._holding:
-            return
-        # From the last signal: an earlier block that never closed must not hide a later one's close.
-        start, signal = max((self._buffer.rfind(s), s) for s in _HEAL_SIGNALS)
-        if signal in _JSON_BODY_SIGNALS:
-            self._json = True
-        elif signal == "<tool_call>":
-            self._json = None
-        self._scan(self._buffer[max(start, 0) + len(signal) :])
+        if self._holding:
+            self._scan(self._buffer)
 
     def _scan(self, text: str) -> bool:
-        """Advance the bracket scan; True if the JSON body balanced within ``text``."""
+        """Advance the scan of the held block; True if a JSON body balanced within ``text``."""
         balanced = False
+        added = 0
         for char in text:
             if self._json is None:
                 if char.isspace():
                     continue
                 self._json = char in "{["
-            if not self._json:
-                return balanced
             if self._in_string:
                 if self._escaped:
                     self._escaped = False
@@ -436,13 +434,25 @@ class StreamToolCallHealer:
                     self._escaped = True
                 elif char == '"':
                     self._in_string = False
-            elif char == '"':
+                continue
+            if self._json and char == '"':
                 self._in_string = True
-            elif char in "{[":
+                continue
+            self._outside = (self._outside + char)[-_MAX_CLOSE_TAG_LEN:]
+            added += 1
+            # Every signal ends in one of these; a signal outside any string starts the next call's body.
+            if char in ">]=" and (signal := next((s for s in _HEAL_SIGNALS if self._outside.endswith(s)), None)):
+                self._depth = 0
+                self._json = True if signal in _JSON_BODY_SIGNALS else None if signal == "<tool_call>" else False
+                continue
+            if not self._json:
+                continue
+            if char in "{[":
                 self._depth += 1
             elif char in "}]" and self._depth:
                 self._depth -= 1
                 balanced = balanced or not self._depth
+        self._outside_added = added
         return balanced
 
     def _drain(self) -> list:

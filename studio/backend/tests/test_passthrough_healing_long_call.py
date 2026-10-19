@@ -59,3 +59,23 @@ def test_a_call_whose_argument_is_full_of_closers_is_fast():
     elapsed = time.monotonic() - start
     assert _calls(events) == [content]
     assert elapsed < 5, elapsed
+
+
+def test_tags_quoted_inside_a_json_argument_do_not_reparse_the_call():
+    # A file that mentions the markup (a prompt template, the healer's own tests) streams those
+    # literals inside the quoted argument; none of them can close the call.
+    content = 'x = "<tool_call>"; y = "[TOOL_CALLS]"; z = "<function=a>"\n' * 400
+    call = (
+        '<tool_call>{"name": "write", "arguments": '
+        + json.dumps({"content": content})
+        + "}</tool_call>"
+    )
+    healer = StreamToolCallHealer({"write"})
+    events = []
+    start = time.monotonic()
+    for i in range(0, len(call), 4):
+        events.extend(healer.feed(call[i : i + 4]))
+    events.extend(healer.finalize())
+    elapsed = time.monotonic() - start
+    assert _calls(events) == [content]
+    assert elapsed < 5, elapsed
