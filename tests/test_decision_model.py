@@ -1213,6 +1213,112 @@ def test_decision_loss_recipe_terms():
     torch.testing.assert_close(got, expected_ce + 0.5 * expected_brier + 2.0 * expected_ordinal)
 
 
+def test_decision_loss_split_over_a_window_matches_one_batch():
+    # Every recipe term, summed over micro-batches with the window's counts, equals one big batch.
+    torch.manual_seed(0)
+    logits = torch.randn(6, 4)
+    mask = torch.tensor([[1, 1, 1, 0]] * 4 + [[1, 1, 0, 0]] * 2, dtype = torch.bool)
+    target = torch.zeros(6, 4)
+    target[torch.arange(6), torch.tensor([0, 2, 1, 1, 0, 1])] = 1.0
+    ordinal = torch.tensor([True, False, False, True, True, False])
+    terms = {"label_smoothing": 0.1, "brier_weight": 0.5, "ordinal_weight": 2.0}
+    whole = decision._decision_loss(logits, target, mask, ordinal, **terms)
+    split = sum(
+        decision._decision_loss(
+            logits[rows],
+            target[rows],
+            mask[rows],
+            ordinal[rows],
+            **terms,
+            num_items = 6,
+            num_ordinal = 3,
+        )
+        for rows in (slice(0, 1), slice(1, 6))
+    )
+    torch.testing.assert_close(split, whole)
+
+
+class _MarkerScorer(torch.nn.Module):
+    # Scores each option from its own marker token only, so rows never see each other or padding.
+    is_clef = False
+
+    def __init__(self):
+        super().__init__()
+        self.encoder = types.SimpleNamespace(config = types.SimpleNamespace(pad_token_id = 0))
+        self.score = torch.nn.Embedding(32, 1)
+
+    def forward(self, input_ids, marker_pos, **kwargs):
+        return self.score(torch.gather(input_ids, 1, marker_pos)).squeeze(-1), None
+
+
+def test_gradient_accumulation_weighs_every_decision_the_same(tmp_path):
+    # A window of 1 + 3 decisions must give the gradient of one batch holding the same 4.
+    torch.manual_seed(0)
+    model = _MarkerScorer()
+    items = [
+        {"input_ids": [5, 6, 7], "markers": [1, 2], "qtype": 0, "target": [1.0, 0.0]},
+        {"input_ids": [8, 9, 10, 11, 12], "markers": [2, 4], "qtype": 0, "target": [0.0, 1.0]},
+        {"input_ids": [13, 14, 15, 16], "markers": [0, 1, 3], "qtype": 1, "target": [0, 0, 1.0]},
+        {"input_ids": [17, 18], "markers": [0, 1], "qtype": 0, "target": [1.0, 0.0]},
+    ]
+    trainer = DecisionTrainer(
+        model = model,
+        args = _args(tmp_path, gradient_accumulation_steps = 2, use_cpu = True),
+        train_dataset = items,
+    )
+    collate = trainer.data_collator
+
+    def gradient(batches):
+        model.zero_grad(set_to_none = True)
+        samples, num_items = trainer.get_batch_samples(iter(batches), len(batches), "cpu")
+        trainer.current_gradient_accumulation_steps = len(samples)
+        for inputs in samples:
+            trainer.training_step(model, dict(inputs), num_items)
+        return model.score.weight.grad.clone()
+
+    split = gradient([collate(items[:1]), collate(items[1:])])
+    whole = gradient([collate(items)])
+    torch.testing.assert_close(split, whole)
+
+
+def test_ddp_ranks_weigh_every_decision_the_same(tmp_path, monkeypatch):
+    # Rank 0 holds 1 decision and rank 1 holds 3: the mean of their gradients (what DDP applies)
+    # must be the gradient of one process holding all 4.
+    torch.manual_seed(0)
+    model = _MarkerScorer()
+    items = [
+        {"input_ids": [5, 6, 7], "markers": [1, 2], "qtype": 0, "target": [1.0, 0.0]},
+        {"input_ids": [8, 9, 10, 11, 12], "markers": [2, 4], "qtype": 0, "target": [0.0, 1.0]},
+        {"input_ids": [13, 14, 15, 16], "markers": [0, 1, 3], "qtype": 1, "target": [0, 0, 1.0]},
+        {"input_ids": [17, 18], "markers": [0, 1], "qtype": 0, "target": [1.0, 0.0]},
+    ]
+    trainer = DecisionTrainer(
+        model = model,
+        args = _args(tmp_path, gradient_accumulation_steps = 1, use_cpu = True),
+        train_dataset = items,
+    )
+    collate = trainer.data_collator
+
+    def gradient(batch, other = None):
+        model.zero_grad(set_to_none = True)
+        if other is not None:
+            monkeypatch.setattr(trainer.args, "average_tokens_across_devices", True, raising = False)
+            monkeypatch.setattr(type(trainer.args), "world_size", property(lambda self: 2))
+            monkeypatch.setattr(type(trainer.accelerator), "num_processes", property(lambda self: 2))
+            scored = int(other["ordinal"].sum()) if "ordinal" in other else 0
+            other_counts = torch.tensor([int(other["marker_mask"].any(-1).sum()), scored])
+            monkeypatch.setattr(trainer.accelerator, "gather", lambda t: torch.cat([t, other_counts]))
+        samples, num_items = trainer.get_batch_samples(iter([batch]), 1, "cpu")
+        monkeypatch.undo()
+        trainer.current_gradient_accumulation_steps = 1
+        trainer.training_step(model, dict(samples[0]), num_items)
+        return model.score.weight.grad.clone()
+
+    rank0, rank1 = collate(items[:1]), collate(items[1:])
+    ddp = (gradient(rank0, other = rank1) + gradient(rank1, other = rank0)) / 2
+    torch.testing.assert_close(ddp, gradient(collate(items)))
+
+
 def test_record_accuracy_needs_every_question_of_a_row_right():
     logits = [torch.tensor([2.0, 0.0]), torch.tensor([0.0, 2.0]), torch.tensor([2.0, 0.0])]
     items = [
