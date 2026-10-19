@@ -71,3 +71,18 @@ def test_a_template_offering_none_still_gets_it():
     assert _shim(levels, None)._request_reasoning_kwargs(None, "none", None) == {
         "reasoning_effort": "none"
     }
+
+
+def test_a_custom_template_whose_levels_were_not_scanned_keeps_none():
+    # A template quoting "none" without both "low" and "high" leaves the scanned levels empty.
+    template = (
+        '{%- if reasoning_effort == "none" %}Reasoning: off'
+        "{%- else %}Reasoning: {{ reasoning_effort }}{%- endif %}"
+    )
+    from core.inference.llama_cpp import detect_reasoning_flags
+
+    flags = detect_reasoning_flags(template, "someone/custom-model-GGUF")
+    assert flags["reasoning_effort_levels"] == []
+    assert _shim([], None)._request_reasoning_kwargs(None, "none", None) == {
+        "reasoning_effort": "none"
+    }
