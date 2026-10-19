@@ -32,3 +32,10 @@ test("the drop zone takes native drops and names every type it accepts", () => {
     assert.match(zone, new RegExp(`\\b${label}\\b`), `${label} is not listed`);
   }
 });
+
+test("in Unsloth Desktop the drop takes only what the attachment reader serves", () => {
+  const zone = readFileSync(zoneUrl, "utf8");
+  assert.match(zone, /NATIVE_DROP_ACCEPT = "\.csv,\.json,\.jsonl"/);
+  assert.match(zone, /accept: isTauri \? NATIVE_DROP_ACCEPT : LOCAL_SEED_ACCEPT/);
+  assert.match(zone, /click to browse for Parquet/);
+});

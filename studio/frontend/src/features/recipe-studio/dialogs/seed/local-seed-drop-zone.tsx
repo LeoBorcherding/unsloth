@@ -5,9 +5,12 @@ import { useCallback, useRef } from "react";
 import { CloudUploadIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNativeFileDrop } from "@/features/native-intents";
+import { isTauri } from "@/lib/api-base";
 import { LOCAL_SEED_UPLOAD_MAX_LABEL } from "./upload-limits";
 
 export const LOCAL_SEED_ACCEPT = ".csv,.json,.jsonl,.parquet";
+// Unsloth Desktop hands a drop to the chat attachment reader: no Parquet, CSV up to 20 MB.
+const NATIVE_DROP_ACCEPT = ".csv,.json,.jsonl";
 
 type LocalSeedDropZoneProps = {
   onFile: (file: File) => void;
@@ -20,7 +23,7 @@ export function LocalSeedDropZone({ onFile, disabled }: LocalSeedDropZoneProps) 
     onFiles: (files) => {
       if (files[0]) onFile(files[0]);
     },
-    accept: LOCAL_SEED_ACCEPT,
+    accept: isTauri ? NATIVE_DROP_ACCEPT : LOCAL_SEED_ACCEPT,
     multiple: false,
     disabled,
     disabledReason: "This block is busy. Try the drop again in a moment.",
@@ -52,6 +55,11 @@ export function LocalSeedDropZone({ onFile, disabled }: LocalSeedDropZoneProps) 
         <p className="text-muted-foreground/60 mt-1 text-xs">
           CSV, JSON, JSONL, Parquet - up to {LOCAL_SEED_UPLOAD_MAX_LABEL}
         </p>
+        {isTauri && (
+          <p className="text-muted-foreground/60 text-xs">
+            Drop CSV (up to 20 MB) or JSON; click to browse for Parquet.
+          </p>
+        )}
       </div>
       <input
         ref={inputRef}
