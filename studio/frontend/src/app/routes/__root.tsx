@@ -178,6 +178,11 @@ const AudioPage = lazy(() =>
   import("@/features/audio").then((m) => ({ default: m.AudioPage })),
 );
 
+// Global Evals driver, same job as useExportRuntimeLifecycle; lazy so its API and store stay out of the startup bundle.
+const BenchmarkRuntimeLifecycle = lazy(
+  () => import("@/features/benchmark/benchmark-runtime-lifecycle"),
+);
+
 // Enabled once the session is settled, not once a token exists. The first read runs once per session, so a read
 // refused mid password change would leave personalization unhydrated, and every save paused, until a reload. The
 // pathname subscription re-reads the gate on the navigation that ends the change.
@@ -832,6 +837,9 @@ function RootLayout() {
 
   return (
     <AppProvider>
+      <Suspense fallback={null}>
+        <BenchmarkRuntimeLifecycle />
+      </Suspense>
       <CredentialBootstrapGate active={!isAuthFlowRoute}>
         <SharedRunConfigLinkHandler
           chatSearch={shouldMountChat ? chatSearch : null}

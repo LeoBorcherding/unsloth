@@ -12,6 +12,9 @@ import {
   getInferenceStatus,
 } from "@/features/chat";
 import { authFetch } from "@/features/auth";
+import { BenchmarkPage } from "@/features/benchmark/benchmark-page";
+import { EvalsModelPicker } from "@/features/benchmark/components/evals-model-picker";
+import { useEvalsModel } from "@/features/benchmark/use-evals-model";
 import { gpuMemoryDisplay } from "@/hooks/gpu-memory-display";
 import { gpuMemoryTotalsGb } from "@/hooks/gpu-vram";
 import { useSystemInfo } from "@/hooks/use-system";
@@ -218,7 +221,7 @@ function ShownRunNote({
   );
 }
 
-type BenchTab = "benchmark" | "llama-bench" | "history";
+type BenchTab = "benchmark" | "quality" | "llama-bench" | "history";
 
 /** Train's sub-nav: underlined text tabs on the header rule. */
 function BenchSubNav({
@@ -234,6 +237,7 @@ function BenchSubNav({
     disabled: boolean;
   }> = [
     { value: "benchmark", label: "Config sweeps", disabled: false },
+    { value: "quality", label: "Evals", disabled: false },
     { value: "llama-bench", label: "llama-bench", disabled: false },
     {
       value: "history",
@@ -404,6 +408,9 @@ export function BenchmarksPage(): ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the resolved window
   }, [contextSweep, maxContext]);
   const [tab, setTab] = useState<BenchTab>("benchmark");
+  // The Evals tab's model pick lives up here because its picker sits in this header,
+  // in the same slot the config-sweep picker uses.
+  const evals = useEvalsModel();
   const resultsRef = useRef<HTMLDivElement | null>(null);
   // Switching tabs keeps the scroll, and below 72rem the chart sits above the preview, so bring it up.
   const showResults = useCallback(() => {
@@ -487,8 +494,14 @@ export function BenchmarksPage(): ReactElement {
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border/60">
               <BenchSubNav value={tab} runCount={runs.length} />
+              {/* Both tabs pick their model in this slot: the sweep pill drives the sweeps
+                  runner, the evals pill loads the pick through chat's runtime. */}
               <div className="ml-auto min-w-0 max-w-full pb-1.5 sm:max-w-[60%]">
-                <SweepsModelPicker status={status} locked={Boolean(live)} />
+                {tab === "quality" ? (
+                  <EvalsModelPicker evals={evals} />
+                ) : (
+                  <SweepsModelPicker status={status} locked={Boolean(live)} />
+                )}
               </div>
             </div>
           </header>
@@ -568,6 +581,10 @@ export function BenchmarksPage(): ReactElement {
                 </div>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="quality" className="mt-0">
+            <BenchmarkPage evals={evals} />
           </TabsContent>
 
           <TabsContent value="llama-bench" className="mt-0">

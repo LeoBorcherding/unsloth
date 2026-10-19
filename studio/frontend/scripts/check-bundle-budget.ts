@@ -196,12 +196,12 @@ export const BUDGET = {
   // 95). Nearly all of it is searching a model maker in the Model hub (#13998, +3,038 B raw / +1,000 B transfer):
   // its owner-to-uploads search lives in use-hub-model-search, a hook the startup screen already loads, so there
   // is no separate module to lazy-load. #13999 and #13993 add 79 B raw / 58 B transfer. Raised by that growth.
-  // The llama-bench tab adds 1,540 B raw / 259 B transfer (6,800,533 -> 6,802,073 B raw, 2,045,384 -> 2,045,643 B
-  // transfer over the Benchmarks page at fa44a8594c, one machine and build, Node 24, chunk count unchanged at 95).
-  // Its code is all in the lazy Benchmarks route; what reaches startup is the route's longer preload list.
-  // Raised by that growth.
-  transferBytes: 2_046_040,
-  rawBytes: 6_802_955,
+  // The Evals tab (stacked with llama-bench for the Colab run) adds 6,058 B raw / 1,585 B transfer (6,800,533 -> 6,806,591 B raw, 2,045,384 -> 2,046,969 B
+  // transfer over the Benchmarks page at fa44a8594c, one machine and build, Node 24, chunk count unchanged at 95),
+  // all of it its strings in the eager en locale. Its runtime driver mounts through React.lazy, which kept another
+  // 8.4 KB raw / 3.0 KB transfer out. Raised by the strings.
+  transferBytes: 2_047_366,
+  rawBytes: 6_807_473,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
