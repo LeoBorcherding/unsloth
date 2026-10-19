@@ -657,8 +657,10 @@ class JobManager:
         if terminal:
             self._retire_workflow_key(job)
 
-        if current:
-            self._emit(event)
+        # Rechecked under the lock: start() may have swapped in the next run meanwhile.
+        with self._lock:
+            if self._job is target:
+                self._emit(event)
 
     def _retire_workflow_key(self, job: Job) -> None:
         """Revoke the workflow-scoped sk-unsloth-* key, if one was minted.

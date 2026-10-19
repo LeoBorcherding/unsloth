@@ -528,8 +528,11 @@ def _normalize_rows(value: Any) -> int | None:
     rows = None
     if isinstance(value, int) and not isinstance(value, bool):
         rows = value
-    elif isinstance(value, str) and value.strip().isdigit():
-        rows = int(value.strip())
+    elif isinstance(value, str):
+        text = value.strip()
+        # isdigit alone passes "²", which int() rejects; the length cap keeps int() off huge strings.
+        if text.isascii() and text.isdigit() and len(text) <= 9:
+            rows = int(text)
     if rows is None or not 1 <= rows <= _MAX_RUN_ROWS:
         raise HTTPException(
             status_code = 400,

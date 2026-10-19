@@ -22,7 +22,11 @@ if _BACKEND_DIR not in sys.path:
 from auth import policy  # noqa: E402
 from core.data_recipe import huggingface as recipe_hf  # noqa: E402
 from core.data_recipe.jobs import manager as module  # noqa: E402
-from core.data_recipe.jobs.constants import EVENT_JOB_CANCELLED, EVENT_JOB_COMPLETED  # noqa: E402
+from core.data_recipe.jobs.constants import (  # noqa: E402
+    EVENT_JOB_CANCELLED,
+    EVENT_JOB_COMPLETED,
+    EVENT_JOB_ENQUEUED,
+)
 from routes.data_recipe import jobs as route  # noqa: E402
 from utils.account_context import AccountContext, run_as  # noqa: E402
 
@@ -136,6 +140,24 @@ def test_events_still_queued_when_the_next_run_starts_land_on_the_kept_run(harne
     assert m.get_dataset(first, limit = 10) == {"dataset": [{"q": "a"}], "total": 1}
     assert m.get_status(second)["status"] == "pending"
     assert len(m._events) == seen_before, "the old run's event must not reach the new run's stream"
+
+
+def test_an_event_handled_while_the_next_run_starts_stays_off_its_stream(harness, monkeypatch):
+    m = harness.manager
+    first = m.start(recipe = {}, run = {})
+    first_job = m._job
+    harness.procs[0].running = False
+    started = []
+
+    def next_run_starts_meanwhile(job):
+        started.append(m.start(recipe = {}, run = {}))
+
+    monkeypatch.setattr(m, "_retire_workflow_key", next_run_starts_meanwhile)
+    m._handle_event(first_job, {"type": EVENT_JOB_COMPLETED})
+
+    assert m.get_status(first)["status"] == "completed"
+    assert [e["type"] for e in m._events] == [EVENT_JOB_ENQUEUED]
+    assert m.get_current_job_id() == started[0]
 
 
 def test_only_the_last_few_finished_runs_are_kept(harness):
@@ -310,7 +332,10 @@ def _create_job(monkeypatch, harness, rows):
     return minted, started
 
 
-@pytest.mark.parametrize("rows", [0, -1, "abc", 1.5, True, 200_001])
+@pytest.mark.parametrize(
+    "rows",
+    [0, -1, "abc", 1.5, True, 200_001, "²", pytest.param("9" * 5000, id = "5000-digits")],
+)
 def test_create_job_refuses_bad_rows_before_minting_a_key(harness, monkeypatch, rows):
     with pytest.raises(HTTPException) as exc:
         _create_job(monkeypatch, harness, rows)
