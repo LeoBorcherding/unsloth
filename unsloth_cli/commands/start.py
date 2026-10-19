@@ -5,6 +5,7 @@
 
 import atexit
 import base64
+import collections
 import contextlib
 import errno
 import functools
@@ -5924,6 +5925,10 @@ _JSON_STRING = re.compile(r'"(?:\\.|[^"\\])*"')
 _JSON_LITERAL = re.compile(r"[^\s,:\[\]{}/]+")
 
 
+def _jsonc_comments(text: str) -> list:
+    return [m.group() for m in _JSONC_COMMENT.finditer(text) if not m.group(1)]
+
+
 def _jsonc_skip(text: str, i: int) -> int:
     return _JSONC_GAP.match(text, i).end()
 
@@ -6027,19 +6032,23 @@ def _set_app_values(text: Optional[str], path: Path, updates: list) -> Optional[
         return text
     if path.suffix != ".yaml":
         # Edit only the touched members so the user's comments and layout survive.
+        new_text = json.dumps(config, indent = 2, ensure_ascii = False) + "\n"
         with contextlib.suppress(Exception):
             candidate = text or ""
             for keys, value in updates:
                 candidate = _jsonc_set(candidate, keys, value)
             if _load_app_config(path, candidate) == config:
-                return candidate
-        if text and _JSONC_COMMENT.sub(lambda m: m.group(1) or "", text) != text:
+                new_text = candidate
+        # A replaced list or object takes the comments inside it along.
+        if collections.Counter(_jsonc_comments(text or "")) - collections.Counter(
+            _jsonc_comments(new_text)
+        ):
             typer.echo(
-                f"Couldn't keep the comments in {path} while updating it. The copy from before "
+                f"Couldn't keep every comment in {path} while updating it. The copy from before "
                 f"Unsloth first changed it is {path.name}.unsloth-backup next to it.",
                 err = True,
             )
-        return json.dumps(config, indent = 2, ensure_ascii = False) + "\n"
+        return new_text
     import yaml
 
     # Rewrite only the touched top-level blocks so the rest of the file keeps its comments.

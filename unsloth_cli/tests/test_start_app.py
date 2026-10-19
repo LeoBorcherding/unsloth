@@ -922,3 +922,18 @@ def test_vscode_warns_when_the_context_is_too_small_for_agent_mode(
 
     assert result.exit_code == 0, result.output
     assert ("--context-length 32768" in result.output) is warned
+
+
+def test_app_warns_when_a_replaced_list_drops_a_comment(capsys):
+    text = (
+        '{\n  // keep me\n  "disabled_providers": [\n    "unsloth-studio", // was off\n'
+        '    "openai",\n  ],\n}\n'
+    )
+
+    out = start._set_app_values(
+        text, Path("opencode.jsonc"), [(["disabled_providers"], ["openai"])]
+    )
+
+    assert "// keep me" in out
+    assert start._load_app_config(Path("opencode.jsonc"), out) == {"disabled_providers": ["openai"]}
+    assert "Couldn't keep every comment" in capsys.readouterr().err
