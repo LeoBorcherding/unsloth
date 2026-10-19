@@ -224,8 +224,15 @@ def _json_rank_count_from_env(name: str) -> Optional[int]:
     return None
 
 
+def _mlx_launch_possible() -> bool:
+    # MLX only runs on macOS; elsewhere these are some other job's MPI/NCCL settings.
+    return sys.platform == "darwin"
+
+
 def mlx_distributed_info() -> tuple[bool, int, Optional[int]]:
     """Return launch-context metadata without initializing MLX distributed."""
+    if not _mlx_launch_possible():
+        return False, 0, None
     rank = _parse_nonnegative_int(os.environ.get("MLX_RANK"))
     world_size = _parse_nonnegative_int(os.environ.get("MLX_WORLD_SIZE"))
     if rank is not None:
@@ -257,7 +264,8 @@ def mlx_distributed_info() -> tuple[bool, int, Optional[int]]:
 def mlx_distributed_uses_mpi() -> bool:
     """Whether the current distributed context was launched through MPI."""
     return (
-        _parse_nonnegative_int(os.environ.get("MLX_RANK")) is None
+        _mlx_launch_possible()
+        and _parse_nonnegative_int(os.environ.get("MLX_RANK")) is None
         and _first_mpi_env_pair()[0] is not None
     )
 
