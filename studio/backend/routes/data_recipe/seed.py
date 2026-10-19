@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastA
 from auth.authentication import allow_ambient_hf_token
 from core.data_recipe.jsonable import to_preview_jsonable
 from hub.services.datasets.local_options import (
+    _grouped_splits,
     _sharded_splits,
     _IGNORED_DATA_FILENAMES,
     _MAX_MODULE_INFERENCE_FILES,
@@ -257,16 +258,11 @@ def _config_holds_split(
     folder = _config_folder(config)
     if not folder:
         return True
-    # A data_dir config's splits come from its file names; unlabelled files are all train.
-    inside = [f for f in data_files if f.startswith(f"{folder}/")]
-    split_lower = split.lower()
-    if any(_split_rank(f, split_lower) < 2 for f in inside):
-        return True
-    return (
-        bool(inside)
-        and _split_labels(split_lower) == _split_labels(DEFAULT_SPLIT)
-        and not any(_carries_another_split(f, split_lower) for f in inside)
-    )
+    # A data_dir config's splits are the ones the loader infers from the folder.
+    inside = [PurePosixPath(f[len(folder) + 1 :]) for f in data_files if f.startswith(f"{folder}/")]
+    grouped = _grouped_splits(inside) if inside else None
+    labels = _split_labels(split.lower())
+    return bool(grouped) and any(name.lower() in labels for name in grouped)
 
 
 def _pick_config(configs: list[dict[str, Any]], subset: str | None) -> dict[str, Any] | None:

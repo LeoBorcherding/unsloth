@@ -1921,3 +1921,17 @@ def test_a_data_dir_only_config_without_the_split_is_passed_over(monkeypatch, tm
     response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
     assert response.subset == "french"
     assert response.resolved_path == "datasets/org/bilingual/fr/train-*.parquet"
+
+
+def test_a_data_dir_config_whose_shards_name_another_split_is_passed_over(monkeypatch, tmp_path):
+    # The loader reads data/extra-00000-of-00001.parquet as split "extra", not as train.
+    files = [
+        "en/data/extra-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "french"
