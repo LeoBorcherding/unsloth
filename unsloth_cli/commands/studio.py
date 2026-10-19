@@ -3274,8 +3274,18 @@ def _legacy_pid_runs_studio(pid: int) -> "bool | None":
         return None
     names = [Path(a).name.lower() for a in argv]
     stems = {n[:-4] if n.endswith((".exe", ".bat", ".cmd")) else n for n in names}
-    if "run.py" in names or ("studio" in names and stems & {"unsloth", "unsloth_cli"}):
+    if "studio" in names and stems & {"unsloth", "unsloth_cli"}:
         return True
+    for arg in argv:
+        if Path(arg).name.lower() != "run.py":
+            continue
+        # Only the backend's own run.py: any project can have a run.py.
+        try:
+            script = Path(proc.cwd()) / arg
+        except Exception:
+            return None
+        if [part.lower() for part in script.parts[-3:-1]] == ["studio", "backend"]:
+            return True
     try:
         return Path(exe).resolve().is_relative_to(STUDIO_HOME.resolve())
     except (OSError, ValueError):

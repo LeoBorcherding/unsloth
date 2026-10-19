@@ -489,7 +489,7 @@ def test_a_record_whose_pid_is_not_ascii_digits_is_discarded(monkeypatch, tmp_pa
     assert not (tmp_path / "studio-8901-1.pid").exists()
 
 
-def _fake_psutil(argv, exe = "C:/Windows/System32/notepad.exe"):
+def _fake_psutil(argv, exe = "C:/Windows/System32/notepad.exe", cwd = "/home/u/unsloth/studio/backend"):
     class _FakeProcess:
         def __init__(self, pid):
             self.pid = pid
@@ -500,6 +500,9 @@ def _fake_psutil(argv, exe = "C:/Windows/System32/notepad.exe"):
         def exe(self):
             return exe
 
+        def cwd(self):
+            return cwd
+
     return SimpleNamespace(Process = _FakeProcess)
 
 
@@ -507,6 +510,7 @@ def _fake_psutil(argv, exe = "C:/Windows/System32/notepad.exe"):
     "argv",
     [
         ["python", "run.py", "--port", "8901"],
+        ["python", "C:/Users/u/.unsloth/studio/unsloth_studio/Lib/site-packages/studio/backend/run.py"],
         ["C:/venv/Scripts/python.exe", "C:/venv/Scripts/unsloth.exe", "studio", "-p", "8888"],
         ["/venv/bin/python3", "/venv/bin/unsloth", "studio"],
         ["python", "-m", "unsloth_cli", "studio", "--api-only"],
@@ -516,6 +520,19 @@ def test_a_bare_legacy_record_running_studio_is_recognised(monkeypatch, argv):
     monkeypatch.setitem(sys.modules, "psutil", _fake_psutil(argv))
 
     assert _REAL_LEGACY_RUNS_STUDIO(8550) is True
+
+
+@pytest.mark.parametrize(
+    "argv, cwd",
+    [
+        (["python", "C:/work/project/run.py"], "C:/work"),
+        (["python", "run.py", "--port", "8901"], "/home/u/project"),
+    ],
+)
+def test_another_projects_run_py_is_not_recognised(monkeypatch, argv, cwd):
+    monkeypatch.setitem(sys.modules, "psutil", _fake_psutil(argv, cwd = cwd))
+
+    assert _REAL_LEGACY_RUNS_STUDIO(8550) is False
 
 
 def test_a_bare_legacy_record_on_an_unrelated_process_is_not_stopped(monkeypatch, tmp_path):
