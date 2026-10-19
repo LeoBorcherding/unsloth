@@ -396,6 +396,25 @@ class _TermIgnoringCtx(_FakeCtx):
         return _TermIgnoringProc(target, kwargs, daemon)
 
 
+def test_shutdown_racing_a_first_stop_does_not_kill_the_save(monkeypatch):
+    import utils.account_context as account_context
+
+    svc = DiffusionTrainingService(ctx = _WedgedCtx(), target = _happy_target)
+    svc.start(dict(_CFG))
+    _wait_status(svc, "running")
+    real_run_as = account_context.run_as
+
+    def stop_lands_first(account, fn, /, *args, **kwargs):
+        # /diffusion/stop sets the flag between shutdown's liveness check and its own stop call.
+        svc.stop(save = True)
+        return real_run_as(account, fn, *args, **kwargs)
+
+    monkeypatch.setattr(account_context, "run_as", stop_lands_first)
+    assert svc.stop_for_shutdown(timeout = 0.5) is False
+    assert not svc._proc.terminated and svc._proc.is_alive()
+    svc._proc.kill()
+
+
 def test_service_second_stop_does_not_block_the_caller():
     # /diffusion/stop is async, so a stop() that waits out terminate's grace freezes every request.
     svc = DiffusionTrainingService(ctx = _TermIgnoringCtx(), target = _happy_target)

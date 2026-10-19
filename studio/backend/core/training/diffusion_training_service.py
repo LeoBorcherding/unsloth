@@ -769,17 +769,19 @@ class DiffusionTrainingService:
 
     @_invalidates_gpu_memory("diffusion training stop")
     @job_control
-    def stop(self, save: bool = True) -> bool:
+    def stop(self, save: bool = True, escalate: bool = True) -> bool:
         """Request a clean stop: the trainer finishes the current step, then either saves
         a partial adapter (``save=True``, the default) or discards the run (``save=False``,
         matching the LLM trainer's cancel). Returns True if a stop was signalled, False if
-        nothing was running."""
+        nothing was running. ``escalate=False`` never turns a repeat into a kill."""
         with self._lock:
             proc = self._proc
             if proc is None or not proc.is_alive() or self._stop_queue is None:
                 return False
-            escalate = self._stop_signalled
-        if escalate:
+            repeat = self._stop_signalled
+        if repeat:
+            if not escalate:
+                return True
             # The child consumes the FIRST signal, so honouring a later stop-without-saving set a parent
             # discard the child never carried out: the run was marked discarded and its checkpoints deleted
             # while the adapter and catalog entry stayed on disk. A repeat only ends a child that ignored it.
@@ -844,10 +846,10 @@ class DiffusionTrainingService:
 
         if settled():
             return True
-        if proc is not None and proc.is_alive() and not self._stop_signalled:
+        if proc is not None and proc.is_alive():
             # The signal path runs as the owner, which job_control refuses for a managed account's run.
-            # Not after a Stop already sent: a repeat ends the child instead of letting it finish saving.
-            run_as(account, self.stop, save = True)
+            # Never escalates: after a Stop already sent, the child is left to finish saving.
+            run_as(account, self.stop, save = True, escalate = False)
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
             if settled():
