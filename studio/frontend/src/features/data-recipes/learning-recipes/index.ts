@@ -73,8 +73,6 @@ function coerceRecipePayload(value: unknown): RecipePayload {
     run: {
       rows: 5,
       preview: true,
-      // biome-ignore lint/style/useNamingConvention: api schema
-      output_formats: ["jsonl"],
     },
     ui: {
       nodes: [],

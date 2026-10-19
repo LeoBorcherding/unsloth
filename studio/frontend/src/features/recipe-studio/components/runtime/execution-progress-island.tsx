@@ -17,6 +17,7 @@ import { isExecutionInProgress } from "../../executions/execution-helpers";
 import {
   formatMetricValue,
   formatPercent,
+  preparingStageLabel,
 } from "../executions/executions-view-helpers";
 
 type ExecutionProgressIslandProps = {
@@ -126,6 +127,8 @@ export function ExecutionProgressIsland({
       typeof sourcePercent === "number",
   );
   const showLoadingSpinner = inProgress && !hasProgressSignal;
+  // Before the first batch every metric is "--", so say what the run is doing instead.
+  const preparing = showLoadingSpinner && !showSourceProgress;
   const batchTotal = execution.batch?.total ?? null;
   const showBatch = typeof batchTotal === "number" && batchTotal > 1;
 
@@ -180,7 +183,12 @@ export function ExecutionProgressIsland({
 
       {!minimized && (
         <>
-          <div className="grid grid-cols-2 gap-2 px-3 pt-2 text-ui-11 text-muted-foreground sm:grid-cols-4">
+          <div
+            className={cn(
+              "grid grid-cols-2 gap-2 px-3 pt-2 text-ui-11 text-muted-foreground sm:grid-cols-4",
+              preparing && "hidden",
+            )}
+          >
             <p
               className="truncate"
               title={`Done: ${formatMetricValue(execution.progress?.done)}`}
@@ -222,9 +230,15 @@ export function ExecutionProgressIsland({
                 icon={currentColumnIcon}
                 className="size-3.5 shrink-0"
               />
-              <p className="truncate" title={execution.current_column ?? "--"}>
-                Column: {execution.current_column ?? "--"}
-              </p>
+              {preparing ? (
+                <p className="truncate">
+                  Preparing: {preparingStageLabel(execution.stage)}
+                </p>
+              ) : (
+                <p className="truncate" title={execution.current_column ?? "--"}>
+                  Column: {execution.current_column ?? "--"}
+                </p>
+              )}
             </div>
           )}
           {showBatch && (

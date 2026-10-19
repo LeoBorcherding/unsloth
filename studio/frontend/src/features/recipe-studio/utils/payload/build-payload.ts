@@ -414,8 +414,6 @@ export function buildRecipePayload(
       run: {
         rows: 5,
         preview: true,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        output_formats: ["jsonl"],
       },
       ui: {
         nodes: uiNodes,

@@ -15,7 +15,7 @@ import { isOllamaModelId } from "@/features/hub/lib/model-identity";
 import { DEFAULT_MAX_SEQ_LENGTH, isServedByMlx } from "@/features/model-picker";
 import { createLoadingToastIcon, toast } from "@/lib/toast";
 import { toastError } from "@/shared/toast";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   cancelRecipeJob,
@@ -910,12 +910,18 @@ export function useRecipeExecutions({
     [setRunErrors],
   );
 
+  // Set before the first await and held until the run settles, so a second Run is refused.
+  const startingRef = useRef(false);
+
   const runWithValidation = useCallback(
     async (
       kind: RecipeExecutionKind,
       rows: number,
       runName: string | null,
     ): Promise<boolean> => {
+      if (startingRef.current) {
+        return false;
+      }
       const trimmedRunName = typeof runName === "string" ? runName.trim() : "";
       if (kind === "full" && !trimmedRunName) {
         const message = "Run name required for full runs.";
@@ -943,27 +949,43 @@ export function useRecipeExecutions({
         runName,
       });
 
-      if (!(await validateExecutionPayload(executionPayload))) {
-        return false;
-      }
+      // runExecution keeps the loading flag up once it starts; this covers the time before it.
+      const setLoading =
+        kind === "preview" ? setPreviewLoading : setFullLoading;
+      startingRef.current = true;
+      setLoading(true);
+      let started = false;
+      try {
+        if (!(await validateExecutionPayload(executionPayload))) {
+          return false;
+        }
 
-      // Recipe and Chat share one singleton local inference backend. This direct load is a
-      // point-in-time handoff to job creation, not a lease: if Chat swaps models after this
-      // succeeds, the backend runs against current state. A future generation token should be
-      // validated across this load and the `/jobs` loaded-model gate.
-      const restorePrevious = await prepareLocalModelForExecution(payload);
-      if (restorePrevious === false) {
-        return false;
-      }
+        // Recipe and Chat share one singleton local inference backend. This direct load is a
+        // point-in-time handoff to job creation, not a lease: if Chat swaps models after this
+        // succeeds, the backend runs against current state. A future generation token should be
+        // validated across this load and the `/jobs` loaded-model gate.
+        const restorePrevious = await prepareLocalModelForExecution(payload);
+        if (restorePrevious === false) {
+          return false;
+        }
 
-      return runExecution({
-        kind,
-        payload,
-        rows: normalizedRows,
-        settings: runSettings,
-        runName,
-        restorePrevious,
-      });
+        started = true;
+        // Held until the run settles: Easy's Run doesn't read previewLoading, and there's no
+        // job id to lock on until /jobs answers.
+        return await runExecution({
+          kind,
+          payload,
+          rows: normalizedRows,
+          settings: runSettings,
+          runName,
+          restorePrevious,
+        });
+      } finally {
+        startingRef.current = false;
+        if (!started) {
+          setLoading(false);
+        }
+      }
     },
     [
       onExecutionStart,
@@ -971,6 +993,8 @@ export function useRecipeExecutions({
       readExecutablePayload,
       runExecution,
       runSettings,
+      setFullLoading,
+      setPreviewLoading,
       setRunErrors,
       validateExecutionPayload,
     ],
