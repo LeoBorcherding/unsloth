@@ -17,6 +17,7 @@ type PersistRecipeFn = (input: {
   id: string | null;
   name: string;
   payload: RecipePayload;
+  overwrite?: boolean;
 }) => Promise<{
   id: string;
   updatedAt: number;
@@ -29,6 +30,7 @@ type UseRecipeStudioActionsParams = {
   initialSavedAt: number;
   payloadResult: RecipePayloadResult;
   onPersistRecipe: PersistRecipeFn;
+  onReloadRecipe?: () => void;
   resetRecipe: () => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   getCurrentPayloadFromStore: () => RecipePayload;
@@ -90,6 +92,7 @@ export function useRecipeStudioActions({
   initialSavedAt,
   payloadResult,
   onPersistRecipe,
+  onReloadRecipe,
   resetRecipe,
   loadRecipe,
   getCurrentPayloadFromStore,
@@ -103,6 +106,7 @@ export function useRecipeStudioActions({
     initialSavedAt,
     payloadResult,
     onPersistRecipe,
+    onReloadRecipe,
     resetRecipe,
     loadRecipe,
     getCurrentPayloadFromStore,
