@@ -61,9 +61,10 @@ export function RecipeStudioHeader({
   onViewChange,
   onSaveRecipe,
 }: RecipeStudioHeaderProps): ReactElement {
-  // Edited apart from the recipe, so Esc can drop it; committed on Enter or blur.
+  // Each keystroke still reaches the recipe, so leaving without a blur saves it; Esc restores
+  // the name from before the edit, and Enter or blur settles an empty one on Unnamed.
   const [draftName, setDraftName] = useState<string | null>(null);
-  const cancelledDraft = useRef(false);
+  const nameBeforeEdit = useRef<string | null>(null);
 
   function handleViewValueChange(value: string): void {
     if (value === "easy" || value === "editor" || value === "executions") {
@@ -72,14 +73,20 @@ export function RecipeStudioHeader({
   }
 
   function openWorkflowNameEditor(): void {
-    cancelledDraft.current = false;
+    nameBeforeEdit.current = workflowName;
     setDraftName(workflowName);
   }
 
+  function changeDraftName(value: string): void {
+    setDraftName(value);
+    onWorkflowNameChange(value);
+  }
+
   function closeWorkflowNameEditor(): void {
-    if (draftName === null || cancelledDraft.current) {
+    if (draftName === null || nameBeforeEdit.current === null) {
       return;
     }
+    nameBeforeEdit.current = null;
     const nextName = normalizeNonEmptyName(draftName, "Unnamed");
     if (nextName !== workflowName) {
       onWorkflowNameChange(nextName);
@@ -95,7 +102,11 @@ export function RecipeStudioHeader({
       return;
     }
     if (event.key === "Escape") {
-      cancelledDraft.current = true;
+      const previous = nameBeforeEdit.current;
+      nameBeforeEdit.current = null;
+      if (previous !== null && previous !== workflowName) {
+        onWorkflowNameChange(previous);
+      }
       setDraftName(null);
     }
   }
@@ -116,7 +127,7 @@ export function RecipeStudioHeader({
           {draftName !== null ? (
             <Input
               value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
+              onChange={(event) => changeDraftName(event.target.value)}
               onBlur={closeWorkflowNameEditor}
               onKeyDown={handleWorkflowNameKeyDown}
               maxLength={RECIPE_NAME_MAX_LENGTH}

@@ -391,7 +391,15 @@ function mountHeader() {
     (input()?.props.onChange as (e: unknown) => void)({ target: { value } });
   const key = (k: string) =>
     (input()?.props.onKeyDown as (e: unknown) => void)({ key: k });
-  return { renames, open, input, type, key, blur: () => (input()?.props.onBlur as () => void)() };
+  return {
+    renames,
+    name: () => name,
+    open,
+    input,
+    type,
+    key,
+    blur: () => (input()?.props.onBlur as () => void)(),
+  };
 }
 
 test("Esc in the recipe name editor keeps the old name", () => {
@@ -401,8 +409,15 @@ test("Esc in the recipe name editor keeps the old name", () => {
   const blur = header.input()?.props.onBlur as () => void;
   header.key("Escape");
   blur();
-  assert.deepEqual(header.renames, []);
+  assert.equal(header.name(), "Original");
   assert.equal(header.input(), null);
+});
+
+test("a typed name reaches the recipe before any blur, so leaving the page keeps it", () => {
+  const header = mountHeader();
+  header.open();
+  header.type("Renamed then left");
+  assert.equal(header.name(), "Renamed then left");
 });
 
 test("an emptied recipe name falls back to Unnamed, and the input is capped", () => {
@@ -411,5 +426,5 @@ test("an emptied recipe name falls back to Unnamed, and the input is capped", ()
   assert.equal(header.input()?.props.maxLength, 10_000);
   header.type("   ");
   header.key("Enter");
-  assert.deepEqual(header.renames, ["Unnamed"]);
+  assert.equal(header.name(), "Unnamed");
 });
