@@ -67,6 +67,15 @@ test("an empty requests-at-once leaves the default to the backend", () => {
   assert.equal(parallelOf(built), undefined);
 });
 
+test("a requests-at-once below 1 or with a fraction is refused, not sent", () => {
+  for (const value of ["0", "-1", "0.5", "two"]) {
+    const errors: string[] = [];
+    const built = buildModelConfig(model("local", "local", value), errors);
+    assert.equal(parallelOf(built), undefined, value);
+    assert.equal(errors.length, 1, value);
+  }
+});
+
 test("with no run-wide override a local and a remote model keep different limits", () => {
   const modelConfigs = [
     buildModelConfig(model("local", "local", "1"), []),

@@ -312,7 +312,15 @@ def _loaded_local_parallel_slots() -> int:
     from core.inference import get_inference_backend
 
     llama = get_llama_cpp_backend()
-    backend = llama if llama.is_loaded else get_inference_backend()
+    if llama.is_loaded:
+        backend = llama
+    else:
+        backend = get_inference_backend()
+        # Same rule as /v1's serving fields: a model that can't batch serves one request at a time.
+        models = getattr(backend, "models", None) or {}
+        entry = models.get(getattr(backend, "active_model_name", None) or "") or {}
+        if entry.get("can_batch") is not True:
+            return 1
     slots = getattr(backend, "effective_parallel_slots", None)
     if isinstance(slots, bool) or not isinstance(slots, int) or slots < 1:
         return 1

@@ -30,11 +30,15 @@ def recipe(*, local_params = None, remote_params = None):
     }
 
 
-def inject(monkeypatch, payload, *, gguf = True, slots = 1):
+def inject(monkeypatch, payload, *, gguf = True, slots = 1, can_batch = True):
     llama = SimpleNamespace(
         is_loaded = gguf, model_identifier = MODEL, hf_variant = "", effective_parallel_slots = slots
     )
-    backend = SimpleNamespace(active_model_name = "" if gguf else MODEL, effective_parallel_slots = slots)
+    backend = SimpleNamespace(
+        active_model_name = "" if gguf else MODEL,
+        effective_parallel_slots = slots,
+        models = {MODEL: {"can_batch": can_batch}},
+    )
     monkeypatch.setitem(
         sys.modules, "routes.inference", SimpleNamespace(get_llama_cpp_backend = lambda: llama)
     )
@@ -63,6 +67,12 @@ def test_the_slot_count_follows_the_loaded_backend(monkeypatch):
         inject(monkeypatch, recipe(), gguf = False, slots = 2)["local_model"]["max_parallel_requests"]
         == 2
     )
+
+
+def test_a_safetensors_model_that_cannot_batch_gets_one_request_at_a_time(monkeypatch):
+    params = inject(monkeypatch, recipe(), gguf = False, slots = 4, can_batch = False)
+
+    assert params["local_model"]["max_parallel_requests"] == 1
 
 
 def test_values_the_user_set_on_a_local_model_are_kept(monkeypatch):
