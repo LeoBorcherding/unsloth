@@ -137,7 +137,7 @@
     ],
     "layout_direction": "LR",
     "seed_source_type": "hf",
-    "seed_columns": [],
+    "seed_columns": ["instruction", "input", "output"],
     "seed_drop_columns": [],
     "seed_preview_rows": [],
     "local_file_name": "",

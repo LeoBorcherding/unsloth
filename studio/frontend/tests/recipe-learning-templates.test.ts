@@ -5,6 +5,10 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 
+import { registerBundlerResolver } from "./helpers/kit.ts";
+
+registerBundlerResolver();
+
 // The gallery and tour promise these run as shipped, so a template that can't pass Check is a bug.
 
 const DIR = new URL("../src/features/data-recipes/learning-recipes/", import.meta.url);
@@ -73,4 +77,23 @@ test("tour copy sends PDFs to Document file and shows Esc as a key", () => {
   assert.match(editorSteps, /Document file/);
   const tour = readFileSync(new URL("features/tour/components/guided-tour.tsx", SRC), "utf8");
   assert.doesNotMatch(tour, /`Esc`/);
+});
+
+test("templates pass the editor's Check as shipped, short of a PDF upload", async () => {
+  const { importRecipePayload } = await import("../src/features/recipe-studio/utils/import/importer.ts");
+  const { buildRecipePayload } = await import("../src/features/recipe-studio/utils/payload/build-payload.ts");
+  for (const name of readdirSync(DIR).filter((n) => n.endsWith(".json") && n !== "conversation.json")) {
+    const { errors, snapshot } = importRecipePayload(readFileSync(new URL(name, DIR), "utf8"));
+    assert.ok(snapshot, `${name}: ${errors.join("; ")}`);
+    const built = buildRecipePayload(
+      snapshot.configs,
+      snapshot.nodes,
+      snapshot.edges,
+      snapshot.processors,
+      snapshot.layoutDirection,
+      snapshot.auxNodePositions,
+    );
+    const expected = name === "pdf-grounded-qa.json" ? ["seed: Load the source-data preview first."] : [];
+    assert.deepEqual(built.errors, expected, name);
+  }
 });
