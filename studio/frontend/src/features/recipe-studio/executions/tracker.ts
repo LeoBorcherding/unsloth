@@ -222,7 +222,7 @@ export async function trackRecipeExecution({
   try {
     while (!(done || signal?.aborted)) {
       const status = await getRecipeJobStatus(jobId);
-      if (done && isTerminalStatus(lastStatus)) {
+      if (signal?.aborted || (done && isTerminalStatus(lastStatus))) {
         break;
       }
       const mappedStatus = mapJobStatus(status.status);
@@ -260,7 +260,7 @@ export async function trackRecipeExecution({
           // 404 until the first batch lands.
         }
       }
-      if (!done) {
+      if (!(done || signal?.aborted)) {
         await delay(1200);
       }
     }

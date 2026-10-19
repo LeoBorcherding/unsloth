@@ -211,3 +211,64 @@ test("a stray update for another recipe is ignored by the open one", () => {
     ["exec-B"],
   );
 });
+
+test("a status reply that lands after leaving starts no more work", async () => {
+  let reply: () => void = () => {};
+  let statusCalls = 0;
+  let datasetCalls = 0;
+  const api = {
+    getRecipeJobStatus: (jobId: string) => {
+      statusCalls += 1;
+      return new Promise((resolve) => {
+        reply = () => resolve({ job_id: jobId, status: "running" });
+      });
+    },
+    getRecipeJobDataset: async () => {
+      datasetCalls += 1;
+      return { dataset: [], total: 0 };
+    },
+    getRecipeJobAnalysis: async () => ({}),
+    streamRecipeJobEvents: ({ signal }: { signal: AbortSignal }) =>
+      new Promise<void>((resolve) =>
+        signal.addEventListener("abort", () => resolve()),
+      ),
+  };
+  const { trackRecipeExecution } = loadWithStubs<{
+    trackRecipeExecution: (params: Record<string, unknown>) => Promise<unknown>;
+  }>(
+    new URL(
+      "../src/features/recipe-studio/executions/tracker.ts",
+      import.meta.url,
+    ),
+    {
+      "@/features/hub": { bumpInventoryVersion: () => {} },
+      "@/shared/toast": { toastError: () => {}, toastSuccess: () => {} },
+      "../api": api,
+    },
+    { relativePassthrough: true },
+  );
+  const leaving = new AbortController();
+  const tracking = trackRecipeExecution({
+    label: "Preview",
+    kind: "preview",
+    rows: 1,
+    jobId: "job-A",
+    initialExecution: {
+      id: "exec-A",
+      recipeId: "recipe-A",
+      status: "running",
+      jobId: "job-A",
+    },
+    notify: false,
+    onUpsert: () => {},
+    onSetPreviewErrors: () => {},
+    signal: leaving.signal,
+  });
+  await tick(5);
+  leaving.abort();
+  reply();
+
+  assert.deepEqual(await tracking, { success: false, terminal: false });
+  assert.equal(statusCalls, 1);
+  assert.equal(datasetCalls, 0);
+});
