@@ -3311,6 +3311,15 @@ def _active_video_backend():
         return None
 
 
+def _active_export_backend():
+    try:
+        from core.export import get_export_backend
+        return get_export_backend()
+    except Exception as e:
+        logger.debug(f"Export backend unavailable during delete guard: {e}")
+        return None
+
+
 def _forget_gone_library_entries(source: str, folder: Path) -> None:
     """Drop the Library's name, folder and star for models that were in `folder` and are gone now,
     so they never land on a new model saved to the same path. A GGUF export is listed by one of
@@ -3619,6 +3628,27 @@ async def delete_finetuned_model(
                 status_code = 503,
                 detail = "Could not verify model load status before deleting",
             ) from e
+
+    # The export worker merges from the checkpoint it loaded and writes into the op's folder.
+    export_backend = _active_export_backend()
+    if export_backend is not None:
+        try:
+            in_use = export_backend.paths_in_use()
+        except Exception as e:
+            logger.warning("Could not check the export worker before delete: %s", e)
+            raise HTTPException(
+                status_code = 503,
+                detail = "Could not verify export status before deleting",
+            ) from e
+        if any(
+            _loaded_model_matches_deleted_path(p, target_path)
+            or _loaded_model_matches_deleted_path(str(target_path), Path(p))
+            for p in in_use
+        ):
+            raise HTTPException(
+                status_code = 409,
+                detail = "Cannot delete a model the export worker is using",
+            )
 
     try:
         if export_type == "gguf" and gguf_variant:
