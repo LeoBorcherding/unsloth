@@ -6330,7 +6330,11 @@ def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> N
         # Stopped once the state was saved (a console close lands here too): undo it now, as the
         # next start's recovery would, instead of leaving config.toml on a revoked key.
         if new_state is not None and (_read_json_object(state_path) or {}).get("key") == key:
-            _switch_codex_app_back(state_path, new_state)
+            previous_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                _switch_codex_app_back(state_path, new_state)
+            finally:
+                signal.signal(signal.SIGINT, previous_sigint)
         else:
             _revoke_new_app_key(base, key_id, state)
         _shutdown_auto_served()
