@@ -74,3 +74,26 @@ def test_passthrough_heal_keeps_literal_end_tag_in_parameter(text, name, args):
         (name, args)
     ]
     assert not (msg.get("content") or "").strip()
+
+
+def test_many_literal_end_tags_in_one_parameter_stay_linear(monkeypatch):
+    import core.tool_healing as tool_healing
+
+    real = tool_healing._inside_open_parameter
+    calls = []
+    monkeypatch.setattr(
+        tool_healing, "_inside_open_parameter", lambda *a, **k: calls.append(1) or real(*a, **k)
+    )
+
+    def parse(n):
+        calls.clear()
+        value = "x </tool_call> " * n
+        text = (
+            "<tool_call>\n<function=write>\n<parameter=q>\n"
+            f"{value}\n</parameter>\n</function>\n</tool_call>"
+        )
+        parsed = parse_tool_calls_from_text(text)
+        assert json.loads(parsed[0]["function"]["arguments"]) == {"q": value.strip()}
+        return len(calls)
+
+    assert parse(2000) - parse(2) < 10
