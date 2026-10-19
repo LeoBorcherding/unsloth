@@ -62,12 +62,14 @@ import { useRecipeStudioStore } from "./stores/recipe-studio";
 import type { RecipeNodeData } from "./types";
 import { getGraphWarnings } from "./utils/graph-warnings";
 import {
+  CANVAS_MIN_ZOOM,
   FIT_VIEW_DURATION_MS,
   FIT_VIEW_MAX_ZOOM,
   FIT_VIEW_PADDING,
   getFitViewTargetNodes,
 } from "./utils/graph/fit-view";
 import { buildRecipePayload } from "./utils/payload";
+import { payloadNodesChanged } from "./utils/payload/payload-nodes";
 import type { RecipePayload } from "./utils/payload/types";
 import { buildDefaultSchemaTransform } from "./utils/processors";
 import { buildDialogOptions } from "./utils/recipe-studio-view";
@@ -301,17 +303,22 @@ export function RecipeStudioPage({
     setLayoutDirection(layoutDirection === "LR" ? "TB" : "LR");
   }, [layoutDirection, setLayoutDirection]);
 
+  // Rebuilding validates and stringifies the whole recipe, so skip node changes it can't see.
+  const [payloadNodes, setPayloadNodes] = useState(nodes);
+  if (payloadNodesChanged(payloadNodes, nodes)) {
+    setPayloadNodes(nodes);
+  }
   const payloadResult = useMemo(
     () =>
       buildRecipePayload(
         configs,
-        nodes,
+        payloadNodes,
         edges,
         processors,
         layoutDirection,
         auxNodePositions,
       ),
-    [auxNodePositions, configs, edges, layoutDirection, nodes, processors],
+    [auxNodePositions, configs, edges, layoutDirection, payloadNodes, processors],
   );
   const getCurrentPayloadFromStore = useCallback((): RecipePayload => {
     const state = useRecipeStudioStore.getState();
@@ -522,13 +529,23 @@ export function RecipeStudioPage({
       /** Execute fitView on the current primary workflow nodes. */
       const doFit = () => {
         const targets = getFitViewTargetNodes(reactFlowInstance.getNodes());
-        if (targets.length === 0) {
+        if (cancelled || targets.length === 0) {
+          return;
+        }
+        if (useRecipeStudioStore.getState().autoLayoutPending) {
+          // Blocks imported without positions: lay them out at their measured sizes first.
+          useRecipeStudioStore.setState({ autoLayoutPending: false });
+          applyLayout();
+          frameId = window.requestAnimationFrame(() => {
+            frameId = window.requestAnimationFrame(doFit);
+          });
           return;
         }
         viewportMovedSinceAutoFitRef.current = false;
         reactFlowInstance.fitView({
           duration: FIT_VIEW_DURATION_MS,
           maxZoom: FIT_VIEW_MAX_ZOOM,
+          minZoom: CANVAS_MIN_ZOOM,
           padding: FIT_VIEW_PADDING,
           nodes: targets.map((n) => ({ id: n.id })),
         });
@@ -582,7 +599,7 @@ export function RecipeStudioPage({
         }
       };
     },
-    [reactFlowInstance],
+    [applyLayout, reactFlowInstance],
   );
 
   const toggleMaximize = useCallback(() => {
@@ -678,6 +695,8 @@ export function RecipeStudioPage({
         nodesDraggable={canvasInteractive}
         nodesConnectable={canvasInteractive}
         elementsSelectable={canvasInteractive}
+        deleteKeyCode={["Backspace", "Delete"]}
+        minZoom={CANVAS_MIN_ZOOM}
         fitView={false}
         className="@container/canvas h-full w-full rounded-t-none"
       >

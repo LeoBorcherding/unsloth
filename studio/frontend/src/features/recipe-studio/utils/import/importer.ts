@@ -635,6 +635,7 @@ export function importRecipePayload(
       layoutDirection: resolvedLayoutDirection,
       nextId,
       nextY: maxY + 140,
+      needsLayout: configs.some((config) => !layouts.has(config.name)),
     },
   };
 }
