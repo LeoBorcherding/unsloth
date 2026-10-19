@@ -89,7 +89,7 @@ export function replaceRef(
   }
   // A column named like a filter or test (`title`, `length`) must not rename `| title`.
   const name = new RegExp(
-    `(?<![\\w.])(?<!\\|\\s*)(?<!\\bis\\s+(?:not\\s+)?)${escapeRegExp(from)}(?!\\w)`,
+    `(?<![\\w.])(?<!\\|\\s*)(?<!\\b(?:filter|is|is\\s+not)\\s+)${escapeRegExp(from)}(?!\\w)`,
     "g",
   );
   const rename = (part: string) =>

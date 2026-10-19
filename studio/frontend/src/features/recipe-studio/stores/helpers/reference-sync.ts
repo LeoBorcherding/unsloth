@@ -255,6 +255,10 @@ export function applyNameEdit(
   oldName: string,
   newName: string,
 ): NameEditState {
+  // Notes aren't referenced; a block may share a note's name, so a note rename must not move its refs.
+  if (state.configs[id]?.kind === "markdown_note") {
+    return state;
+  }
   const source = state.renameSources[id] ?? oldName;
   if (!isFreeName(state.configs, id, newName)) {
     if (state.renameSources[id] === source) {

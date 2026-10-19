@@ -170,3 +170,19 @@ test("a column named like a filter, test or keyword argument only renames the co
     "{{ topic | title }} {{ headline }} {% if headline is not title %}{{ x | truncate(title=5) }}{% endif %}",
   );
 });
+
+test("a filter block's name stays when a column of that name is renamed", () => {
+  const configs = byId(column("u", "upper"), llm("q", "q", "{% filter upper %}{{ upper }}{% endfilter %}"));
+  const renamed = sync.applyRenameToConfigs(configs, "upper", "shout");
+  assert.equal(prompt(renamed, "q"), "{% filter upper %}{{ shout }}{% endfilter %}");
+});
+
+test("renaming a note never moves a block's references", () => {
+  const configs = byId(
+    block("n", { kind: "markdown_note", name: "topic" }),
+    column("c", "topic"),
+    llm("q", "q", "Write about {{ topic }}"),
+  );
+  const out = typeName(configs, "n", ["notes"]);
+  assert.equal(prompt(out.configs, "q"), "Write about {{ topic }}");
+});
