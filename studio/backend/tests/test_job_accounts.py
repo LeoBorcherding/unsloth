@@ -812,6 +812,8 @@ def test_owner_training_start_status_cancel_bytes_are_unchanged(training, monkey
             "total_steps": 0,
             "loss": None,
             "learning_rate": None,
+            "elapsed_seconds": None,
+            "eta_seconds": None,
             "output_dir": None,
             "drafter": None,
             "model_download_repo_id": None,
@@ -1023,8 +1025,8 @@ def test_hugging_face_recipe_seeds_use_explicit_account_credentials():
     run_as(ALICE, jobs.validate_recipe_access, {"source": source})
     with pytest.raises(HTTPException):
         run_as(ALICE, jobs.validate_recipe_access, {"source": {**source, "path": "/owner/private"}})
-    with pytest.raises(HTTPException):
-        run_as(ALICE, jobs.validate_recipe_access, {"source": {**source, "token": ""}})
+    # Tokenless reads anonymously, never with the host's token.
+    run_as(ALICE, jobs.validate_recipe_access, {"source": {**source, "token": ""}})
 
 
 @pytest.mark.parametrize("account", [OWNER, ALICE])

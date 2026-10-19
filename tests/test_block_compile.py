@@ -362,6 +362,44 @@ def test_gdn_self_check_leaves_default_rng_alone():
     assert torch.equal(torch.cuda.get_rng_state(), state)
 
 
+def test_gdn_self_check_stays_out_of_a_non_reentrant_checkpoint(monkeypatch):
+    # #14063: the check's autograd.grad must not recompute the checkpointed layer mid-forward.
+    from torch.utils.checkpoint import checkpoint
+
+    G = _load("_gdn_op")
+    chunk = types.ModuleType("fla.ops.gated_delta_rule.chunk")
+    for name in (
+        "chunk_gated_delta_rule_fwd",
+        "chunk_gated_delta_rule_bwd",
+        "l2norm_fwd",
+        "l2norm_bwd",
+    ):
+        setattr(chunk, name, lambda *a, **k: None)
+    for name in ("fla", "fla.ops", "fla.ops.gated_delta_rule"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "fla.ops.gated_delta_rule.chunk", chunk)
+
+    def self_check(q, k, v, g, beta):
+        ins = [t.requires_grad_() for t in (q, k, v)]
+        out = (ins[0] * ins[1]).sigmoid() * ins[2]
+        return all(gr is not None for gr in torch.autograd.grad(out.sum(), ins))
+
+    monkeypatch.setattr(G, "_self_check", self_check)
+    calls = []
+    w = torch.randn(8, 8, requires_grad = True)
+
+    def layer(x):
+        calls.append(1)
+        h = (x @ w).sigmoid()
+        G._fla_ops(lambda: (h, h, h, h, h))
+        return (h @ w).sigmoid()
+
+    checkpoint(layer, torch.randn(4, 8), use_reentrant = False).sum().backward()
+    assert G._FLA
+    assert len(calls) == 2  # forward, then one recompute in backward
+    assert w.grad is not None
+
+
 def test_sm_count_is_read_outside_the_trace(monkeypatch):
     # Stands in for Triton's hip_utils.get_device_properties, which Dynamo cannot trace.
     M = _load()
@@ -560,6 +598,62 @@ def test_gdn_adapter_routes_only_the_self_checked_call(monkeypatch):
     assert seen == ["op"] + ["fla"] * 6
 
 
+def _hub_wrapper(implementation, applicable_params):
+    # Shape of transformers' use_kernel_func_from_hub_with_fallback wrapper.
+    def torch_chunk_gated_delta_rule(*args, **kwargs):
+        kwargs = {k: v for k, v in kwargs.items() if k in applicable_params}
+        return implementation(*args, **kwargs)
+
+    return torch_chunk_gated_delta_rule
+
+
+def test_gdn_adapter_ignores_kwargs_the_hub_wrapper_drops(monkeypatch):
+    # The decoder's TransformersKwargs (num_items_in_batch, use_cache, ...) reach the hub wrapper,
+    # which drops them; the adapter declined on them, so the op never ran in training.
+    M = _load()
+    seen = []
+    monkeypatch.setattr(M, "_GDN_OP", [True])
+    monkeypatch.setattr(torch.compiler, "is_compiling", lambda: True)
+    monkeypatch.setattr(
+        torch.ops,
+        "unsloth",
+        types.SimpleNamespace(qwen3_5_gdn_chunk = lambda *a: seen.append("op") or ("out",)),
+        raising = False,
+    )
+    fla = lambda *a, **kw: seen.append("fla") or ("fla", None)
+    params = ("q", "k", "v", "g", "beta", "scale", "initial_state", "output_final_state")
+    params += ("use_qk_l2norm_in_kernel", "cu_seqlens")
+    adapter = M._gdn_chunk_adapter(_hub_wrapper(fla, params))
+    t, gb = torch.zeros(1, 4, 2, 8), torch.zeros(1, 4, 2)
+    stock = dict(use_qk_l2norm_in_kernel = True, initial_state = None, output_final_state = False)
+    adapter(t, t, t, g = gb, beta = gb, num_items_in_batch = torch.tensor(8), use_cache = False, **stock)
+    adapter(t, t, t, g = gb, beta = gb, cu_seqlens = torch.tensor([0, 4]), **stock)
+    assert seen == ["op", "fla"]
+
+
+def test_route_fla_kernel_sees_a_frozen_heap(monkeypatch):
+    # Trainer.train() gc.freeze()s the heap (_gc_train_scope) before the first GatedDeltaNet
+    # forward routes the kernel, and gc.get_referrers skips frozen objects: nothing was routed.
+    import gc
+
+    if gc.get_freeze_count():
+        pytest.skip("the heap is already frozen")
+    M = _load()
+    chunk = types.ModuleType("fake_frozen.fla.ops.gated_delta_rule.chunk")
+    chunk.chunk_gated_delta_rule = lambda *a, **kw: ("fla", None)
+    monkeypatch.setitem(sys.modules, chunk.__name__, chunk)
+    modeling = types.ModuleType("fake_frozen_modeling")
+    modeling.torch_chunk_gated_delta_rule = _hub_wrapper(chunk.chunk_gated_delta_rule, ("q",))
+    monkeypatch.setitem(sys.modules, modeling.__name__, modeling)
+    gc.freeze()
+    try:
+        assert M._route_fla_kernel() >= 1
+        assert gc.get_freeze_count() > 0  # the caller's freeze is kept
+    finally:
+        gc.unfreeze()
+    assert getattr(modeling.torch_chunk_gated_delta_rule, "_unsloth_block_adapter", False)
+
+
 @pytest.mark.parametrize("linear_env", ["auto", "0"])
 def test_nf4_block_route_matches_both_checkpoint_halves(monkeypatch, linear_env):
     # Package context so `from ..kernels import bnb_override` resolves to the fakes below.
@@ -713,3 +807,88 @@ def test_moe_experts_run_outside_the_block(monkeypatch):
     third.experts = LoraWrapper()
     M._experts_outside(third)
     assert not getattr(third.experts, "_unsloth_block_outside", False)
+
+
+def test_selective_dequant_keeps_bnb4bit_experts_outside_the_block(monkeypatch):
+    # The zoo plan reads token counts on the host and declines in a trace; opted-in experts stay eager.
+    M = _load()
+
+    class Params4bit(torch.nn.Parameter):
+        pass
+
+    class ToyExperts(torch.nn.Module):
+        def __init__(self, quantized):
+            super().__init__()
+            weight = torch.zeros(2, 4, 4)
+            self.gate_up_proj = (
+                Params4bit(weight, requires_grad = False) if quantized else torch.nn.Parameter(weight)
+            )
+
+        def forward(self, x):
+            return x * 2
+
+    def layer(quantized):
+        out = torch.nn.Module()
+        out.mlp = torch.nn.Module()
+        out.mlp.experts = ToyExperts(quantized)
+        return out
+
+    monkeypatch.setattr(M, "_lora_would_fold", lambda experts: False)
+    for key in (
+        "UNSLOTH_BLOCK_MOE",
+        "UNSLOTH_MOE_SELECTIVE_DEQUANT",
+        "UNSLOTH_MOE_DEQUANT_CHUNK_EXPERTS",
+    ):
+        monkeypatch.delenv(key, raising = False)
+    default = layer(True)
+    M._experts_outside(default)
+    assert not getattr(default.mlp.experts, "_unsloth_block_outside", False)
+    for key, value in (
+        ("UNSLOTH_MOE_SELECTIVE_DEQUANT", "1"),
+        ("UNSLOTH_MOE_DEQUANT_CHUNK_EXPERTS", "32"),
+    ):
+        monkeypatch.setenv(key, value)
+        quantized, plain = layer(True), layer(False)
+        M._experts_outside(quantized)
+        M._experts_outside(plain)
+        assert quantized.mlp.experts._unsloth_block_outside
+        assert not getattr(plain.mlp.experts, "_unsloth_block_outside", False)
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("UNSLOTH_MOE_DEQUANT_CHUNK_EXPERTS", "abc")
+    bad = layer(True)
+    M._experts_outside(bad)
+    assert not getattr(bad.mlp.experts, "_unsloth_block_outside", False)
+
+
+def test_selective_dequant_off_never_reads_a_packed_expert_stack(monkeypatch):
+    # MXFP4 experts expose gate_up_proj as a property that dequantizes the whole stack.
+    M = _load()
+    reads = []
+
+    class PackedExperts(torch.nn.Module):
+        @property
+        def gate_up_proj(self):
+            reads.append(1)
+            return torch.zeros(1)
+
+        def forward(self, x):
+            return x
+
+    monkeypatch.setattr(M, "_lora_would_fold", lambda experts: False)
+    for key in (
+        "UNSLOTH_BLOCK_MOE",
+        "UNSLOTH_MOE_SELECTIVE_DEQUANT",
+        "UNSLOTH_MOE_DEQUANT_CHUNK_EXPERTS",
+    ):
+        monkeypatch.delenv(key, raising = False)
+    layer = torch.nn.Module()
+    layer.mlp = torch.nn.Module()
+    layer.mlp.experts = PackedExperts()
+    M._experts_outside(layer)
+    assert reads == []
+    # Opted in, a packed stack is still not a bnb 4-bit one: never read, never moved out.
+    monkeypatch.setenv("UNSLOTH_MOE_SELECTIVE_DEQUANT", "1")
+    layer.__dict__.pop("_unsloth_block_moe_done", None)
+    M._experts_outside(layer)
+    assert reads == []
+    assert not getattr(layer.mlp.experts, "_unsloth_block_outside", False)

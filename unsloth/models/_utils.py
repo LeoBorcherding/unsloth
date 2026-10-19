@@ -3658,8 +3658,18 @@ def extract_quant_model_param_count(model):
     """Quantized model param count, from the difference in param class."""
     count: int = 0
     for name, p in model.named_parameters():
-        if p.__class__.__name__ == "Params4bit":
-            count += 2 * p.numel()
+        # Under FSDP2 the parameter is a DTensor that carries the Params4bit quant attributes
+        # (fsdp2_qlora), so its class name alone does not identify it. Only a bitsandbytes quant
+        # state counts: compressed-tensors packed weights also carry one, at 2, 4 or 8 bits.
+        quant_state = getattr(p, "quant_state", None)
+        is_4bit = p.__class__.__name__ == "Params4bit" or (
+            quant_state is not None and type(quant_state).__module__.split(".")[0] == "bitsandbytes"
+        )
+        if is_4bit and getattr(p, "bnb_quantized", True) is not False:
+            # Two 4-bit weights per packed byte. FSDP2 QLoRA stores the bytes in a float dtype
+            # (bnb_4bit_quant_storage), where one element holds element_size() bytes. Before its
+            # first quantizing move a Params4bit still holds dense values: counted as they are.
+            count += 2 * p.numel() * p.element_size()
         else:
             count += p.numel()
     return count
@@ -7354,7 +7364,9 @@ def validate_loftq_config(
     signature = str(inspect.signature(LoraConfig))
     SUPPORTS_LOFTQ = "loftq_config" in signature
 
-    if lora_dropout != 0:
+    from ..kernels.fast_lora import FUSED_LORA_DROPOUT
+
+    if lora_dropout != 0 and not FUSED_LORA_DROPOUT:
         logger.warning_once(
             f"Unsloth: Dropout = 0 is supported for fast patching. You are using dropout = {lora_dropout}.\n"
             f"Unsloth will patch all other layers, except LoRA matrices, causing a performance hit."

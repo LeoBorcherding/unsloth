@@ -12,7 +12,7 @@ from utils.account_context import (
     current_account,
     reset_account,
 )
-from core.training.account_jobs import account_event_stream
+from core.training.account_jobs import account_event_stream, managed_account
 import copy
 import hashlib
 import hmac
@@ -304,6 +304,35 @@ def _loaded_local_model_identity() -> tuple[bool, str, str]:
     return False, "", ""
 
 
+def _require_named_model_when_resident_hidden(
+    recipe: dict[str, Any], local_provider_names: set[str]
+) -> None:
+    """/v1 serves an unnamed model to a managed account only when the loaded one is shared with it.
+    Say so before the run instead of letting every row 404 and drop."""
+    from hub.services.models import account_access
+
+    if not account_access.managed_account():
+        return
+    used_aliases = _used_llm_model_aliases(recipe)
+    unnamed = sorted(
+        mc["alias"]
+        for mc in recipe.get("model_configs", [])
+        if isinstance(mc, dict)
+        and mc.get("alias") in used_aliases
+        and mc.get("provider") in local_provider_names
+        and str(mc.get("model") or "").strip().lower() in {"", "local"}
+    )
+    if not unnamed:
+        return
+    from routes.inference import _loaded_slot_ident
+
+    if account_access.resident_hidden("chat", _loaded_slot_ident()):
+        raise ValueError(
+            "The model loaded in Chat is not shared with this account. "
+            f"Choose a model in: {', '.join(unnamed)}."
+        )
+
+
 def _ensure_selected_local_model_loaded(
     recipe: dict[str, Any], local_provider_names: set[str]
 ) -> None:
@@ -311,6 +340,7 @@ def _ensure_selected_local_model_loaded(
     if not model_loaded:
         raise ValueError("No model loaded in Chat. Load a model first, then run the recipe.")
 
+    _require_named_model_when_resident_hidden(recipe, local_provider_names)
     selection = _single_used_local_model_selection(recipe, local_provider_names)
     if selection is None:
         return
@@ -527,7 +557,10 @@ def _resolve_seed_endpoint(recipe: dict[str, Any]) -> None:
     HF_ENDPOINT resolved here, which matters for a remote browser: /api/health
     reports the public default to it for a loopback mirror, and shipping that
     back would bypass the mirror on the deployments that need it most. An
-    endpoint the user typed into the seed node is left alone.
+    endpoint the user typed into the seed node is left alone, except that a managed
+    account may only use this server's own endpoint: the fetch runs in this process,
+    outside the recipe worker's egress guard, and follows redirects, so checking the
+    typed address alone would not keep it off loopback, LAN or metadata services.
     """
     seed_config = recipe.get("seed_config")
     if not isinstance(seed_config, dict):
@@ -535,8 +568,14 @@ def _resolve_seed_endpoint(recipe: dict[str, Any]) -> None:
     source = seed_config.get("source")
     if not isinstance(source, dict) or source.get("seed_type") != "hf":
         return
-    if not str(source.get("endpoint") or "").strip():
+    typed = str(source.get("endpoint") or "").strip()
+    if not typed:
         source["endpoint"] = get_hf_endpoint()
+    elif typed.rstrip("/") != get_hf_endpoint().rstrip("/") and managed_account():
+        raise HTTPException(
+            status_code = 403,
+            detail = "Managed accounts use this server's Hugging Face endpoint; leave the seed endpoint blank.",
+        )
 
 
 @router.post("/jobs", response_class = JSONResponse, response_model = JobCreateResponse)
