@@ -362,6 +362,10 @@ class TestStreamHealer:
 
 
 _PARITY_ALLOWED = {"bash", "read", "write"}
+_QUOTED_THINK_THEN_REHEARSAL = (
+    '<tool_call>{"name":"read","arguments":{"q":"<think>"}}</tool_call>'
+    '<think>maybe <tool_call>{"name":"bash","arguments":{"cmd":"rm"}}</tool_call></think>'
+)
 
 
 def _stream_calls(text, size):
@@ -390,6 +394,8 @@ def _nonstream_calls(text):
         # Tags quoted inside a JSON argument don't end the call.
         '<tool_call>{"name":"write","arguments":{"q":"Wrap calls as <tool_call>...</tool_call> in the prompt."}}</tool_call>',
         '<tool_call>{"name":"write","arguments":{"q":"<function=bash><parameter=cmd>rm</parameter></function>"}}</tool_call>',
+        # A think tag quoted in one call's arguments doesn't hide a real think block after it.
+        _QUOTED_THINK_THEN_REHEARSAL,
     ],
 )
 def test_stream_healer_matches_non_stream(text, size):
@@ -397,6 +403,10 @@ def test_stream_healer_matches_non_stream(text, size):
     assert calls == _nonstream_calls(text)
     if not calls:
         assert relayed == text
+
+
+def test_a_quoted_think_tag_does_not_unhide_a_later_rehearsal():
+    assert [name for name, _args in _nonstream_calls(_QUOTED_THINK_THEN_REHEARSAL)] == ["read"]
 
 
 def test_a_call_after_a_closed_think_block_is_still_promoted():

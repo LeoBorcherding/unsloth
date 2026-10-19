@@ -1208,8 +1208,17 @@ def _think_spans_outside_tool_markup(text: str) -> list[tuple[int, int]]:
     tool-call span (that tag is argument data, not reasoning). Keeping it would drop a
     real call after it as rehearsed and leak the call's markup. START tested only, so
     a greedy unclosed <think> past the call is still that call's argument data."""
-    think_spans = [m.span() for m in _THINK_TAG_RE.finditer(text)]
     call_spans = _tool_call_markup_spans(text)
+    think_spans = []
+    pos = 0
+    while (m := _THINK_TAG_RE.search(text, pos)) is not None:
+        inside = [ce for cs, ce in call_spans if cs <= m.start() < ce]
+        if inside:
+            # A quoted opener's span can swallow a real think block later on; resume past the call.
+            pos = max(inside)
+            continue
+        think_spans.append(m.span())
+        pos = max(m.end(), m.start() + 1)
     # Prefilled reasoning: the template opens <think> in the prompt, so a leading span skips calls rehearsed there.
     close = _THINK_CLOSE_RE.search(text)
     if close is not None:
