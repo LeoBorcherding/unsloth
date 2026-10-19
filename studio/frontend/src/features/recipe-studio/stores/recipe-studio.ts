@@ -48,6 +48,7 @@ import {
   applyNameEdit,
   buildNodeUpdate,
   isFreeName,
+  reconcileRenameSources,
   syncEdgesForConfigPatch,
   syncSubcategoryConfigsForCategoryUpdate,
   updateNodeData,
@@ -817,6 +818,12 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
           oldName,
           newName,
         ));
+        // This edit may have freed a name another block was waiting on.
+        ({ configs, processors, renameSources } = reconcileRenameSources({
+          configs,
+          processors,
+          renameSources,
+        }));
       }
 
       // When a provider toggles local/external, keep linked model_config nodes
@@ -868,10 +875,23 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         .filter((change) => change.type === "remove")
         .map((change) => change.id);
 
+      // A block whose name field is empty or taken still owns the references on its earlier name.
+      const configsForRemoval = { ...state.configs };
+      for (const id of removedIds) {
+        const source = state.renameSources[id];
+        if (source !== undefined && configsForRemoval[id]) {
+          configsForRemoval[id] = { ...configsForRemoval[id], name: source };
+        }
+      }
       const removed = applyNodeRemovals(
-        { edges: state.edges, configs: state.configs },
+        { edges: state.edges, configs: configsForRemoval },
         removedIds,
       );
+      const reconciled = reconcileRenameSources({
+        configs: removed.configs,
+        processors: state.processors,
+        renameSources: state.renameSources,
+      });
       const nodes = applyNodeChanges<RecipeNode>(changes, state.nodes);
       const llmAuxVisibility =
         removedIds.length === 0
@@ -884,7 +904,9 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       return {
         nodes,
         edges: removed.edges,
-        configs: removed.configs,
+        configs: reconciled.configs,
+        processors: reconciled.processors,
+        renameSources: reconciled.renameSources,
         llmAuxVisibility,
       };
     };

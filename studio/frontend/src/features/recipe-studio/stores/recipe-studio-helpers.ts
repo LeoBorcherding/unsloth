@@ -19,4 +19,5 @@ export {
   applyRenameToConfig,
   applyRenameToConfigs,
   isFreeName,
+  reconcileRenameSources,
 } from "./helpers/reference-sync";

@@ -275,6 +275,23 @@ export function applyNameEdit(
   };
 }
 
+/** Pending renames whose block now holds a free name (the other holder was renamed or removed)
+ * catch up, and pending renames of removed blocks are dropped. */
+export function reconcileRenameSources(state: NameEditState): NameEditState {
+  let next = state;
+  for (const [id, source] of Object.entries(state.renameSources)) {
+    const config = next.configs[id];
+    if (!config) {
+      const renameSources = { ...next.renameSources };
+      delete renameSources[id];
+      next = { ...next, renameSources };
+    } else if (isFreeName(next.configs, id, config.name)) {
+      next = applyNameEdit(next, id, source, config.name);
+    }
+  }
+  return next;
+}
+
 export function applyRemovalToConfigs(
   configs: Record<string, NodeConfig>,
   ref: string,

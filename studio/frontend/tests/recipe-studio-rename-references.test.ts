@@ -186,3 +186,30 @@ test("renaming a note never moves a block's references", () => {
   const out = typeName(configs, "n", ["notes"]);
   assert.equal(prompt(out.configs, "q"), "Write about {{ topic }}");
 });
+
+test("a block waiting on a taken name catches up when the other block is renamed or removed", () => {
+  const configs = byId(column("a", "a"), column("b", "b"), llm("q", "q", "X {{ a }} Y {{ b }}"));
+  // a -> b while b is taken: a's references wait on "a".
+  const waiting = typeName(configs, "a", ["b"]);
+  assert.equal(prompt(waiting.configs, "q"), "X {{ a }} Y {{ b }}");
+
+  const renamed = sync.reconcileRenameSources(
+    sync.applyNameEdit(
+      { ...waiting, configs: { ...waiting.configs, b: { ...waiting.configs.b, name: "c" } as NodeConfig } },
+      "b",
+      "b",
+      "c",
+    ),
+  );
+  assert.equal(prompt(renamed.configs, "q"), "X {{ b }} Y {{ c }}");
+  assert.deepEqual(renamed.renameSources, {});
+
+  const { b: _removed, ...rest } = waiting.configs;
+  // What removing a node does: drop the removed block's references, then reconcile.
+  const removed = sync.reconcileRenameSources({
+    ...waiting,
+    configs: sync.applyRemovalToConfigs(rest, "b"),
+  });
+  assert.match(prompt(removed.configs, "q"), /^X \{\{ b \}\} Y\s*$/);
+  assert.deepEqual(removed.renameSources, {});
+});
