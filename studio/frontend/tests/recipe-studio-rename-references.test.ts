@@ -154,3 +154,19 @@ test("object columns are person samplers, structured and judge LLMs, validators 
     ["check", "customer", "meta", "score", "ticket"],
   );
 });
+
+test("a column named like a filter, test or keyword argument only renames the column", () => {
+  const configs = byId(
+    column("t", "title"),
+    llm(
+      "q",
+      "q",
+      "{{ topic | title }} {{ title }} {% if title is not title %}{{ x | truncate(title=5) }}{% endif %}",
+    ),
+  );
+  const renamed = sync.applyRenameToConfigs(configs, "title", "headline");
+  assert.equal(
+    prompt(renamed, "q"),
+    "{{ topic | title }} {{ headline }} {% if headline is not title %}{{ x | truncate(title=5) }}{% endif %}",
+  );
+});

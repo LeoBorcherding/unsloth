@@ -7,6 +7,8 @@ const SIMPLE_JINJA_EXPR_RE = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 const PLAIN_JINJA_EXPR_RE = /^[a-zA-Z0-9_.\s-]+$/;
 const JINJA_BLOCK_RE = /({{|{%)([\s\S]*?)(}}|%})/g;
 const JINJA_STRING_RE = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/;
+const KWARG_BEFORE_RE = /[(,]\s*$/;
+const KWARG_AFTER_RE = /^\s*=(?!=)/;
 
 function isValidNestedReference(
   expr: string,
@@ -76,7 +78,7 @@ export function findInvalidJinjaReferences(
 }
 
 /** Renames `from` wherever it is a variable inside `{{ }}` or `{% %}` (bare, dotted, filtered or in a
- * statement), leaving attribute names and string literals alone. */
+ * statement), leaving attribute, filter, test and keyword-argument names and string literals alone. */
 export function replaceRef(
   template: string,
   from: string,
@@ -85,13 +87,24 @@ export function replaceRef(
   if (!template || !from || from === to) {
     return template;
   }
-  const name = new RegExp(`(?<![\\w.])${escapeRegExp(from)}(?!\\w)`, "g");
+  // A column named like a filter or test (`title`, `length`) must not rename `| title`.
+  const name = new RegExp(
+    `(?<![\\w.])(?<!\\|\\s*)(?<!\\bis\\s+(?:not\\s+)?)${escapeRegExp(from)}(?!\\w)`,
+    "g",
+  );
+  const rename = (part: string) =>
+    part.replace(name, (match: string, offset: number) =>
+      KWARG_BEFORE_RE.test(part.slice(0, offset)) &&
+      KWARG_AFTER_RE.test(part.slice(offset + match.length))
+        ? match
+        : to,
+    );
   return template.replace(
     JINJA_BLOCK_RE,
     (_block, open: string, body: string, close: string) =>
       `${open}${body
         .split(JINJA_STRING_RE)
-        .map((part, index) => (index % 2 === 1 ? part : part.replace(name, to)))
+        .map((part, index) => (index % 2 === 1 ? part : rename(part)))
         .join("")}${close}`,
   );
 }
