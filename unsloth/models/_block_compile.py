@@ -598,6 +598,17 @@ def _layer_kind(layer):
     )
 
 
+def _no_data_dependent_capture():
+    """Unsloth turns on capture_scalar_outputs and capture_dynamic_output_shape_ops for every
+    compile. A padding mask then pulls flash-attention's unpad path (nonzero indices, .item()
+    lengths) into the block graph, and its compiled backward returns wrong LoRA grads from the
+    second step on (torch 2.11, Qwen3.5 padded batches). Breaking the graph there keeps them exact."""
+    return torch._dynamo.config.patch(
+        capture_scalar_outputs = False,
+        capture_dynamic_output_shape_ops = False,
+    )
+
+
 def _wrap(cls, compile_options):
     original = cls.forward
     compiled = torch.compile(original, fullgraph = False, dynamic = None, options = compile_options)
@@ -615,6 +626,9 @@ def _wrap(cls, compile_options):
         inline_flag[0] = True
         _IN_BLOCK[0] = mode
         try:
+            if isinstance(kwargs.get("attention_mask"), torch.Tensor):
+                with _no_data_dependent_capture():
+                    return compiled(self, hidden_states, *args, **kwargs)
             return compiled(self, hidden_states, *args, **kwargs)
         finally:
             inline_flag[0] = previous

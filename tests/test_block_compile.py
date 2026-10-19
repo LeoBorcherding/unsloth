@@ -172,6 +172,93 @@ def test_cache_calls_keep_the_stock_forward(monkeypatch):
     assert calls  # no cache: compiled
 
 
+def _unpad_class():
+    # Flash-attention's padded path: nonzero token indices and an .item() length.
+    class UnpadDecoderLayer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = torch.nn.Linear(8, 8)
+
+        def forward(
+            self,
+            hidden_states,
+            attention_mask = None,
+        ):
+            h = self.proj(hidden_states)
+            if attention_mask is None:
+                return h
+            idx = torch.nonzero(attention_mask.flatten(), as_tuple = False).flatten()
+            longest = int(attention_mask.sum(-1).max().item())
+            flat = h.reshape(-1, h.shape[-1])
+            out = torch.zeros_like(flat)
+            out[idx] = flat[idx] * longest
+            return out.view_as(h) + hidden_states
+
+    return UnpadDecoderLayer
+
+
+def test_padded_calls_trace_without_data_dependent_capture(monkeypatch):
+    M = _load()
+    seen = []
+
+    def fake_compile(fn, **kwargs):
+        def compiled(*args, **kw):
+            cfg = torch._dynamo.config
+            seen.append((cfg.capture_scalar_outputs, cfg.capture_dynamic_output_shape_ops))
+            return fn(*args, **kw)
+
+        return compiled
+
+    monkeypatch.setattr(torch, "compile", fake_compile)
+    monkeypatch.setattr(torch._dynamo.config, "capture_scalar_outputs", True)
+    monkeypatch.setattr(torch._dynamo.config, "capture_dynamic_output_shape_ops", True)
+    cls = _unpad_class()
+    M._wrap(cls, {})
+    layer = cls()
+    x = torch.randn(2, 4, 8, requires_grad = True)
+    mask = torch.tensor([[1, 1, 1, 1], [1, 1, 0, 0]])
+    layer(x, attention_mask = mask)
+    assert seen and set(seen) == {(False, False)}
+    seen.clear()
+    layer(x)  # no padding: Unsloth's global capture settings are left alone
+    assert set(seen) == {(True, True)}
+
+
+def test_padded_block_breaks_at_the_unpad(monkeypatch):
+    from torch._dynamo.utils import counters
+
+    M = _load()
+    real_compile = torch.compile
+    monkeypatch.setattr(
+        torch, "compile", lambda fn, **kw: real_compile(fn, backend = "eager", dynamic = None)
+    )
+    monkeypatch.setattr(torch._dynamo.config, "capture_scalar_outputs", True)
+    monkeypatch.setattr(torch._dynamo.config, "capture_dynamic_output_shape_ops", True)
+    cls = _unpad_class()
+    original = cls.forward
+    layer = cls()
+    x = torch.randn(2, 4, 8)
+    mask = torch.tensor([[1, 1, 1, 1], [1, 1, 0, 0]])
+    xw = x.clone().requires_grad_()
+    original(layer, xw, attention_mask = mask).sum().backward()
+    want = [p.grad.clone() for p in layer.parameters()] + [xw.grad]
+    layer.zero_grad()
+    torch._dynamo.reset()
+    counters.clear()
+    try:
+        M._wrap(cls, {})
+        xg = x.clone().requires_grad_()
+        layer(xg, attention_mask = mask).sum().backward()
+        breaks = sum(counters["graph_break"].values())
+    finally:
+        cls.forward = original
+        torch._dynamo.reset()
+    # The nonzero / .item() run outside the block graph instead of as unbacked sizes inside it.
+    assert breaks > 0
+    for g, w in zip([p.grad for p in layer.parameters()] + [xg.grad], want):
+        torch.testing.assert_close(g, w)
+
+
 def test_gemma4_band_fast_path_in_blocks(monkeypatch):
     M = _load()
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
