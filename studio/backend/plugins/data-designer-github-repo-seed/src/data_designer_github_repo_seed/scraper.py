@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 import uuid
@@ -185,6 +186,7 @@ def scrape(cfg: ScrapeConfig, base_dir: Path):
             client = client,
             trial_limits = trial_limits,
             light = True,
+            comments = cfg.include_comments and cfg.max_comments_per_item > 0,
         )
         try:
             repo_meta = scraper.scrape_repo_meta()
@@ -219,15 +221,28 @@ def scrape(cfg: ScrapeConfig, base_dir: Path):
     return all_rows
 
 
-def materialize_to_jsonl(cfg: ScrapeConfig, out_dir: Path) -> Path:
+def materialize_to_jsonl(cfg: ScrapeConfig, out_dir: Path, stem: str | None = None) -> Path:
     out_dir.mkdir(parents = True, exist_ok = True)
-    tag = "-".join(r.replace("/", "__") for r in cfg.repos)[:120]
-    kinds = "-".join(cfg.item_types)
+    if stem is None:
+        tag = "-".join(r.replace("/", "__") for r in cfg.repos)[:120]
+        kinds = "-".join(cfg.item_types)
+        stem = f"github_{tag}__{kinds}__{cfg.limit}"
     run_id = f"{int(time.time())}-{uuid.uuid4().hex[:12]}"
-    fname = f"github_{tag}__{kinds}__{cfg.limit}_{run_id}.jsonl"
-    out = out_dir / fname
-    rows = scrape(cfg, out_dir / "raw-runs" / run_id)
-    with out.open("w", encoding = "utf-8") as f:
+    out = out_dir / f"{stem}_{run_id}.jsonl"
+    raw_dir = out_dir / "raw-runs" / run_id
+    try:
+        rows = scrape(cfg, raw_dir)
+    finally:
+        # Only the flattened JSONL is read back.
+        shutil.rmtree(raw_dir, ignore_errors = True)
+        try:
+            raw_dir.parent.rmdir()
+        except OSError:
+            pass  # another scrape is still using it
+    # Written aside and moved in, so another job never reads a half-written file.
+    partial = out.with_suffix(".partial")
+    with partial.open("w", encoding = "utf-8") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii = False) + "\n")
+    partial.replace(out)
     return out
