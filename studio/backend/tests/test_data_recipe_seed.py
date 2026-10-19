@@ -1815,7 +1815,6 @@ def test_validate_answers_when_the_error_collector_cannot_read_the_seed(monkeypa
 
 
 def _inspect_gsm8k(monkeypatch, tmp_path, subset):
-    seed_route = _load_seed_route(monkeypatch, tmp_path)
     configs = [
         {
             "config_name": name,
@@ -1826,7 +1825,12 @@ def _inspect_gsm8k(monkeypatch, tmp_path, subset):
         }
         for name in ("main", "socratic")
     ]
-    monkeypatch.setattr(seed_route, "_list_hf_repo_files", lambda **kwargs: _GSM8K_FILES)
+    return _inspect_card(monkeypatch, tmp_path, "openai/gsm8k", _GSM8K_FILES, configs, subset)
+
+
+def _inspect_card(monkeypatch, tmp_path, dataset_name, files, configs, subset):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "_list_hf_repo_files", lambda **kwargs: files)
     monkeypatch.setattr(seed_route, "_list_hf_dataset_configs", lambda **kwargs: configs)
     monkeypatch.setattr(seed_route, "refuse_unauthorized_dataset_preview", lambda *a, **k: None)
     loads = []
@@ -1838,7 +1842,7 @@ def _inspect_gsm8k(monkeypatch, tmp_path, subset):
     monkeypatch.setattr(seed_route, "_load_preview_rows", fake_preview)
     response = seed_route.inspect_seed_dataset(
         SimpleNamespace(
-            dataset_name = "openai/gsm8k",
+            dataset_name = dataset_name,
             split = "train",
             subset = subset,
             hf_token = None,
@@ -1863,3 +1867,27 @@ def test_a_named_subset_still_wins(monkeypatch, tmp_path):
     response, _loads = _inspect_gsm8k(monkeypatch, tmp_path, "socratic")
     assert response.resolved_path == "datasets/openai/gsm8k/socratic/train-*.parquet"
     assert response.subset == "socratic"
+
+
+def test_the_implicit_subset_is_one_that_has_the_split(monkeypatch, tmp_path):
+    # glue lists ax first and ax ships only a test split: seeding train from it would read the
+    # unlabeled test rows as train.
+    files = [
+        "ax/test-00000-of-00001.parquet",
+        "cola/test-00000-of-00001.parquet",
+        "cola/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "ax", "data_files": [{"split": "test", "path": "ax/test-*"}]},
+        {
+            "config_name": "cola",
+            "data_files": [
+                {"split": "train", "path": "cola/train-*"},
+                {"split": "test", "path": "cola/test-*"},
+            ],
+        },
+    ]
+    response, loads = _inspect_card(monkeypatch, tmp_path, "nyu-mll/glue", files, configs, None)
+    assert response.subset == "cola"
+    assert response.resolved_path == "datasets/nyu-mll/glue/cola/train-*.parquet"
+    assert loads[0]["data_files"] == ["cola/train-00000-of-00001.parquet"]
