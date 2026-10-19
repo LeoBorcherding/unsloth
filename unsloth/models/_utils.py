@@ -4751,7 +4751,38 @@ import transformers.utils.quantization_config
 
 transformers.utils.quantization_config.BitsAndBytesConfig.__init__ = _BitsAndBytesConfig__init__
 
+import atexit
 import pickle
+import shutil
+import tempfile
+
+_OFFLOAD_MARKER = ".unsloth_offload"
+_OFFLOAD_DIRS = set()
+_isjunction = getattr(os.path, "isjunction", lambda path: False)
+
+
+def _remove_stale_offload_dirs(temporary_location):
+    # Windows can't delete a .pt the live model still memory-maps, so the exit hook can leave its
+    # dir behind. Clear what earlier runs left; one a running process still maps just stays.
+    try:
+        entries = os.listdir(temporary_location)
+    except OSError:
+        return
+    for entry in entries:
+        path = os.path.abspath(os.path.join(temporary_location, entry))
+        # Never follow a link: its target isn't ours to empty.
+        if path in _OFFLOAD_DIRS or os.path.islink(path) or _isjunction(path):
+            continue
+        if not os.path.isfile(os.path.join(path, _OFFLOAD_MARKER)):
+            continue
+        # The marker goes last, so a dir whose .pt is still locked stays marked for the next sweep.
+        try:
+            for name in os.listdir(path):
+                if name != _OFFLOAD_MARKER:
+                    os.remove(os.path.join(path, name))
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors = True)
 
 
 def offload_to_disk(
@@ -4760,9 +4791,14 @@ def offload_to_disk(
     name,
     temporary_location: str = "_unsloth_temporary_saved_buffers",
 ):
-    file_location = os.path.join(temporary_location, model.config._name_or_path)
-    if not os.path.exists(file_location):
-        os.makedirs(file_location)
+    # Not os.path.join(temporary_location, _name_or_path): a local model's path is absolute, so the
+    # join lands in the user's model folder. A fresh dir per call also keeps concurrent runs apart.
+    model_name = os.path.basename(os.path.normpath(str(model.config._name_or_path)))
+    prefix = re.sub(r"[^\w.-]+", "_", model_name)[:64] or "model"
+    os.makedirs(temporary_location, exist_ok = True)
+    _remove_stale_offload_dirs(temporary_location)
+    file_location = tempfile.mkdtemp(prefix = f"{prefix}-", dir = os.path.abspath(temporary_location))
+    atexit.register(shutil.rmtree, file_location, ignore_errors = True)
 
     filename = os.path.join(file_location, f"{name}.pt")
     W = W.weight if hasattr(W, "weight") else W
@@ -4773,6 +4809,9 @@ def offload_to_disk(
         pickle_protocol = pickle.HIGHEST_PROTOCOL,
     )
     offloaded_W = torch.load(filename, map_location = "cpu", mmap = True, weights_only = False)
+    # Marked only once mapped, so another run's sweep can't delete it mid-save.
+    open(os.path.join(file_location, _OFFLOAD_MARKER), "wb").close()
+    _OFFLOAD_DIRS.add(file_location)
     offloaded_W._offloaded_file_location = filename
     return offloaded_W
 
