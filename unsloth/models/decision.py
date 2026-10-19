@@ -1218,6 +1218,7 @@ class DecisionTrainer(Trainer):
         # accumulation steps again.
         self.model_accepts_loss_kwargs = True
         self._num_ordinal_in_batch = None
+        self._count_ranks = 1
         backward = self.accelerator.backward
 
         def _backward(loss, **backward_kwargs):
@@ -1311,10 +1312,20 @@ class DecisionTrainer(Trainer):
                 break
         if not batch_samples:
             return batch_samples, None
-        num_items = sum(int(batch["marker_mask"].any(-1).sum()) for batch in batch_samples)
-        self._num_ordinal_in_batch = sum(
-            int(batch["ordinal"].sum()) for batch in batch_samples if "ordinal" in batch
+        counts = torch.tensor(
+            [
+                sum(int(batch["marker_mask"].any(-1).sum()) for batch in batch_samples),
+                sum(int(batch["ordinal"].sum()) for batch in batch_samples if "ordinal" in batch),
+            ]
         )
+        # The LM loss's convention: every rank divides by the global count and compute_loss scales by
+        # the rank count, so DDP's gradient mean weighs each decision once.
+        self._count_ranks = 1
+        if getattr(self.args, "average_tokens_across_devices", False) and self.args.world_size > 1:
+            gathered = self.accelerator.gather(counts.to(device or self.args.device))
+            counts = gathered.view(-1, 2).sum(0).cpu()
+            self._count_ranks = self.accelerator.num_processes
+        num_items, self._num_ordinal_in_batch = (int(count) for count in counts)
         return batch_samples, max(num_items, 1)
 
     def compute_loss(
@@ -1351,6 +1362,8 @@ class DecisionTrainer(Trainer):
                 (log_ref.exp() * (log_ref - log_p) * mask).sum(-1), num_items_in_batch
             )
             loss = loss + self.kl_weight * kl
+        if num_items_in_batch is not None and self._count_ranks > 1:
+            loss = loss * self._count_ranks
         return (loss, {"loss": loss, "logits": logits}) if return_outputs else loss
 
     def create_optimizer(self, model = None):
