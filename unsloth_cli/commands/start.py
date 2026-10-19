@@ -6249,6 +6249,39 @@ def _open_codex_app() -> None:
     typer.echo("Open the Codex app now.")
 
 
+_console_close_handlers = []  # a ctypes callback must outlive any call still running in it
+
+
+@contextlib.contextmanager
+def _survive_console_close():
+    # Windows ends the process once a close, logoff or shutdown handler returns, skipping every finally.
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+
+    done = threading.Event()
+
+    @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+    def handler(event):
+        if event not in (1, 2, 5, 6):  # CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN
+            return 0
+        # Wakes the hold loop's sleep, which an interrupt from this thread alone would not.
+        signal.raise_signal(signal.SIGINT)
+        if event != 1:
+            done.wait()
+        return 1
+
+    _console_close_handlers.append(handler)
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetConsoleCtrlHandler(handler, 1)
+    try:
+        yield
+    finally:
+        kernel32.SetConsoleCtrlHandler(handler, 0)
+        done.set()
+
+
 def _hold_codex_app(base: str) -> None:
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -6270,10 +6303,11 @@ def _hold_codex_app(base: str) -> None:
             signal.signal(number, handler)
 
 
+@_survive_console_close()
 def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> None:
     target = _codex_app_target()
     catalog = target.path.with_name(_CODEX_APP_CATALOG)
-    state, key_id = {}, None
+    state, key_id, new_state = {}, None, None
     try:
         state_path, state, text, key, key_id = _open_app_config(target, base, explicit_key)
         new_text, previous = _codex_app_build(text, base, key, entry, None)
@@ -6293,7 +6327,16 @@ def _codex_app_session(base: str, explicit_key: Optional[str], entry: dict) -> N
         }
         _save_app_config(target, state_path, {}, new_state, text, new_text)
     except BaseException:
-        _revoke_new_app_key(base, key_id, state)
+        # Stopped once the state was saved (a console close lands here too): undo it now, as the
+        # next start's recovery would, instead of leaving config.toml on a revoked key.
+        if new_state is not None and (_read_json_object(state_path) or {}).get("key") == key:
+            previous_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                _switch_codex_app_back(state_path, new_state)
+            finally:
+                signal.signal(signal.SIGINT, previous_sigint)
+        else:
+            _revoke_new_app_key(base, key_id, state)
         _shutdown_auto_served()
         raise
     try:
