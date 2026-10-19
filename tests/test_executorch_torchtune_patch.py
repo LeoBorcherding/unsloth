@@ -117,6 +117,14 @@ def test_a_torchtune_that_fails_to_import_still_gets_the_stub(tmp_path, monkeypa
     assert _run(tmp_path, code) == "y"
 
 
+def test_a_torchtune_without_get_mapped_key_still_gets_the_stub(tmp_path, monkeypatch):
+    _make_site(tmp_path, with_torchtune = True)
+    (tmp_path / "torchtune" / "models" / "convert_weights.py").write_text("OTHER = 1\n")
+    _patch(monkeypatch, tmp_path)
+    code = "import executorch.examples.models as m\nprint(m.get_mapped_key('x', {'x': 'y'}))\n"
+    assert _run(tmp_path, code) == "y"
+
+
 def test_an_old_unconditional_patch_is_rewritten_once(tmp_path, monkeypatch):
     init = _make_site(tmp_path, with_torchtune = True, models_init = _OLD_PATCHED)
     _patch(monkeypatch, tmp_path)

@@ -7011,7 +7011,7 @@ def fix_executorch():
         # A torchtune that is installed but fails to import (its torchao pin) still gets the stub
         what = stub + textwrap.dedent("""\
         try:
-            import torchtune.models.convert_weights
+            from torchtune.models.convert_weights import get_mapped_key as _get_mapped_key
         except Exception:
             sys.modules["torchtune"] = torchtune
             sys.modules["torchtune.models"] = models
