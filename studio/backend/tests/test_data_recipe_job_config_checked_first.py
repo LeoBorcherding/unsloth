@@ -75,3 +75,5 @@ def test_a_valid_recipe_still_starts(calls):
 
 def test_load_tools_has_a_timeout_when_the_editor_sends_none():
     assert McpToolsListRequest().timeout_sec == 30
+    assert McpToolsListRequest(timeout_sec = None).timeout_sec == 30
+    assert McpToolsListRequest.model_validate({"timeout_sec": None}).timeout_sec == 30

@@ -153,8 +153,16 @@ export async function fillBlankLocalModels(
   let ggufVariant = "";
   try {
     const status = await getInferenceStatus();
-    target = (status.model_identifier ?? status.active_model ?? "").trim();
-    ggufVariant = status.gguf_variant?.trim() ?? "";
+    const label = status.active_model?.trim() ?? "";
+    target = (
+      status.model_identifier ?? (status.is_gguf ? "" : label)
+    ).trim();
+    ggufVariant = target ? (status.gguf_variant?.trim() ?? "") : "";
+    // A GGUF opened from a native file path reports only its label, which the job's
+    // loaded-model check can't match; "local" runs on whatever Chat has loaded.
+    if (!target && label) {
+      target = "local";
+    }
   } catch {
     // Treated as nothing loaded.
   }

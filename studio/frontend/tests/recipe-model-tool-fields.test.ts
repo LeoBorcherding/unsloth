@@ -116,6 +116,26 @@ test("a Local model block left empty builds, and runs on the model Chat has load
   assert.equal(built.payload.recipe.model_configs[0].model, "");
 });
 
+// /status withholds a native-path GGUF's on-disk path, and the job's loaded-model check
+// compares against that path, so the display label would be refused as a mismatch.
+test("an empty Local model block runs on a GGUF Chat opened from a native file path", async () => {
+  const { fillBlankLocalModels } = loadHook({
+    // biome-ignore lint/style/useNamingConvention: api schema
+    model_identifier: null,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    active_model: "my-model-Q4_K_M.gguf",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    is_gguf: true,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    gguf_variant: null,
+  });
+  const filled = await fillBlankLocalModels(build(localRecipe("")).payload);
+  assert.equal(filled.error, null);
+  const [config] = filled.payload.recipe.model_configs;
+  assert.equal(config.model, "local");
+  assert.equal(config.gguf_variant, undefined);
+});
+
 test("an empty Local model block with nothing loaded in Chat says so", async () => {
   // biome-ignore lint/style/useNamingConvention: api schema
   const { fillBlankLocalModels } = loadHook({ active_model: null });
