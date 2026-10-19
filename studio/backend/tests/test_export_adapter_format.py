@@ -177,7 +177,18 @@ def _converter_harness(monkeypatch, tmp_path, with_converter):
         calls.append((cmd, env))
         return types.SimpleNamespace(returncode = 0, stdout = "", stderr = "")
 
+    class _Popen:
+        def __init__(self, cmd, env = None, **kwargs):
+            calls.append((cmd, env))
+            self.kwargs = kwargs
+            self.pid = None
+            self.returncode = 0
+
+        def communicate(self):
+            return "", ""
+
     monkeypatch.setattr(subprocess, "run", _run)
+    monkeypatch.setattr(subprocess, "Popen", _Popen)
     real_find_spec = importlib.util.find_spec
     monkeypatch.setattr(
         importlib.util,
@@ -200,6 +211,50 @@ def test_gguf_converter_token_env(monkeypatch, tmp_path, token, expect):
     env = calls[-1][1]
     assert env.get("HF_TOKEN") == expect
     assert env.get("HF_HUB_DISABLE_IMPLICIT_TOKEN") == ("1" if token is False else "0")
+
+
+def test_gguf_converter_bound_to_parent_and_hidden(monkeypatch, tmp_path):
+    import subprocess
+
+    from utils import process_lifetime, subprocess_compat
+
+    backend, adapter, calls = _converter_harness(monkeypatch, tmp_path, True)
+    fake_popen = subprocess.Popen
+    spawned = []
+
+    def _spawn(spawn):
+        spawned.append(spawn())
+        return spawned[-1]
+
+    monkeypatch.setattr(process_lifetime, "spawn_on_lifetime_thread", _spawn)
+    monkeypatch.setattr(process_lifetime, "child_popen_kwargs", lambda: {"preexec_fn": "bind"})
+    monkeypatch.setattr(
+        subprocess_compat, "windows_hidden_subprocess_kwargs", lambda: {"creationflags": 0x08000000}
+    )
+    backend._convert_peft_dir_to_gguf(adapter, "q8_0", None)
+    assert len(spawned) == 1 and isinstance(spawned[0], fake_popen)
+    assert spawned[0].kwargs["preexec_fn"] == "bind"
+    assert spawned[0].kwargs["creationflags"] == 0x08000000
+    assert calls[-1][0][1].endswith("convert_lora_to_gguf.py")
+
+
+def test_gguf_converter_recorded_for_the_startup_sweep(monkeypatch, tmp_path):
+    # macOS has no parent-death signal, so the pid record is what reaps a cancelled export's converter.
+    from utils import process_lifetime
+
+    backend, adapter, _ = _converter_harness(monkeypatch, tmp_path, True)
+    events = []
+
+    def _spawn(spawn):
+        process = spawn()
+        process.pid = 4242
+        return process
+
+    monkeypatch.setattr(process_lifetime, "spawn_on_lifetime_thread", _spawn)
+    monkeypatch.setattr(process_lifetime, "adopt_pid", lambda pid: events.append(("adopt", pid)))
+    monkeypatch.setattr(process_lifetime, "forget_pid", lambda pid: events.append(("forget", pid)))
+    backend._convert_peft_dir_to_gguf(adapter, "q8_0", None)
+    assert events == [("adopt", 4242), ("forget", 4242)]
 
 
 def _fork_source_tarball(tag, members = None):
