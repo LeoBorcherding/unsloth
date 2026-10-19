@@ -241,6 +241,11 @@ def detect_custom_format_heuristic(dataset):
         and not has_keyword(col, assistant_words)
     ]
     assistant_potential = [col for col in content_columns if has_keyword(col, assistant_words)]
+    # "implementation" (Text to Python's code column) counts only when no other column reads as the answer.
+    answer_words = [word for word in assistant_words if word != "implementation"]
+    assistant_potential = [
+        col for col in assistant_potential if has_keyword(col, answer_words)
+    ] or assistant_potential
     user_potential = [
         col
         for col in content_columns

@@ -92,3 +92,10 @@ def test_reasoning_and_trace_columns_are_never_a_turn(heuristic, side):
     row = {"question": _MID, "answer": _MID, **side}
 
     assert heuristic(Dataset.from_list([row])) == {"question": "user", "answer": "assistant"}
+
+
+@pytest.mark.parametrize("heuristic", _HEURISTICS)
+def test_an_implementation_input_does_not_outrank_the_answer(heuristic):
+    row = {"instruction": _MID, "implementation": _LONG, "expected_answer": _MID}
+
+    assert heuristic(Dataset.from_list([row]))["expected_answer"] == "assistant"
