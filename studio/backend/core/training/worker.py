@@ -4777,7 +4777,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 event_queue.put(
                     {
                         "type": "error",
-                        "error": trainer.training_progress.error or "Failed to load dataset",
+                        "error": _oom_error(config, trainer.training_progress.error)
+                        or trainer.training_progress.error
+                        or "Failed to load dataset",
                         "stack": "",
                         "ts": time.time(),
                     }

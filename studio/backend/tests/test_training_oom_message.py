@@ -38,4 +38,5 @@ def test_every_error_text_the_worker_relays_goes_through_the_oom_check():
     source = inspect.getsource(worker.run_training_process)
     assert '"error": _oom_error(config, progress.error) or progress.error' in source
     assert "_oom_error(config, load_error)" in source
-    assert "_oom_error(config, trainer.training_progress.error)" in source
+    # LoRA prepare, and dataset load (audio preprocessing puts its codec on the GPU).
+    assert source.count("_oom_error(config, trainer.training_progress.error)") == 2
