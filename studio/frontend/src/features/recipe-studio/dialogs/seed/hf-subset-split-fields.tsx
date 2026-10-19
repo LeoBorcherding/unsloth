@@ -9,6 +9,7 @@ import { FieldLabel } from "../shared/field-label";
 type HfSubsetSplitFieldsProps = {
   config: SeedConfig;
   onUpdate: (patch: Partial<SeedConfig>) => void;
+  disabled?: boolean;
 };
 
 // A new subset or split points at different files, so the loaded path and fields go until the next Load.
@@ -22,6 +23,7 @@ const CLEARED_LOAD: Partial<SeedConfig> = {
 export function HfSubsetSplitFields({
   config,
   onUpdate,
+  disabled,
 }: HfSubsetSplitFieldsProps): ReactElement {
   const subsetId = `${config.id}-hf-subset`;
   const splitId = `${config.id}-hf-split`;
@@ -36,6 +38,7 @@ export function HfSubsetSplitFields({
         <Input
           id={subsetId}
           className="nodrag"
+          disabled={disabled}
           placeholder="default"
           value={config.hf_subset ?? ""}
           onChange={(event) => onUpdate({ ...CLEARED_LOAD, hf_subset: event.target.value })}
@@ -46,6 +49,7 @@ export function HfSubsetSplitFields({
         <Input
           id={splitId}
           className="nodrag"
+          disabled={disabled}
           placeholder="train"
           value={config.hf_split ?? ""}
           onChange={(event) => onUpdate({ ...CLEARED_LOAD, hf_split: event.target.value })}

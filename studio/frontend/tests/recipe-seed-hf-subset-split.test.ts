@@ -38,9 +38,31 @@ function inputs(node: unknown, out: StubElement[] = []): StubElement[] {
   return out;
 }
 
-test("the Hugging Face tab renders Subset and Split fields", () => {
+test("the Hugging Face tab renders Subset and Split fields, locked while a load runs", () => {
   const dialog = readFileSync(DIALOG, "utf8");
-  assert.match(dialog, /<HfSubsetSplitFields config=\{config\} onUpdate=\{onUpdate\} \/>/);
+  // An edit during a load would be overwritten by the older response's subset and split.
+  assert.match(
+    dialog,
+    /<HfSubsetSplitFields\s+config=\{config\}\s+onUpdate=\{onUpdate\}\s+disabled=\{isInspecting\}\s*\/>/,
+  );
+});
+
+test("the fields are disabled while inspecting", () => {
+  const { HfSubsetSplitFields } = loadWithStubs<{
+    HfSubsetSplitFields: (props: Record<string, unknown>) => StubElement;
+  }>(FIELDS, {
+    "react/jsx-runtime": stubJsxRuntime(),
+    "@/components/ui/input": { Input },
+    "../shared/field-label": { FieldLabel },
+  });
+  const tree = HfSubsetSplitFields({
+    config: { id: "seed", hf_subset: "", hf_split: "" },
+    onUpdate: () => undefined,
+    disabled: true,
+  });
+  const fields = inputs(tree);
+  assert.equal(fields.length, 2);
+  for (const field of fields) assert.equal(field.props.disabled, true);
 });
 
 test("editing subset or split sets it and drops the stale load", () => {

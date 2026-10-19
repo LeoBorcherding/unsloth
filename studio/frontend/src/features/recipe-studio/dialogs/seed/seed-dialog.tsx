@@ -1007,7 +1007,11 @@ export function SeedDialog({
                 </div>
               </div>
 
-              <HfSubsetSplitFields config={config} onUpdate={onUpdate} />
+              <HfSubsetSplitFields
+                config={config}
+                onUpdate={onUpdate}
+                disabled={isInspecting}
+              />
 
               <div className="grid gap-1.5">
                 <FieldLabel
