@@ -722,6 +722,8 @@ def test_an_hsa_override_cannot_spoof_an_apu_into_a_discrete_discount(backend, m
         version = _Version()
         __version__ = "2.9.0"
 
+    # The override is only honoured off Windows; pin the host so a Windows runner agrees.
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("HSA_OVERRIDE_GFX_VERSION", "10.3.0")
     monkeypatch.setitem(sys.modules, "torch", _Torch())
     monkeypatch.setattr(backend, "_resolve_visible_physical_ids", staticmethod(lambda: None))

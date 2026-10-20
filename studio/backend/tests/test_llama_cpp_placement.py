@@ -5953,7 +5953,11 @@ def test_a_drafter_pinned_to_an_igpu_keeps_its_host_pinned_charge(tmp_path):
     assert pinned == full
 
 
-def test_a_drafter_pinned_to_the_discrete_target_keeps_the_discount(tmp_path):
+def test_a_drafter_pinned_to_the_discrete_target_keeps_the_discount(tmp_path, monkeypatch):
+    import utils.hardware as hardware
+
+    # Apple silicon is unified memory and never takes the discount; pin a discrete host.
+    monkeypatch.setattr(hardware, "is_apple_silicon", lambda: False)
     pinned, _ = _draft_reserve_launch(tmp_path, extra_args = ["--spec-draft-device", "Vulkan0"])
     full, _ = _draft_reserve_launch(
         tmp_path, extra_args = ["--spec-draft-device", "Vulkan0"], discount = False
@@ -6227,7 +6231,10 @@ def test_the_resident_share_removes_a_host_pinned_lazy_table_once(
 
 def _adapter_launch_total(tmp_path, monkeypatch, *, extra_args, host_pinned_gib):
     """First planned total for a 4 GiB target whose 1 GiB token_embd.weight is host-pinned."""
+    import utils.hardware as hardware
+
     gib = 1024**3
+    monkeypatch.setattr(hardware, "is_apple_silicon", lambda: False)
     backend, gguf = _backend(tmp_path, vulkan = True, memory = [(0, 30_000, 32_000)])
     monkeypatch.setattr(LlamaCppBackend, "_tied_output_bytes", staticmethod(lambda _path: 0))
     monkeypatch.setattr(
