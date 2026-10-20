@@ -347,6 +347,9 @@ from .diffusion_prequant import (
     load_prequantized_transformer,
     local_prequant_path_ready,
     prequant_checkpoint_cached,
+    prequant_repo_filename,
+    prequant_single_file_error,
+    prequant_single_file_message,
     prequant_unreadable_reason,
     resolve_prequant_source,
     scoped_local_files_only,
@@ -3937,6 +3940,27 @@ class DiffusionBackend:
                 f"'{repo_id}' hosts pre-quantised checkpoints for {shown}; it is not a pipeline to pick "
                 f"directly. Pick {shown} and set {' and '.join(knobs) or 'a precision'} instead."
             )
+        # A hosted pre-quant artifact picked as a single file: diffusers would drop its scales and fail on meta.
+        if (
+            kind == "single_file"
+            and gguf_filename
+            and repo_id.strip().lower() in prequant_only_repo_ids()
+            and not _is_local_path(repo_id)
+        ):
+            bases, schemes, _te = prequant_repo_role(fam, repo_id)
+            artifacts = {
+                prequant_repo_filename(repo_id, scheme, suffix)
+                for scheme in schemes
+                for suffix in (".safetensors", "-ConvRot.safetensors")
+            }
+            picked = os.path.basename(gguf_filename)
+            if picked in artifacts:
+                named = {b.lower(): b for b in fam.named_variant_bases}
+                raise ValueError(
+                    prequant_single_file_message(
+                        picked, [named.get(b.lower(), b) for b in bases], schemes
+                    )
+                )
         # Refuse a too-old diffusers here, not deep in the load, but only when this load builds the diffusers
         # pipeline: a GGUF this host routes to native sd.cpp never instantiates the class. The picker gate reads the
         # same predicate. Imported here, not at module import, because the router imports this module's siblings.
@@ -7039,6 +7063,10 @@ class DiffusionBackend:
                 # A ComfyUI-quantized file loads through its own path below; a format it cannot run is refused here,
                 # from the header, before planning or reading a weight, rather than loaded with its scales dropped.
                 comfy_scan = refuse_comfy_quant(single_file_path) if kind == "single_file" else None
+                if kind == "single_file" and comfy_scan is None:
+                    prequant_problem = prequant_single_file_error(single_file_path)
+                    if prequant_problem:
+                        raise ValueError(prequant_problem)
                 # torchao weights from a ComfyUI file: compile like Studio's own quantized transformer
                 comfy_compile = False
                 transformer_cls = getattr(diffusers, fam.transformer_class)

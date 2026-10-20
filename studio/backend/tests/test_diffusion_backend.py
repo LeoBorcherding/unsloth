@@ -2302,6 +2302,87 @@ def test_validate_refuses_a_pipeline_pick_of_a_hosted_prequant_repo(fake_runtime
     assert not any(fam.base_repo.lower() in ids for fam in _FAMILIES)
 
 
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "Qwen-Image-2.1-Turbo-FP8.safetensors",
+        "Qwen-Image-2.1-Turbo-INT8.safetensors",
+        "Qwen-Image-2.1-Turbo-INT8-ConvRot.safetensors",
+    ),
+)
+def test_validate_refuses_a_single_file_pick_of_a_hosted_prequant_artifact(fake_runtime, filename):
+    backend = DiffusionBackend()
+    with pytest.raises(ValueError, match = "pre-quantised transformer") as excinfo:
+        backend.validate_load_request(
+            "unsloth/Qwen-Image-2.1-Turbo-FP8",
+            gguf_filename = filename,
+            model_kind = "single_file",
+        )
+    message = str(excinfo.value)
+    assert "Pick Qwen/Qwen-Image-2.1-Turbo" in message
+    assert "fp8 or int8" in message
+
+
+_REAL_TORCH = sys.modules.get("torch")
+
+
+def _write_prequant_safetensors(path, fmt, scheme):
+    """The torchao-flattened layout of Studio's hosted pre-quant artifacts, header metadata included."""
+    meta = {
+        "unsloth_format": fmt,
+        "unsloth_metadata": json.dumps(
+            {"base_model_id": "Qwen/Qwen-Image-2.1-Turbo", "scheme": scheme}
+        ),
+    }
+    tensors = {
+        "__metadata__": meta,
+        "blocks.0.to_q._weight_qdata": {"dtype": "I8", "shape": [1, 4], "data_offsets": [0, 4]},
+        "blocks.0.to_q._weight_scale": {"dtype": "F32", "shape": [1, 1], "data_offsets": [4, 8]},
+    }
+    header = json.dumps(tensors).encode()
+    path.write_bytes(len(header).to_bytes(8, "little") + header + b"\x01\x02\x03\x04\x00\x00\x80\x3f")
+    return path
+
+
+def test_single_file_load_of_a_local_prequant_artifact_is_refused_before_from_single_file(
+    fake_runtime, tmp_path, monkeypatch
+):
+    """A local copy (or a rename) only shows up in its header: diffusers' single-file loader would drop
+    every ``_weight_scale`` and fail on meta with "Cannot copy out of meta tensor"."""
+    _write_prequant_safetensors(
+        tmp_path / "turbo.safetensors", "unsloth_prequant_transformer_state_dict_v2", "int8"
+    )
+    import core.inference.prequant_safetensors as pst
+
+    real_read = pst.read_prequant_header
+
+    def _read_under_real_torch(path):
+        # safetensors' "pt" handle needs the real torch, which fake_runtime swapped out.
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "torch", _REAL_TORCH)
+            return real_read(path)
+
+    monkeypatch.setattr(pst, "read_prequant_header", _read_under_real_torch)
+    monkeypatch.setattr(_FakeTransformer, "last", None)
+    backend = DiffusionBackend()
+    with pytest.raises(ValueError, match = "pre-quantised transformer") as excinfo:
+        backend.load_pipeline(
+            str(tmp_path),
+            gguf_filename = "turbo.safetensors",
+            model_kind = "single_file",
+            family_override = "z-image",
+        )
+    assert "transformer precision to int8" in str(excinfo.value)
+    assert _FakeTransformer.last is None
+
+
+def test_prequant_single_file_error_ignores_a_plain_safetensors(tmp_path):
+    from core.inference.diffusion_prequant import prequant_single_file_error
+
+    assert prequant_single_file_error(str(_write_min_safetensors(tmp_path / "dit.safetensors"))) is None
+    assert prequant_single_file_error(str(tmp_path / "model.gguf")) is None
+
+
 def test_load_sdxl_rejects_untrusted_repo(fake_runtime):
     """A random non-allowlisted, non-unsloth repo is still rejected for a full pipeline
     load even when it detects as SDXL -- the allowlist is exact-match only."""
