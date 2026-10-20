@@ -140,7 +140,7 @@ import {
   BookmarkTurnButton,
   BookmarkTurnMenuItem,
   TurnNavigator,
-} from "@/components/assistant-ui/turn-navigation";
+} from "@/components/assistant-ui/lazy-turn-navigation";
 import {
   IntentAwareScrollProvider,
   useIntentAwareAutoScroll,

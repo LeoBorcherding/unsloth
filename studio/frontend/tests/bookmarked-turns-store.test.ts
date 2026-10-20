@@ -140,3 +140,27 @@ test("the turn card names its turn and stays out of select-all copies", async ()
     /<span className="shrink-0 text-muted-foreground\/80 text-ui-11">\s*\{preview \? t\("turns\.label", \{ number: preview\.turn \}\)/,
   );
 });
+
+test("the thread reaches turn navigation only through its lazy, setting-gated wrapper", async () => {
+  const thread = await readFile(
+    new URL("../src/components/assistant-ui/thread.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    thread,
+    /from "@\/components\/assistant-ui\/lazy-turn-navigation"/,
+  );
+  assert.doesNotMatch(
+    thread,
+    /from "@\/components\/assistant-ui\/turn-navigation"/,
+  );
+  const wrapper = await readFile(
+    new URL(
+      "../src/components/assistant-ui/lazy-turn-navigation.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.doesNotMatch(wrapper, /^import \{[^}]*\} from "\.\/turn-navigation"/m);
+  assert.match(wrapper, /state\.showTurnNavigation/);
+});

@@ -287,8 +287,12 @@ export const BUDGET = {
   // chunk. Raised to the measured build plus the same 160 B raw / 189 B transfer margin.
   // Reconciled with main at 87c6408455: the combined build measures 6,844,101 B raw / 2,060,934 B transfer
   // (Node 24, 96 chunks). The API Settings button stays in its lazy page. Keep the same 160 B / 189 B margin.
-  transferBytes: 2_061_123,
-  rawBytes: 6_844_261,
+  // Turn navigation (#11668) adds 2,954 B raw / 835 B transfer with its rail, card and bookmark buttons lazy-loaded
+  // behind the setting, which is off by default (6,844,101 -> 6,847,055 B raw, 2,056,085 -> 2,056,920 B transfer
+  // against 22a0beae98, one machine and build, Node 26, 96 chunks): its strings in every eager locale, the bookmark
+  // store and the settings row. Raised by that growth, keeping the same margin.
+  transferBytes: 2_061_958,
+  rawBytes: 6_847_215,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
