@@ -56,8 +56,8 @@ def _nemotron_h_fast_path():
         from transformers import NemotronHConfig
     except Exception:
         pytest.skip("no Nemotron-H on this transformers")
-    if not hasattr(m, "lazy_load_kernel"):
-        pytest.skip("this transformers does not load the Mamba kernels lazily")
+    if not hasattr(m, "is_fast_path_available"):
+        pytest.skip("this transformers picks the Mamba kernels without lazy_load_kernel")
     config = NemotronHConfig(
         hidden_size = 64,
         mamba_num_heads = 4,
@@ -76,13 +76,16 @@ def restore_lazy_load_kernel(monkeypatch):
     # `import unsloth` (conftest) may have applied the fix already: start every test from the original.
     from transformers import integrations
 
-    original = hub_kernels.lazy_load_kernel
+    original = getattr(hub_kernels, "lazy_load_kernel", None)
+    if original is None:
+        pytest.skip("no lazy_load_kernel on this transformers")
     if getattr(original, "_unsloth_mamba_ssm_guard", False):
         original = original.__wrapped__
     monkeypatch.setattr(hub_kernels, "lazy_load_kernel", original)
     try:
         from transformers.models.nemotron_h import modeling_nemotron_h as m
-        monkeypatch.setattr(m, "lazy_load_kernel", original, raising = False)
+        if hasattr(m, "lazy_load_kernel"):
+            monkeypatch.setattr(m, "lazy_load_kernel", original)
     except Exception:
         pass
     if "lazy_load_kernel" in vars(integrations):
