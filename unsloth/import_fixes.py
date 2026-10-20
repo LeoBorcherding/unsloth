@@ -10807,6 +10807,59 @@ def disable_broken_causal_conv1d():
         print(hint)
 
 
+_MAMBA_SSM_KERNELS = ("mamba-ssm", "falcon_mamba-ssm")
+_MAMBA_SSM_CONV_MODULES = ("ops.triton.ssd_combined", "ops.selective_scan_interface")
+
+
+def _mamba_ssm_lacks_causal_conv1d_cuda(kernel):
+    # causal-conv1d >= 1.5.1 dropped `causal_conv1d_interface.causal_conv1d_cuda`; mamba-ssm builds that
+    # still import it (the hub kernel among them) set it to None and assert on the first training forward.
+    for sub in _MAMBA_SSM_CONV_MODULES:
+        try:
+            module = importlib.import_module(f"{kernel.__name__}.{sub}")
+        except Exception:
+            continue
+        if hasattr(module, "causal_conv1d_cuda") and module.causal_conv1d_cuda is None:
+            return True
+    return False
+
+
+def fix_transformers_mamba_ssm_without_causal_conv1d_cuda():
+    """Mamba-family models: treat a mamba-ssm kernel that lost `causal_conv1d_cuda` as unavailable,
+    so transformers takes its naive path instead of asserting in `mamba_split_conv1d_scan_combined`."""
+    try:
+        from transformers.integrations import hub_kernels
+    except Exception:
+        return
+    original = getattr(hub_kernels, "lazy_load_kernel", None)
+    if original is None or getattr(original, "_unsloth_mamba_ssm_guard", False):
+        return
+    checked = {}
+
+    @functools.wraps(original)
+    def lazy_load_kernel(kernel_name, *args, **kwargs):
+        kernel = original(kernel_name, *args, **kwargs)
+        if kernel_name not in _MAMBA_SSM_KERNELS or not isinstance(kernel, types.ModuleType):
+            return kernel
+        if id(kernel) not in checked:
+            checked[id(kernel)] = _mamba_ssm_lacks_causal_conv1d_cuda(kernel)
+            if checked[id(kernel)]:
+                logger.warning(
+                    f"Unsloth: {kernel_name} imports `causal_conv1d_cuda`, which the installed "
+                    "causal-conv1d no longer exports, so Mamba layers use the slower PyTorch path."
+                )
+        return None if checked[id(kernel)] else kernel
+
+    lazy_load_kernel._unsloth_mamba_ssm_guard = True
+    hub_kernels.lazy_load_kernel = lazy_load_kernel
+    # Modeling files bind it by name at import; patch the ones already loaded and the package re-export.
+    for name, module in list(sys.modules.items()):
+        if (
+            name == "transformers.integrations" or name.startswith("transformers.models.")
+        ) and getattr(module, "lazy_load_kernel", None) is original:
+            module.lazy_load_kernel = lazy_load_kernel
+
+
 _BNB_ROCM_DLL_RE = re.compile(r"libbitsandbytes_rocm(\d+)\.dll", re.IGNORECASE)
 
 
