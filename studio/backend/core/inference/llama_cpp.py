@@ -10193,6 +10193,9 @@ class LlamaCppBackend:
         """The discrete-first split for a full-offload mixed Vulkan pin, or None to
         leave llama.cpp's own split (the pre-existing behaviour) wherever its inputs
         cannot be priced or someone else owns the placement."""
+        # The launch pops a non-layer inherited mode with its paired split; judge what the child gets.
+        if (env.get("LLAMA_ARG_SPLIT_MODE") or "").strip().lower() not in ("", "layer"):
+            env = {k: v for k, v in env.items() if k != "LLAMA_ARG_TENSOR_SPLIT"}
         if (
             not shared_gpu_ids
             or spill_inputs is None

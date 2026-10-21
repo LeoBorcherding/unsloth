@@ -276,6 +276,11 @@ def test_a_row_or_tensor_split_mode_leaves_the_split_to_llama_cpp():
         with pytest.raises(Priced):
             call(args, {})
     assert call(["--fit", "off", "--fit", "on"], {}) is None
+    # A non-layer inherited mode is popped with its paired split, so that split never reaches the child.
+    with pytest.raises(Priced):
+        call([], {"LLAMA_ARG_SPLIT_MODE": "row", "LLAMA_ARG_TENSOR_SPLIT": "1,1"})
+    assert call([], {"LLAMA_ARG_TENSOR_SPLIT": "1,1"}) is None
+    assert call([], {"LLAMA_ARG_SPLIT_MODE": "layer", "LLAMA_ARG_TENSOR_SPLIT": "1,1"}) is None
 
 
 def test_an_unpriced_uneven_kv_cache_leaves_the_split_to_llama_cpp():
