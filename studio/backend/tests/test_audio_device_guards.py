@@ -304,8 +304,9 @@ def test_the_post_load_ownership_check_is_gated_like_the_gguf_one():
     """Ungated, it unloads the CPU audio model it just loaded and returns 409:
     the load skips acquire_for, so on a clean server the owner is None."""
     src = _inference_source()
-    assert "if chat_load_needs_gpu and current_owner() != CHAT:" in src
-    assert "\n        if current_owner() != CHAT:" not in src
+    assert "if chat_load_needs_gpu and not holds(CHAT):" in src
+    assert "\n        if not holds(CHAT):" not in src
+    assert "chat_load_needs_gpu and current_owner() != CHAT" not in src
 
 
 def test_a_cpu_audio_worker_hides_cuda_and_hip():
@@ -350,16 +351,21 @@ def test_a_zero_gpu_standard_load_drops_the_stale_chat_claim():
     during-load release is the third, handed to load_model as a callback so it
     fires once the previous worker is gone rather than before it."""
     src = _inference_source()
-    assert src.count("await asyncio.to_thread(release, CHAT)") == 2
-    assert src.count("(lambda: release(CHAT)) if not chat_load_needs_gpu else None") == 1
+    assert src.count("await asyncio.to_thread(_release_chat_for_zero_vram_primary)") == 2
+    assert (
+        src.count(
+            "_release_chat_for_zero_vram_primary if replacing and not chat_load_needs_gpu else None"
+        )
+        == 1
+    )
 
 
 def test_the_release_is_gated_on_the_same_flag_as_the_409():
     """Two `if not` sites plus the callback's own inline gate, which spells the
     flag the same way."""
     src = _inference_source()
-    assert src.count("if not chat_load_needs_gpu:") == 2
-    assert src.count("if not chat_load_needs_gpu else None") == 1
+    assert src.count("if replacing and not chat_load_needs_gpu:") == 2
+    assert src.count("if replacing and not chat_load_needs_gpu else None") == 1
 
 
 def test_every_http_device_field_pins_the_three_canonical_values():
@@ -443,7 +449,7 @@ def test_the_stale_chat_claim_is_dropped_before_the_load_not_only_after():
 
     src = inspect.getsource(ri._load_model_impl)
     before_load = src[: src.index("backend.load_model,")]
-    assert before_load.count("release, CHAT") >= 1
+    assert before_load.count("_release_chat_for_zero_vram_primary") >= 1
 
 
 def test_the_gguf_audio_codec_follows_the_servers_own_placement():
@@ -547,3 +553,20 @@ def test_whisper_cpp_publishes_the_load_before_choosing_its_placement():
 
     src = inspect.getsource(GgmlSttSidecar.load)
     assert src.index("self._loading = True") < src.index("elif _training_active():")
+
+
+def test_a_model_that_fell_back_to_cpu_is_recorded_as_holding_no_gpu(monkeypatch):
+    """No VRAM counted for it, and a repeat Auto load does not retry the GPU."""
+    import inspect
+
+    from core.inference import audio_cpp_server, orchestrator
+
+    assert 'model_info.get("audio_cpp_backend") == "cpu"' in inspect.getsource(orchestrator)
+    monkeypatch.setattr(audio_cpp_server, "runtime_runs_on_cpu", lambda: False)
+    monkeypatch.delenv("UNSLOTH_AUDIO_DEVICE", raising = False)
+    resident = _backend(audio_cpu = True, audio_type = "audiocpp_tts")
+    resident.models["x/y"]["audio_device_fallback"] = "cpu"
+    assert ri._resident_audio_holds_no_gpu(resident)
+    assert ri._resident_audio_placement_matches(resident, _request("auto"))
+    assert ri._resident_audio_placement_matches(resident, _request(None))
+    assert not ri._resident_audio_placement_matches(resident, _request("gpu"))

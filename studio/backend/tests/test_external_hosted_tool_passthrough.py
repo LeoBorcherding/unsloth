@@ -46,6 +46,7 @@ class FakeExternalClient:
     """Stands in for ExternalProviderClient, recording the passthrough call."""
 
     last: dict = {}
+    served_template = None
 
     def __init__(self, **kwargs):
         FakeExternalClient.last = {"ctor": kwargs, "passthrough": None}
@@ -59,6 +60,9 @@ class FakeExternalClient:
             yield "data: [DONE]\n\n"
 
         return gen()
+
+    async def served_chat_template(self, model):
+        return FakeExternalClient.served_template
 
     async def close(self):
         return None
@@ -220,11 +224,11 @@ def test_an_api_request_without_resolved_server_tools_stays_undated(monkeypatch)
     ]
 
 
-def test_an_ollama_connection_keeps_its_modelfile_prompt_when_studio_sends_no_system_turn(
-    monkeypatch,
+@pytest.mark.parametrize("provider_type", ("ollama", "llama_cpp", "vllm"))
+def test_a_local_server_keeps_its_own_system_prompt_when_studio_sends_no_system_turn(
+    monkeypatch, provider_type
 ):
-    # A synthesized date-only turn at index 0 is what displaces the Modelfile SYSTEM (#10436).
-    inf = _install(monkeypatch, "ollama")
+    inf = _install(monkeypatch, provider_type)
     monkeypatch.setattr(
         inf,
         "current_date_prompt_line",
@@ -235,6 +239,27 @@ def test_an_ollama_connection_keeps_its_modelfile_prompt_when_studio_sends_no_sy
 
     assert FakeExternalClient.last["passthrough"]["messages"] == [
         {"role": "user", "content": "what is 2+2?"}
+    ]
+
+
+def test_a_llama_cpp_connection_dates_a_served_template_with_no_default(monkeypatch):
+    inf = _install(monkeypatch, "llama_cpp")
+    monkeypatch.setattr(
+        FakeExternalClient,
+        "served_template",
+        "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}",
+    )
+    monkeypatch.setattr(
+        inf,
+        "current_date_prompt_line",
+        lambda **_kwargs: "The current date is 2026-08-15.",
+    )
+
+    _run(inf, _payload())
+
+    assert FakeExternalClient.last["passthrough"]["messages"] == [
+        {"role": "system", "content": "The current date is 2026-08-15."},
+        {"role": "user", "content": "what is 2+2?"},
     ]
 
 
@@ -263,10 +288,8 @@ def test_an_ollama_connection_still_dates_a_studio_composed_system_prompt(monkey
     ]
 
 
-@pytest.mark.parametrize("provider_type", ("llama_cpp", "vllm", "custom"))
-def test_the_other_self_hosted_providers_still_get_the_synthesized_turn(monkeypatch, provider_type):
-    """These have no Modelfile SYSTEM to lose, so the exemption must not widen to them."""
-    inf = _install(monkeypatch, provider_type)
+def test_a_custom_connection_still_gets_the_synthesized_turn(monkeypatch):
+    inf = _install(monkeypatch, "custom")
     monkeypatch.setattr(
         inf,
         "current_date_prompt_line",
@@ -572,7 +595,9 @@ def test_b_the_external_and_codex_paths_derive_the_gate_identically():
         if node.arg == "confirm_calls":
             confirms.add(ast.unparse(node.value))
     assert modes == {"payload.permission_mode or 'auto'"}
-    assert confirms == {"_permission_mode_confirm(payload)"}
+    assert confirms == {
+        "_permission_mode_confirm(payload) or _off_mode_sandbox_gate(payload, _ui_events)"
+    }
 
     nudge_values = []
     for node in ast.walk(tree):
@@ -750,26 +775,22 @@ def test_the_conversation_id_reaches_the_provider_client(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "provider_type, model, caching, noted",
+    "provider_type, model, caching",
     [
-        ("anthropic", "claude-sonnet-4-6", None, False),
-        ("openrouter", "anthropic/claude-sonnet-4.6", None, False),
-        ("openrouter", "~anthropic/claude-opus-latest", True, False),
-        ("anthropic", "claude-sonnet-4-6", False, True),
-        ("openrouter", "anthropic/claude-sonnet-4.6", False, True),
-        ("openrouter", "deepseek/deepseek-v3.2", None, True),
+        ("anthropic", "claude-sonnet-4-6", None),
+        ("openrouter", "anthropic/claude-sonnet-4.6", None),
+        ("openrouter", "~anthropic/claude-opus-latest", True),
+        ("anthropic", "claude-sonnet-4-6", False),
+        ("openrouter", "deepseek/deepseek-v3.2", None),
     ],
 )
-def test_a_thread_from_yesterday_keeps_the_claude_cache_breakpoint_stable(
-    monkeypatch, provider_type, model, caching, noted
+def test_a_thread_from_yesterday_leaves_every_user_turn_verbatim(
+    monkeypatch, provider_type, model, caching
 ):
-    from datetime import date
-
     inf = _install(monkeypatch, provider_type)
     monkeypatch.setattr(
         inf, "current_date_prompt_line", lambda **_k: "The current date is 2026-08-16."
     )
-    monkeypatch.setattr(inf, "conversation_start_date", lambda *_a, **_k: date(2026, 8, 15))
     monkeypatch.setattr(inf, "_request_has_api_key", lambda _request: False)
     history = [
         {"role": "user", "content": "first"},
@@ -788,4 +809,8 @@ def test_a_thread_from_yesterday_keeps_the_claude_cache_breakpoint_stable(
     )
     sent = FakeExternalClient.last["passthrough"]
     assert sent["thread_id"] == "thread-7"
-    assert sent["messages"][-1]["content"].startswith("[Current date: ") is noted
+    assert [m["content"] for m in sent["messages"] if m["role"] != "system"] == [
+        "first",
+        "ok",
+        "second",
+    ]

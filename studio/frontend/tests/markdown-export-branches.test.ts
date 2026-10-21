@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
-import ts from "typescript";
+import ts from "@typescript/typescript6";
 
 import { stripSearchImageTokens } from "../src/features/chat/search-images/search-images.ts";
 import {
@@ -110,11 +110,15 @@ function loadExporters(
     listStoredChatMessages: async () => stored,
     getStoredChatThread: async (id: string) =>
       threads.find((thread) => thread.id === id),
+    resolveChatInstructions: async () => "",
+    threadScopedDefault: () => undefined,
+    settleThreadScopedSettingsForCopy: async () => {},
     buildNamedConversationsMarkdown,
     CONVERSATION_MARKDOWN_MIME_TYPE,
     canMergeConversationExport,
     planChatItemSources,
     ...liveThreadHead,
+    savedBranchHead: () => undefined,
     orderByParentChain,
     createConversationMarkdownBuilder,
     createConversationMarkdownExporter,
@@ -126,6 +130,7 @@ function loadExporters(
     csvDocument,
     CSV_MIME,
     exportTs: () => "ts",
+    conversationBasename: async () => "conversation",
     downloadBlob: async (body: string) => {
       downloads.push(body);
     },
@@ -147,7 +152,10 @@ async function markdownOutputs(
   const exporters = loadExporters(stored, downloads, sources);
   const unregister = liveBranch
     ? liveThreadHead.registerLiveThreadView({
-        threadListItem: () => ({ getState: () => ({ remoteId: "thread" }) }),
+        threads: () => ({ getState: () => ({ mainThreadId: "thread" }) }),
+        threadListItem: () => ({
+          getState: () => ({ id: "thread", remoteId: "thread" }),
+        }),
         thread: () => ({
           getState: () => ({ messages: liveBranch.map((id) => ({ id })) }),
         }),

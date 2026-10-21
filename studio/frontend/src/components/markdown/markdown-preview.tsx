@@ -7,7 +7,12 @@ import { openLink } from "@/lib/open-link";
 import { safeMarkdownUrl } from "@/lib/safe-markdown-url";
 import { scheduleIdleTask } from "@/lib/schedule-idle-task";
 import { cn } from "@/lib/utils";
-import { code } from "@streamdown/code";
+import {
+  MARKDOWN_TABLE_ICONS,
+  MarkdownTable,
+  StaticMarkdownTable,
+} from "@/components/assistant-ui/markdown-table";
+import { codePlugin } from "@/components/assistant-ui/shared-code-plugin";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import {
@@ -42,6 +47,11 @@ const MARKDOWN_COMPONENTS = {
       {children}
     </a>
   ),
+  table: MarkdownTable,
+};
+const INERT_COMPONENTS = {
+  ...INERT_MARKDOWN_COMPONENTS,
+  table: StaticMarkdownTable,
 };
 
 type MarkdownPreviewProps = {
@@ -70,7 +80,7 @@ function MarkdownPreviewImpl({
   const plugins = useMemo<MarkdownPlugins>(() => {
     const needs = markdownPluginNeeds(markdown);
     const next: MarkdownPlugins = {};
-    if (needs.code) next.code = code;
+    if (needs.code) next.code = codePlugin;
     if (needs.math) next.math = math;
     if (needs.mermaid) next.mermaid = mermaid;
     return next;
@@ -103,7 +113,8 @@ function MarkdownPreviewImpl({
           mode="static"
           plugins={plugins}
           rehypePlugins={REHYPE_PLUGINS}
-          components={inert ? INERT_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
+          components={inert || plain ? INERT_COMPONENTS : MARKDOWN_COMPONENTS}
+          icons={MARKDOWN_TABLE_ICONS}
           urlTransform={safeMarkdownUrl}
           controls={false}
           className={markdownClassName}

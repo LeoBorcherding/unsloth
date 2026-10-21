@@ -257,6 +257,14 @@ class _FakeBackend(video_module.VideoBackend):
 
 
 @pytest.fixture(autouse = True)
+def _pin_video_fetch_to_the_named_repo(monkeypatch):
+    """These tests are about plan / load decisions, written against the UPSTREAM ids their fake Hub serves. The fetch
+    swap onto the unsloth mirrors depends on the developer's own HF cache, so it is pinned off here, as the image
+    offline-load tests do; tests/test_video_unsloth_mirrors.py covers the swap itself."""
+    monkeypatch.setenv("UNSLOTH_DIFFUSION_NO_MIRROR", "1")
+
+
+@pytest.fixture(autouse = True)
 def _healthy_diffusers(healthy_diffusers):
     """These tests are about the route, not about the runner's diffusers.
 
@@ -893,11 +901,13 @@ def test_status_passthrough(client, monkeypatch):
         **resolved["transformer_quant"],
         "artifact": None,
         "replaced": None,
+        "steps": None,
     }
     assert body["resolved"]["text_encoder_quant"] == {
         **resolved["text_encoder_quant"],
         "artifact": None,
         "replaced": None,
+        "steps": None,
     }
     # Entries from an older backend (no requested/status) still parse, defaulted to "applied".
     assert body["resolved"]["speed_mode"]["requested"] is None
@@ -1648,7 +1658,8 @@ def test_video_download_plan_refuses_an_unsupported_combination_before_staging(c
         "/api/inference/video/download-plan",
         json = {
             "model_path": "MiniMaxAI/MiniMax-H3",
-            "gguf_filename": "minimax_h3_fl2va_pruned_int8_rowwise.safetensors",
+            # Only a ComfyUI-quantized denoiser loads as an H3 single file; the conditioner never does.
+            "gguf_filename": "qwen3vl_32b_minimax_h3_bf16.safetensors",
             "model_kind": "single_file",
         },
     )

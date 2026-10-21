@@ -699,8 +699,10 @@ class TestExtraArgsMtpDetection:
         # the fit budget that is then tested (Finding G4). _vram_frac is that
         # fraction resolved once per load: the user's budget, else the constant.
         compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
-        assert "_gpu_usable(g,pin_fraction)" in compact
-        assert "_gpu_usable(g,_vram_frac-_flat_mtp_reserve)" in compact
+        # _gpu_rank orders by _gpu_usable(g, frac), shared-memory iGPUs after discrete cards.
+        assert "usable=_gpu_usable(g,frac)" in compact
+        assert "_gpu_rank(g,pin_fraction," in compact
+        assert "_gpu_rank(g,_vram_frac-_flat_mtp_reserve," in compact
         # Resolved once, so a mid-load save cannot split ranking from fitting.
         assert "_vram_frac=_active_vram_fraction()" in compact
 
@@ -1204,9 +1206,7 @@ class TestExtraArgsMtpDetection:
         # agree. Whitespace-stripped for formatter.
         compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
         assert "def_pool_budget_mib(subset,frac):" in compact
-        # Each GPU's own usable, with the host heap shared rows all report counted once.
-        assert "(g[0],max(0.0,_gpu_usable(g,frac)))forginsubset" in compact
-        assert "self._shared_heap_once(" in compact
+        assert "sum(max(0.0,_gpu_usable(g,frac))forginsubset)" in compact
         # No revert to the pooled free/total form.
         assert "def_pool_total(" not in compact
         assert "budget_frac=1.0" in compact

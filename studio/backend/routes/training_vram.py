@@ -5,6 +5,7 @@
 models when they fit. STT is evicted before chat when training needs memory.
 """
 
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from hub.utils.hf_tokens import HfTokenArg, normalize_token
@@ -68,6 +69,34 @@ def summarize_resident_chat() -> Dict[str, Any]:
                 loading = True
     except Exception as e:
         logger.warning("Could not inspect GGUF backend: %s", e)
+
+    try:
+        from core.inference import model_slots
+
+        filling_slot = model_slots.loading
+        # A stuck slot's server would not stop, so it may still hold VRAM whatever it reports.
+        stuck = list(model_slots.stuck)
+        for slot in [*model_slots.slots, *stuck]:
+            pending = next(iter(getattr(slot.orchestrator, "loading_models", ()) or ()), None)
+            filling = filling_slot is not None and filling_slot[0] is slot
+            name = (
+                (slot in stuck and (slot.llama.model_identifier or "gguf"))
+                or slot.orchestrator.active_model_name
+                or pending
+                or (
+                    slot.llama.is_active
+                    and getattr(slot.llama, "_gpu_offload_active", None) is not False
+                    and (slot.llama.model_identifier or "gguf")
+                )
+                or (filling and filling_slot[1])
+            )
+            if name:
+                gguf_name = gguf_name or name
+                # Only a still-loading slot is unsizable; a loaded one is in the free VRAM can_keep reads.
+                if pending or filling or (slot.llama.is_active and not slot.llama.is_loaded):
+                    loading = True
+    except Exception as e:
+        logger.warning("Could not inspect models loaded alongside: %s", e)
 
     return {
         "hf": hf_name,
@@ -480,7 +509,26 @@ def free_chat_models_for_training(reason: str) -> List[str]:
     except Exception as e:
         logger.warning("Could not unload GGUF chat model: %s", e)
 
+    freed += free_kept_models_for_training(reason)
     return freed
+
+
+def free_kept_models_for_training(reason: str) -> List[str]:
+    from core.inference import model_slots
+
+    kept = [
+        slot.orchestrator.active_model_name or slot.llama.model_identifier or "gguf"
+        for slot in [*model_slots.slots, *model_slots.stuck]
+    ]
+    if kept:
+        logger.info("Unloading %d model(s) kept alongside for training (%s)", len(kept), reason)
+        try:
+            model_slots.unload_extra_models(strict = True)
+        except RuntimeError as exc:
+            raise ManagedEngineStillRunning(
+                "A model kept alongside could not be stopped. Retry before starting training."
+            ) from exc
+    return [f"kept:{name}" for name in kept]
 
 
 def _stt_sidecar_holds_no_vram(sidecar) -> bool:
@@ -621,10 +669,35 @@ def free_stt_model_for_training(reason: str) -> List[str]:
     return freed
 
 
+def free_prompt_upsampler_for_training(reason: str) -> List[str]:
+    """Stop the FLUX.3 prompt upsampler's llama-server, only if Images ever started it. Never raises."""
+    upsampler_module = sys.modules.get("core.inference.flux3_prompt_upsampler")
+    if upsampler_module is None:
+        return []
+    try:
+        # A run still decoding its references has not reached the sidecar: stopped here, it never starts one.
+        upsampler_module.cancel_active()
+        upsampler = upsampler_module.get_sidecar()
+        # Loaded, not only on the GPU: a -ngl 0 server still holds ~6 GB of host RAM and the CPU through training.
+        if upsampler.loaded or upsampler.is_loading():
+            logger.info("Unloading the FLUX.3 prompt upsampler for training (%s)", reason)
+            upsampler.unload()
+            return ["image:prompt-upsampler"]
+    except Exception as e:
+        logger.warning("Could not unload the FLUX.3 prompt upsampler: %s", e)
+    return []
+
+
 def coordinate_models_for_training(
     can_keep: Callable[[], Tuple[bool, Dict[str, Any]]],
 ) -> List[str]:
     """Keep resident models when they fit, evicting STT before chat."""
+    # The upsampler restarts on demand, so it never holds memory through training.
+    freed = free_prompt_upsampler_for_training(reason = "training start")
+    return freed + _coordinate_resident_models(can_keep)
+
+
+def _coordinate_resident_models(can_keep: Callable[[], Tuple[bool, Dict[str, Any]]]) -> List[str]:
     resident_chat = summarize_resident_chat()
     resident_stt = summarize_resident_stt()
     if not resident_chat["any"] and not resident_stt["any"]:
@@ -669,6 +742,16 @@ def coordinate_models_for_training(
         keep, _info = can_keep()
         if keep:
             logger.info("Keeping chat model loaded after freeing STT: %s", resident_chat)
+            return freed
+
+    from core.inference import model_slots
+
+    # Models kept alongside go before the one in use.
+    if model_slots.slots or model_slots.stuck:
+        freed += free_kept_models_for_training(reason = "insufficient training memory")
+        keep, _info = can_keep()
+        if keep:
+            logger.info("Keeping the active chat model loaded after freeing the others")
             return freed
 
     freed += free_chat_models_for_training(

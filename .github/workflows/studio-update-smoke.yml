@@ -28,8 +28,6 @@ on:
       - 'studio/prebuilt_core.py'
       # install_node_prebuilt.py reads the default version and archive digests from here.
       - 'studio/node_prebuilt_pins.json'
-      # install_audio_cpp_prebuilt.py checks every runtime archive against these digests.
-      - 'studio/audio_cpp_prebuilt_pins.json'
       - 'studio/setup.ps1'
       - 'install.ps1'
       - 'studio/backend/requirements/**'
@@ -40,6 +38,7 @@ on:
       - 'studio/frontend/package-lock.json'
       - 'studio/backend/core/data_recipe/oxc-validator/package.json'
       - 'studio/backend/core/data_recipe/oxc-validator/package-lock.json'
+      - 'studio/backend/core/data_recipe/oxc-validator/.npmrc'
       # The harness below and the proxy it measures with.
       - 'tests/studio/install/test_update_idempotency.py'
       - 'tests/studio/install/idempotency_proxy.py'
@@ -101,8 +100,6 @@ on:
       - 'studio/prebuilt_core.py'
       # install_node_prebuilt.py reads the default version and archive digests from here.
       - 'studio/node_prebuilt_pins.json'
-      # install_audio_cpp_prebuilt.py checks every runtime archive against these digests.
-      - 'studio/audio_cpp_prebuilt_pins.json'
       - 'studio/setup.ps1'
       - 'install.ps1'
       - 'studio/backend/requirements/**'
@@ -113,6 +110,7 @@ on:
       - 'studio/frontend/package-lock.json'
       - 'studio/backend/core/data_recipe/oxc-validator/package.json'
       - 'studio/backend/core/data_recipe/oxc-validator/package-lock.json'
+      - 'studio/backend/core/data_recipe/oxc-validator/.npmrc'
       # The harness below and the proxy it measures with.
       - 'tests/studio/install/test_update_idempotency.py'
       - 'tests/studio/install/idempotency_proxy.py'
@@ -161,11 +159,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
-  # Latest-only on a PR branch. On main this does less than it reads like: it stops
-  # a RUNNING main job being killed, but GitHub cancels any PENDING run in the group
-  # the moment a newer one is queued, so a merge burst still leaves only the tip.
-  # See studio-backend-ci.yml, which is grouped per commit on main for that reason.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  # Latest-only on a PR branch. On main, cancel-in-progress is false so a RUNNING run is
+  # never killed, and a newer push replaces only the PENDING one: a merge burst runs the
+  # commit already executing plus the tip. See studio-backend-ci.yml for the trade.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
