@@ -1142,6 +1142,38 @@ def local_prequant_scheme(path: str) -> Optional[str]:
     return scheme
 
 
+def prequant_single_file_message(
+    filename: str, bases: Sequence[str], schemes: Sequence[str]
+) -> str:
+    shown = " or ".join(b for b in bases if b) or "its base model"
+    precision = " or ".join(s for s in schemes if s) or "the matching precision"
+    return (
+        f"'{filename}' is an Unsloth pre-quantised transformer for {shown}, not a single-file "
+        f"checkpoint. Pick {shown} and set the transformer precision to {precision} instead."
+    )
+
+
+def prequant_single_file_error(path: Optional[str]) -> Optional[str]:
+    """Why ``path`` cannot load as a single file, from its header: diffusers' single-file loader drops
+    an Unsloth pre-quant's torchao ``_weight_qdata`` / ``_weight_scale`` keys and leaves every quantized
+    Linear on meta."""
+    import os
+
+    from .prequant_safetensors import is_safetensors_checkpoint, read_prequant_header
+
+    if not is_safetensors_checkpoint(path):
+        return None
+    header = read_prequant_header(str(path))
+    if not header or header.get("format") not in PREQUANT_FORMATS:
+        return None
+    meta = header.get("metadata") or {}
+    return prequant_single_file_message(
+        os.path.basename(str(path)),
+        (str(meta.get("base_model_id") or ""),),
+        (str(meta.get("scheme") or ""),),
+    )
+
+
 def hosted_nvfp4_repo_ids() -> frozenset:
     """Lowercased repo ids any image/video family registers for nvfp4, read off the family tables."""
     from dataclasses import fields, is_dataclass
