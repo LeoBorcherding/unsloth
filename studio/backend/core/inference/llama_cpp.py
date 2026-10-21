@@ -10210,10 +10210,8 @@ class LlamaCppBackend:
             # argv only: a non-layer inherited LLAMA_ARG_SPLIT_MODE is popped before launch.
             or _extra_args_split_mode(extra_args, {}) not in (None, "layer")
             # Extras follow the generated --fit off; the fitter rejects a multi-device split.
-            or any(
-                str(a) in ("-fit", "--fit") or str(a).startswith(("-fit=", "--fit="))
-                for a in (extra_args or ())
-            )
+            # A user's --fit off stays off on the fit-on retry (last arg wins), so it keeps the split.
+            or fit_is_enabled_in(extra_args)
             # RPC devices go ahead of the local ones, so the shares would land on them.
             or (_extra_args_device(extra_args, {"--rpc"}) or "").strip()
             or str(env.get("LLAMA_ARG_RPC", "")).strip()

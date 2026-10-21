@@ -271,6 +271,11 @@ def test_a_row_or_tensor_split_mode_leaves_the_split_to_llama_cpp():
     # The launch pops an inherited non-layer mode, so the child runs layer split.
     with pytest.raises(Priced):
         call([], {"LLAMA_ARG_SPLIT_MODE": "row"})
+    # A user's --fit off keeps the fitter off, as the generated one does.
+    for args in (["--fit", "off"], ["--fit=off"], ["-fit", "off"], ["--fit", "on", "--fit", "off"]):
+        with pytest.raises(Priced):
+            call(args, {})
+    assert call(["--fit", "off", "--fit", "on"], {}) is None
 
 
 def test_an_unpriced_uneven_kv_cache_leaves_the_split_to_llama_cpp():
