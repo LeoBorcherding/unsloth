@@ -146,3 +146,54 @@ def test_update_rocm72_pin_over_2141(wsl, monkeypatch):
         assert all(spec in torch_calls[0].args for spec in _TRIO_211)
     else:
         assert torch_calls == []
+
+
+@pytest.mark.parametrize(
+    "installed, unsafe",
+    [
+        ("2.11.0+rocm7.2", False),
+        ("2.12.0+rocm7.2", True),
+        ("2.14.1+rocm7.2", True),
+        ("2.14.1+rocm7.20", False),
+        ("2.11.0+rocm7.13.0", False),
+        ("2.14.1+cpu", False),
+    ],
+)
+def test_wsl_rocm72_torch_unsafe(installed, unsafe, monkeypatch):
+    monkeypatch.setattr(stack, "_is_wsl", lambda: True)
+    assert stack._wsl_rocm72_torch_unsafe(installed) is unsafe
+    monkeypatch.setattr(stack, "_is_wsl", lambda: False)
+    assert stack._wsl_rocm72_torch_unsafe(installed) is False
+
+
+@pytest.mark.parametrize("wsl", [True, False])
+def test_update_unpinned_2141_on_wsl(wsl, monkeypatch):
+    """No pin: an existing 2.14.1+rocm7.2 is reinstalled to the 2.11 trio on WSL, kept natively."""
+    monkeypatch.delenv("UNSLOTH_TORCH_INDEX_FAMILY", raising = False)
+    monkeypatch.delenv("UNSLOTH_TORCH_INDEX_URL", raising = False)
+    probe = MagicMock(
+        returncode = 0, stdout = stack._TORCH_PROBE_MARKER + "2.14.1+rocm7.2|7.2.12345|\n"
+    )
+    with (
+        patch.object(stack, "_is_wsl", return_value = wsl),
+        patch.object(stack, "_installed_rocm_wheel_family", lambda: None),
+        patch.object(stack, "IS_MACOS", False),
+        patch.object(stack, "IS_WINDOWS", False),
+        patch("platform.machine", return_value = "x86_64"),
+        patch.object(stack, "pip_install_try", return_value = True),
+        patch.object(stack, "pip_install") as pip,
+        patch.object(stack, "_has_usable_nvidia_gpu", return_value = False),
+        patch.object(stack, "_has_rocm_gpu", return_value = True),
+        patch.object(stack, "_detect_rocm_version", return_value = (7, 2)),
+        patch("os.path.isdir", return_value = True),
+        patch("subprocess.run", return_value = probe),
+    ):
+        stack._ensure_rocm_torch()
+    torch_calls = [
+        c for c in pip.call_args_list if any(str(a).startswith("torch>=") for a in c.args)
+    ]
+    if wsl:
+        assert len(torch_calls) == 1
+        assert all(spec in torch_calls[0].args for spec in _TRIO_211)
+    else:
+        assert torch_calls == []

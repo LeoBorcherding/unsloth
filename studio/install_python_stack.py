@@ -2514,6 +2514,12 @@ def _is_wsl() -> bool:
         return False
 
 
+def _wsl_rocm72_torch_unsafe(installed_ver: str) -> bool:
+    """2.12+rocm7.2 on WSL: its bundled librocprofiler-sdk aborts on DXG at the first CUDA call."""
+    m = re.match(r"^(\d+)\.(\d+)[^+]*\+rocm7\.2(?!\d)", installed_ver or "")
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= (2, 12) and _is_wsl()
+
+
 def _wsl_rocm_runtime_present() -> bool:
     """librocdxg (the WSL ROCDXG bridge that lets HIP reach the GPU over /dev/dxg)
     under a ROCm lib dir. Its absence marks a WSL box whose ROCm was never set up."""
@@ -6181,6 +6187,8 @@ def _amd_torch_needs_dependency_pass() -> bool:
     # The +rocm tag covers builds that omit torch.version.hip.
     if not (_hip or "rocm" in _version.lower()):
         return True
+    if _wsl_rocm72_torch_unsafe(_version.lower()):
+        return True
     # Torch IS a ROCm build, which used to end it. The per-arch repairs act on exactly those
     # hosts, so keeping the fast path makes them unreachable from `studio update`: a swapped
     # card, or the reported gfx1103 on a generic wheel, would be repaired on a fresh install
@@ -6614,7 +6622,11 @@ def _ensure_rocm_torch() -> "bool | None":
         else False
     )
 
-    rocm_torch_ready = has_hip_torch and not _rocm_pin_mismatch
+    rocm_torch_ready = (
+        has_hip_torch
+        and not _rocm_pin_mismatch
+        and not _wsl_rocm72_torch_unsafe(_installed_torch_ver)
+    )
 
     # Inferred-gfx path: ROCm runtime missing but install.sh would route to AMD wheels.
     # Gated on the runtime NOT enumerating a GPU: when it can, the runtime-visible
