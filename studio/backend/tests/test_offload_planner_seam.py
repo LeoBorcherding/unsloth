@@ -592,7 +592,15 @@ def test_a_malformed_or_short_tensor_split_declines():
 
 
 def test_the_planner_gets_the_budget_the_fit_tested_not_raw_free():
-    """The planner gets the budget the fit tested, not raw free VRAM: the user's budget fraction applies."""
+    """_gpu_usable applies the user's VRAM-budget fraction and the per-card
+    reserve floor; raw free_mib is neither.
+
+    The budget is settable down to 0.10 (vram_budget_settings), so at 0.80 on a 24 GiB
+    card the fit tests ~4.8 GiB less than free, and even at the 0.97 default a
+    big card holds back 3% rather than the planner's flat per-device reserve.
+    Planning on free credits VRAM the fit had already ruled out, emits too few
+    -ot overrides, and then appends --fit off over the result.
+    """
     stub = _Stub()
     on_free = _plan(stub, free_mib = 14 * 1024)
     on_budget = _plan(stub, free_mib = 14 * 1024, usable_mib = 13 * 1024)
