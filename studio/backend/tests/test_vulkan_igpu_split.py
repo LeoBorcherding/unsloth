@@ -88,6 +88,18 @@ def test_a_card_too_full_for_its_split_buffers_does_not_outrank_the_igpu():
     assert (picked, use_fit) == ([IGPU], False)
 
 
+def test_a_card_below_the_split_overhead_still_takes_a_model_it_holds_alone():
+    # The overhead is paid per extra device; a one-card load pays none.
+    picked, use_fit = LlamaCppBackend._select_gpus(
+        500 * MIB,
+        [(DGPU, 1000), (IGPU, 14352)],
+        usable_fraction = 0.9,
+        per_device_overhead_bytes = 1000 * MIB,
+        shared_gpu_ids = SHARED,
+    )
+    assert (picked, use_fit) == ([DGPU], False)
+
+
 def test_every_auto_placement_sort_ranks_discrete_first():
     src = inspect.getsource(LlamaCppBackend.load_model)
     assert "key = lambda g: _gpu_usable(" not in src

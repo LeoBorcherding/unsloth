@@ -17998,6 +17998,10 @@ class LlamaCppBackend:
             ),
             reverse = True,
         )
+        # One card alone pays no split overhead, so the floor only orders split prefixes.
+        solo = sorted(
+            gpus, key = lambda g: (g[0] not in _shared, _usable(g[0], g[1])), reverse = True
+        )
 
         # Cap a downgraded multi-GPU request to the usable count so it doesn't pull
         # in a near-full card to hit min_gpus. No-op for the default min_gpus == 1.
@@ -18007,19 +18011,19 @@ class LlamaCppBackend:
         # A busy card too small alone must not pull a card that fits into a shared pin.
         if (
             min_gpus <= 1
-            and ranked[0][0] in shared
-            and _usable(ranked[0][0], ranked[0][1]) < model_size_mib
+            and solo[0][0] in shared
+            and _usable(solo[0][0], solo[0][1]) < model_size_mib
         ):
-            for idx, free_mib in ranked:
+            for idx, free_mib in solo:
                 if idx not in shared and _usable(idx, free_mib) >= model_size_mib:
                     return [idx], False
 
         # Try 1 GPU at the usable-VRAM threshold (only when one device is allowed).
-        if min_gpus <= 1 and _usable(ranked[0][0], ranked[0][1]) >= model_size_mib:
-            for idx, free_mib in ranked:
+        if min_gpus <= 1 and _usable(solo[0][0], solo[0][1]) >= model_size_mib:
+            for idx, free_mib in solo:
                 if idx not in shared and _usable(idx, free_mib) >= model_size_mib:
                     return [idx], False
-            return [ranked[0][0]], False
+            return [solo[0][0]], False
 
         # Try N GPUs (most-free first); each past the first adds per-device overhead.
         # Require at least min_gpus devices before accepting a fit.
