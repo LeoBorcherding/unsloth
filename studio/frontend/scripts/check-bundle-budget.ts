@@ -374,8 +374,10 @@ export const BUDGET = {
   // Local addresses in the desktop browser panel (#14290): the grant, per-tab bookkeeping and agent check live in
   // the eager browser store, executor and panel: +1,808 B raw / +551 B transfer (6,891,248 -> 6,893,056 B raw,
   // 2,076,155 -> 2,076,706 B transfer against c2f75c486, one machine and build). Raised to that plus the same margin.
-  transferBytes: 2_076_895,
-  rawBytes: 6_893_216,
+  // Apple unified-memory fit hint (#14598) merged with main at 65db7508a: 6,894,443 B raw / 2,077,226 B
+  // transfer (Node 26, 98 chunks). Raised to that plus about 200 B.
+  transferBytes: 2_077_426,
+  rawBytes: 6_894_643,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
