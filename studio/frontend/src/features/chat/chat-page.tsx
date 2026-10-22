@@ -178,6 +178,8 @@ import {
   chatModelSwitchMeta,
   type ChatModelSwitchTarget,
 } from "./components/chat-model-notice-switch";
+import { ExactConcurrencyChip } from "./components/exact-concurrency-chip";
+import { exactConcurrencyChipApplies } from "./lib/exact-concurrency";
 import { ContextUsageBar } from "./components/context-usage-bar";
 import { contextUsageRows } from "./lib/context-usage-bar-state";
 import { ModelLoadInlineStatus } from "./components/model-load-status";
@@ -4808,6 +4810,13 @@ export function ChatPage({
                 onSwitch={handleSwitchBackToChatModel}
               />
             )}
+            {view.mode !== "compare" &&
+              exactConcurrencyChipApplies({
+                isExternalModel,
+                residentCheckpoint,
+                selectedCheckpoint: inferenceCheckpoint,
+                modelLoading,
+              }) && <ExactConcurrencyChip />}
             {view.mode !== "compare" && currentProjectId && (
               <nav
                 aria-label="Project location"
