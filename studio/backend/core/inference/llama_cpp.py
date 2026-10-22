@@ -18011,9 +18011,7 @@ class LlamaCppBackend:
             reverse = True,
         )
         # One card alone pays no split overhead, so the floor only orders split prefixes.
-        solo = sorted(
-            gpus, key = lambda g: (g[0] not in _shared, _usable(g[0], g[1])), reverse = True
-        )
+        solo = sorted(gpus, key = lambda g: (g[0] not in _shared, _usable(g[0], g[1])), reverse = True)
 
         # Cap a downgraded multi-GPU request to the usable count so it doesn't pull
         # in a near-full card to hit min_gpus. No-op for the default min_gpus == 1.
