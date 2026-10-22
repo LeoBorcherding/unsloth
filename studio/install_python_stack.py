@@ -4526,11 +4526,7 @@ def _rocm_pin_family_mismatch(pin_url: str, installed_ver: str) -> bool:
         # Same family: a release outside the rocm7.2 window violates the spec -> reinstall into it.
         if _pin_is_211 and _inst_rel is not None:
             _ceiling = _ROCM72_WSL_TORCH_CEILING if _is_wsl() else _ROCM72_TORCH_CEILING
-            if not (
-                (2, 11)
-                <= (int(_inst_rel.group(1)), int(_inst_rel.group(2)))
-                < _ceiling
-            ):
+            if not ((2, 11) <= (int(_inst_rel.group(1)), int(_inst_rel.group(2))) < _ceiling):
                 return True
         return False
     # rocm pin, unreadable installed version: compare on the 2.11 line, but an untagged

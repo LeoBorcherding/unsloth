@@ -138,7 +138,9 @@ def test_update_rocm72_pin_over_2141(wsl, monkeypatch):
         patch("subprocess.run", return_value = probe),
     ):
         stack._ensure_rocm_torch()
-    torch_calls = [c for c in pip.call_args_list if any(str(a).startswith("torch>=") for a in c.args)]
+    torch_calls = [
+        c for c in pip.call_args_list if any(str(a).startswith("torch>=") for a in c.args)
+    ]
     if wsl:
         assert len(torch_calls) == 1
         assert all(spec in torch_calls[0].args for spec in _TRIO_211)
