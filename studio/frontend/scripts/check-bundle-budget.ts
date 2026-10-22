@@ -353,8 +353,12 @@ export const BUDGET = {
   // #14524 set transfer to its own measured build with no headroom; merged next to #14508 the startup set
   // compresses 7 B larger (2_071_823 B at 5ab80ffdb4, Node 24), so main is over. Measured + 189 B, raw unchanged
   // (already 244 B above the measured 6_879_345).
-  transferBytes: 2_072_012,
-  rawBytes: 6_879_589,
+  // Turn navigation (#11668) adds 2,972 B raw / 782 B transfer with its rail, card and bookmark buttons lazy-loaded
+  // behind the setting, which is off by default (6,879,345 -> 6,882,317 B raw, 2,071,823 -> 2,072,605 B transfer
+  // against 0391814917, one machine and build, Node 24, 97 chunks): its strings in every eager locale, the bookmark
+  // store and the settings row. Raised by that growth, keeping main's headroom.
+  transferBytes: 2_072_794,
+  rawBytes: 6_882_561,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the

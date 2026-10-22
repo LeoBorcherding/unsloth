@@ -615,6 +615,13 @@ export const en = {
     queueingOnHint: "New messages wait their turn.",
     queueingHintShared: "The queue is kept.",
   },
+  turns: {
+    label: "Turn {number}",
+    bookmarkedLabel: "Turn {number}, bookmarked",
+    bookmark: "Bookmark turn",
+    removeBookmark: "Remove bookmark",
+    navigator: "Turns",
+  },
   // /rewind and the prompt More menu's Rewind item.
   rewind: {
     title: "Rewind",
@@ -2765,6 +2772,9 @@ export const en = {
       inlineEditResponse: "Edit response on responses",
       inlineEditResponseDescription:
         "Keep Edit response on every response, instead of in the More menu.",
+      turnNavigation: "Turn navigation",
+      turnNavigationDescription:
+        "Number each turn, bookmark turns, and jump between them from a rail beside long chats.",
       modelDisclaimer: "Model disclaimer",
       modelDisclaimerDescription:
         'Show "LLMs can make mistakes" under the chat box.',

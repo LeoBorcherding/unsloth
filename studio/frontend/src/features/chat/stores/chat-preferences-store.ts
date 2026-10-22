@@ -49,6 +49,8 @@ export interface ChatPreferencesState {
   setShowResponseModel: (value: boolean) => void;
   showInlineEditResponse: boolean;
   setShowInlineEditResponse: (value: boolean) => void;
+  showTurnNavigation: boolean;
+  setShowTurnNavigation: (value: boolean) => void;
   thinkingVisibility: DisplayVisibility;
   setThinkingVisibility: (value: DisplayVisibility) => void;
   toolVisibility: DisplayVisibility;
@@ -67,7 +69,7 @@ export interface ChatPreferencesState {
   setFilesPanelCollapsed: (value: boolean) => void;
 }
 
-// A stale stored value would leave the dropdown blank and unfixable.
+// a stale stored value would leave the dropdown blank and unfixable
 function normalisePastedTextMinChars(value: unknown): number {
   return PASTED_TEXT_THRESHOLD_CHOICES.includes(
     value as (typeof PASTED_TEXT_THRESHOLD_CHOICES)[number],
@@ -88,7 +90,7 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
       confirmDeleteChats: true,
       setConfirmDeleteChats: (confirmDeleteChats) =>
         set({ confirmDeleteChats }),
-      // Off by default: deleting files is the destructive half, so it stays opt in.
+      // off by default: deleting files is the destructive half, so it stays opt in
       alwaysDeleteChatFiles: false,
       setAlwaysDeleteChatFiles: (alwaysDeleteChatFiles) =>
         set({ alwaysDeleteChatFiles }),
@@ -100,12 +102,15 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
       showInlineEditResponse: true,
       setShowInlineEditResponse: (showInlineEditResponse) =>
         set({ showInlineEditResponse }),
+      showTurnNavigation: false,
+      setShowTurnNavigation: (showTurnNavigation) =>
+        set({ showTurnNavigation }),
       thinkingVisibility: DEFAULT_THINKING_VISIBILITY,
       setThinkingVisibility: (thinkingVisibility) =>
         set({ thinkingVisibility }),
       toolVisibility: DEFAULT_TOOL_VISIBILITY,
       setToolVisibility: (toolVisibility) => set({ toolVisibility }),
-      // Off by default: it hides rows the thread shows today, so it stays opt in.
+      // off by default: it hides rows the thread shows today, so it stays opt in
       foldToolActivityIntoThinking: false,
       setFoldToolActivityIntoThinking: (foldToolActivityIntoThinking) =>
         set({ foldToolActivityIntoThinking }),
@@ -136,7 +141,7 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
           : persisted,
       merge: (persisted, current) => {
         const saved = persisted as Partial<ChatPreferencesState> | undefined;
-        // Records written before the three-state settings carry the two booleans instead.
+        // records written before the three-state settings carry the two booleans instead
         const legacy = persisted as
           | {
               collapseThinkingByDefault?: unknown;
@@ -151,6 +156,7 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
           showModelDisclaimer: saved?.showModelDisclaimer ?? false,
           showResponseModel: saved?.showResponseModel ?? false,
           showInlineEditResponse: saved?.showInlineEditResponse ?? true,
+          showTurnNavigation: saved?.showTurnNavigation ?? false,
           thinkingVisibility: migrateVisibility(
             saved?.thinkingVisibility,
             legacy?.collapseThinkingByDefault,

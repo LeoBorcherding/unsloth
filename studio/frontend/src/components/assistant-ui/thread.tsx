@@ -137,6 +137,11 @@ import {
 } from "@/features/chat";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import {
+  BookmarkTurnButton,
+  BookmarkTurnMenuItem,
+  TurnNavigator,
+} from "@/components/assistant-ui/lazy-turn-navigation";
+import {
   IntentAwareScrollProvider,
   useIntentAwareAutoScroll,
   useIsThreadAtBottom,
@@ -335,6 +340,7 @@ import {
   showForkCreatedToast,
   type PlusMenuItemId,
   usePlusMenuPrefsStore,
+  useBookmarkedTurnsStore,
   writeComposerDraft,
   normalizeChatImage,
 } from "@/features/chat";
@@ -2326,6 +2332,8 @@ export const Thread: FC<{
           completeProgressiveMounts. It takes the propless slot #9042 introduced, for the same
           reason: React's bail-out needs one shared element per row. See
           progressive-mount-controller.ts. */}
+          <TurnNavigator viewportRef={viewportElRef} />
+
           <ProgressiveMessages
             renderMessage={renderThreadMessage}
             resetKey={runtimeThreadId}
@@ -8741,7 +8749,7 @@ function useDeleteMessage() {
         try {
           thread.stopSpeaking();
         } catch {
-          // Playback ended between reading the state and stopping it.
+          // playback ended between reading the state and stopping it
         }
       }
     }
@@ -8756,6 +8764,10 @@ function useDeleteMessage() {
         messageId,
         remoteId,
       });
+      // a deleted prompt can no longer open a turn, so drop its bookmark too
+      if (remoteId) {
+        useBookmarkedTurnsStore.getState().forgetTurns(remoteId, [messageId]);
+      }
     } catch (error) {
       console.error("Failed to delete message", error);
       toast.error("Failed to delete message");
@@ -9125,6 +9137,7 @@ const AssistantActionBar: FC = () => {
                   Save to project sources
                 </ActionBarMorePrimitive.Item>
               )}
+              <BookmarkTurnMenuItem className="aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-[12px] px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground" />
             </div>
           </ActionBarMorePrimitive.Content>
         </ActionBarMorePrimitive.Root>
@@ -9157,7 +9170,7 @@ const UserMessageAudio: FC = () => {
 
 const UserMessage: FC = () => {
   const focusReveal = useActionBarFocusReveal();
-  // Attachments alone (annotations, images) get no empty bubble under them.
+  // attachments alone (annotations, images) get no empty bubble under them
   const hasContent = useAuiState(({ message }) =>
     message.content.some((part) => part.type !== "text" || part.text.trim() !== ""),
   );
@@ -9182,8 +9195,7 @@ const UserMessage: FC = () => {
           <BranchPicker className="aui-user-branch-picker ml-[calc(6px*var(--ui-space-scale,1))] shrink-0" />
         </UserMessageFooter>
       </div>
-      {/* The other half of the pair: last is a user message while a reply is
-          still to come, or once one has been deleted. */}
+      {/* last is a user message while a reply is pending or after the reply was deleted */}
       <MessagePrimitive.If last={true}>
         <ForkChatShortcut />
       </MessagePrimitive.If>
@@ -9216,6 +9228,7 @@ const UserActionBar: FC = () => {
           </TooltipIconButton>
         </ActionBarPrimitive.Edit>
       )}
+      <BookmarkTurnButton />
       <RewindMessageButton />
       <ForkCountBadge />
       <ForkMessageButton />

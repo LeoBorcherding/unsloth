@@ -6,6 +6,7 @@ import {
   CHAT_HISTORY_UPDATED_EVENT,
   notifyChatHistoryUpdated,
 } from "../api/chat-api";
+import { useBookmarkedTurnsStore } from "../stores/bookmarked-turns-store";
 import { useChatRuntimeStore } from "../stores/chat-runtime-store";
 import type { ThreadRecord } from "../types";
 import {
@@ -360,6 +361,8 @@ export async function deleteChatItems(
 
   try {
     const kept = await deleteStoredChatThreads(threadIds, args);
+    // after the delete lands, so a rolled-back delete keeps its bookmarks
+    useBookmarkedTurnsStore.getState().forgetThreads(threadIds);
     notifyChatThreadsDeleted(
       threadIds,
       items.filter((item) => item.type === "compare").map((item) => item.id),

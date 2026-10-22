@@ -667,6 +667,13 @@ export const sv = {
     queueingOnHint: "Nya meddelanden väntar på sin tur.",
     queueingHintShared: "Kön behålls.",
   },
+  turns: {
+    label: "Tur {number}",
+    bookmarkedLabel: "Tur {number}, bokmärkt",
+    bookmark: "Bokmärk turen",
+    removeBookmark: "Ta bort bokmärke",
+    navigator: "Turer",
+  },
   rewind: {
     title: "Spola tillbaka",
     confirmTitle: "Spola tillbaka till det här meddelandet?",
@@ -2907,6 +2914,9 @@ export const sv = {
       inlineEditResponse: "Redigera svar på svaren",
       inlineEditResponseDescription:
         "Visa Redigera svar på varje svar i stället för i menyn Mer.",
+      turnNavigation: "Turnavigering",
+      turnNavigationDescription:
+        "Numrera varje tur, bokmärk turer och hoppa mellan dem via en list bredvid långa chattar.",
       modelDisclaimer: "Modellfriskrivning",
       modelDisclaimerDescription:
         "Visa ”LLM:er kan göra misstag” under chattrutan.",
