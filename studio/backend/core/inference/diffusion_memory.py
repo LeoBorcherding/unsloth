@@ -3393,21 +3393,12 @@ def _keep_groups_resident(
         onload = torch.device(device)
         left = int(room_mib) * 1024 * 1024
         kept = 0
-
-        def _tensors(group: Any) -> list:
-            out: list = []
-            seen: set[int] = set()
-            for t in (
-                [p for m in group.modules for p in m.parameters()]
-                + [b for m in group.modules for b in m.buffers()]
-                + list(group.parameters or [])
-                + list(group.buffers or [])
-            ):
-                if id(t) not in seen:
-                    seen.add(id(t))
-                    out.append(t)
-            return out
-
+        try:
+            from .diffusion_stable_arena import pin_group_in_range, stable_repin_wanted
+            stable = stable_repin_wanted(module)
+        except Exception:  # noqa: BLE001 - re-pins move the stock way
+            stable = False
+        _tensors = _resident_tensors
         disable = getattr(getattr(torch, "compiler", None), "disable", None)
 
         def _noop(*args: Any, **kwargs: Any) -> None:
@@ -3471,8 +3462,36 @@ def _keep_groups_resident(
                 continue
             for member in closure:
                 cpu = getattr(member, "cpu_param_dict", None) or {}
-                for t in _tensors(member):
-                    if _placed_on(t, onload.type, is_torchao):
+                members_tensors = _tensors(member)
+                placed: set = set()
+                if stable and onload.type == "cuda":
+                    # The step graph recorded the resident groups' addresses: a re-pin lands where the last one did.
+                    try:
+                        placed = pin_group_in_range(
+                            module,
+                            member,
+                            members_tensors,
+                            lambda t: not _placed_on(t, onload.type, is_torchao),
+                            lambda t, cpu = cpu: cpu.get(t, t),
+                            onload,
+                            go._swap_torchao_tensor,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - the stock move still places the group
+                        placed = set()
+                        # A failed attempt that left no tensor in the range unmaps it: the stock move below must not
+                        # pay for a second copy of the group beside it.
+                        try:
+                            from .diffusion_stable_arena import release_group_range
+                            release_group_range(module, member, members_tensors)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        if logger is not None:
+                            logger.warning(
+                                "diffusion.memory: stable re-pin range unavailable (%s); the group moves the stock way",
+                                exc,
+                            )
+                for t in members_tensors:
+                    if id(t) in placed or _placed_on(t, onload.type, is_torchao):
                         continue
                     moved = cpu.get(t, t).to(onload)
                     if is_torchao(t):
@@ -3555,7 +3574,23 @@ def _streamed_group_count(groups: list) -> int:
     )
 
 
-def _release_group(group: Any) -> None:
+def _resident_tensors(group: Any) -> list:
+    """Every tensor of an offload group, each once (its modules' parameters, their buffers, then the group's own)."""
+    out: list = []
+    seen: set[int] = set()
+    for t in (
+        [p for m in group.modules for p in m.parameters()]
+        + [b for m in group.modules for b in m.buffers()]
+        + list(group.parameters or [])
+        + list(group.buffers or [])
+    ):
+        if id(t) not in seen:
+            seen.add(id(t))
+            out.append(t)
+    return out
+
+
+def _release_group(group: Any, owner: Any = None) -> None:
     onload_, offload_ = getattr(group, "_unsloth_streamed_hooks", (None, None))
     for name, fn in (("onload_", onload_), ("offload_", offload_)):
         if fn is not None:
@@ -3564,6 +3599,10 @@ def _release_group(group: Any) -> None:
             group.__dict__.pop(name, None)
     group._unsloth_resident = False
     group.offload_()
+    if "_unsloth_repin_range" in getattr(group, "__dict__", {}):
+        # its weights are on their host copies again: the physical memory goes back, the addresses stay reserved
+        from .diffusion_stable_arena import release_group_range
+        release_group_range(owner, group, _resident_tensors(group))
     _bump_placement_epoch()
 
 
@@ -3643,7 +3682,7 @@ def release_resident_groups(
                         continue
                     # Recorded before demoting: a release that fails part way is still re-pinned by ``restore``.
                     streamed.add(id(member))
-                    _release_group(member)
+                    _release_group(member, module)
                     left -= int(getattr(member, "_unsloth_resident_bytes", 0))
         if not released:
             return None
