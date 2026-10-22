@@ -213,7 +213,8 @@ const TurnIndexPublisher: FC<{
     return () => {
       cancel();
       useTurnIndexStore.setState((state) => {
-        const { [threadKey]: _, ...rest } = state;
+        const rest = { ...state };
+        delete rest[threadKey];
         return rest;
       }, true);
     };
@@ -354,8 +355,6 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
   // closing keeps the last preview, so the hidden card keeps its text nodes
   const [preview, setPreview] = useState<TurnPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // non-empty from the start, so the first hover edits text nodes instead of inserting them
-  const lastReplyRef = useRef(" ");
   // only the latest turn can stream, so an open card follows it and the scan stops at its prompt
   const previewOpenerId = previewOpen ? preview?.openerId : undefined;
   const liveReply = useAuiState(({ thread }) => {
@@ -812,9 +811,6 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
 
   const previewBookmarked = preview ? bookmarked.has(preview.openerId) : false;
   const previewReply = preview ? (liveReply ?? preview.reply) : "";
-  if (previewReply) {
-    lastReplyRef.current = previewReply;
-  }
   // the rail is not a scroller, so wheel scrolling over it reaches the thread
   return (
     <div
@@ -910,7 +906,8 @@ const TurnRail: FC<{ viewportRef: RefObject<HTMLElement | null> }> = ({
               !previewReply && "invisible -mt-1.5 h-0",
             )}
           >
-            {lastReplyRef.current}
+            {/* never empty, so a hover edits the text node instead of inserting one */}
+            {previewReply || "\u00a0"}
           </p>
         </div>,
         document.body,
