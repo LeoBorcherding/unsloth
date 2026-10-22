@@ -280,9 +280,19 @@ def test_a_row_or_tensor_split_mode_leaves_the_split_to_llama_cpp():
         # More slots than the split was priced at: a bigger cache under --fit off.
         ["--parallel", "8"],
         ["-np", "4"],
+        # Tensors placed outside the per-layer rows the split was priced from.
+        ["-ot", "blk.*=Vulkan1"],
+        ["--cpu-moe"],
+        ["-ngl", "20"],
+        ["-devd", "Vulkan1"],
     ):
         assert call(args, {}) is None, args
-    assert call([], {"LLAMA_ARG_N_PARALLEL": "4"}) is None
+    for env in (
+        {"LLAMA_ARG_N_PARALLEL": "4"},
+        {"LLAMA_ARG_OVERRIDE_TENSOR": "blk.*=Vulkan1"},
+        {"LLAMA_ARG_N_GPU_LAYERS": "20"},
+    ):
+        assert call([], env) is None, env
     with pytest.raises(Priced):
         call(["--parallel", "1"], {})
     assert call([], {"LLAMA_ARG_RPC": "10.0.0.2:50052"}) is None

@@ -10212,6 +10212,12 @@ class LlamaCppBackend:
             or (_extra_args_n_parallel(extra_args, env) or 0)
             > int(spill_inputs.get("n_parallel") or 1)
             or _extra_args_have_tensor_split(extra_args, env)
+            # Overrides, CPU-MoE, a layer count or a draft device move tensors off the per-layer rows.
+            or _args_place_tensors_on_cpu(extra_args)
+            or _env_places_tensors_on_cpu(env)
+            or _extra_args_set_any_flag(extra_args, _GPU_LAYER_FLAGS)
+            or _env_fixes_gpu_layers(env)
+            or _extra_args_draft_device_pin(extra_args)
             # Row and tensor modes split within a tensor; per-layer shares don't describe them.
             # argv only: a non-layer inherited LLAMA_ARG_SPLIT_MODE is popped before launch.
             or _extra_args_split_mode(extra_args, {}) not in (None, "layer")
