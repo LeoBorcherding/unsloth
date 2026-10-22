@@ -10208,6 +10208,9 @@ class LlamaCppBackend:
             # A host-resident cache or projector draws on the pool the iGPU reports.
             or spill_inputs.get("host_mmproj_bytes")
             or not _kv_offload_from_args(extra_args, env)
+            # A pass-through --parallel lands after ours and grows the cache past the priced slots.
+            or (_extra_args_n_parallel(extra_args, env) or 0)
+            > int(spill_inputs.get("n_parallel") or 1)
             or _extra_args_have_tensor_split(extra_args, env)
             # Row and tensor modes split within a tensor; per-layer shares don't describe them.
             # argv only: a non-layer inherited LLAMA_ARG_SPLIT_MODE is popped before launch.
@@ -10236,11 +10239,14 @@ class LlamaCppBackend:
             return None
         n_blocks = len(layout.blocks)
         kv_total = int(spill_inputs["kv_cache_bytes"] or 0)
+        # No KV estimate means a weights-only split with the real cache still to come.
+        if not kv_total or not self._can_estimate_kv():
+            return None
         kv_weights = list(spill_inputs.get("kv_layer_weights") or ())
         if len(kv_weights) != n_blocks or sum(kv_weights) <= 0:
             # Uniform is only right for a plain cache; MLA, hybrid recurrent and an
             # unpriced sliding window put it on some layers only (_kv_layer_weights).
-            if kv_total and (
+            if (
                 self._kv_lora_rank is not None
                 or self._ssm_inner_size is not None
                 or self._sliding_window_pattern

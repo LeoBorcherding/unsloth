@@ -277,8 +277,14 @@ def test_a_row_or_tensor_split_mode_leaves_the_split_to_llama_cpp():
         ["--rpc", "10.0.0.2:50052"],
         ["--fit", "on"],
         ["--fit=on"],
+        # More slots than the split was priced at: a bigger cache under --fit off.
+        ["--parallel", "8"],
+        ["-np", "4"],
     ):
         assert call(args, {}) is None, args
+    assert call([], {"LLAMA_ARG_N_PARALLEL": "4"}) is None
+    with pytest.raises(Priced):
+        call(["--parallel", "1"], {})
     assert call([], {"LLAMA_ARG_RPC": "10.0.0.2:50052"}) is None
     # The launch pops an inherited non-layer mode, so the child runs layer split.
     with pytest.raises(Priced):
@@ -306,6 +312,7 @@ def test_an_unpriced_uneven_kv_cache_leaves_the_split_to_llama_cpp():
         other_resident_bytes = 0,
     )
     backend._tensor_spill_layout = lambda _path: layout
+    backend._can_estimate_kv = lambda: True
     # No compute_buffer_flat: a load that passes the KV gate stops on the KeyError.
     inputs = {
         "separate_draft_on_gpu": False,
@@ -334,3 +341,9 @@ def test_an_unpriced_uneven_kv_cache_leaves_the_split_to_llama_cpp():
     backend._kv_lora_rank = backend._ssm_inner_size = backend._sliding_window_pattern = None
     with pytest.raises(KeyError):
         call()
+    # No KV estimate: the split would price weights only.
+    backend._can_estimate_kv = lambda: False
+    assert call() is None
+    backend._can_estimate_kv = lambda: True
+    inputs["kv_cache_bytes"] = 0
+    assert call() is None
