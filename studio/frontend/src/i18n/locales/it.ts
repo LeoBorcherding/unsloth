@@ -3070,6 +3070,7 @@ export const it = {
       relativeNever: "mai",
       relativeJustNow: "proprio ora",
       expired: "scaduta",
+      expiredStatus: "Scaduta",
       today: "oggi",
       created: "Creato {value}",
       used: "Ultimo utilizzo: {value}",
