@@ -20,9 +20,10 @@ constraints_for_leaf() {
         TORCHVISION_CONSTRAINT="torchvision>=0.19,<0.27.0"
         TORCHAUDIO_CONSTRAINT="torchaudio>=2.4,<2.12.0"
         _torch_index_leaf="$1"
+        OS="$3"
         eval "$2"
         echo "$TORCH_CONSTRAINT|$TORCHVISION_CONSTRAINT|$TORCHAUDIO_CONSTRAINT"
-    ' _ "$1" "$_BLOCK"
+    ' _ "$1" "$_BLOCK" "${2:-linux}"
 }
 
 echo "=== generic rocm7.2: 2.11 floor, 2.14 ceiling ==="
@@ -50,6 +51,16 @@ assert_eq "2.11.0+rocm7.2 kept" "torch==2.11.0" "$(prev_pin 2.11.0+rocm7.2 'torc
 assert_eq "2.14.1+rocm7.2 kept" "torch==2.14.1" "$(prev_pin 2.14.1+rocm7.2 'torch>=2.11.0,<2.15.0')"
 assert_eq "Repair (UNSLOTH_TORCH_UPGRADE=1) moves" "" \
     "$(bash -c 'eval "$1"; UNSLOTH_TORCH_UPGRADE=1 _previous_torch_pin 2.11.0+rocm7.2 "torch>=2.11.0,<2.15.0"' _ "$_PIN_FN")"
+
+echo "=== WSL keeps rocm7.2 on 2.11: 2.12+ bundles a rocprofiler that aborts on DXG ==="
+_WSL_LEAF=$(constraints_for_leaf rocm7.2 wsl)
+assert_eq "rocm7.2 on wsl" "torch>=2.11.0,<2.12.0|torchvision>=0.26.0,<0.27.0|torchaudio>=2.11.0,<2.12.0" "$_WSL_LEAF"
+assert_eq "gfx120x-all on wsl" "torch>=2.11.0,<2.12.0|torchvision>=0.26.0,<0.27.0|torchaudio>=2.11.0,<2.12.0" \
+    "$(constraints_for_leaf gfx120x-all wsl)"
+assert_eq "rocm7.1 on wsl untouched" "torch>=2.4,<2.12.0|torchvision>=0.19,<0.27.0|torchaudio>=2.4,<2.12.0" \
+    "$(constraints_for_leaf rocm7.1 wsl)"
+assert_eq "2.11.0+rocm7.2 on wsl kept" "torch==2.11.0" "$(prev_pin 2.11.0+rocm7.2 "${_WSL_LEAF%%|*}")"
+assert_eq "2.14.1+rocm7.2 on wsl not kept" "" "$(prev_pin 2.14.1+rocm7.2 "${_WSL_LEAF%%|*}")"
 
 echo ""
 echo "PASS: $PASS"

@@ -299,6 +299,8 @@ _ROCM_TORCH211_PKG_SPEC: tuple[str, str, str] = (
 )
 # Kept in step with install.sh's rocm7.2 case.
 _ROCM72_TORCH_CEILING: tuple[int, int] = (2, 15)
+# WSL stays on 2.11: 2.12+ bundles a librocprofiler-sdk that aborts on DXG at the first CUDA call.
+_ROCM72_WSL_TORCH_CEILING: tuple[int, int] = (2, 12)
 
 # Per-tag repair specs; must land on the same wheels a fresh install.sh run does.
 _ROCM_TORCH_PKG_SPECS: dict[str, tuple[str, str, str]] = {
@@ -4523,10 +4525,11 @@ def _rocm_pin_family_mismatch(pin_url: str, installed_ver: str) -> bool:
             return True
         # Same family: a release outside the rocm7.2 window violates the spec -> reinstall into it.
         if _pin_is_211 and _inst_rel is not None:
+            _ceiling = _ROCM72_WSL_TORCH_CEILING if _is_wsl() else _ROCM72_TORCH_CEILING
             if not (
                 (2, 11)
                 <= (int(_inst_rel.group(1)), int(_inst_rel.group(2)))
-                < _ROCM72_TORCH_CEILING
+                < _ceiling
             ):
                 return True
         return False
@@ -7119,6 +7122,8 @@ def _ensure_rocm_torch() -> "bool | None":
                 _torch_pkg, _vision_pkg, _audio_pkg = _ROCM_TORCH211_PKG_SPEC
             elif tag.startswith("gfx"):
                 _torch_pkg, _vision_pkg, _audio_pkg = _ROCM_TORCH_PKG_SPECS["_default"]
+            elif tag == "rocm7.2" and _is_wsl():
+                _torch_pkg, _vision_pkg, _audio_pkg = _ROCM_TORCH211_PKG_SPEC
             else:
                 _torch_pkg, _vision_pkg, _audio_pkg = _ROCM_TORCH_PKG_SPECS.get(
                     tag, _ROCM_TORCH_PKG_SPECS["_default"]

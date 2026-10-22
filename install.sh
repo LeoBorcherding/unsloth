@@ -7045,6 +7045,11 @@ case "$_torch_index_leaf" in
         TORCH_CONSTRAINT="torch>=2.11.0,<2.15.0"
         TORCHVISION_CONSTRAINT="torchvision>=0.26.0,<0.30.0"
         TORCHAUDIO_CONSTRAINT="torchaudio>=2.11.0,<2.12.0"
+        # Not on WSL: 2.12+ bundles a librocprofiler-sdk that aborts on DXG at the first CUDA call.
+        if [ "${OS:-}" = "wsl" ]; then
+            TORCH_CONSTRAINT="torch>=2.11.0,<2.12.0"
+            TORCHVISION_CONSTRAINT="torchvision>=0.26.0,<0.27.0"
+        fi
         ;;
     gfx120x-all|gfx1151|gfx1150|gfx1152|gfx103x-all|gfx110x-all)
         TORCH_CONSTRAINT="torch>=2.11.0,<2.12.0"

@@ -1402,6 +1402,7 @@ GPU: 2
 
     # The pin is compared against THIS interpreter's `rocm` meta-package first, so stub it.
     @patch.object(stack_mod, "_installed_rocm_wheel_family", lambda: None)
+    @patch.object(stack_mod, "_is_wsl", lambda: False)
     def test_rocm_pin_family_mismatch_helper(self):
         """_rocm_pin_family_mismatch: exact rocm compare, else the 2.11 line."""
         f = stack_mod._rocm_pin_family_mismatch
@@ -1448,6 +1449,7 @@ GPU: 2
         assert f(f"{base}/rocm7", "2.10.0") is True
         assert f(f"{base}/rocm7", "2.10.0+rocm") is False
 
+    @patch.object(stack_mod, "_is_wsl", lambda: False)
     @patch.object(stack_mod, "IS_MACOS", False)
     @patch("platform.machine", return_value = "x86_64")
     @patch.object(stack_mod, "IS_WINDOWS", False)
