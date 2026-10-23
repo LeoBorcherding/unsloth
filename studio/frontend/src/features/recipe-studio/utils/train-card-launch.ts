@@ -6,10 +6,18 @@ import {
   useTrainingConfigStore,
   useTrainingRuntimeStore,
 } from "@/features/training";
-import { createRecipeTrainingSplit } from "../api";
+import {
+  type HoldoutRowsResponse,
+  createRecipeTrainingSplit,
+  getRecipeHoldoutRows,
+} from "../api";
 import type { RecipeExecutionRecord } from "../execution-types";
 import type { TrainCardRun } from "../types";
-import { type TrainCardSettings, buildTrainCardMapping } from "./train-card";
+import {
+  type TrainCardHoldout,
+  type TrainCardSettings,
+  buildTrainCardMapping,
+} from "./train-card";
 
 const SETUP_TIMEOUT_MS = 120_000;
 
@@ -95,14 +103,37 @@ export async function launchTrainCardRun(
   return {
     jobId: runtime.jobId,
     executionId: execution.id,
+    sourceJobId: execution.jobId,
+    artifactPath: execution.artifact_path,
     baseModel: settings.baseModel,
     outputName: settings.outputName,
+    promptColumn: settings.promptColumn,
+    responseColumn: settings.responseColumn,
+    holdoutPercent: settings.holdoutPercent,
+    seed: settings.seed,
     trainPath: split.train_path,
     holdoutPath: split.holdout_path,
+    holdoutRowIds: split.holdout_row_ids ?? [],
     trainRows: split.train_rows,
     holdoutRows: split.holdout_rows,
     phase: runtime.phase === "idle" ? "starting" : runtime.phase,
     outputDir: null,
     startedAt: Date.now(),
   };
+}
+
+/** Reads back the exact rows a Train card held out, for a scorer downstream of its output handle. */
+export function readTrainCardHoldoutRows(
+  holdout: TrainCardHoldout,
+  page: { offset?: number; limit?: number } = {},
+): Promise<HoldoutRowsResponse> {
+  return getRecipeHoldoutRows(holdout.source_job_id, {
+    // biome-ignore lint/style/useNamingConvention: api schema
+    artifact_path: holdout.artifact_path,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    holdout_percent: holdout.percent,
+    seed: holdout.seed,
+    offset: page.offset ?? 0,
+    limit: page.limit ?? 20,
+  });
 }

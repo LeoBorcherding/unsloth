@@ -27,9 +27,12 @@ const { isValidRecipeConnection } = await import(
 const {
   buildTrainCardMapping,
   getTrainCardOutput,
+  getTrainCardState,
   listTrainableColumns,
   parseTrainCardSettings,
   pickTrainSourceExecution,
+  shortModelName,
+  summarizeAdvancedTrainSettings,
 } = await import("../src/features/recipe-studio/utils/train-card.ts");
 
 type Snapshot = NonNullable<
@@ -82,10 +85,17 @@ function build(snapshot: Snapshot, configs: Snapshot["configs"], nodes: Snapshot
 const finishedRun = {
   jobId: "job-7",
   executionId: "exec-2",
+  sourceJobId: "recipe-job-3",
+  artifactPath: "/data/recipe_x",
   baseModel: "unsloth/Qwen2.5-0.5B-Instruct",
   outputName: "train_1",
+  promptColumn: "question",
+  responseColumn: "answer",
+  holdoutPercent: 10,
+  seed: 3407,
   trainPath: "/data/recipe_x/splits/holdout-10-seed3407/train.parquet",
   holdoutPath: "/data/recipe_x/splits/holdout-10-seed3407/holdout.parquet",
+  holdoutRowIds: [3, 17, 21, 40, 52, 66, 71, 80, 88, 95],
   trainRows: 90,
   holdoutRows: 10,
   phase: "completed",
@@ -206,12 +216,112 @@ test("trainable columns skip dropped fields and model setup", () => {
 
 test("only a finished run is offered on the output handle", () => {
   const card = makeTrainConfig("t1", []);
-  assert.equal(getTrainCardOutput({ ...card, lastRun: finishedRun }), finishedRun);
   assert.equal(
     getTrainCardOutput({ ...card, lastRun: { ...finishedRun, phase: "training" } }),
     null,
   );
   assert.equal(getTrainCardOutput({ ...card, lastRun: null }), null);
+});
+
+test("the output handle names the adapter and the exact held-out rows", () => {
+  const card = makeTrainConfig("t1", []);
+  assert.deepEqual(getTrainCardOutput({ ...card, lastRun: finishedRun }), {
+    adapter_path: "/outputs/train_1",
+    base_model: "unsloth/Qwen2.5-0.5B-Instruct",
+    training_job_id: "job-7",
+    prompt_column: "question",
+    response_column: "answer",
+    holdout: {
+      source_job_id: "recipe-job-3",
+      artifact_path: "/data/recipe_x",
+      percent: 10,
+      seed: 3407,
+      parquet_path: "/data/recipe_x/splits/holdout-10-seed3407/holdout.parquet",
+      row_ids: [3, 17, 21, 40, 52, 66, 71, 80, 88, 95],
+      rows: 10,
+    },
+  });
+  const noHoldout = getTrainCardOutput({
+    ...card,
+    lastRun: { ...finishedRun, holdoutPath: null, holdoutRowIds: [], holdoutRows: 0 },
+  });
+  assert.equal(noHoldout?.holdout, null);
+});
+
+test("a saved run keeps its held-out row ids through save and reopen", () => {
+  const snapshot = loadTemplate();
+  const { configs, nodes, train } = withTrainCard(snapshot, { lastRun: finishedRun });
+  const built = build(snapshot, configs, nodes);
+  const reopened = importRecipePayload(JSON.stringify(built.payload));
+  const card = Object.values(reopened.snapshot?.configs ?? {}).find(
+    (config) => config.kind === "train" && config.name === train.name,
+  );
+  assert.ok(card && card.kind === "train");
+  assert.deepEqual(card.lastRun, finishedRun);
+});
+
+test("the card shows one state, most urgent first", () => {
+  const base = {
+    hasSource: true,
+    errors: [] as string[],
+    lastRun: null,
+    active: false,
+    launching: false,
+    launchFailed: false,
+  };
+  assert.equal(getTrainCardState({ ...base, hasSource: false }), "needs_run");
+  assert.equal(
+    getTrainCardState({ ...base, hasSource: false, errors: ["Pick a base model."] }),
+    "needs_run",
+  );
+  assert.equal(getTrainCardState({ ...base, errors: ["Pick a base model."] }), "setup");
+  assert.equal(getTrainCardState(base), "ready");
+  assert.equal(getTrainCardState({ ...base, launching: true, active: true }), "preparing");
+  assert.equal(
+    getTrainCardState({ ...base, active: true, lastRun: { ...finishedRun, phase: "training" } }),
+    "training",
+  );
+  assert.equal(getTrainCardState({ ...base, lastRun: finishedRun }), "adapter_ready");
+  assert.equal(
+    getTrainCardState({ ...base, hasSource: false, lastRun: finishedRun }),
+    "adapter_ready",
+  );
+  assert.equal(
+    getTrainCardState({ ...base, lastRun: { ...finishedRun, phase: "stopped" } }),
+    "stopped",
+  );
+  assert.equal(
+    getTrainCardState({ ...base, lastRun: { ...finishedRun, phase: "error" } }),
+    "failed",
+  );
+  assert.equal(getTrainCardState({ ...base, launchFailed: true }), "failed");
+});
+
+test("the collapsed Advanced row says what changed from the defaults", () => {
+  const card = makeTrainConfig("t1", []);
+  assert.equal(summarizeAdvancedTrainSettings(card), "Defaults");
+  assert.equal(
+    summarizeAdvancedTrainSettings({ ...card, maxSteps: "200", holdoutPercent: "20" }),
+    "Defaults",
+  );
+  assert.equal(
+    summarizeAdvancedTrainSettings({ ...card, learningRate: "1e-4" }),
+    "Changed: learning rate",
+  );
+  assert.equal(
+    summarizeAdvancedTrainSettings({ ...card, method: "lora", outputName: "support-bot" }),
+    "Changed: method, run name",
+  );
+  assert.equal(
+    summarizeAdvancedTrainSettings({ ...card, method: "lora", seed: "1", loraRank: "8" }),
+    "3 changed",
+  );
+});
+
+test("model ids shorten to the name after the org", () => {
+  assert.equal(shortModelName("unsloth/Qwen2.5-0.5B-Instruct"), "Qwen2.5-0.5B-Instruct");
+  assert.equal(shortModelName("local-model"), "local-model");
+  assert.equal(shortModelName("/models/llama/"), "llama");
 });
 
 test("columns can feed a train card, but its adapter cannot feed a column", () => {

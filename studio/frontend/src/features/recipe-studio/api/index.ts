@@ -52,6 +52,15 @@ export type TrainingSplitResponse = {
   train_rows: number;
   // biome-ignore lint/style/useNamingConvention: api schema
   holdout_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_row_ids: number[];
+};
+
+export type HoldoutRowsResponse = {
+  rows: Record<string, unknown>[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  row_ids: number[];
+  total: number;
 };
 
 export type SourceProgressResponse = {
@@ -402,6 +411,16 @@ export async function createRecipeTrainingSplit(
 ): Promise<TrainingSplitResponse> {
   return postJson<TrainingSplitResponse>(
     `/jobs/${jobId}/training-split`,
+    payload,
+  );
+}
+
+export async function getRecipeHoldoutRows(
+  jobId: string,
+  payload: TrainingSplitRequest & { offset?: number; limit?: number },
+): Promise<HoldoutRowsResponse> {
+  return postJson<HoldoutRowsResponse>(
+    `/jobs/${jobId}/training-split/holdout-rows`,
     payload,
   );
 }

@@ -17,11 +17,18 @@ import {
   Alert02Icon,
   Database02Icon,
   Rocket01Icon,
+  Settings02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { NodeResizer, Position, useUpdateNodeInternals } from "@xyflow/react";
-import { type ReactElement, useEffect, useMemo, useState } from "react";
+import {
+  type ReactElement,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { MAX_NODE_WIDTH, MIN_NODE_WIDTH } from "../constants";
 import { useRecipeExecutionsStore } from "../stores/recipe-executions";
 import { useRecipeStudioStore } from "../stores/recipe-studio";
@@ -29,12 +36,15 @@ import type { RecipeNode as RecipeGraphNodeType, TrainCardRun } from "../types";
 import { NODE_HANDLE_CLASS } from "../utils/handle-layout";
 import { HANDLE_IDS } from "../utils/handles";
 import {
+  type TrainCardState,
   describeTrainPhase,
   formatHoldoutSummary,
+  getTrainCardState,
   isTrainRunActive,
   listTrainableColumns,
   parseTrainCardSettings,
   pickTrainSourceExecution,
+  shortModelName,
 } from "../utils/train-card";
 import { launchTrainCardRun } from "../utils/train-card-launch";
 import { RECIPE_STUDIO_NODE_TONES } from "../utils/ui-tones";
@@ -58,43 +68,70 @@ type RecipeTrainNodeProps = {
   selected: boolean;
 };
 
-function StatusRow({
+type PanelTone = "waiting" | "ready" | "active" | "done" | "error";
+
+const PANEL_TONES: Record<PanelTone, { box: string; icon: string }> = {
+  waiting: {
+    box: "border-amber-400/50 bg-amber-500/5",
+    icon: "text-amber-600 dark:text-amber-400",
+  },
+  ready: { box: "border-border/70 bg-muted/30", icon: "text-foreground" },
+  active: {
+    box: "border-sky-500/40 bg-sky-500/5",
+    icon: "text-sky-600 dark:text-sky-400",
+  },
+  done: {
+    box: "border-emerald-500/40 bg-emerald-500/5",
+    icon: "text-emerald-600 dark:text-emerald-400",
+  },
+  error: {
+    box: "border-rose-500/40 bg-rose-500/5",
+    icon: "text-rose-600 dark:text-rose-400",
+  },
+};
+
+function StatePanel({
   tone,
   icon,
+  spinning,
   title,
   detail,
+  children,
 }: {
-  tone: "ready" | "waiting" | "error";
+  tone: PanelTone;
   icon: typeof Rocket01Icon;
+  spinning?: boolean;
   title: string;
   detail?: string;
+  children?: ReactNode;
 }): ReactElement {
   return (
     <div
+      data-train-state-panel=""
       className={cn(
-        "corner-squircle flex items-start gap-2 rounded-lg border px-3 py-2",
-        tone === "ready" && "border-emerald-500/40 bg-emerald-500/5",
-        tone === "waiting" && "border-amber-400/50 bg-amber-500/5",
-        tone === "error" && "border-rose-500/40 bg-rose-500/5",
+        "corner-squircle grid gap-2 rounded-lg border px-3 py-2.5",
+        PANEL_TONES[tone].box,
       )}
     >
-      <HugeiconsIcon
-        icon={icon}
-        className={cn(
-          "mt-0.5 size-4 shrink-0",
-          tone === "ready" && "text-emerald-600 dark:text-emerald-400",
-          tone === "waiting" && "text-amber-600 dark:text-amber-400",
-          tone === "error" && "text-rose-600 dark:text-rose-400",
+      <div className="flex items-start gap-2">
+        {spinning ? (
+          <Spinner className={cn("mt-0.5 size-4 shrink-0", PANEL_TONES[tone].icon)} />
+        ) : (
+          <HugeiconsIcon
+            icon={icon}
+            className={cn("mt-0.5 size-4 shrink-0", PANEL_TONES[tone].icon)}
+          />
         )}
-      />
-      <div className="min-w-0">
-        <p className="break-words text-xs font-medium text-foreground">
-          {title}
-        </p>
-        {detail && (
-          <p className="break-all text-ui-11 text-muted-foreground">{detail}</p>
-        )}
+        <div className="min-w-0">
+          <p className="break-words text-sm font-semibold text-foreground">
+            {title}
+          </p>
+          {detail && (
+            <p className="break-words text-xs text-muted-foreground">{detail}</p>
+          )}
+        </div>
       </div>
+      {children}
     </div>
   );
 }
@@ -182,28 +219,131 @@ export function RecipeTrainNode({
     }
   };
 
-  const stats = [
-    { label: "Method", value: config.method === "qlora" ? "QLoRA" : "LoRA" },
-    { label: "Steps", value: config.maxSteps || "?" },
-    { label: "Rank", value: config.loraRank || "?" },
-    { label: "LR", value: config.learningRate || "?" },
-    { label: "Hold out", value: `${config.holdoutPercent || 0}%` },
-  ];
+  const state: TrainCardState = getTrainCardState({
+    hasSource: source !== null,
+    errors,
+    lastRun,
+    active,
+    launching,
+    launchFailed: launchError !== null,
+  });
+  const columnsLabel =
+    settings.promptColumn && settings.responseColumn
+      ? `${settings.promptColumn} → ${settings.responseColumn}`
+      : null;
+  const chips = [
+    columnsLabel,
+    `${config.maxSteps || "?"} steps`,
+    `${config.holdoutPercent || 0}% held out`,
+  ].filter((chip): chip is string => Boolean(chip));
   const sourceLabel = source
-    ? `${source.run_name?.trim() || "Full run"} · ${source.rows} rows`
-    : "Run the full recipe first";
-  const showProgress = active && !launching;
+    ? `${source.rows} rows from ${source.run_name?.trim() || "the last full run"}`
+    : "";
   const progressValue =
     totalSteps > 0 ? Math.min(100, (currentStep / totalSteps) * 100) : 0;
   const runFailed =
     lastRun?.phase === "error" ? (tracksRuntime ? runtimeError : null) : null;
+  const hint =
+    errors.length > 0 && state !== "needs_run" && state !== "setup"
+      ? errors[0]
+      : null;
   let buttonLabel = "Train on this dataset";
-  if (launching) {
+  if (state === "preparing") {
     buttonLabel = "Preparing...";
-  } else if (active) {
+  } else if (state === "training") {
     buttonLabel = "Training...";
-  } else if (lastRun?.phase === "completed") {
+  } else if (lastRun && state !== "ready") {
     buttonLabel = "Train again";
+  }
+
+  let panel: ReactElement;
+  switch (state) {
+    case "needs_run":
+      panel = (
+        <StatePanel
+          tone="waiting"
+          icon={Database02Icon}
+          title="Needs a full run"
+          detail="Run the full recipe once. This card trains on its rows."
+        />
+      );
+      break;
+    case "setup":
+      panel = (
+        <StatePanel
+          tone="waiting"
+          icon={Settings02Icon}
+          title="Finish setup"
+          detail={errors[0]}
+        />
+      );
+      break;
+    case "ready":
+      panel = (
+        <StatePanel
+          tone="ready"
+          icon={Rocket01Icon}
+          title="Ready to train"
+          detail={sourceLabel}
+        />
+      );
+      break;
+    case "preparing":
+      panel = (
+        <StatePanel
+          tone="active"
+          icon={Rocket01Icon}
+          spinning={true}
+          title="Preparing"
+          detail="Holding out rows and loading the model"
+        />
+      );
+      break;
+    case "training":
+      panel = (
+        <StatePanel
+          tone="active"
+          icon={Rocket01Icon}
+          spinning={true}
+          title={
+            totalSteps > 0 && lastRun?.phase === "training"
+              ? `Training · step ${currentStep} of ${totalSteps}`
+              : describeTrainPhase(lastRun?.phase ?? "starting")
+          }
+          detail={currentLoss ? `loss ${currentLoss.toFixed(3)}` : undefined}
+        >
+          <Progress
+            value={progressValue}
+            indeterminate={totalSteps === 0}
+            className="h-1.5"
+          />
+        </StatePanel>
+      );
+      break;
+    case "adapter_ready":
+      panel = (
+        <StatePanel
+          tone="done"
+          icon={Tick02Icon}
+          title="Adapter ready"
+          detail={lastRun ? formatHoldoutSummary(lastRun) : undefined}
+        />
+      );
+      break;
+    case "stopped":
+      panel = (
+        <StatePanel tone="waiting" icon={Alert02Icon} title="Run stopped" />
+      );
+      break;
+    default:
+      panel = (
+        <StatePanel
+          tone="error"
+          icon={Alert02Icon}
+          title={launchError ? "Training did not start" : "Training failed"}
+          detail={launchError ?? runFailed ?? undefined}
+        />
+      );
   }
 
   return (
@@ -243,7 +383,10 @@ export function RecipeTrainNode({
               {config.name}
             </BaseNodeHeaderTitle>
             <p className="truncate text-ui-11 text-muted-foreground">
-              {data.subtype} · {settings.baseModel || "No base model yet"}
+              {data.subtype} ·{" "}
+              {settings.baseModel
+                ? shortModelName(settings.baseModel)
+                : "No base model yet"}
             </p>
           </div>
         </div>
@@ -269,69 +412,21 @@ export function RecipeTrainNode({
           executionLocked && "pointer-events-none opacity-85",
         )}
       >
+        {panel}
+
         <div className="flex flex-wrap gap-1.5">
-          {stats.map((stat) => (
+          {chips.map((chip) => (
             <Badge
-              key={stat.label}
+              key={chip}
               variant="secondary"
-              className="corner-squircle font-mono text-ui-11"
+              className="corner-squircle text-ui-11 font-normal"
             >
-              <span className="text-muted-foreground">{stat.label}</span>
-              <span className="ml-1 text-foreground">{stat.value}</span>
+              {chip}
             </Badge>
           ))}
         </div>
 
-        <StatusRow
-          tone={source ? "ready" : "waiting"}
-          icon={source ? Tick02Icon : Database02Icon}
-          title={sourceLabel}
-          detail={
-            settings.promptColumn && settings.responseColumn
-              ? `${settings.promptColumn} → ${settings.responseColumn}`
-              : "Pick prompt and response columns in Configure"
-          }
-        />
-
-        {showProgress && (
-          <div className="grid gap-1.5">
-            <div className="flex items-center justify-between text-ui-11 text-muted-foreground">
-              <span>{describeTrainPhase(lastRun?.phase ?? "")}</span>
-              <span className="font-mono">
-                {totalSteps > 0 ? `step ${currentStep}/${totalSteps}` : ""}
-                {currentLoss ? ` · loss ${currentLoss.toFixed(3)}` : ""}
-              </span>
-            </div>
-            <Progress
-              value={progressValue}
-              indeterminate={totalSteps === 0}
-              className="h-1.5"
-            />
-          </div>
-        )}
-
-        {lastRun?.phase === "completed" && (
-          <StatusRow
-            tone="ready"
-            icon={Tick02Icon}
-            title={`Adapter ready · ${formatHoldoutSummary(lastRun)}`}
-            detail={lastRun.outputDir ?? lastRun.jobId ?? undefined}
-          />
-        )}
-        {lastRun?.phase === "stopped" && !active && (
-          <StatusRow tone="waiting" icon={Alert02Icon} title="Run stopped" />
-        )}
-        {(launchError || lastRun?.phase === "error") && (
-          <StatusRow
-            tone="error"
-            icon={Alert02Icon}
-            title={launchError ? "Training did not start" : "Training failed"}
-            detail={launchError ?? runFailed ?? undefined}
-          />
-        )}
-        {errors.length > 0 && !active && (
-          <p className="text-ui-11 text-muted-foreground">{errors[0]}</p>
-        )}
+        {hint && <p className="text-ui-11 text-muted-foreground">{hint}</p>}
 
         <div className="flex gap-2">
           <Button
@@ -345,11 +440,7 @@ export function RecipeTrainNode({
               onRun().catch(() => undefined);
             }}
           >
-            {active ? (
-              <Spinner className="size-4" />
-            ) : (
-              <HugeiconsIcon icon={Rocket01Icon} className="size-4" />
-            )}
+            <HugeiconsIcon icon={Rocket01Icon} className="size-4" />
             {buttonLabel}
           </Button>
           {lastRun?.jobId && (

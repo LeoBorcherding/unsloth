@@ -52,7 +52,12 @@ from core.data_recipe.huggingface import (
     publish_recipe_dataset,
 )
 from core.data_recipe.jobs import get_job_manager
-from core.data_recipe.training_split import RecipeTrainingSplitError, split_recipe_dataset
+from core.data_recipe.training_split import (
+    RecipeTrainingSplit,
+    RecipeTrainingSplitError,
+    read_holdout_rows,
+    split_recipe_dataset,
+)
 from core.data_recipe.service import (
     recipe_has_stdio_mcp,
     require_ui_session_for_host_env_credentials,
@@ -63,6 +68,8 @@ from models.data_recipe import (
     JobCreateResponse,
     PublishDatasetRequest,
     PublishDatasetResponse,
+    HoldoutRowsRequest,
+    HoldoutRowsResponse,
     RecipePayload,
     TrainingSplitRequest,
     TrainingSplitResponse,
@@ -919,9 +926,7 @@ def download_job_dataset(
     )
 
 
-@router.post("/jobs/{job_id}/training-split", response_model = TrainingSplitResponse)
-def create_job_training_split(job_id: str, payload: TrainingSplitRequest):
-    """Paths a training run reads for this run's dataset, holding out a share of rows when asked."""
+def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTrainingSplit:
     artifact_path = (payload.artifact_path or "").strip() or None
     status = get_job_manager().get_status(job_id)
     if status is not None:
@@ -957,11 +962,40 @@ def create_job_training_split(job_id: str, payload: TrainingSplitRequest):
             event = "data_recipe.jobs.training_split_error",
             log = logger,
         ) from exc
+    return split
+
+
+@router.post("/jobs/{job_id}/training-split", response_model = TrainingSplitResponse)
+def create_job_training_split(job_id: str, payload: TrainingSplitRequest):
+    """Paths a training run reads for this run's dataset, holding out a share of rows when asked."""
+    split = _job_training_split(job_id, payload)
     return TrainingSplitResponse(
         train_path = split.train_path,
         holdout_path = split.holdout_path,
         train_rows = split.train_rows,
         holdout_rows = split.holdout_rows,
+        holdout_row_ids = list(split.holdout_row_ids),
+    )
+
+
+@router.post("/jobs/{job_id}/training-split/holdout-rows", response_model = HoldoutRowsResponse)
+def read_job_holdout_rows(job_id: str, payload: HoldoutRowsRequest):
+    """The held-out rows themselves, so a scorer reads exactly what training never saw."""
+    split = _job_training_split(job_id, payload)
+    try:
+        rows = read_holdout_rows(split, offset = payload.offset, limit = payload.limit)
+    except Exception as exc:
+        raise log_and_http_error(
+            exc,
+            500,
+            safe_error_detail(exc),
+            event = "data_recipe.jobs.holdout_rows_error",
+            log = logger,
+        ) from exc
+    return HoldoutRowsResponse(
+        rows = rows,
+        row_ids = list(split.holdout_row_ids[payload.offset : payload.offset + len(rows)]),
+        total = split.holdout_rows,
     )
 
 

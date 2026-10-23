@@ -52,13 +52,23 @@ function parseLastRun(value: unknown): TrainCardRun | null {
     const parsed = Number(value[key]);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const rowIds = Array.isArray(value.holdoutRowIds)
+    ? value.holdoutRowIds.filter((id): id is number => Number.isInteger(id))
+    : [];
   return {
     jobId: readString(value.jobId) ?? null,
     executionId,
+    sourceJobId: readString(value.sourceJobId) ?? null,
+    artifactPath: readString(value.artifactPath) ?? null,
     baseModel: readString(value.baseModel) ?? "",
     outputName: readString(value.outputName) ?? "",
+    promptColumn: readString(value.promptColumn) ?? "",
+    responseColumn: readString(value.responseColumn) ?? "",
+    holdoutPercent: count("holdoutPercent"),
+    seed: count("seed"),
     trainPath,
     holdoutPath: readString(value.holdoutPath) ?? null,
+    holdoutRowIds: rowIds,
     trainRows: count("trainRows"),
     holdoutRows: count("holdoutRows"),
     phase: readString(value.phase) ?? "idle",
