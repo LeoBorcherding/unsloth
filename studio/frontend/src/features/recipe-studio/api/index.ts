@@ -33,6 +33,34 @@ export type PublishRecipeJobResponse = {
   message: string;
 };
 
+export type TrainingSplitRequest = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  artifact_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_percent: number;
+  seed: number;
+};
+
+export type TrainingSplitResponse = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_path: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_row_ids: number[];
+};
+
+export type HoldoutRowsResponse = {
+  rows: Record<string, unknown>[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  row_ids: number[];
+  total: number;
+};
+
 export type SourceProgressResponse = {
   source?: string | null;
   status?: string | null;
@@ -373,6 +401,26 @@ export async function publishRecipeJob(
   payload: PublishRecipeJobRequest,
 ): Promise<PublishRecipeJobResponse> {
   return postJson<PublishRecipeJobResponse>(`/jobs/${jobId}/publish`, payload);
+}
+
+export async function createRecipeTrainingSplit(
+  jobId: string,
+  payload: TrainingSplitRequest,
+): Promise<TrainingSplitResponse> {
+  return postJson<TrainingSplitResponse>(
+    `/jobs/${jobId}/training-split`,
+    payload,
+  );
+}
+
+export async function getRecipeHoldoutRows(
+  jobId: string,
+  payload: TrainingSplitRequest & { offset?: number; limit?: number },
+): Promise<HoldoutRowsResponse> {
+  return postJson<HoldoutRowsResponse>(
+    `/jobs/${jobId}/training-split/holdout-rows`,
+    payload,
+  );
 }
 
 export async function inspectSeedDataset(

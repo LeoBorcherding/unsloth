@@ -65,6 +65,34 @@ class PublishDatasetResponse(BaseModel):
     message: str
 
 
+class TrainingSplitRequest(BaseModel):
+    artifact_path: str | None = Field(
+        default = None,
+        description = "Execution artifact path captured by the UI for completed runs",
+    )
+    holdout_percent: int = Field(default = 0, ge = 0, le = 50)
+    seed: int = Field(default = 3407, ge = 0, le = 2**31 - 1)
+
+
+class TrainingSplitResponse(BaseModel):
+    train_path: str
+    holdout_path: str | None = None
+    train_rows: int
+    holdout_rows: int
+    holdout_row_ids: list[int] = Field(default_factory = list)
+
+
+class HoldoutRowsRequest(TrainingSplitRequest):
+    offset: int = Field(default = 0, ge = 0)
+    limit: int = Field(default = 20, ge = 1, le = 500)
+
+
+class HoldoutRowsResponse(BaseModel):
+    rows: list[dict[str, Any]]
+    row_ids: list[int]
+    total: int
+
+
 class SeedInspectRequest(BaseModel):
     dataset_name: str = Field(min_length = 1)
     hf_token: str | None = None

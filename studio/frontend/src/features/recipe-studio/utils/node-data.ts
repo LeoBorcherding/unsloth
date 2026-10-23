@@ -71,6 +71,16 @@ export function nodeDataFromConfig(
       layoutDirection,
     };
   }
+  if (config.kind === "train") {
+    return {
+      title: "Train",
+      kind: "train",
+      subtype: "Fine-tune",
+      blockType: "train",
+      name: config.name,
+      layoutDirection,
+    };
+  }
   if (config.kind === "seed") {
     const seedSourceType = config.seed_source_type ?? "hf";
     const sourceLabel =

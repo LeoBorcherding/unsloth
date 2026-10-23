@@ -34,6 +34,7 @@ const SUPPORTED_DRAG_KINDS: RecipeBlockDragPayload["kind"][] = [
   "validator",
   "expression",
   "note",
+  "train",
 ];
 
 function parseRecipeBlockDragPayload(raw: string): RecipeBlockDragPayload | null {
@@ -78,6 +79,7 @@ type UseRecipeEditorGraphArgs = {
     openDialog?: boolean,
   ) => void;
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
 };
 
 type UseRecipeEditorGraphResult = {
@@ -100,6 +102,7 @@ type UseRecipeEditorGraphResult = {
     type: ValidatorBlockType,
   ) => void;
   handleAddMarkdownNoteFromSheet: () => void;
+  handleAddTrainFromSheet: () => void;
 };
 
 export function useRecipeEditorGraph({
@@ -122,6 +125,7 @@ export function useRecipeEditorGraph({
   addExpressionNode,
   addValidatorNode,
   addMarkdownNoteNode,
+  addTrainNode,
 }: UseRecipeEditorGraphArgs): UseRecipeEditorGraphResult {
   const baseNodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const baseEdgeIds = useMemo(() => new Set(edges.map((edge) => edge.id)), [edges]);
@@ -229,6 +233,10 @@ export function useRecipeEditorGraph({
         addMarkdownNoteNode(position, false);
         return;
       }
+      if (payload.kind === "train") {
+        addTrainNode(position, false);
+        return;
+      }
       if (payload.type === "model_provider") {
         addModelProviderNode(position, false);
         return;
@@ -252,6 +260,7 @@ export function useRecipeEditorGraph({
       addToolProfileNode,
       addSamplerNode,
       addSeedNode,
+      addTrainNode,
       addValidatorNode,
       reactFlowInstance,
     ],
@@ -316,6 +325,10 @@ export function useRecipeEditorGraph({
     addMarkdownNoteNode(getViewportCenterPosition());
   }, [addMarkdownNoteNode, getViewportCenterPosition]);
 
+  const handleAddTrainFromSheet = useCallback(() => {
+    addTrainNode(getViewportCenterPosition());
+  }, [addTrainNode, getViewportCenterPosition]);
+
   return {
     handleNodeClick,
     handleNodeDoubleClick,
@@ -332,5 +345,6 @@ export function useRecipeEditorGraph({
     handleAddExpressionFromSheet,
     handleAddValidatorFromSheet,
     handleAddMarkdownNoteFromSheet,
+    handleAddTrainFromSheet,
   };
 }
