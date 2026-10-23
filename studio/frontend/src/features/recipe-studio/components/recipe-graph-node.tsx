@@ -60,6 +60,8 @@ import { InlineModel } from "./inline/inline-model";
 import { isInlineConfig } from "./inline/inline-policy";
 import { InlineSampler } from "./inline/inline-sampler";
 import { InlineSeed } from "./inline/inline-seed";
+import { FeedbackSeedBody } from "./loop/feedback-seed-body";
+import { RecipeLoopNode } from "./loop/recipe-loop-node";
 import { RecipeTrainNode } from "./recipe-train-node";
 import {
   BaseNode,
@@ -116,6 +118,9 @@ const NODE_META = {
   },
   train: {
     tone: RECIPE_STUDIO_NODE_TONES.train,
+  },
+  loop: {
+    tone: RECIPE_STUDIO_NODE_TONES.loop,
   },
   model_provider: {
     tone: RECIPE_STUDIO_NODE_TONES.model_provider,
@@ -309,6 +314,9 @@ function renderNodeBody(
   if (config?.kind === "benchmark") {
     return <BenchmarkCardBody config={config} disabled={executionLocked} />;
   }
+  if (config?.kind === "seed" && config.loop_feedback) {
+    return <FeedbackSeedBody config={config} />;
+  }
 
   if (config && isInlineConfig(config)) {
     const onUpdate = (patch: Partial<NodeConfig>) =>
@@ -440,6 +448,9 @@ function RecipeGraphNodeBase({
 
   if (config?.kind === "train") {
     return <RecipeTrainNode id={id} data={data} selected={selected} />;
+  }
+  if (config?.kind === "loop") {
+    return <RecipeLoopNode id={id} data={data} selected={selected} />;
   }
 
   const showDataHandles =

@@ -62,6 +62,7 @@ export type RecipeNodeData = {
     | "note"
     | "train"
     | "benchmark"
+    | "loop"
     | "model_provider"
     | "model_config"
     | "tool_config";
@@ -79,6 +80,7 @@ export type RecipeNodeData = {
     | "markdown_note"
     | "train"
     | "benchmark"
+    | "loop"
     | "model_provider"
     | "model_config"
     | "tool_config";
@@ -411,6 +413,9 @@ export type SeedConfig = {
   // ui-only: explicit per-column drop for structured seed sources (hf/local)
   seed_drop_columns?: string[];
   seed_source_type: SeedSourceType;
+  // ui-only: a local seed the Loop card rewrites each round from the Benchmark card's failures
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  loop_feedback?: boolean;
   // ui-only (serialized in seed_config)
   hf_repo_id: string;
   hf_subset?: string;
@@ -516,6 +521,19 @@ export type TrainCardConfig = {
   lastRun?: TrainCardRun | null;
 };
 
+/** UI-only like the Train card: the loop's stop rules and round size. Inputs are strings. */
+export type LoopCardConfig = {
+  id: string;
+  kind: "loop";
+  name: string;
+  targetScore: string;
+  maxRounds: string;
+  stopOnPlateau: boolean;
+  plateauRounds: string;
+  rowsPerRound: string;
+  failureShare: string;
+};
+
 export type NodeConfig =
   | SamplerConfig
   | LlmConfig
@@ -525,6 +543,7 @@ export type NodeConfig =
   | BenchmarkConfig
   | SeedConfig
   | TrainCardConfig
+  | LoopCardConfig
   | ModelProviderConfig
   | ModelConfig
   | ToolProfileConfig;

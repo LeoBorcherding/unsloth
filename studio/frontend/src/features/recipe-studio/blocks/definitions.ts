@@ -18,6 +18,7 @@ import {
   Parabola02Icon,
   PencilEdit02Icon,
   Plant01Icon,
+  RepeatIcon,
   Rocket01Icon,
   Shield02Icon,
   Tag01Icon,
@@ -34,6 +35,7 @@ import {
   makeBenchmarkConfig,
   makeExpressionConfig,
   makeLlmConfig,
+  makeLoopConfig,
   makeMarkdownNoteConfig,
   makeModelConfig,
   makeModelProviderConfig,
@@ -52,7 +54,8 @@ export type BlockKind =
   | "seed"
   | "note"
   | "train"
-  | "benchmark";
+  | "benchmark"
+  | "loop";
 export type ValidatorBlockType =
   | "validator_python"
   | "validator_sql"
@@ -73,6 +76,7 @@ export type BlockType =
   | "seed_unstructured"
   | "seed_github"
   | "train"
+  | "loop"
   | "model_provider"
   | "model_config"
   | "tool_config";
@@ -111,8 +115,8 @@ export type BlockDialogKey =
   | "tool_config"
   | "train"
   | "expression"
-  | "expression"
-  | "benchmark";
+  | "benchmark"
+  | "loop";
 
 export type BlockDefinition = {
   kind: BlockKind;
@@ -172,6 +176,12 @@ export const BLOCK_GROUPS: BlockGroup[] = [
     title: "Train",
     description: "Fine-tune a model on the dataset this recipe generates.",
     icon: Rocket01Icon,
+  },
+  {
+    kind: "loop",
+    title: "Loop",
+    description: "Generate, train and benchmark in rounds, feeding failures back.",
+    icon: RepeatIcon,
   },
 ];
 
@@ -444,6 +454,16 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     dialogKey: "benchmark",
     createConfig: (id, existing) => makeBenchmarkConfig(id, existing),
   },
+  {
+    kind: "loop",
+    type: "loop",
+    title: "Loop",
+    description:
+      "Rounds of generate, train and benchmark: failed examples steer the next round's rows.",
+    icon: RepeatIcon,
+    dialogKey: "loop",
+    createConfig: (id, existing) => makeLoopConfig(id, existing),
+  },
 ];
 
 export function getBlocksForKind(kind: BlockKind): BlockDefinition[] {
@@ -516,6 +536,9 @@ export function getBlockDefinitionForConfig(
   }
   if (config.kind === "benchmark") {
     return getBlockDefinition("benchmark", "benchmark");
+  }
+  if (config.kind === "loop") {
+    return getBlockDefinition("loop", "loop");
   }
   return getBlockDefinition("expression", "expression");
 }

@@ -1,48 +1,55 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import type { LoopDataset } from "./types";
+import type { TrainCardSettings } from "../utils/train-card";
+import { buildTrainCardMapping } from "../utils/train-card";
 
-export function leafName(path: string | null | undefined): string | null {
-  if (!path) return null;
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] ?? null;
-}
-
-/** A recipe dataset as the trainer's local dataset resolver names it. */
-export function recipeDatasetRef(dataset: LoopDataset): string {
-  return `recipes/${dataset.version}/parquet-files`;
-}
-
-/** The folder a recipe run wrote, from the artifact path its execution recorded. */
-export function datasetVersionFromArtifact(
-  artifactPath: string | null,
-): string | null {
-  return leafName(artifactPath);
-}
-
+/**
+ * The training request for one round. Round 1 starts from the Train card's base model; later rounds
+ * pass the previous round's adapter folder as the model, which the trainer continues instead of
+ * stacking a new adapter.
+ */
 export function buildLoopTrainingRequest(input: {
-  datasets: LoopDataset[];
-  holdout: LoopDataset | null;
-  config: { modelName: string; epochs: number; learningRate: string };
-  iteration: number;
+  settings: TrainCardSettings;
+  trainPath: string;
+  continueFrom: string | null;
+  round: number;
 }): Record<string, unknown> {
-  const { datasets, holdout, config } = input;
+  const { settings, trainPath, continueFrom, round } = input;
   return {
-    model_name: config.modelName,
-    project_name: "Recipe loop",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    model_name: continueFrom ?? settings.baseModel,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    model_format: continueFrom ? "adapter" : null,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    project_name: `${settings.outputName} round ${round}`.slice(0, 80),
+    // biome-ignore lint/style/useNamingConvention: api schema
     training_type: "LoRA/QLoRA",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    load_in_4bit: settings.method === "qlora",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    local_datasets: [trainPath],
+    // biome-ignore lint/style/useNamingConvention: api schema
     format_type: "auto",
-    local_datasets: datasets.map(recipeDatasetRef),
-    local_eval_datasets: holdout ? [recipeDatasetRef(holdout)] : [],
-    // Two evals per run; the last one is the iteration's score.
-    eval_steps: 0.5,
-    num_epochs: config.epochs,
-    batch_size: 8,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    custom_format_mapping: buildTrainCardMapping(settings),
+    // biome-ignore lint/style/useNamingConvention: api schema
+    max_steps: settings.maxSteps,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    learning_rate: String(settings.learningRate),
+    // biome-ignore lint/style/useNamingConvention: api schema
+    batch_size: settings.batchSize,
+    // biome-ignore lint/style/useNamingConvention: api schema
     gradient_accumulation_steps: 1,
-    learning_rate: config.learningRate,
-    load_in_4bit: true,
-    max_seq_length: 1024,
-    random_seed: 3407 + input.iteration,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    lora_r: settings.loraRank,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    lora_alpha: settings.loraAlpha,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    max_seq_length: settings.contextLength,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    random_seed: settings.seed + round - 1,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    train_on_completions: true,
   };
 }

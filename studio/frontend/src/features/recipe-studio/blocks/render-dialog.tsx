@@ -7,6 +7,7 @@ import { getBlockDefinitionForConfig } from "./definitions";
 import { BenchmarkDialog } from "../dialogs/benchmark/benchmark-dialog";
 import { ExpressionDialog } from "../dialogs/expression/expression-dialog";
 import { LlmDialog } from "../dialogs/llm/llm-dialog";
+import { LoopDialog } from "../dialogs/loop/loop-dialog";
 import { ModelConfigDialog } from "../dialogs/models/model-config-dialog";
 import { ModelProviderDialog } from "../dialogs/models/model-provider-dialog";
 import { SeedDialog } from "../dialogs/seed/seed-dialog";
@@ -143,6 +144,10 @@ export function renderBlockDialog(
           modelConfigAliases={modelConfigAliases}
           onUpdate={update}
         />
+      ) : null;
+    case "loop":
+      return config.kind === "loop" ? (
+        <LoopDialog config={config} onUpdate={update} />
       ) : null;
   }
 }

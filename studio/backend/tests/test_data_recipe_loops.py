@@ -32,11 +32,14 @@ def _loop(loop_id = "l1", recipe_id = "r1", **extra) -> dict:
 def test_loop_history_round_trips_and_later_saves_replace_it():
     client = _client()
     client.put("/recipes/r1", json = _recipe())
-    first = _loop(status = "running", iterations = [{"index": 1, "score": 2.5}])
+    first = _loop(status = "running", rounds = [{"index": 1, "result": {"score": 0.55}}])
     assert client.put("/recipes/r1/loops/l1", json = first).status_code == 204
     second = _loop(
         status = "target_reached",
-        iterations = [{"index": 1, "score": 2.5}, {"index": 2, "score": 1.1}],
+        rounds = [
+            {"index": 1, "result": {"score": 0.55}},
+            {"index": 2, "dataset": {"fromFailures": 40}, "result": {"score": 0.8}},
+        ],
     )
     assert client.put("/recipes/r1/loops/l1", json = second).status_code == 204
 

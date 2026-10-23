@@ -8,247 +8,421 @@ import { registerBundlerResolver } from "./helpers/kit.ts";
 
 registerBundlerResolver();
 
-const {
-  DEFAULT_LOOP_CONFIG,
-  EVAL_LOSS_METRIC,
-  createLoopRecord,
-  loopStopReason,
-  resumeLoopRecord,
-  rowsForIteration,
-  runLoop,
-} = await import("../src/features/recipe-studio/loop/controller.ts");
-const { buildLoopTrainingRequest, datasetVersionFromArtifact } = await import(
+const { createLoopRecord, loopStopReason, resumeLoopRecord, runLoop } = await import(
+  "../src/features/recipe-studio/loop/controller.ts"
+);
+const { buildFeedbackSeedRows, feedbackSeedColumns } = await import(
+  "../src/features/recipe-studio/loop/feedback-seed.ts"
+);
+const { buildLoopTrainingRequest } = await import(
   "../src/features/recipe-studio/loop/training-request.ts"
+);
+const { buildLoopBenchmarkRequest, loopScoreFromResult } = await import(
+  "../src/features/recipe-studio/loop/benchmark-request.ts"
 );
 
 type Steps = Parameters<typeof runLoop>[0]["steps"];
-type Iteration = Parameters<typeof loopStopReason>[0][number];
+type Round = Parameters<typeof loopStopReason>[0][number];
+type Settings = Parameters<typeof loopStopReason>[1];
+type Failure = Parameters<typeof buildFeedbackSeedRows>[0]["failures"][number];
 
-function done(index: number, score: number): Iteration {
+const settings: Settings = {
+  targetScore: 0.8,
+  maxRounds: 4,
+  plateauRounds: 2,
+  rowsPerRound: 10,
+  failureShare: 0.5,
+};
+
+function done(index: number, score: number): Round {
   return {
     index,
     status: "done",
     dataset: null,
-    run: null,
-    score,
+    adapter: null,
+    result: {
+      score,
+      passed: 0,
+      scored: 10,
+      baseline: null,
+      failedExamples: [],
+      failedTotal: 0,
+    },
     error: null,
     startedAt: 0,
     finishedAt: 0,
   };
 }
 
-const config = {
-  ...DEFAULT_LOOP_CONFIG,
-  target: 0.5,
-  maxIterations: 5,
-  plateauPatience: 2,
-  minImprovement: 0.01,
-  baseRows: 100,
-  rowsPerIteration: 50,
-  holdoutRows: 32,
+function failure(question: string, topic: string): Failure {
+  return {
+    prompt: question,
+    reference: `Q-${topic.toUpperCase()}`,
+    output: "Q-BIL",
+    row: { ticket: question, topic, queue: `Q-${topic.toUpperCase()}` },
+  };
+}
+
+test("stop rules read the benchmark score as higher is better", () => {
+  assert.equal(loopStopReason([], settings), null);
+  assert.equal(loopStopReason([done(1, 0.5)], settings), null);
+  assert.equal(loopStopReason([done(1, 0.5), done(2, 0.8)], settings), "target_reached");
+  assert.equal(loopStopReason([done(1, 0.9)], settings), "target_reached");
+  // Two rounds that never beat round 1 by a full point is a plateau.
+  assert.equal(
+    loopStopReason([done(1, 0.6), done(2, 0.605), done(3, 0.55)], settings),
+    "plateau",
+  );
+  assert.equal(
+    loopStopReason([done(1, 0.6), done(2, 0.55), done(3, 0.62)], settings),
+    null,
+  );
+  assert.equal(
+    loopStopReason([done(1, 0.6), done(2, 0.6), done(3, 0.6)], {
+      ...settings,
+      plateauRounds: 0,
+    }),
+    null,
+  );
+  assert.equal(
+    loopStopReason([done(1, 0.4), done(2, 0.5), done(3, 0.6), done(4, 0.7)], settings),
+    "max_rounds",
+  );
+  const errored: Round = { ...done(2, 0.95), status: "error" };
+  assert.equal(loopStopReason([done(1, 0.5), errored], settings), null);
+});
+
+test("failed examples become seed rows, mixed with blank fresh rows", () => {
+  const failures = [failure("Refund my order", "returns"), failure("Card declined", "billing")];
+  const rows = buildFeedbackSeedRows({
+    failures,
+    rows: 10,
+    failureShare: 0.5,
+    recipeColumns: ["ticket", "topic", "queue"],
+  });
+  assert.equal(rows.length, 10);
+  const fromFailures = rows.filter((row) => row.origin === "failure");
+  assert.equal(fromFailures.length, 5);
+  // Cycles through the failures when there are fewer than slots.
+  assert.deepEqual(
+    fromFailures.map((row) => row.failed_topic),
+    ["returns", "billing", "returns", "billing", "returns"],
+  );
+  assert.equal(fromFailures[0]?.failed_prompt, "Refund my order");
+  assert.equal(fromFailures[0]?.failed_reference, "Q-RETURNS");
+  assert.equal(fromFailures[0]?.failed_output, "Q-BIL");
+  const fresh = rows.filter((row) => row.origin === "fresh");
+  assert.equal(fresh.length, 5);
+  for (const row of fresh) {
+    assert.equal(row.failed_prompt, "");
+    assert.equal(row.failed_topic, "");
+  }
+  // Every row has the same columns, so the seed reads as one table.
+  const columns = feedbackSeedColumns(["ticket", "topic", "queue"]);
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), [...columns].sort());
+  }
+});
+
+test("round 1, with nothing failed yet, is all fresh rows", () => {
+  const rows = buildFeedbackSeedRows({
+    failures: [],
+    rows: 4,
+    failureShare: 0.5,
+    recipeColumns: ["ticket"],
+  });
+  assert.deepEqual(
+    rows.map((row) => row.origin),
+    ["fresh", "fresh", "fresh", "fresh"],
+  );
+  const all = buildFeedbackSeedRows({
+    failures: [failure("a", "tech")],
+    rows: 3,
+    failureShare: 1,
+    recipeColumns: ["ticket"],
+  });
+  assert.deepEqual(
+    all.map((row) => row.origin),
+    ["failure", "failure", "failure"],
+  );
+});
+
+const trainSettings = {
+  baseModel: "unsloth/Qwen2.5-0.5B-Instruct",
+  method: "qlora" as const,
+  promptColumn: "ticket",
+  responseColumn: "queue",
+  maxSteps: 30,
+  learningRate: 0.0002,
+  loraRank: 16,
+  loraAlpha: 16,
+  batchSize: 4,
+  contextLength: 1024,
+  holdoutPercent: 25,
+  seed: 3407,
+  outputName: "router",
 };
 
-function fakeSteps(scores: number[], calls: string[]): Steps {
-  let version = 0;
+test("round 1 trains from the base model, later rounds continue the last adapter", () => {
+  const first = buildLoopTrainingRequest({
+    settings: trainSettings,
+    trainPath: "/data/r1/splits/holdout-25-seed3407/train.parquet",
+    continueFrom: null,
+    round: 1,
+  });
+  assert.equal(first.model_name, "unsloth/Qwen2.5-0.5B-Instruct");
+  assert.equal(first.model_format, null);
+  assert.deepEqual(first.local_datasets, [
+    "/data/r1/splits/holdout-25-seed3407/train.parquet",
+  ]);
+  assert.deepEqual(first.custom_format_mapping, { ticket: "user", queue: "assistant" });
+  assert.equal(first.max_steps, 30);
+  assert.equal(first.load_in_4bit, true);
+
+  const second = buildLoopTrainingRequest({
+    settings: trainSettings,
+    trainPath: "/data/r2/parquet-files",
+    continueFrom: "/outputs/router_round_1",
+    round: 2,
+  });
+  assert.equal(second.model_name, "/outputs/router_round_1");
+  assert.equal(second.model_format, "adapter");
+  assert.equal(second.training_type, "LoRA/QLoRA");
+  assert.deepEqual(second.local_datasets, ["/data/r2/parquet-files"]);
+  assert.notEqual(second.random_seed, first.random_seed);
+});
+
+function fakeSteps(scores: number[], calls: Record<string, unknown[]>): Steps {
   return {
-    metric: EVAL_LOSS_METRIC,
-    async generate({ rows, purpose }) {
-      version += 1;
-      calls.push(`generate:${purpose}:${rows}`);
-      return { version: `recipe_v${version}`, rows, executionId: `e${version}` };
+    generate: async ({ round, seedRows }) => {
+      calls.generate.push({ round, seedRows });
+      return {
+        executionId: `exec-${round}`,
+        jobId: `job-${round}`,
+        artifactPath: `/data/r${round}`,
+        runName: `round ${round}`,
+        rows: seedRows.length,
+        fromFailures: seedRows.filter((row) => row.origin === "failure").length,
+        examples: [],
+      };
     },
-    async train({ iteration, datasets, holdout }) {
-      calls.push(
-        `train:${iteration}:${datasets.map((d) => d.version).join(",")}:${holdout?.version}`,
-      );
-      return { runId: `run${iteration}`, adapter: `adapter${iteration}` };
+    train: async ({ round, holdout, continueFrom }) => {
+      calls.train.push({ round, holdout, continueFrom });
+      return {
+        adapter: {
+          jobId: `train-${round}`,
+          outputDir: `/outputs/round_${round}`,
+          continuedFrom: continueFrom,
+          trainRows: 8,
+        },
+        holdout: holdout ?? {
+          sourceJobId: `job-${round}`,
+          artifactPath: `/data/r${round}`,
+          holdoutPath: `/data/r${round}/splits/holdout.parquet`,
+          rows: 2,
+        },
+      };
     },
-    async score({ iteration }) {
-      calls.push(`score:${iteration}`);
-      const score = scores[iteration - 1];
-      if (score === undefined) throw new Error("no score scripted");
-      return score;
+    score: async ({ round, holdout }) => {
+      calls.score.push({ round, holdout: holdout.holdoutPath });
+      const score = scores[round - 1] ?? 0;
+      return {
+        score,
+        passed: Math.round(score * 10),
+        scored: 10,
+        baseline: null,
+        failedExamples: [failure(`missed in round ${round}`, "returns")],
+        failedTotal: 1,
+      };
     },
   };
 }
 
-test("stop rules: target, plateau, iteration cap, and a higher-is-better metric", () => {
-  assert.equal(loopStopReason([], config, EVAL_LOSS_METRIC), null);
-  assert.equal(
-    loopStopReason([done(1, 0.9), done(2, 0.5)], config, EVAL_LOSS_METRIC),
-    "target_reached",
-  );
-  assert.equal(
-    loopStopReason([done(1, 0.9), done(2, 0.7)], config, EVAL_LOSS_METRIC),
-    null,
-  );
-  // Best of the last two (0.795) is not 0.01 better than the best before them (0.8).
-  assert.equal(
-    loopStopReason(
-      [done(1, 0.8), done(2, 0.795), done(3, 0.81)],
-      config,
-      EVAL_LOSS_METRIC,
-    ),
-    "plateau",
-  );
-  assert.equal(
-    loopStopReason(
-      [done(1, 0.8), done(2, 0.795), done(3, 0.81)],
-      { ...config, plateauPatience: 0, maxIterations: 3 },
-      EVAL_LOSS_METRIC,
-    ),
-    "max_iterations",
-  );
-  const accuracy = { id: "accuracy", label: "Accuracy", goal: "max" as const };
-  assert.equal(
-    loopStopReason([done(1, 0.4), done(2, 0.92)], { ...config, target: 0.9 }, accuracy),
-    "target_reached",
-  );
-  assert.equal(rowsForIteration(config, 1), 100);
-  assert.equal(rowsForIteration(config, 3), 50);
-});
-
-test("a loop makes the held-out rows once, trains on every version so far, and stops at the target", async () => {
-  const calls: string[] = [];
-  const saved: Array<{ status: string; iterations: number }> = [];
-  const record = createLoopRecord({
-    id: "l1",
-    recipeId: "r1",
-    config,
-    metric: EVAL_LOSS_METRIC,
-    now: 1,
-  });
-  const final = await runLoop({
-    record,
-    steps: fakeSteps([1.2, 0.8, 0.45], calls),
+test("each round feeds its failures forward and continues from the last adapter", async () => {
+  const calls: Record<string, unknown[]> = { generate: [], train: [], score: [] };
+  const saved: unknown[] = [];
+  const record = await runLoop({
+    record: createLoopRecord({ id: "l1", recipeId: "r1", settings, now: 0 }),
+    steps: fakeSteps([0.5, 0.7, 0.85], calls),
+    recipeColumns: ["ticket", "topic", "queue"],
     signal: new AbortController().signal,
-    save: (r) => saved.push({ status: r.status, iterations: r.iterations.length }),
-    now: () => 2,
+    save: (r) => saved.push(r),
+    now: () => 1,
   });
-
-  assert.equal(final.status, "target_reached");
-  assert.deepEqual(calls, [
-    "generate:holdout:32",
-    "generate:train:100",
-    "train:1:recipe_v2:recipe_v1",
-    "score:1",
-    "generate:train:50",
-    "train:2:recipe_v2,recipe_v3:recipe_v1",
-    "score:2",
-    "generate:train:50",
-    "train:3:recipe_v2,recipe_v3,recipe_v4:recipe_v1",
-    "score:3",
-  ]);
+  assert.equal(record.status, "target_reached");
   assert.deepEqual(
-    final.iterations.map((it) => [it.index, it.dataset?.version, it.run?.runId, it.score]),
-    [
-      [1, "recipe_v2", "run1", 1.2],
-      [2, "recipe_v3", "run2", 0.8],
-      [3, "recipe_v4", "run3", 0.45],
-    ],
+    record.rounds.map((round) => round.result?.score),
+    [0.5, 0.7, 0.85],
   );
-  // Saved after every step, so a reload mid-iteration still has the partial history.
-  assert.ok(saved.length >= 1 + 3 * 4);
-  assert.deepEqual(saved[saved.length - 1], { status: "target_reached", iterations: 3 });
+
+  const generated = calls.generate as { round: number; seedRows: { origin: string; failed_prompt: string }[] }[];
+  assert.equal(generated[0]?.seedRows.filter((row) => row.origin === "failure").length, 0);
+  const round2 = generated[1]?.seedRows.filter((row) => row.origin === "failure") ?? [];
+  assert.equal(round2.length, 5);
+  assert.equal(round2[0]?.failed_prompt, "missed in round 1");
+  assert.equal(record.rounds[1]?.dataset?.fromFailures, 5);
+
+  const trained = calls.train as { continueFrom: string | null; holdout: unknown }[];
+  assert.deepEqual(
+    trained.map((call) => call.continueFrom),
+    [null, "/outputs/round_1", "/outputs/round_2"],
+  );
+  assert.equal(trained[0]?.holdout, null);
+  // Every round is scored on round 1's held-out rows.
+  assert.deepEqual(
+    (calls.score as { holdout: string }[]).map((call) => call.holdout),
+    ["/data/r1/splits/holdout.parquet", "/data/r1/splits/holdout.parquet", "/data/r1/splits/holdout.parquet"],
+  );
+  assert.ok(saved.length >= 9, "saved after every step");
 });
 
-test("resume keeps finished iterations and the held-out rows, and redoes the unfinished one", async () => {
-  const calls: string[] = [];
-  const interrupted = {
-    ...createLoopRecord({
-      id: "l1",
-      recipeId: "r1",
-      config,
-      metric: EVAL_LOSS_METRIC,
-      now: 1,
-    }),
-    holdout: { version: "recipe_hold", rows: 32, executionId: "eh" },
-    iterations: [
-      { ...done(1, 1.0), dataset: { version: "recipe_a", rows: 100, executionId: "e1" } },
-      {
-        ...done(2, 0),
-        status: "training" as const,
-        score: null,
-        dataset: { version: "recipe_b", rows: 50, executionId: "e2" },
-      },
-    ],
+test("a failed round can be resumed from the last finished adapter", async () => {
+  const calls: Record<string, unknown[]> = { generate: [], train: [], score: [] };
+  const steps = fakeSteps([0.5, 0.6, 0.9], calls);
+  const failing: Steps = {
+    ...steps,
+    train: async (input) => {
+      if (input.round === 2) {
+        throw new Error("CUDA out of memory");
+      }
+      return steps.train(input);
+    },
   };
-  const final = await runLoop({
-    record: resumeLoopRecord(interrupted, 5),
-    steps: fakeSteps([1.0, 0.7, 0.69, 0.695], calls),
-    signal: new AbortController().signal,
-    save: () => undefined,
-  });
-
-  assert.equal(calls[0], "generate:train:50");
-  assert.ok(!calls.some((c) => c.startsWith("generate:holdout")));
-  assert.equal(calls[1], "train:2:recipe_a,recipe_v1:recipe_hold");
-  assert.equal(final.status, "plateau");
-  assert.deepEqual(
-    final.iterations.map((it) => it.score),
-    [1.0, 0.7, 0.69, 0.695],
-  );
-});
-
-test("a failing step ends the loop with the error on that iteration; Stop ends it as stopped", async () => {
-  const failing = fakeSteps([], []);
-  failing.train = async () => {
-    throw new Error("CUDA out of memory");
-  };
-  const failed = await runLoop({
-    record: createLoopRecord({ id: "l1", recipeId: "r1", config, metric: EVAL_LOSS_METRIC, now: 1 }),
+  const broken = await runLoop({
+    record: createLoopRecord({ id: "l2", recipeId: "r1", settings, now: 0 }),
     steps: failing,
+    recipeColumns: ["ticket"],
     signal: new AbortController().signal,
     save: () => undefined,
   });
-  assert.equal(failed.status, "error");
-  assert.equal(failed.error, "CUDA out of memory");
-  assert.equal(failed.iterations[0]?.status, "error");
+  assert.equal(broken.status, "error");
+  assert.equal(broken.error, "CUDA out of memory");
+  assert.deepEqual(
+    broken.rounds.map((round) => round.status),
+    ["done", "error"],
+  );
 
+  const resumed = resumeLoopRecord(broken, settings, 5);
+  assert.equal(resumed.status, "running");
+  assert.equal(resumed.rounds.length, 1);
+  assert.equal(resumed.holdout?.holdoutPath, "/data/r1/splits/holdout.parquet");
+  calls.train = [];
+  const finished = await runLoop({
+    record: resumed,
+    steps,
+    recipeColumns: ["ticket"],
+    signal: new AbortController().signal,
+    save: () => undefined,
+  });
+  assert.equal(finished.status, "target_reached");
+  assert.deepEqual(
+    finished.rounds.map((round) => round.index),
+    [1, 2, 3],
+  );
+  assert.equal(
+    (calls.train[0] as { continueFrom: string | null }).continueFrom,
+    "/outputs/round_1",
+  );
+});
+
+test("stopping mid-round marks the loop stopped and the round unfinished", async () => {
   const controller = new AbortController();
-  const stopping = fakeSteps([1.0, 0.9], []);
-  const score = stopping.score;
-  stopping.score = async (input) => {
-    const value = await score(input);
-    controller.abort();
-    return value;
-  };
-  const stopped = await runLoop({
-    record: createLoopRecord({ id: "l2", recipeId: "r1", config, metric: EVAL_LOSS_METRIC, now: 1 }),
-    steps: stopping,
+  const calls: Record<string, unknown[]> = { generate: [], train: [], score: [] };
+  const steps = fakeSteps([0.5], calls);
+  const record = await runLoop({
+    record: createLoopRecord({ id: "l3", recipeId: "r1", settings, now: 0 }),
+    steps: {
+      ...steps,
+      train: async () => {
+        controller.abort();
+        const error = new Error("Stopped.");
+        error.name = "AbortError";
+        throw error;
+      },
+    },
+    recipeColumns: ["ticket"],
     signal: controller.signal,
     save: () => undefined,
   });
-  assert.equal(stopped.status, "stopped");
-  assert.deepEqual(stopped.iterations.map((it) => it.status), ["done"]);
+  assert.equal(record.status, "stopped");
+  assert.equal(record.rounds[0]?.status, "error");
+  assert.equal(record.rounds[0]?.error, "Stopped.");
 });
 
-test("training reads the recipe datasets through the recipes/ dataset root", () => {
-  assert.equal(
-    datasetVersionFromArtifact("/home/u/.unsloth/studio/assets/datasets/recipes/recipe_loop-v1"),
-    "recipe_loop-v1",
+test("a loop record survives a JSON round trip, the shape the server stores", () => {
+  const record = resumeLoopRecord(
+    {
+      ...createLoopRecord({ id: "l4", recipeId: "r1", settings, now: 0 }),
+      rounds: [done(1, 0.5), done(2, 0.7)],
+      holdout: { sourceJobId: "j", artifactPath: "/a", holdoutPath: "/a/h.parquet", rows: 20 },
+      status: "stopped",
+    },
+    settings,
+    9,
   );
-  assert.equal(datasetVersionFromArtifact(null), null);
-  const request = buildLoopTrainingRequest({
-    datasets: [
-      { version: "recipe_a", rows: 100, executionId: null },
-      { version: "recipe_b", rows: 50, executionId: null },
+  assert.deepEqual(JSON.parse(JSON.stringify(record)), record);
+});
+
+const benchmark = {
+  id: "b1",
+  kind: "benchmark" as const,
+  name: "benchmark",
+  model_alias: "",
+  baseline_mode: "adapter_off" as const,
+  prompt_column: "ticket",
+  reference_column: "queue",
+  scorer: "reference" as const,
+  holdout_percent: "20",
+  max_rows: "30",
+};
+
+test("the loop benchmarks the loaded adapter on the fixed held-out split", () => {
+  const { request, errors } = buildLoopBenchmarkRequest({
+    benchmark,
+    configs: [],
+    holdoutPath: "/data/r1/splits/holdout-25-seed3407/holdout.parquet",
+  });
+  assert.deepEqual(errors, []);
+  assert.ok(request);
+  assert.equal(request.holdout_path, "/data/r1/splits/holdout-25-seed3407/holdout.parquet");
+  assert.deepEqual(request.rows, []);
+  assert.equal(request.max_rows, 30);
+  assert.equal(request.reference_column, "queue");
+  assert.deepEqual(request.baseline, { mode: "adapter_off", alias: null });
+  const candidate = request.model_configs.find((config) => config.alias === request.model_alias);
+  assert.equal(candidate?.model, "local");
+  const provider = request.model_providers.find((p) => p.name === candidate?.provider);
+  assert.equal(provider?.is_local, true);
+
+  const missing = buildLoopBenchmarkRequest({
+    benchmark: { ...benchmark, reference_column: "" },
+    configs: [],
+    holdoutPath: "/x",
+  });
+  assert.equal(missing.request, null);
+  assert.match(missing.errors.join(" "), /reference column/);
+});
+
+test("a benchmark that scored nothing is an error, not a 0% round", () => {
+  const result = {
+    candidate: { total: 3, scored: 0, passed: 0, errors: 3, score: null },
+    cancelled: false,
+    failed_examples: [],
+    failed_total: 3,
+  };
+  assert.throws(() => loopScoreFromResult(result), /errored/);
+  const scored = loopScoreFromResult({
+    ...result,
+    candidate: { total: 3, scored: 3, passed: 2, errors: 0, score: 2 / 3 },
+    baseline: { total: 3, scored: 3, passed: 1, errors: 0, score: 1 / 3 },
+    failed_examples: [
+      { prompt: "p", reference: "r", output: "o", reason: "Answer does not contain the reference.", row: { a: 1 } },
     ],
-    holdout: { version: "recipe_hold", rows: 32, executionId: null },
-    config: { modelName: "unsloth/SmolLM2-135M-Instruct", epochs: 1, learningRate: "2e-4" },
-    iteration: 2,
+    failed_total: 1,
   });
-  assert.deepEqual(request.local_datasets, [
-    "recipes/recipe_a/parquet-files",
-    "recipes/recipe_b/parquet-files",
+  assert.equal(scored.score, 2 / 3);
+  assert.equal(scored.baseline, 1 / 3);
+  assert.deepEqual(scored.failedExamples, [
+    { prompt: "p", reference: "r", output: "o", row: { a: 1 } },
   ]);
-  assert.deepEqual(request.local_eval_datasets, ["recipes/recipe_hold/parquet-files"]);
-  assert.ok((request.eval_steps as number) > 0);
-  const noHoldout = buildLoopTrainingRequest({
-    datasets: [],
-    holdout: null,
-    config: { modelName: "m", epochs: 1, learningRate: "1e-4" },
-    iteration: 1,
-  });
-  assert.deepEqual(noHoldout.local_eval_datasets, []);
 });

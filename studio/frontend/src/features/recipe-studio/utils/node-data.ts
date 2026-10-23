@@ -81,6 +81,16 @@ export function nodeDataFromConfig(
       layoutDirection,
     };
   }
+  if (config.kind === "loop") {
+    return {
+      title: "Loop",
+      kind: "loop",
+      subtype: "Generate, train, benchmark",
+      blockType: "loop",
+      name: config.name,
+      layoutDirection,
+    };
+  }
   if (config.kind === "train") {
     return {
       title: "Train",
@@ -88,6 +98,16 @@ export function nodeDataFromConfig(
       subtype: "Fine-tune",
       blockType: "train",
       name: config.name,
+      layoutDirection,
+    };
+  }
+  if (config.kind === "seed" && config.loop_feedback) {
+    return {
+      title: "Source data",
+      kind: "seed",
+      subtype: "Fed by the Benchmark card",
+      blockType: "seed",
+      name: "Benchmark failures",
       layoutDirection,
     };
   }

@@ -1,98 +1,67 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { buildFeedbackSeedRows } from "./feedback-seed";
 import type {
-  LoopConfig,
-  LoopDataset,
-  LoopIteration,
-  LoopMetric,
   LoopRecord,
+  LoopRound,
+  LoopSettings,
   LoopStatus,
   LoopSteps,
 } from "./types";
 
-export const EVAL_LOSS_METRIC: LoopMetric = {
-  id: "eval_loss",
-  label: "Eval loss",
-  goal: "min",
-};
-
-export const DEFAULT_LOOP_CONFIG: LoopConfig = {
-  target: 0.5,
-  maxIterations: 3,
-  plateauPatience: 2,
-  minImprovement: 0.01,
-  baseRows: 200,
-  rowsPerIteration: 200,
-  holdoutRows: 64,
-  modelName: "unsloth/SmolLM2-135M-Instruct",
-  epochs: 1,
-  learningRate: "2e-4",
-};
+// A plateau is a run of rounds that never beats the best earlier score by a full point.
+const PLATEAU_MIN_GAIN = 0.01;
+const KEPT_FAILURES = 30;
 
 export type LoopStopReason = Exclude<LoopStatus, "running" | "stopped" | "error">;
 
-function isBetter(metric: LoopMetric, a: number, b: number, by = 0): boolean {
-  return metric.goal === "min" ? a < b - by : a > b + by;
+function scores(rounds: LoopRound[]): number[] {
+  return rounds
+    .filter((round) => round.status === "done" && round.result)
+    .map((round) => (round.result as NonNullable<LoopRound["result"]>).score);
 }
 
-function best(metric: LoopMetric, scores: number[]): number | null {
-  if (scores.length === 0) return null;
-  return scores.reduce((acc, s) => (isBetter(metric, s, acc) ? s : acc));
-}
-
-export function bestIteration(record: LoopRecord): LoopIteration | null {
-  let winner: LoopIteration | null = null;
-  for (const it of record.iterations) {
-    if (it.status !== "done" || it.score === null) continue;
-    if (!winner || isBetter(record.metric, it.score, winner.score as number)) {
-      winner = it;
+export function bestRound(rounds: LoopRound[]): LoopRound | null {
+  let best: LoopRound | null = null;
+  for (const round of rounds) {
+    if (round.status !== "done" || !round.result) {
+      continue;
+    }
+    if (!best?.result || round.result.score > best.result.score) {
+      best = round;
     }
   }
-  return winner;
+  return best;
 }
 
-function scoredIterations(iterations: LoopIteration[]): number[] {
-  return iterations
-    .filter((it) => it.status === "done" && it.score !== null)
-    .map((it) => it.score as number);
-}
-
-/** Why the loop should stop before starting another iteration, or null to keep going. */
+/** Why the loop stops before another round, or null to keep going. */
 export function loopStopReason(
-  iterations: LoopIteration[],
-  config: LoopConfig,
-  metric: LoopMetric,
+  rounds: LoopRound[],
+  settings: LoopSettings,
 ): LoopStopReason | null {
-  const scores = scoredIterations(iterations);
-  const top = best(metric, scores);
-  if (top !== null && !isBetter(metric, config.target, top)) {
+  const done = scores(rounds);
+  if (done.length > 0 && Math.max(...done) >= settings.targetScore) {
     return "target_reached";
   }
-  const patience = config.plateauPatience;
-  if (patience > 0 && scores.length > patience) {
-    const before = best(metric, scores.slice(0, -patience)) as number;
-    const recent = best(metric, scores.slice(-patience)) as number;
-    if (!isBetter(metric, recent, before, config.minImprovement)) {
+  const patience = settings.plateauRounds;
+  if (patience > 0 && done.length > patience) {
+    const before = Math.max(...done.slice(0, -patience));
+    const recent = Math.max(...done.slice(-patience));
+    if (recent < before + PLATEAU_MIN_GAIN) {
       return "plateau";
     }
   }
-  if (scores.length >= config.maxIterations) {
-    return "max_iterations";
+  if (done.length >= settings.maxRounds) {
+    return "max_rounds";
   }
   return null;
-}
-
-/** Iteration 1 draws the base rows; every later one adds a fresh draw of rowsPerIteration. */
-export function rowsForIteration(config: LoopConfig, index: number): number {
-  return index <= 1 ? config.baseRows : config.rowsPerIteration;
 }
 
 export function createLoopRecord(input: {
   id: string;
   recipeId: string;
-  config: LoopConfig;
-  metric: LoopMetric;
+  settings: LoopSettings;
   now: number;
 }): LoopRecord {
   return {
@@ -101,30 +70,34 @@ export function createLoopRecord(input: {
     createdAt: input.now,
     updatedAt: input.now,
     status: "running",
-    metric: input.metric,
-    config: input.config,
+    settings: input.settings,
     holdout: null,
-    iterations: [],
+    rounds: [],
     error: null,
   };
 }
 
-/** Continue a saved loop: finished iterations stay, an unfinished one is redone. */
-export function resumeLoopRecord(record: LoopRecord, now: number): LoopRecord {
+/** Continue a saved loop: finished rounds stay, an unfinished one is redone from the last adapter. */
+export function resumeLoopRecord(
+  record: LoopRecord,
+  settings: LoopSettings,
+  now: number,
+): LoopRecord {
+  const rounds = record.rounds.filter((round) => round.status === "done");
   return {
     ...record,
+    settings,
     status: "running",
     error: null,
     updatedAt: now,
-    iterations: record.iterations.filter((it) => it.status === "done"),
+    rounds,
+    // The held-out split is fixed by round 1; without a finished round it is carved again.
+    holdout: rounds.length > 0 ? record.holdout : null,
   };
 }
 
 function isAbort(error: unknown, signal: AbortSignal): boolean {
-  return (
-    signal.aborted ||
-    (error instanceof Error && error.name === "AbortError")
-  );
+  return signal.aborted || (error instanceof Error && error.name === "AbortError");
 }
 
 function errorText(error: unknown): string {
@@ -132,12 +105,14 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Drives iterations until a stop condition, saving after every step so the history survives a
- * reload. Each iteration trains on every dataset version generated so far.
+ * Drives rounds until a stop rule, saving after every step so the history survives a reload.
+ * Each round writes rows from the last round's failures plus fresh rows, continues training from
+ * the last round's adapter, and scores it on the held-out rows round 1 set aside.
  */
 export async function runLoop(input: {
   record: LoopRecord;
   steps: LoopSteps;
+  recipeColumns: string[];
   signal: AbortSignal;
   save: (record: LoopRecord) => void;
   now?: () => number;
@@ -149,93 +124,80 @@ export async function runLoop(input: {
     record = { ...record, ...patch, updatedAt: now() };
     save(record);
   };
-  const setIteration = (patch: Partial<LoopIteration>): void => {
-    const iterations = record.iterations.slice();
-    iterations[iterations.length - 1] = {
-      ...(iterations[iterations.length - 1] as LoopIteration),
+  const setRound = (patch: Partial<LoopRound>): void => {
+    const rounds = record.rounds.slice();
+    rounds[rounds.length - 1] = {
+      ...(rounds[rounds.length - 1] as LoopRound),
       ...patch,
     };
-    commit({ iterations });
+    commit({ rounds });
   };
 
   try {
-    if (!record.holdout && record.config.holdoutRows > 0) {
-      const holdout = await steps.generate({
-        iteration: 0,
-        rows: record.config.holdoutRows,
-        purpose: "holdout",
-        signal,
-      });
-      commit({ holdout });
-    }
     while (true) {
       if (signal.aborted) {
         commit({ status: "stopped" });
         return record;
       }
-      const reason = loopStopReason(
-        record.iterations,
-        record.config,
-        record.metric,
-      );
+      const reason = loopStopReason(record.rounds, record.settings);
       if (reason) {
         commit({ status: reason });
         return record;
       }
-      const index = record.iterations.length + 1;
+      const previous = record.rounds[record.rounds.length - 1] ?? null;
+      const index = record.rounds.length + 1;
       commit({
-        iterations: [
-          ...record.iterations,
+        rounds: [
+          ...record.rounds,
           {
             index,
             status: "generating",
             dataset: null,
-            run: null,
-            score: null,
+            adapter: null,
+            result: null,
             error: null,
             startedAt: now(),
             finishedAt: null,
           },
         ],
       });
-      const dataset = await steps.generate({
-        iteration: index,
-        rows: rowsForIteration(record.config, index),
-        purpose: "train",
-        signal,
+      const seedRows = buildFeedbackSeedRows({
+        failures: previous?.result?.failedExamples ?? [],
+        rows: record.settings.rowsPerRound,
+        failureShare: record.settings.failureShare,
+        recipeColumns: input.recipeColumns,
       });
-      setIteration({ dataset, status: "training" });
-      const datasets = record.iterations
-        .map((it) => it.dataset)
-        .filter((d): d is LoopDataset => d !== null);
-      const run = await steps.train({
-        iteration: index,
-        datasets,
+      const dataset = await steps.generate({ round: index, seedRows, signal });
+      setRound({ dataset, status: "training" });
+      const { adapter, holdout } = await steps.train({
+        round: index,
+        dataset,
         holdout: record.holdout,
-        config: record.config,
+        continueFrom: previous?.adapter?.outputDir ?? null,
         signal,
       });
-      setIteration({ run, status: "scoring" });
-      const score = await steps.score({
-        iteration: index,
-        run,
-        holdout: record.holdout,
-        signal,
+      if (!record.holdout) {
+        commit({ holdout });
+      }
+      setRound({ adapter, status: "scoring" });
+      const result = await steps.score({ round: index, adapter, holdout, signal });
+      setRound({
+        result: {
+          ...result,
+          failedExamples: result.failedExamples.slice(0, KEPT_FAILURES),
+        },
+        status: "done",
+        finishedAt: now(),
       });
-      setIteration({ score, status: "done", finishedAt: now() });
     }
   } catch (error) {
     const aborted = isAbort(error, signal);
     const message = aborted ? "Stopped." : errorText(error);
-    const last = record.iterations[record.iterations.length - 1];
+    const last = record.rounds[record.rounds.length - 1];
     if (last && last.status !== "done") {
-      setIteration({ status: "error", error: message, finishedAt: now() });
+      setRound({ status: "error", error: message, finishedAt: now() });
     }
-    commit(
-      aborted
-        ? { status: "stopped" }
-        : { status: "error", error: message },
-    );
+    commit(aborted ? { status: "stopped" } : { status: "error", error: message });
     return record;
   }
 }

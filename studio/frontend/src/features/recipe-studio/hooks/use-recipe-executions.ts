@@ -922,6 +922,8 @@ export function useRecipeExecutions({
       rows: number,
       runName: string | null,
       onCreated?: (executionId: string) => void,
+      // The loop frees the GPU for training next, so it skips reloading the model it displaced.
+      keepModel = false,
     ): Promise<boolean> => {
       const trimmedRunName = typeof runName === "string" ? runName.trim() : "";
       if (kind === "full" && !trimmedRunName) {
@@ -969,7 +971,7 @@ export function useRecipeExecutions({
         rows: normalizedRows,
         settings: runSettings,
         runName,
-        restorePrevious,
+        restorePrevious: keepModel ? null : restorePrevious,
         onCreated,
       });
     },
@@ -998,9 +1000,15 @@ export function useRecipeExecutions({
       runName: string,
     ): Promise<RecipeExecutionRecord | null> => {
       const created: { id: string | null } = { id: null };
-      const ok = await runWithValidation("full", rows, runName, (id) => {
-        created.id = id;
-      });
+      const ok = await runWithValidation(
+        "full",
+        rows,
+        runName,
+        (id) => {
+          created.id = id;
+        },
+        true,
+      );
       if (!(ok && created.id)) return null;
       return (
         useRecipeExecutionsStore

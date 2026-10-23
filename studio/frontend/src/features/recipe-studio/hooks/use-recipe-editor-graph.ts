@@ -36,6 +36,7 @@ const SUPPORTED_DRAG_KINDS: RecipeBlockDragPayload["kind"][] = [
   "note",
   "train",
   "benchmark",
+  "loop",
 ];
 
 function parseRecipeBlockDragPayload(raw: string): RecipeBlockDragPayload | null {
@@ -82,6 +83,7 @@ type UseRecipeEditorGraphArgs = {
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
   addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
   addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addLoopNode: (position?: XYPosition, openDialog?: boolean) => void;
 };
 
 type UseRecipeEditorGraphResult = {
@@ -106,6 +108,7 @@ type UseRecipeEditorGraphResult = {
   handleAddMarkdownNoteFromSheet: () => void;
   handleAddTrainFromSheet: () => void;
   handleAddBenchmarkFromSheet: () => void;
+  handleAddLoopFromSheet: () => void;
 };
 
 export function useRecipeEditorGraph({
@@ -130,6 +133,7 @@ export function useRecipeEditorGraph({
   addMarkdownNoteNode,
   addTrainNode,
   addBenchmarkNode,
+  addLoopNode,
 }: UseRecipeEditorGraphArgs): UseRecipeEditorGraphResult {
   const baseNodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const baseEdgeIds = useMemo(() => new Set(edges.map((edge) => edge.id)), [edges]);
@@ -245,6 +249,10 @@ export function useRecipeEditorGraph({
         addBenchmarkNode(position, false);
         return;
       }
+      if (payload.kind === "loop") {
+        addLoopNode(position, false);
+        return;
+      }
       if (payload.type === "model_provider") {
         addModelProviderNode(position, false);
         return;
@@ -261,6 +269,7 @@ export function useRecipeEditorGraph({
     },
     [
       addBenchmarkNode,
+      addLoopNode,
       addExpressionNode,
       addLlmNode,
       addMarkdownNoteNode,
@@ -342,6 +351,10 @@ export function useRecipeEditorGraph({
     addBenchmarkNode(getViewportCenterPosition());
   }, [addBenchmarkNode, getViewportCenterPosition]);
 
+  const handleAddLoopFromSheet = useCallback(() => {
+    addLoopNode(getViewportCenterPosition());
+  }, [addLoopNode, getViewportCenterPosition]);
+
   return {
     handleNodeClick,
     handleNodeDoubleClick,
@@ -360,5 +373,6 @@ export function useRecipeEditorGraph({
     handleAddMarkdownNoteFromSheet,
     handleAddTrainFromSheet,
     handleAddBenchmarkFromSheet,
+    handleAddLoopFromSheet,
   };
 }

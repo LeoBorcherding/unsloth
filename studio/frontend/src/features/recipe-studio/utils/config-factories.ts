@@ -6,6 +6,7 @@ import type {
   ExpressionConfig,
   LlmConfig,
   LlmType,
+  LoopCardConfig,
   MarkdownNoteConfig,
   ModelConfig,
   ModelProviderConfig,
@@ -443,6 +444,23 @@ export function makeBenchmarkConfig(
     holdout_percent: "20",
     // biome-ignore lint/style/useNamingConvention: ui schema
     max_rows: "20",
+  };
+}
+
+export function makeLoopConfig(
+  id: string,
+  existing: NodeConfig[],
+): LoopCardConfig {
+  return {
+    id,
+    kind: "loop",
+    name: nextName(existing, "loop"),
+    targetScore: "80",
+    maxRounds: "3",
+    stopOnPlateau: true,
+    plateauRounds: "2",
+    rowsPerRound: "80",
+    failureShare: "50",
   };
 }
 

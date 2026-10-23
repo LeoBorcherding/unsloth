@@ -38,6 +38,7 @@ import {
 import type { RecipeSnapshot } from "../utils/import";
 import { getLayoutedElements } from "../utils/layout";
 import { makeUnstructuredUploadUid } from "../utils/config-factories";
+import { findLoopParts, makeFeedbackSeedConfig } from "../utils/loop-card";
 import {
   centerModelInfraNodes,
   optimizeModelInfraEdgeHandles,
@@ -63,6 +64,7 @@ type SheetView =
   | "note"
   | "train"
   | "benchmark"
+  | "loop"
   | "processor";
 
 type RecipeStudioState = {
@@ -124,6 +126,9 @@ type RecipeStudioState = {
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
   addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
   addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addLoopNode: (position?: XYPosition, openDialog?: boolean) => void;
+  /** The Loop card's failures seed, wired from the Benchmark card so the feedback edge shows. */
+  addLoopFeedbackSeed: () => void;
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   setAuxNodePosition: (id: string, position: XYPosition) => void;
@@ -748,6 +753,47 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         position,
         openDialog,
       );
+    }),
+  addLoopNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(state, "loop", "loop", position, openDialog);
+    }),
+  addLoopFeedbackSeed: () =>
+    set((state) => {
+      const parts = findLoopParts(state.configs);
+      if (state.executionLocked || parts.feedback || parts.otherSeed) {
+        return state;
+      }
+      const config = makeFeedbackSeedConfig(
+        `n${state.nextId}`,
+        Object.values(state.configs),
+      );
+      const left = Math.min(0, ...state.nodes.map((node) => node.position.x));
+      const update = buildNodeUpdate(
+        state,
+        config,
+        state.layoutDirection,
+        { x: left - 420, y: state.nodes[0]?.position.y ?? 0 },
+        false,
+      );
+      if (!parts.benchmark) {
+        return update;
+      }
+      const wired = applyRecipeConnection(
+        {
+          source: parts.benchmark.id,
+          sourceHandle: HANDLE_IDS.benchmarkOut,
+          target: config.id,
+          targetHandle: HANDLE_IDS.dataInBottom,
+        },
+        update.configs,
+        state.edges,
+        state.layoutDirection,
+      );
+      return { ...update, edges: wired.edges };
     }),
   loadRecipe: (snapshot) =>
     set((state) => ({

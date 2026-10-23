@@ -40,7 +40,7 @@ export type RecipePayload = {
       x: number;
       y: number;
       width?: number;
-      node_type?: "markdown_note" | "tool_config" | "train" | "benchmark";
+      node_type?: "markdown_note" | "tool_config" | "train" | "benchmark" | "loop";
       name?: string;
       markdown?: string;
       note_color?: string;
@@ -49,6 +49,7 @@ export type RecipePayload = {
       // Train card settings: the card is not a dataset column.
       train?: Record<string, unknown>;
       benchmark?: Record<string, unknown>;
+      loop?: Record<string, unknown>;
     }>;
     edges: {
       from: string;
@@ -73,6 +74,7 @@ export type RecipePayload = {
     seed_drop_columns?: string[];
     seed_preview_rows?: Record<string, unknown>[];
     seed_total_rows?: number;
+    seed_loop_feedback?: boolean;
     local_file_name?: string;
     // biome-ignore lint/style/useNamingConvention: api schema
     unstructured_upload_uid?: string;

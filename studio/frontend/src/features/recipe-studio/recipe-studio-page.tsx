@@ -33,7 +33,8 @@ import { buildRecipeEditorTourSteps } from "./tour";
 import { BlockSheet } from "./components/block-sheet";
 import { CANVAS_DELETE_KEYS } from "./constants";
 import { LayoutControls } from "./components/controls/layout-controls";
-import { LoopCard } from "./components/loop/loop-card";
+import { RecipeFeedbackEdge } from "./components/loop/feedback-edge";
+import { RecipeLoopContext } from "./components/loop/loop-context";
 import { RunValidateFloatingControls } from "./components/controls/run-validate-floating-controls";
 import { ViewportControls } from "./components/controls/viewport-controls";
 import { ExecutionsView } from "./components/executions/executions-view";
@@ -65,6 +66,7 @@ import { useRecipeStudioActions } from "./hooks/use-recipe-studio-actions";
 import { useRecipeStudioStore } from "./stores/recipe-studio";
 import type { RecipeNodeData } from "./types";
 import { getGraphWarnings } from "./utils/graph-warnings";
+import { isFeedbackSeed } from "./utils/loop-card";
 import {
   FIT_VIEW_DURATION_MS,
   FIT_VIEW_MAX_ZOOM,
@@ -80,6 +82,7 @@ const NODE_TYPES: NodeTypes = { builder: RecipeNode, aux: RecipeGraphAuxNode };
 const EDGE_TYPES: EdgeTypes = {
   canvas: DataEdge,
   semantic: RecipeGraphSemanticEdge,
+  feedback: RecipeFeedbackEdge,
 };
 const COMPLETE_ISLAND_VISIBLE_MS = 7_000;
 const TAB_SWITCH_FIT_DELAY_MS = 110;
@@ -149,6 +152,7 @@ export function RecipeStudioPage({
     addMarkdownNoteNode,
     addTrainNode,
     addBenchmarkNode,
+    addLoopNode,
     selectConfig,
     openConfig,
     updateConfig,
@@ -191,6 +195,7 @@ export function RecipeStudioPage({
       addMarkdownNoteNode: state.addMarkdownNoteNode,
       addTrainNode: state.addTrainNode,
       addBenchmarkNode: state.addBenchmarkNode,
+      addLoopNode: state.addLoopNode,
       selectConfig: state.selectConfig,
       openConfig: state.openConfig,
       updateConfig: state.updateConfig,
@@ -278,6 +283,7 @@ export function RecipeStudioPage({
     handleAddMarkdownNoteFromSheet,
     handleAddTrainFromSheet,
     handleAddBenchmarkFromSheet,
+    handleAddLoopFromSheet,
   } = useRecipeEditorGraph({
     nodes,
     edges,
@@ -300,6 +306,7 @@ export function RecipeStudioPage({
     addMarkdownNoteNode,
     addTrainNode,
     addBenchmarkNode,
+    addLoopNode,
   });
 
   const configList = useMemo(() => Object.values(configs), [configs]);
@@ -409,6 +416,16 @@ export function RecipeStudioPage({
     auxNodePositions,
     llmAuxVisibility,
   });
+  const loopRunning = loop.running;
+  const flowEdges = useMemo(
+    () =>
+      displayGraph.edges.map((edge) =>
+        configs[edge.source]?.kind === "benchmark" && isFeedbackSeed(configs[edge.target])
+          ? { ...edge, type: "feedback", data: { ...edge.data, active: loopRunning } }
+          : edge,
+      ),
+    [configs, displayGraph.edges, loopRunning],
+  );
   const tourSteps = useMemo(
     () =>
       buildRecipeEditorTourSteps({
@@ -484,7 +501,7 @@ export function RecipeStudioPage({
     setRecentCompletedExecution(latestCompleted);
     const hideTimer = window.setTimeout(() => {
       setRecentCompletedExecution(null);
-      // A running loop finishes a dataset every iteration; keep its card on screen.
+      // A running loop finishes a dataset every round; keep the canvas on screen.
       if (loopRunningRef.current) return;
       setActiveView((currentView) =>
         currentView === "editor" ? "executions" : currentView,
@@ -670,12 +687,13 @@ export function RecipeStudioPage({
   let editorContent: ReactElement;
   if (initialRecipeReady) {
     editorContent = (
+      <RecipeLoopContext.Provider value={loop}>
       <ReactFlow<Node<RecipeNodeData | RecipeGraphAuxNodeData>, Edge>
         onInit={setReactFlowInstance}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         nodes={displayGraph.nodes}
-        edges={displayGraph.edges}
+        edges={flowEdges}
         proOptions={{ hideAttribution: true }}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
@@ -777,6 +795,7 @@ export function RecipeStudioPage({
             onAddMarkdownNote={handleAddMarkdownNoteFromSheet}
             onAddTrain={handleAddTrainFromSheet}
             onAddBenchmark={handleAddBenchmarkFromSheet}
+            onAddLoop={handleAddLoopFromSheet}
             onOpenProcessors={openProcessorsFromSheet}
             copied={copied}
             onCopy={copyRecipe}
@@ -803,9 +822,6 @@ export function RecipeStudioPage({
               />
             </Panel>
           )}
-        <Panel position="bottom-right" className="m-3">
-          <LoopCard view={loop} disabled={runBusy && !loop.running} />
-        </Panel>
         <RunValidateFloatingControls
           runBusy={runBusy}
           runDialogKind={runDialogKind}
@@ -818,6 +834,7 @@ export function RecipeStudioPage({
           }}
         />
       </ReactFlow>
+      </RecipeLoopContext.Provider>
     );
   } else {
     editorContent = (

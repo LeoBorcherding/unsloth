@@ -60,6 +60,7 @@ type SheetView =
   | "note"
   | "train"
   | "benchmark"
+  | "loop"
   | "processor";
 type SheetKind =
   | "sampler"
@@ -69,7 +70,8 @@ type SheetKind =
   | "expression"
   | "note"
   | "train"
-  | "benchmark";
+  | "benchmark"
+  | "loop";
 type RootSheetView = Exclude<SheetView, "root">;
 type RootGroup = {
   kind: RootSheetView;
@@ -97,6 +99,7 @@ type BlockSheetProps = {
   onAddMarkdownNote: () => void;
   onAddTrain: () => void;
   onAddBenchmark: () => void;
+  onAddLoop: () => void;
   onOpenProcessors: () => void;
   copied: boolean;
   onCopy: () => void;
@@ -134,6 +137,9 @@ function getSheetTitle(sheetView: SheetView): string {
   if (sheetView === "benchmark") {
     return "Benchmark";
   }
+  if (sheetView === "loop") {
+    return "Loop";
+  }
   if (sheetView === "processor") {
     return "Processor blocks";
   }
@@ -154,6 +160,7 @@ const VIEW_KIND: Record<SheetView, SheetKind | null> = {
   note: "note",
   train: "train",
   benchmark: "benchmark",
+  loop: "loop",
   processor: null,
 };
 
@@ -179,6 +186,7 @@ const SEARCHABLE_KINDS: SheetKind[] = [
   "note",
   "train",
   "benchmark",
+  "loop",
 ];
 const PROCESSOR_TITLE = "Final dataset shape";
 const PROCESSOR_DESCRIPTION = "Rename, reorder, or reshape the final dataset.";
@@ -279,6 +287,7 @@ export function BlockSheet({
   onAddMarkdownNote,
   onAddTrain,
   onAddBenchmark,
+  onAddLoop,
   onOpenProcessors,
   copied,
   onCopy,
@@ -437,6 +446,10 @@ export function BlockSheet({
       onAddBenchmark();
       return;
     }
+    if (kind === "loop") {
+      onAddLoop();
+      return;
+    }
     onAddMarkdownNote();
   };
 
@@ -564,7 +577,8 @@ export function BlockSheet({
                       item.kind === "expression" ||
                       item.kind === "note" ||
                       item.kind === "train" ||
-                      item.kind === "benchmark"
+                      item.kind === "benchmark" ||
+                      item.kind === "loop"
                     }
                     onDragStart={
                       item.kind === "expression" && expressionBlocks[0]
@@ -575,13 +589,16 @@ export function BlockSheet({
                             ? buildDragStart("train", trainBlocks[0].type)
                           : item.kind === "benchmark"
                             ? buildDragStart("benchmark", "benchmark")
+                          : item.kind === "loop"
+                            ? buildDragStart("loop", "loop")
                             : undefined
                     }
                     trailing={
                       item.kind === "expression" ||
                       item.kind === "note" ||
                       item.kind === "train" ||
-                      item.kind === "benchmark"
+                      item.kind === "benchmark" ||
+                      item.kind === "loop"
                         ? "drag"
                         : "chevron"
                     }
@@ -609,6 +626,11 @@ export function BlockSheet({
                       if (item.kind === "benchmark") {
                         setSheetOpen(false);
                         onAddBenchmark();
+                        return;
+                      }
+                      if (item.kind === "loop") {
+                        setSheetOpen(false);
+                        onAddLoop();
                         return;
                       }
                       onViewChange(item.kind);

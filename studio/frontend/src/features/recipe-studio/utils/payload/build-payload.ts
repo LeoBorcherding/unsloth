@@ -197,7 +197,7 @@ export function buildRecipePayload(
       // SeedConfig is global config (seed_config); seed-dataset columns are added by DataDesigner.
       continue;
     }
-    if (config.kind === "markdown_note" || config.kind === "train" || config.kind === "benchmark") {
+    if (config.kind === "markdown_note" || config.kind === "train" || config.kind === "benchmark" || config.kind === "loop") {
       continue;
     }
     if (config.kind === "model_provider") {
@@ -300,6 +300,20 @@ export function buildRecipePayload(
           node_type: "benchmark" as const,
           name: config.name,
           benchmark: serializeBenchmarkSettings(config),
+        },
+      ];
+    }
+    if (config.kind === "loop") {
+      const { id: _id, kind: _kind, name: _name, ...loop } = config;
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "loop" as const,
+          name: config.name,
+          loop,
         },
       ];
     }
@@ -457,6 +471,10 @@ export function buildRecipePayload(
         }),
         ...(firstSeed && {
           seed_preview_rows: firstSeed.seed_preview_rows ?? [],
+        }),
+        ...(firstSeed?.loop_feedback && {
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          seed_loop_feedback: true,
         }),
         ...(firstSeed?.seed_total_rows !== undefined && {
           seed_total_rows: firstSeed.seed_total_rows,

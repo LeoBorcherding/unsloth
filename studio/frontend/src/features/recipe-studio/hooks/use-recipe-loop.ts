@@ -3,44 +3,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RecipeExecutionRecord } from "../execution-types";
-import {
-  DEFAULT_LOOP_CONFIG,
-  EVAL_LOSS_METRIC,
-  createLoopRecord,
-  resumeLoopRecord,
-  runLoop,
-} from "../loop/controller";
+import { createLoopRecord, resumeLoopRecord, runLoop } from "../loop/controller";
 import { listRecipeLoops, saveRecipeLoop } from "../loop/loop-api";
 import { createStudioLoopSteps } from "../loop/studio-steps";
-import { datasetVersionFromArtifact } from "../loop/training-request";
-import type { LoopConfig, LoopRecord, LoopSteps } from "../loop/types";
+import type { LoopRecord, LoopSettings } from "../loop/types";
+import { useRecipeStudioStore } from "../stores/recipe-studio";
+import { loopRecipeColumns } from "../utils/loop-card";
 
 export type RecipeLoopView = {
   latest: LoopRecord | null;
   // A saved "running" loop nothing in this tab is driving (reload, closed tab, restart).
   interrupted: boolean;
   running: boolean;
-  config: LoopConfig;
-  setConfig: (patch: Partial<LoopConfig>) => void;
-  start: () => void;
-  resume: () => void;
+  start: (settings: LoopSettings) => void;
+  resume: (settings: LoopSettings) => void;
   stop: () => void;
 };
-
-function abortError(): Error {
-  const error = new Error("Stopped.");
-  error.name = "AbortError";
-  return error;
-}
-
-function untilAborted(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    if (signal.aborted) reject(abortError());
-    signal.addEventListener("abort", () => reject(abortError()), {
-      once: true,
-    });
-  });
-}
 
 export function useRecipeLoop(input: {
   recipeId: string;
@@ -52,10 +30,9 @@ export function useRecipeLoop(input: {
 }): RecipeLoopView {
   const { recipeId } = input;
   const [loops, setLoops] = useState<LoopRecord[]>([]);
-  const [config, setConfigState] = useState<LoopConfig>(DEFAULT_LOOP_CONFIG);
   const [activeId, setActiveId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // The run callback is rebuilt whenever the graph changes; a loop always uses the current one.
+  // Rebuilt whenever the graph changes; a loop always runs the current recipe.
   const runRef = useRef(input.runFullForLoop);
   runRef.current = input.runFullForLoop;
   const nameRef = useRef(input.workflowName);
@@ -64,13 +41,10 @@ export function useRecipeLoop(input: {
   useEffect(() => {
     let cancelled = false;
     setLoops([]);
-    setConfigState(DEFAULT_LOOP_CONFIG);
     listRecipeLoops(recipeId)
       .then((records) => {
-        if (cancelled) return;
-        setLoops(records);
-        if (records[0]) {
-          setConfigState({ ...DEFAULT_LOOP_CONFIG, ...records[0].config });
+        if (!cancelled) {
+          setLoops(records);
         }
       })
       .catch((error) => {
@@ -84,50 +58,31 @@ export function useRecipeLoop(input: {
   }, [recipeId]);
 
   const upsert = useCallback((record: LoopRecord): void => {
-    setLoops((prev) => [record, ...prev.filter((l) => l.id !== record.id)]);
+    setLoops((prev) => [record, ...prev.filter((loop) => loop.id !== record.id)]);
     saveRecipeLoop(record);
   }, []);
 
   const drive = useCallback(
     async (record: LoopRecord): Promise<void> => {
-      if (abortRef.current) return;
+      if (abortRef.current) {
+        return;
+      }
       const controller = new AbortController();
       abortRef.current = controller;
       setActiveId(record.id);
-      const tag = record.id.slice(0, 6);
-      const generate: LoopSteps["generate"] = async ({
-        iteration,
-        rows,
-        purpose,
-        signal,
-      }) => {
-        const base = nameRef.current.trim() || "Recipe";
-        const name =
-          purpose === "holdout"
-            ? `${base} loop ${tag} holdout`
-            : `${base} loop ${tag} v${iteration}`;
-        const execution = await Promise.race([
-          runRef.current(rows, name),
-          untilAborted(signal),
-        ]);
-        if (!execution) {
-          throw new Error("Generating the dataset failed. The Runs tab has the details.");
-        }
-        const version = datasetVersionFromArtifact(execution.artifact_path);
-        if (!version) {
-          throw new Error("The recipe run finished without saving a dataset.");
-        }
-        return {
-          version,
-          rows: execution.datasetTotal ?? execution.rows,
-          executionId: execution.id,
-        };
-      };
+      const store = useRecipeStudioStore.getState;
       upsert(record);
       try {
         await runLoop({
           record,
-          steps: createStudioLoopSteps(generate),
+          steps: createStudioLoopSteps({
+            tag: record.id.slice(0, 6),
+            recipeName: () => nameRef.current,
+            configs: () => store().configs,
+            updateConfig: (id, patch) => store().updateConfig(id, patch),
+            runRecipe: (rows, runName) => runRef.current(rows, runName),
+          }),
+          recipeColumns: loopRecipeColumns(store().configs),
           signal: controller.signal,
           save: upsert,
         });
@@ -141,40 +96,38 @@ export function useRecipeLoop(input: {
 
   const latest = loops[0] ?? null;
 
-  const start = useCallback(() => {
-    void drive(
-      createLoopRecord({
-        id: crypto.randomUUID(),
-        recipeId,
-        config,
-        metric: EVAL_LOSS_METRIC,
-        now: Date.now(),
-      }),
-    );
-  }, [config, drive, recipeId]);
+  const start = useCallback(
+    (settings: LoopSettings) => {
+      void drive(
+        createLoopRecord({
+          id: crypto.randomUUID(),
+          recipeId,
+          settings,
+          now: Date.now(),
+        }),
+      );
+    },
+    [drive, recipeId],
+  );
 
-  const resume = useCallback(() => {
-    // Current settings apply, so a finished loop can continue with a higher iteration cap.
-    if (latest) void drive(resumeLoopRecord({ ...latest, config }, Date.now()));
-  }, [config, drive, latest]);
+  const resume = useCallback(
+    (settings: LoopSettings) => {
+      // Current settings apply, so a finished loop can go on with a higher round cap.
+      if (latest) {
+        void drive(resumeLoopRecord(latest, settings, Date.now()));
+      }
+    },
+    [drive, latest],
+  );
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
 
-  const setConfig = useCallback((patch: Partial<LoopConfig>) => {
-    setConfigState((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  const running = activeId !== null;
   return {
     latest,
-    interrupted: Boolean(
-      latest && latest.status === "running" && activeId !== latest.id,
-    ),
-    running,
-    config,
-    setConfig,
+    interrupted: Boolean(latest && latest.status === "running" && activeId !== latest.id),
+    running: activeId !== null,
     start,
     resume,
     stop,

@@ -20,6 +20,7 @@ import {
   VALIDATOR_OXC_CODE_LANGS,
   VALIDATOR_SQL_CODE_LANGS,
 } from "../validators/code-lang";
+import { isFeedbackSeed } from "../loop-card";
 import { TRAINED_MODEL_CONSUMER_KINDS } from "../train-card";
 import {
   isSemanticRelation,
@@ -341,6 +342,12 @@ export function isValidRecipeConnection(
   if (source.kind === "train") {
     return (
       TRAINED_MODEL_CONSUMER_KINDS.has(target.kind) && isDataLane(connection)
+    );
+  }
+  // A Benchmark card's score and failed examples only feed the Loop card and its failures seed.
+  if (source.kind === "benchmark" && !isSemanticRelation(source, target)) {
+    return (
+      (target.kind === "loop" || isFeedbackSeed(target)) && isDataLane(connection)
     );
   }
   const semanticRelation = isSemanticRelation(source, target);

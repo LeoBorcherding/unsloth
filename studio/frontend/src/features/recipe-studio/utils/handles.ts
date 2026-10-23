@@ -49,6 +49,7 @@ const DATA_TARGET_HANDLES = new Set<string>([
 ]);
 
 const DATA_SOURCE_HANDLES = new Set<string>([
+  HANDLE_IDS.benchmarkOut,
   HANDLE_IDS.dataOut,
   HANDLE_IDS.dataOutLeft,
   HANDLE_IDS.dataOutTop,

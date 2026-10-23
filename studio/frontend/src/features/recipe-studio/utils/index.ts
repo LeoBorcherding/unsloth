@@ -5,6 +5,7 @@ export {
   makeBenchmarkConfig,
   makeExpressionConfig,
   makeLlmConfig,
+  makeLoopConfig,
   makeMarkdownNoteConfig,
   makeModelConfig,
   makeModelProviderConfig,
