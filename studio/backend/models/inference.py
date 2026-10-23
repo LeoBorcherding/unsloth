@@ -5175,10 +5175,13 @@ class DiffusionGenerateRequest(BaseModel):
         "Omitted applies none and behaves exactly as before. Rejected with a clear message when "
         "the loaded model or its quantisation can't apply ControlNet.",
     )
-    sampler: Optional[Literal["default", "euler", "euler_a", "dpmpp_2m", "dpmpp_2m_sde"]] = Field(
+    sampler: Optional[
+        Literal["default", "euler", "euler_a", "dpmpp_2m", "dpmpp_2m_sde", "heun", "unipc"]
+    ] = Field(
         None,
         description = "Sampler for this generation, one of the loaded model's status `samplers` ids. "
-        "Omitted or 'default' keeps the model's shipped scheduler.",
+        "Omitted or 'default' keeps the model's shipped scheduler (on the native engine, the "
+        "family's sd.cpp sampling method).",
     )
     schedule_type: Optional[Literal["automatic", "uniform", "karras", "exponential"]] = Field(
         None,
@@ -6007,8 +6010,9 @@ class DiffusionStatusResponse(BaseModel):
     samplers: list[Dict[str, Any]] = Field(
         default_factory = list,
         description = "Samplers the loaded model can run, each {id, label, schedule_types}; the "
-        "first is 'default' (the shipped scheduler). Empty when there is no choice: flow-matching "
-        "models, the native and MLX engines, or nothing loaded.",
+        "first is 'default' (the shipped scheduler). Flow-matching models offer their own set, "
+        "the native engine sd.cpp's. Empty when there is no choice: the MLX engine, a scheduler "
+        "that cannot be swapped, or nothing loaded.",
     )
     sd_controls: Optional[Dict[str, Any]] = Field(
         None,

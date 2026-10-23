@@ -77,6 +77,11 @@ from core.inference.diffusion_memory import (
     OFFLOAD_NONE,
     OFFLOAD_SEQUENTIAL,
 )
+from core.inference.diffusion_sampler import (
+    DEFAULT_SAMPLER,
+    sd_cpp_sampler_options,
+    sd_cpp_sampling_method,
+)
 from core.inference import sd_cpp_args as sd_cpp_args_mod
 from core.inference.sd_cpp_args import (
     CPU_BACKEND_FLAGS,
@@ -2608,6 +2613,20 @@ def ensure_sd_server_binary(
         return installed or fallback
 
 
+def _recipe_steps(state: "_SdState") -> Optional[int]:
+    """The load's recommended step count (names only, no header read), else its shipped grid's; None = unknown."""
+    from core.inference.diffusion_families import named_generation_params
+    from core.inference.diffusion_flux3 import is_flux3_family
+
+    names = (state.gguf_filename, state.display_repo_id, state.repo_id, state.base_repo)
+    if is_flux3_family(state.family):
+        names = (state.family.name,) + names
+    named = named_generation_params(*names)
+    if named is not None:
+        return int(named[0])
+    return len(state.sample_sigmas) if state.sample_sigmas else None
+
+
 @dataclass(frozen = True)
 class _SdState:
     """The loaded native checkpoint: resolved asset paths + run settings. ``server`` is the resident
@@ -4433,6 +4452,9 @@ class SdCppDiffusionBackend:
         # Interface parity only: the activation guard is diffusers-only.
         allow_oversized: bool = False,
         hires: Any = None,
+        # Ids from status()["samplers"]; None / "default" keeps the family's sd.cpp sampling method.
+        sampler: Optional[str] = None,
+        schedule_type: Optional[str] = None,
     ) -> dict[str, Any]:
         import tempfile
 
@@ -4517,6 +4539,9 @@ class SdCppDiffusionBackend:
                 # idle while this holds _generate_lock.
                 self._gen = _SdGen(total_steps = int(steps))
             try:
+                sampling_method = sd_cpp_sampling_method(
+                    sampler, schedule_type, state.sampling_method, _recipe_steps(state)
+                )
                 ref_pngs: list[bytes] = []
                 edit_only = bool(getattr(state.family, "edit", False))
                 if edit_only and not conditioned:
@@ -4641,6 +4666,7 @@ class SdCppDiffusionBackend:
                             ref_pngs = ref_pngs,
                             layers = _layer_count(state.family) or None,
                             hires_plan = hires_plan,
+                            sampling_method = sampling_method,
                         )
                     else:
                         images, seeds = self._generate_oneshot(
@@ -4658,6 +4684,7 @@ class SdCppDiffusionBackend:
                             cancel = cancel,
                             ref_pngs = ref_pngs,
                             layers = _layer_count(state.family) or None,
+                            sampling_method = sampling_method,
                         )
                 except RuntimeError as exc:
                     # The mid-render hipBLAS death the video path records too; not a cancellation.
@@ -4713,6 +4740,7 @@ class SdCppDiffusionBackend:
                     "localized_edit": getattr(localized_edit, "mode", None)
                     if conditioned
                     else None,
+                    "sampler": sampler if sampler not in (None, DEFAULT_SAMPLER) else None,
                 }
                 if hires_plan is not None:
                     result["hires"] = diffusion_hires.result_block(hires_plan)
@@ -4754,6 +4782,7 @@ class SdCppDiffusionBackend:
         ref_pngs: Optional[list[bytes]] = None,
         layers: Optional[int] = None,
         hires_plan: Any = None,
+        sampling_method: Optional[str] = None,
     ) -> tuple[list, list[int]]:
         """Generate via the resident sd-server (no model reload).
 
@@ -4850,7 +4879,7 @@ class SdCppDiffusionBackend:
                     steps = int(steps),
                     seed = chunk_seed,
                     batch_count = count,
-                    sample_method = state.sampling_method,
+                    sample_method = sampling_method or state.sampling_method,
                     flow_shift = _request_flow_shift(state, int(width), int(height)),
                     custom_sigmas = (
                         sd_cpp_sample_sigmas(state.sample_sigmas, int(steps))
@@ -5004,6 +5033,7 @@ class SdCppDiffusionBackend:
         cancel: threading.Event,
         ref_pngs: Optional[list[bytes]] = None,
         layers: Optional[int] = None,
+        sampling_method: Optional[str] = None,
     ) -> tuple[list, list[int]]:
         """Fallback path: re-run one-shot sd-cli per image (reloads the model each time). LoRA on
         the one-shot path uses sd-cli's own mechanism: materialize the selected adapters into a
@@ -5061,7 +5091,7 @@ class SdCppDiffusionBackend:
                     cfg_scale = cfg_scale,
                     guidance = flux_guidance,
                     seed = seed_i,
-                    sampling_method = state.sampling_method,
+                    sampling_method = sampling_method or state.sampling_method,
                     batch_count = 1,
                     lora_dir = lora_dir,
                     lora_apply_mode = "auto" if lora_dir else None,
@@ -5347,6 +5377,7 @@ class SdCppDiffusionBackend:
             "supports_guidance": True,
             "supports_live_preview": False,
             "prompt_hint": state.family.prompt_hint,
+            "samplers": sd_cpp_sampler_options(_recipe_steps(state)),
             # "server" = resident sd-server (load once); "oneshot" = legacy per-image sd-cli.
             "native_mode": state.mode,
             # txt2img always; reference and edit only where this build and its loaded assets run them.
