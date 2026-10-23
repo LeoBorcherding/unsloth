@@ -35,7 +35,7 @@ from unsloth_zoo.compiler import create_new_function
 from unsloth_zoo.log import logger
 from unsloth_zoo.logging_utils import PatchRLStatistics
 from unsloth_zoo.rl_replacements import RL_REPLACEMENTS
-from ..device_type import DEVICE_TYPE
+from ..device_type import DEVICE_COUNT, DEVICE_TYPE, clean_gpu_cache
 from .rl_replacements import (
     _unsloth_get_model_config,
     _unsloth_text_configs,
@@ -99,6 +99,38 @@ except Exception:
 # TrainingArguments falls back to this FSDP version when fsdp_config names none (1 -> 2 in transformers 5.10.0).
 _FSDP_DEFAULT_VERSION = 2 if transformers_version >= Version("5.10.0") else 1
 
+_GRPO_VLLM_SYNC_FUNCTIONS = frozenset(
+    (
+        "_move_model_to_vllm",
+        "_sync_fsdp_params_to_vllm",  # TRL < 0.20
+        "_sync_fsdp1_params_to_vllm",
+        "_sync_fsdp2_params_to_vllm",
+    )
+)
+
+
+def _strip_vllm_weight_loads(function, source, trainer_file):
+    # GRPO's _move_model_to_vllm returns early under fast_inference (grpo_trainer__move_model_to_vllm),
+    # and TRL's own vLLM (colocate or server) needs these lines to receive the trainer weights.
+    if trainer_file == "grpo_trainer" and function in _GRPO_VLLM_SYNC_FUNCTIONS:
+        return source
+    source = re.sub(
+        r"(\n[\s]{4,}).+?model_executor\.driver_worker.+?\n",
+        r"\n\1pass\n",
+        source,
+    )
+    source = re.sub(
+        r"(\n[\s]{4,}).+?load_weights\(.+?\n",
+        r"\n\1pass\n",
+        source,
+    )
+    source = re.sub(
+        r"\.state_dict\(\)",
+        r"",
+        source,
+    )
+    return source
+
 
 def vLLMSamplingParams(**kwargs):
     from vllm import SamplingParams
@@ -109,7 +141,7 @@ def vLLMSamplingParams(**kwargs):
 
 
 def _maybe_prepare_vllm_for_resume(trainer):
-    if not torch.cuda.is_available():
+    if DEVICE_COUNT < 1:
         return
 
     llm = getattr(trainer, "llm", None)
@@ -135,7 +167,7 @@ def _maybe_prepare_vllm_for_resume(trainer):
 
     for _ in range(3):
         gc.collect()
-        torch.cuda.empty_cache()
+        clean_gpu_cache()
 
 
 def _patch_resume_from_checkpoint_memory(trainer_class):
@@ -954,17 +986,29 @@ def _wrap_grpo_generate_and_score(trainer_cls):
     def wrapped(self, *args, **kwargs):
         was_training = getattr(getattr(self, "model", None), "training", None)
         parked = None
-        if os.environ.get(
+        park = os.environ.get(
             "UNSLOTH_PARK_OPTIMIZER_DURING_ROLLOUT", "0"
-        ) == "1" and _park_optimizer_enabled(self):
-            parked = _park_optimizer_to_host(self)
+        ) == "1" and _park_optimizer_enabled(self)
+        # An outer torch.inference_mode() (eval between train calls) would make the pinned buffers and
+        # restored state inference tensors, which the next optimizer step cannot update in place.
+        inference_mode = getattr(torch, "inference_mode", None) if park else None
+        if park:
+            if inference_mode is not None:
+                with inference_mode(False), torch.no_grad():
+                    parked = _park_optimizer_to_host(self)
+            else:
+                parked = _park_optimizer_to_host(self)
             if parked is not None:
                 self._unsloth_park_count = getattr(self, "_unsloth_park_count", 0) + 1
         try:
             return original(self, *args, **kwargs)
         finally:
             if parked is not None:
-                _restore_optimizer_from_host(parked)
+                if inference_mode is not None:
+                    with inference_mode(False), torch.no_grad():
+                        _restore_optimizer_from_host(parked)
+                else:
+                    _restore_optimizer_from_host(parked)
             if (
                 was_training is False
                 and hasattr(self, "model")
@@ -2534,6 +2578,7 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
     extra_args = ""
     if "args" in call_args and "model" in call_args:
         mixed_precision = (
+            "_unsloth_precision_requested = tuple(getattr(args, k, False) for k in ('fp16', 'bf16', 'fp16_full_eval', 'bf16_full_eval'))\n"
             "use_bf16 = getattr(args, 'bf16', False)\n"
             "if type(use_bf16) is not bool: use_bf16 = False\n"
             "use_fp16 = getattr(args, 'fp16', False)\n"
@@ -2544,6 +2589,10 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             "    from unsloth_zoo.device_type import device_is_bf16_supported as _bf16_supported\n"
             "except Exception:\n"
             "    _bf16_supported = torch.cuda.is_bf16_supported\n"
+            "try:\n"
+            "    from unsloth_zoo.device_type import DEVICE_TYPE as _unsloth_device_type\n"
+            "except Exception:\n"
+            "    _unsloth_device_type = None\n"
             # FORCE_FLOAT32 models (Gemma3, gpt_oss) cannot use float16: without bf16 keep float32, with bf16 full finetuning may still autocast. Stamped by from_pretrained, since the env is process wide and a later load would otherwise answer for this trainer.
             "full_finetuning = getattr(model, '_unsloth_full_finetuning', None)\n"
             "if full_finetuning is None: full_finetuning = os.environ.get('UNSLOTH_ENABLE_FULL_FINETUNING', '0') == '1'\n"
@@ -2584,7 +2633,8 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             "    if hasattr(args, 'mixed_precision'): args.mixed_precision = 'no'\n"
             "elif (not use_bf16 and not use_fp16) and mixed_precision_dtype == 'float32':\n"
             "    # Mixed precision training. bf16 only if the GPU supports it; V100/T4 use fp16.\n"
-            "    use_bf16_amp = (not float16) and _bf16_supported()\n"
+            # XPU keeps an explicit bf16 model in bf16 (emulated if need be), so autocast follows it.
+            "    use_bf16_amp = (not float16) and (_bf16_supported() or (bfloat16 and _unsloth_device_type == 'xpu'))\n"
             "    args.fp16 = not use_bf16_amp\n"
             "    args.bf16 = use_bf16_amp\n"
             "    os.environ['ACCELERATE_MIXED_PRECISION'] = 'bf16' if use_bf16_amp else 'fp16'\n"
@@ -2651,6 +2701,16 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
             "    args.fp16_full_eval = args.fp16\n"
         )
         extra_args += eval_changes
+        if "args" in call_args and "model" in call_args:
+            # The switches above can contradict a DeepSpeed config already filled from the caller's flags.
+            extra_args += (
+                "if tuple(getattr(args, k, False) for k in ('fp16', 'bf16', 'fp16_full_eval', 'bf16_full_eval')) != _unsloth_precision_requested:\n"
+                "    from unsloth.models.loader_utils import sync_deepspeed_mixed_precision\n"
+                "    sync_deepspeed_mixed_precision(args)\n"
+                "if model is not None:\n"
+                "    from unsloth.models.loader_utils import apply_deepspeed_zero3_model_setup\n"
+                "    apply_deepspeed_zero3_model_setup(model)\n"
+            )
 
     if "model" in call_args:
         # No UNSLOTH_RETURN_LOGITS=1 for compute_metrics here: prediction_step forces it per eval call; here it leaked into training (#3071).
@@ -3150,6 +3210,25 @@ def _patch_trl_rl_trainers_impl(trainer_file = "grpo_trainer"):
         RLTrainer_post += (
             "if getattr(self, 'vllm_generation', None) is not None:\n"
             "    self.vllm_generation._unsloth_vllm_sampling_params = getattr(getattr(self, 'args', None), 'vllm_sampling_params', None)\n"
+            "pass\n"
+        )
+
+    if trainer_file == "grpo_trainer":
+        RLTrainer_post += (
+            "if os.environ.get('UNSLOTH_GRPO_ROUTING_REPLAY', '0') == '1' and hasattr(model, 'vllm_engine'):\n"
+            "    try:\n"
+            "        from unsloth_zoo.routing_replay import install_routing_replay\n"
+            "    except ImportError:\n"
+            "        print('Unsloth: UNSLOTH_GRPO_ROUTING_REPLAY=1 needs a newer unsloth_zoo: pip install -U unsloth_zoo')\n"
+            "    else:\n"
+            "        from unsloth.models._routing_replay import routing_replay_hook_snapshot, prepare_routing_replay\n"
+            "        # TRL scores the PEFT reference through self.model.disable_adapter(), so prepare that object.\n"
+            "        _unsloth_replay_model = getattr(self, 'model', None)\n"
+            "        _unsloth_replay_model = model if _unsloth_replay_model is None else _unsloth_replay_model\n"
+            "        _unsloth_replay_hooks_before = routing_replay_hook_snapshot(_unsloth_replay_model)\n"
+            "        install_routing_replay(model, model.vllm_engine, getattr(self, 'processing_class', None))\n"
+            "        # Pick the router weight formulas outside compilation; PEFT reference scoring routes naturally.\n"
+            "        prepare_routing_replay(_unsloth_replay_model, _unsloth_replay_hooks_before)\n"
             "pass\n"
         )
 
@@ -4194,23 +4273,7 @@ def patch_functions(RLTrainer, trainer_file, RLTrainer_name, all_imports, import
             source,
         )
 
-        source = re.sub(
-            r"(\n[\s]{4,}).+?model_executor\.driver_worker.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"(\n[\s]{4,}).+?load_weights\(.+?\n",
-            r"\n\1pass\n",
-            source,
-        )
-
-        source = re.sub(
-            r"\.state_dict\(\)",
-            r"",
-            source,
-        )
+        source = _strip_vllm_weight_loads(function, source, trainer_file)
 
         if "CUDA_VISIBLE_DEVICES" in os.environ:
             lora_name = (
