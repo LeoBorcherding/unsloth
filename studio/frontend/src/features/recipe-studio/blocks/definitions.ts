@@ -158,7 +158,7 @@ export const BLOCK_GROUPS: BlockGroup[] = [
   {
     kind: "train",
     title: "Train",
-    description: "Fine-tune a model on the dataset this recipe generates.",
+    description: "Fine-tune a model on the dataset this recipe generates, with SFT or RL.",
     icon: Rocket01Icon,
   },
 ];
@@ -417,7 +417,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     type: "train",
     title: "Train on this dataset",
     description:
-      "Start a LoRA training run on the recipe's latest full run, holding out a share of rows.",
+      "Fine-tune with SFT, GRPO, DPO or ORPO on the recipe's latest full run, holding out a share of rows.",
     icon: Rocket01Icon,
     dialogKey: "train",
     createConfig: (id, existing) => makeTrainConfig(id, existing),
