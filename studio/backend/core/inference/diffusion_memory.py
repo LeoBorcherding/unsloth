@@ -1258,13 +1258,75 @@ def _budget_reserve_kind(memory: DeviceMemory) -> str:
     return _ROCM_APU_POOL if _rocm_linux_apu_os_room_outside_pool(memory) else memory.memory_kind
 
 
+def _user_budget_reserve_mib(base: Optional[int]) -> int:
+    """What the user's VRAM Budget setting keeps free of ``base``. 0 at or above the default, where the reserves above
+    are already tuned (3% of a 192 GiB card would exceed the discrete cap), so an untouched setting changes nothing.
+    The placement paths outside this module (multi-GPU encoder cards, CFG-parallel replicas, video residency) charge
+    the same reserve, so one setting caps every card Studio places weights on."""
+    if not base or int(base) <= 0:
+        return 0
+    try:
+        from utils.vram_budget_settings import VRAM_FRACTION_DEFAULT, get_vram_budget_fraction
+        fraction = float(get_vram_budget_fraction())
+    except Exception:  # noqa: BLE001 - settings are a convenience; a load must never fail on them
+        return 0
+    if not fraction < VRAM_FRACTION_DEFAULT:
+        return 0
+    return int(base * (1.0 - fraction))
+
+
+def user_budget_reserve_share() -> float:
+    """The share of each card the user's VRAM Budget keeps free: ``1 - fraction`` below the default, else 0.0 (as
+    :func:`_user_budget_reserve_mib`). For a child process that reads its own card's total."""
+    try:
+        from utils.vram_budget_settings import VRAM_FRACTION_DEFAULT, get_vram_budget_fraction
+        fraction = float(get_vram_budget_fraction())
+    except Exception:  # noqa: BLE001 - settings are a convenience; a load must never fail on them
+        return 0.0
+    return 1.0 - fraction if fraction < VRAM_FRACTION_DEFAULT else 0.0
+
+
+def user_budget_reserve_bytes(device: Any, total_bytes: Optional[int]) -> int:
+    """What the user's VRAM Budget keeps free on ``device`` (``total_bytes`` total), in bytes: 0 at the default, on
+    Metal / CPU and for an unread total. Every runtime workspace sized from a live free reading (VAE tiles, tile
+    batches, untiled decodes, prefetch windows, probes) subtracts it, so Studio's own allocations stay inside the
+    budget the planner admitted the load with. Never raises."""
+    kind = str(getattr(device, "type", device) or "").split(":")[0]
+    if kind in ("cpu", "mps") or not total_bytes:
+        return 0
+    try:
+        return _user_budget_reserve_mib(int(total_bytes) >> 20) << 20
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _device_user_budget_reserve_mib(memory: DeviceMemory, base: Optional[int]) -> int:
+    """:func:`_user_budget_reserve_mib` for ``memory``, 0 where the LLM path ignores the setting too: Apple Metal sizes
+    from its own unified fraction (the slider is hidden on macOS) and a CPU-only host has no GPU for it to act on."""
+    backend = str(getattr(memory, "backend", "") or "").split(":")[0]
+    if (
+        backend in ("mps", "cpu")
+        or getattr(memory, "memory_kind", None) == "system_memory"
+        or getattr(memory, "metal_working_set_mib", None) is not None
+    ):
+        return 0
+    return _user_budget_reserve_mib(base)
+
+
+def _planner_reserve_mib(memory: DeviceMemory, base: int) -> int:
+    return max(
+        _reserve_mib(_budget_reserve_kind(memory), base),
+        _device_user_budget_reserve_mib(memory, base),
+    )
+
+
 def _safe_device_budget_mib(memory: DeviceMemory) -> Optional[int]:
     """Free memory minus a headroom reserve (room for fragmentation + other tenants). None when
     free memory is unknown."""
     if memory.free_mib is None:
         return None
     base = memory.total_mib or memory.free_mib
-    return max(0, int(memory.free_mib) - _reserve_mib(_budget_reserve_kind(memory), base))
+    return max(0, int(memory.free_mib) - _planner_reserve_mib(memory, base))
 
 
 def _fast_device_budget_mib(memory: DeviceMemory) -> Optional[int]:
@@ -1273,7 +1335,11 @@ def _fast_device_budget_mib(memory: DeviceMemory) -> Optional[int]:
     if memory.free_mib is None:
         return None
     base = memory.total_mib or memory.free_mib
-    reserve = max(2048, _reserve_mib(_budget_reserve_kind(memory), base) // 2)
+    reserve = max(
+        2048,
+        _reserve_mib(_budget_reserve_kind(memory), base) // 2,
+        _device_user_budget_reserve_mib(memory, base),
+    )
     return max(0, int(memory.free_mib) - reserve)
 
 
@@ -1755,7 +1821,7 @@ def total_capacity_budget_mib(memory: DeviceMemory) -> Optional[int]:
     total = memory.total_mib
     if total is None:
         return None
-    return int((int(total) - _reserve_mib(_budget_reserve_kind(memory), int(total))) * 0.85)
+    return int((int(total) - _planner_reserve_mib(memory, int(total))) * 0.85)
 
 
 # Opt-in escape hatch for the unified-memory refusal below: the shortfall check is an estimate, so an operator who
@@ -2213,7 +2279,15 @@ def plan_diffusion_memory(
             companion_dense_mib = companion_dense_mib,
             text_encoder_dense_mib = text_encoder_dense_mib,
             base_overhead_mib = base_overhead_mib,
-            free_mib = device_memory.free_mib,
+            # the phase-room checks see the free memory the user's VRAM Budget leaves (raw free at the default)
+            free_mib = (
+                None
+                if device_memory.free_mib is None
+                else int(device_memory.free_mib)
+                - _device_user_budget_reserve_mib(
+                    device_memory, device_memory.total_mib or device_memory.free_mib
+                )
+            ),
             policy = policy,
             stream_transformer = stream_transformer,
         )
@@ -3068,8 +3142,13 @@ _RESIDENT_DIT_SLACK_MIN_MIB = 1024
 
 
 def _resident_dit_slack_mib(memory: Any) -> int:
+    """The measured-residency margin, or what the user's VRAM Budget keeps free when larger (as the planner reserve)."""
     base = getattr(memory, "total_mib", None) or getattr(memory, "free_mib", None) or 0
-    return max(_RESIDENT_DIT_SLACK_MIN_MIB, int(int(base) * _RESIDENT_DIT_SLACK_FRACTION))
+    return max(
+        _RESIDENT_DIT_SLACK_MIN_MIB,
+        int(int(base) * _RESIDENT_DIT_SLACK_FRACTION),
+        _device_user_budget_reserve_mib(memory, int(base)),
+    )
 
 
 def _resident_dit_fits(memory: Any, dit_mib: int, headroom_mib: int, other_mib: int) -> bool:
@@ -5817,7 +5896,23 @@ def image_activation_verdict(
     # false refusal at or below the default resolution, because the `needed <= planned` arm already exempts every
     # request the load itself budgeted for.
     numbers = dict(needed_mib = int(needed), tiled_needed_mib = tiled, budget_mib = int(budget))
-    if int(needed) + overhead <= int(budget) or (not conditioned and needed <= planned):
+    if int(needed) + overhead <= int(budget):
+        return ImageActivationVerdict(ACTIVATION_RUN, **numbers)
+    if not conditioned and needed <= planned:
+        # A size the load budgeted for is never refused. Under a lowered VRAM Budget the budget can sit below even
+        # the default request, so tile the decode when that brings it back under the cap.
+        if (
+            tiled is not None
+            and int(tiled) + overhead <= int(budget)
+            and _device_user_budget_reserve_mib(
+                device_memory, device_memory.total_mib or device_memory.free_mib
+            )
+            > _reserve_mib(
+                _budget_reserve_kind(device_memory),
+                device_memory.total_mib or device_memory.free_mib,
+            )
+        ):
+            return ImageActivationVerdict(ACTIVATION_TILE, **numbers)
         return ImageActivationVerdict(ACTIVATION_RUN, **numbers)
     if tiled is not None and (
         int(tiled) + overhead <= int(budget) or (not conditioned and tiled <= planned)

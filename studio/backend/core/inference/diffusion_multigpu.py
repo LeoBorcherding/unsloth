@@ -305,21 +305,43 @@ def probe_devices(ordinals: Sequence[int]) -> dict[int, DeviceProbe]:
 
 
 def best_secondary(
-    selection: MultiGpuSelection, probes: Optional[dict[int, DeviceProbe]] = None
+    selection: MultiGpuSelection,
+    probes: Optional[dict[int, DeviceProbe]] = None,
+    *,
+    mode: Optional[str] = None,
 ) -> Optional[int]:
     if not selection.secondaries:
         return None
+    from .diffusion_memory import (
+        DeviceMemory,
+        _fast_device_budget_mib,
+        _safe_device_budget_mib,
+        _user_budget_reserve_mib,
+    )
+
+    # Raw free at the default budget (the order is unchanged there). Under a lowered one, the budget the secondary
+    # limit is cut from for ``mode`` (fast: the fast budget, else the safe one), i.e. the larger of the card's planner
+    # reserve and the user's: a big, partly used card can hold less than a small idle one.
+    budgeted = _user_budget_reserve_mib(1 << 20) > 0
+    limit_of = _fast_device_budget_mib if mode == "fast" else _safe_device_budget_mib
+
+    def usable(free: Optional[int], total: Optional[int]) -> int:
+        if free is None:
+            return -1
+        if not budgeted:
+            return int(free)
+        memory = DeviceMemory("cuda", "cuda", "discrete_vram", int(free), total)
+        return int(limit_of(memory) or 0)
+
     if probes is None and selection.automatic:
-        free = {o: _free_total_mib(o)[0] for o in selection.secondaries}
-        return max(
-            selection.secondaries, key = lambda o: (free[o] if free[o] is not None else -1, -o)
-        )
+        free = {o: _free_total_mib(o) for o in selection.secondaries}
+        return max(selection.secondaries, key = lambda o: (usable(*free[o]), -o))
     if probes is None:
         probes = probe_devices((selection.primary, *selection.secondaries))
 
     def key(o: int) -> tuple[int, int]:
         p = probes.get(o)
-        return (p.free_mib if p is not None and p.free_mib is not None else -1, -o)
+        return (usable(p.free_mib, p.total_mib) if p is not None else -1, -o)
 
     return max(selection.secondaries, key = key)
 
@@ -730,10 +752,10 @@ def refine_plan_for_multigpu(
     sizes = _loaded_component_mib(pipe)
     if not sizes:
         return one_card_plan("component sizes are unreadable")
-    secondary = best_secondary(selection)
+    mode = getattr(plan, "requested_mode", None)
+    secondary = best_secondary(selection, mode = mode)
     if secondary is None:
         return one_card_plan("no second card")
-    mode = getattr(plan, "requested_mode", None)
     sec_limit = secondary_resident_limit_mib(secondary, mode)
     if sec_limit is None:
         return one_card_plan(f"free memory of cuda:{secondary} is unknown")
@@ -889,9 +911,18 @@ def encoder_card_limit_mib(ordinal: int) -> Optional[int]:
     """What a secondary that only runs text encoders may hold: free memory minus ComfyUI's per-card floor (the layer
     split prices its block-only cards the same way). None when the card cannot be read."""
     from .diffusion_layer_split_plan import secondary_reserve_mib
+    from .diffusion_memory import _user_budget_reserve_mib
 
-    free, _total = _free_total_mib(int(ordinal))
-    return None if free is None else max(0, int(free) - secondary_reserve_mib())
+    free, total = _free_total_mib(int(ordinal))
+    if free is None:
+        return None
+    return max(0, int(free) - max(secondary_reserve_mib(), _user_budget_reserve_mib(total or free)))
+
+
+def _replica_reserve_mib(free: Optional[int], total: Optional[int]) -> int:
+    """Room a CFG replica leaves free on its card: 1 GiB, or what the user's VRAM Budget keeps free when larger."""
+    from .diffusion_memory import _user_budget_reserve_mib
+    return max(1024, _user_budget_reserve_mib(total or free))
 
 
 def secondary_device_memory(ordinal: int) -> Any:
@@ -2658,7 +2689,8 @@ class CfgParallelRouter:
             need_mib = sum(
                 t.numel() * t.element_size() for t in (*module.parameters(), *module.buffers())
             ) // (1 << 20)
-            free, _total = _free_total_mib(self.secondary.index)
+            free, total = _free_total_mib(self.secondary.index)
+            reserve = _replica_reserve_mib(free, total)
             if free is not None:
                 with contextlib.suppress(Exception):
                     torch = _torch()
@@ -2666,7 +2698,7 @@ class CfgParallelRouter:
                         torch.cuda.memory_reserved(self.secondary)
                         - torch.cuda.memory_allocated(self.secondary)
                     ) // (1 << 20)
-            if free is not None and need_mib + 1024 > free:
+            if free is not None and need_mib + reserve > free:
                 raise RuntimeError(
                     f"replica needs {need_mib} MiB, {free} MiB free on {self.secondary}"
                 )
@@ -2861,9 +2893,20 @@ def install_cfg_parallel(
             need_mib = sum(
                 t.numel() * t.element_size() for t in (*denoiser.parameters(), *denoiser.buffers())
             ) // (1 << 20)
-            best = max(candidates, key = lambda o: probes[o].free_mib or -1)
+
+            def usable(o: int) -> int:
+                # rank by what the replica may use: a big card with a large VRAM Budget reserve can hold less
+                free_o = probes[o].free_mib
+                if free_o is None:
+                    return -1
+                return int(free_o) - _replica_reserve_mib(free_o, probes[o].total_mib)
+
+            best = max(candidates, key = usable)
             free = probes[best].free_mib
-            if free is not None and need_mib + 1024 > free:
+            if (
+                free is not None
+                and need_mib + _replica_reserve_mib(free, probes[best].total_mib) > free
+            ):
                 reason = f"replica needs {need_mib} MiB, {free} MiB free on cuda:{best}"
             else:
                 graph = _resident_graph(denoiser)
