@@ -30,6 +30,7 @@ import { ChevronDownStandardIcon } from "@/lib/chevron-icons";
 import { OPEN_LEARNING_RECIPES_ON_ARRIVAL_KEY } from "@/lib/navigation-intents";
 import { toastError } from "@/shared/toast";
 import {
+  AiBrain01Icon,
   Album02Icon,
   BookOpen01Icon,
   CodeIcon,
@@ -41,6 +42,7 @@ import {
   GithubIcon,
   Plant01Icon,
   PlusSignIcon,
+  Wrench01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate } from "@tanstack/react-router";
@@ -164,6 +166,38 @@ const TEMPLATE_CARDS: TemplateCard[] = [
       "rgb(34 211 238 / 0.45)",
     ],
     learningRecipeId: "structured-outputs-jinja",
+  },
+  {
+    title: "Tool Calls",
+    description:
+      "User requests paired with the tool call that answers them, checked as valid JSON.",
+    icon: Wrench01Icon,
+    difficulty: "Starter",
+    learningBadges: ["Tool Calling", "LLM Text", "JSON Validator"],
+    surfaceClassName:
+      "from-teal-500/15 via-cyan-500/5 to-transparent dark:from-teal-400/20 dark:via-cyan-400/10 dark:to-teal-950/16",
+    shineColor: [
+      "rgb(20 184 166 / 0.45)",
+      "rgb(6 182 212 / 0.4)",
+      "rgb(45 212 191 / 0.45)",
+    ],
+    learningRecipeId: "tool-calls",
+  },
+  {
+    title: "Reasoning Traces",
+    description:
+      "Practice problems with step-by-step reasoning and a final answer in <think> format.",
+    icon: AiBrain01Icon,
+    difficulty: "Starter",
+    learningBadges: ["Structured LLM", "Expression", "Reasoning"],
+    surfaceClassName:
+      "from-orange-500/15 via-amber-500/5 to-transparent dark:from-orange-400/20 dark:via-amber-400/10 dark:to-orange-950/16",
+    shineColor: [
+      "rgb(249 115 22 / 0.45)",
+      "rgb(245 158 11 / 0.4)",
+      "rgb(251 146 60 / 0.45)",
+    ],
+    learningRecipeId: "reasoning-traces",
   },
   {
     title: "GitHub Crawler",

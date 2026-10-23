@@ -30,7 +30,9 @@ import type {
 } from "../execution-types";
 import {
   DATASET_PAGE_SIZE,
+  createRunSeed,
   executionLabel,
+  nextRunVersion,
   normalizeDatasetRows,
   normalizeRunName,
   toErrorMessage,
@@ -791,12 +793,24 @@ export function useRecipeExecutions({
       const label = executionLabel(kind);
 
       setLoading(true);
+      const seed = createRunSeed();
+      const jobPayload = buildExecutionPayload({
+        payload,
+        kind,
+        rows,
+        settings,
+        runName,
+        seed,
+      });
       const baseExecution = createBaseExecutionRecord({
         recipeId,
         kind,
         rows,
         currentSignature,
         runName,
+        seed,
+        version: nextRunVersion(useRecipeExecutionsStore.getState().executions),
+        configSnapshot: { recipe: jobPayload.recipe, run: jobPayload.run },
       });
 
       upsertAndPersist(baseExecution);
@@ -806,13 +820,6 @@ export function useRecipeExecutions({
       let jobCreated = false;
       let shouldRestorePrevious = false;
       try {
-        const jobPayload = buildExecutionPayload({
-          payload,
-          kind,
-          rows,
-          settings,
-          runName,
-        });
         const createdJob = await createRecipeJob(jobPayload);
         jobCreated = true;
         const executionWithJob = {

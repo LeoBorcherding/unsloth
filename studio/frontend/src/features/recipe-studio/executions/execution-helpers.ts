@@ -165,7 +165,64 @@ export function withExecutionDefaults(
       : [],
     column_progress: record.column_progress ?? null,
     batch: record.batch ?? null,
+    quality: normalizeObject(record.quality)
+      ? (record.quality as RecipeExecutionRecord["quality"])
+      : null,
+    version: positiveIntOrNull(record.version),
+    seed:
+      typeof record.seed === "number" && Number.isInteger(record.seed) && record.seed >= 0
+        ? record.seed
+        : null,
+    config_snapshot: normalizeObject(record.config_snapshot),
   };
+}
+
+function positiveIntOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+export function nextRunVersion(records: RecipeExecutionRecord[]): number {
+  return records.reduce((max, record) => Math.max(max, record.version ?? 0), 0) + 1;
+}
+
+// Unsigned 32-bit, the range the backend accepts and numpy's global seed takes.
+export function createRunSeed(): number {
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return values[0];
+}
+
+export function formatVersionLabel(record: RecipeExecutionRecord): string | null {
+  return record.version ? `v${record.version}` : null;
+}
+
+function snapshotRecipeKey(record: RecipeExecutionRecord): string | null {
+  const recipe = record.config_snapshot?.recipe;
+  return recipe === undefined ? null : JSON.stringify(recipe);
+}
+
+/** The earliest older version that ran the same recipe config, if any. */
+export function findSameConfigVersion(
+  record: RecipeExecutionRecord,
+  records: RecipeExecutionRecord[],
+): number | null {
+  const key = snapshotRecipeKey(record);
+  if (key === null || !record.version) {
+    return null;
+  }
+  let match: number | null = null;
+  for (const other of records) {
+    if (
+      other.id !== record.id &&
+      other.version &&
+      other.version < record.version &&
+      (match === null || other.version < match) &&
+      snapshotRecipeKey(other) === key
+    ) {
+      match = other.version;
+    }
+  }
+  return match;
 }
 
 export function delay(ms: number): Promise<void> {

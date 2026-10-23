@@ -3,6 +3,7 @@
 
 import type {
   RecipeExecutionAnalysis,
+  RecipeExecutionQuality,
   RecipeExecutionStatus,
 } from "../../execution-types";
 import { isExecutionInProgress } from "../../executions/execution-helpers";
@@ -188,4 +189,17 @@ export function parseModelUsageRows(
       };
     })
     .filter((item): item is ModelUsageRow => item !== null);
+}
+
+export function summarizeQuality(quality: RecipeExecutionQuality): {
+  formatFailures: number;
+  emptyValues: number;
+} {
+  let formatFailures = 0;
+  let emptyValues = 0;
+  for (const column of quality.columns) {
+    formatFailures += column.format_failures;
+    emptyValues += column.empty;
+  }
+  return { formatFailures, emptyValues };
 }

@@ -28,6 +28,10 @@ const booksAndDocumentsUrl = new URL(
   import.meta.url,
 ).href;
 
+const toolCallsUrl = new URL("./tool-calls.json", import.meta.url).href;
+const reasoningTracesUrl = new URL("./reasoning-traces.json", import.meta.url)
+  .href;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -144,6 +148,20 @@ export const LEARNING_RECIPES: LearningRecipeDef[] = [
     description:
       "Use image context to generate OCR-style document extraction output.",
     loadPayload: () => loadPayloadFromUrl(ocrDocumentExtractionUrl),
+  },
+  {
+    id: "tool-calls",
+    title: "Tool Calls",
+    description:
+      "Generate user requests and the function-call arguments that answer them, checked as JSON.",
+    loadPayload: () => loadPayloadFromUrl(toolCallsUrl),
+  },
+  {
+    id: "reasoning-traces",
+    title: "Reasoning Traces",
+    description:
+      "Generate practice problems with step-by-step reasoning and a final answer in <think> format.",
+    loadPayload: () => loadPayloadFromUrl(reasoningTracesUrl),
   },
   {
     id: "github-support-bot",
