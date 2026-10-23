@@ -26,6 +26,7 @@ import type {
   RecipeNode,
   RecipeProcessorConfig,
   SamplerType,
+  SeedConfig,
   SeedSourceType,
 } from "../types";
 import { applyRecipeConnection, isValidRecipeConnection } from "../utils/graph";
@@ -128,7 +129,7 @@ type RecipeStudioState = {
   addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
   addLoopNode: (position?: XYPosition, openDialog?: boolean) => void;
   /** The Loop card's failures seed, wired from the Benchmark card so the feedback edge shows. */
-  addLoopFeedbackSeed: () => void;
+  addLoopFeedbackSeed: (source: Partial<SeedConfig>) => void;
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   setAuxNodePosition: (id: string, position: XYPosition) => void;
@@ -761,16 +762,16 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
       }
       return buildAddedNodeState(state, "loop", "loop", position, openDialog);
     }),
-  addLoopFeedbackSeed: () =>
+  addLoopFeedbackSeed: (source) =>
     set((state) => {
       const parts = findLoopParts(state.configs);
       if (state.executionLocked || parts.feedback || parts.otherSeed) {
         return state;
       }
-      const config = makeFeedbackSeedConfig(
-        `n${state.nextId}`,
-        Object.values(state.configs),
-      );
+      const config: SeedConfig = {
+        ...makeFeedbackSeedConfig(`n${state.nextId}`, Object.values(state.configs)),
+        ...source,
+      };
       const left = Math.min(0, ...state.nodes.map((node) => node.position.x));
       const update = buildNodeUpdate(
         state,

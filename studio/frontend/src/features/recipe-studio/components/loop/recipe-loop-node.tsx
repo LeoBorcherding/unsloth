@@ -15,7 +15,14 @@ import { useRecipeStudioStore } from "../../stores/recipe-studio";
 import type { RecipeNode as RecipeGraphNodeType } from "../../types";
 import { NODE_HANDLE_CLASS } from "../../utils/handle-layout";
 import { HANDLE_IDS } from "../../utils/handles";
-import { findLoopParts, loopSetupIssues, parseLoopSettings } from "../../utils/loop-card";
+import { buildFeedbackSeedRows } from "../../loop/feedback-seed";
+import { uploadFeedbackSeed } from "../../loop/studio-steps";
+import {
+  findLoopParts,
+  loopRecipeColumns,
+  loopSetupIssues,
+  parseLoopSettings,
+} from "../../utils/loop-card";
 import { RECIPE_STUDIO_NODE_TONES } from "../../utils/ui-tones";
 import {
   BaseNode,
@@ -45,6 +52,8 @@ export function RecipeLoopNode({ id, data, selected }: RecipeLoopNodeProps): Rea
   const loop = useRecipeLoopView();
   const updateNodeInternals = useUpdateNodeInternals();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [seedBusy, setSeedBusy] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const executionLocked = Boolean(data.executionLocked);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure handles when the graph orientation flips
@@ -73,6 +82,26 @@ export function RecipeLoopNode({ id, data, selected }: RecipeLoopNodeProps): Rea
       record.status === "stopped" ||
       record.status === "error" ||
       loopStopReason(record.rounds, settings) === null);
+
+  // The seed starts with one round of blank fresh rows, so the recipe runs before the first loop.
+  const addFeedbackSeed = async () => {
+    setSeedBusy(true);
+    setSeedError(null);
+    try {
+      const columns = loopRecipeColumns(configs);
+      const rows = buildFeedbackSeedRows({
+        failures: [],
+        rows: Number.isInteger(settings.rowsPerRound) ? settings.rowsPerRound : 80,
+        failureShare: 0,
+        recipeColumns: columns,
+      });
+      addLoopFeedbackSeed(await uploadFeedbackSeed(rows, 0, columns));
+    } catch (error) {
+      setSeedError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSeedBusy(false);
+    }
+  };
 
   const chips = [
     `Target ${config.targetScore || "?"}%`,
@@ -193,16 +222,18 @@ export function RecipeLoopNode({ id, data, selected }: RecipeLoopNodeProps): Rea
                 size="xs"
                 variant="outline"
                 className="nodrag"
-                disabled={executionLocked}
+                disabled={executionLocked || seedBusy}
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  addLoopFeedbackSeed();
+                  void addFeedbackSeed();
                 }}
               >
+                {seedBusy && <Spinner className="size-3.5" />}
                 Add failures seed
               </Button>
             )}
+            {seedError && <p className="text-xs text-destructive">{seedError}</p>}
           </div>
         )}
 

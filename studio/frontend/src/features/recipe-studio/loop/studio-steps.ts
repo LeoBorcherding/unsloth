@@ -22,7 +22,7 @@ import {
 import { buildLoopBenchmarkRequest, loopScoreFromResult } from "./benchmark-request";
 import { feedbackSeedColumns, feedbackSeedToJsonl } from "./feedback-seed";
 import { buildLoopTrainingRequest } from "./training-request";
-import type { LoopHoldout, LoopSteps } from "./types";
+import type { FeedbackSeedRow, LoopHoldout, LoopSteps } from "./types";
 
 const POLL_MS = 2000;
 const TERMINAL_PHASES = new Set(["completed", "error", "stopped"]);
@@ -202,40 +202,52 @@ async function trainThroughStudio(
   return { jobId, outputDir };
 }
 
+/** Uploads one round's feedback seed rows; the patch points the failures seed at the new file. */
+export async function uploadFeedbackSeed(
+  seedRows: FeedbackSeedRow[],
+  round: number,
+  recipeColumns: string[],
+): Promise<Partial<SeedConfig>> {
+  const filename = `benchmark-failures-round-${round}.jsonl`;
+  const upload = await inspectSeedUpload({
+    filename,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    content_base64: toBase64(feedbackSeedToJsonl(seedRows)),
+    // biome-ignore lint/style/useNamingConvention: api schema
+    preview_size: 5,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    seed_source_type: "local",
+  });
+  return {
+    // biome-ignore lint/style/useNamingConvention: api schema
+    seed_source_type: "local",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    hf_path: upload.resolved_path,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    local_file_name: filename,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    seed_columns: feedbackSeedColumns(recipeColumns),
+    // biome-ignore lint/style/useNamingConvention: api schema
+    seed_preview_rows: upload.preview_rows,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    seed_total_rows: seedRows.length,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    sampling_strategy: "ordered",
+    // biome-ignore lint/style/useNamingConvention: api schema
+    selection_type: "none",
+  };
+}
+
 /** Generation through the recipe, training through Unsloth Studio's trainer, scoring through the Benchmark card's API. */
 export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
   return {
     generate: async ({ round, seedRows, signal }) => {
       const configs = deps.configs();
       const feedback = requireFeedbackSeed(configs);
-      const filename = `benchmark-failures-round-${round}.jsonl`;
-      const upload = await inspectSeedUpload({
-        filename,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        content_base64: toBase64(feedbackSeedToJsonl(seedRows)),
-        // biome-ignore lint/style/useNamingConvention: api schema
-        preview_size: 5,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        seed_source_type: "local",
-      });
-      deps.updateConfig(feedback.id, {
-        // biome-ignore lint/style/useNamingConvention: api schema
-        seed_source_type: "local",
-        // biome-ignore lint/style/useNamingConvention: api schema
-        hf_path: upload.resolved_path,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        local_file_name: filename,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        seed_columns: feedbackSeedColumns(loopRecipeColumns(configs)),
-        // biome-ignore lint/style/useNamingConvention: api schema
-        seed_preview_rows: upload.preview_rows,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        seed_total_rows: seedRows.length,
-        // biome-ignore lint/style/useNamingConvention: api schema
-        sampling_strategy: "ordered",
-        // biome-ignore lint/style/useNamingConvention: api schema
-        selection_type: "none",
-      } as Partial<NodeConfig>);
+      deps.updateConfig(
+        feedback.id,
+        (await uploadFeedbackSeed(seedRows, round, loopRecipeColumns(configs))) as Partial<NodeConfig>,
+      );
 
       const base = deps.recipeName().trim() || "Recipe";
       const runName = `${base} loop ${deps.tag} round ${round}`;
