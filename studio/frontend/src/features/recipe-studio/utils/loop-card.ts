@@ -9,6 +9,7 @@ import type {
   SeedConfig,
   TrainCardConfig,
 } from "../types";
+import { isRecipeTask } from "./benchmark";
 import { makeLoopConfig, makeSeedConfig } from "./config-factories";
 import { listTrainableColumns, parseTrainCardSettings } from "./train-card";
 
@@ -127,6 +128,10 @@ export function loopSetupIssues(
     issues.push("Add a Benchmark card.");
   } else {
     const benchmark = parts.benchmark;
+    if (!isRecipeTask(benchmark.task)) {
+      // lm-eval tasks need a GGUF, and each round produces a LoRA adapter.
+      issues.push("Benchmark card: use the Recipe held-out task to score each round's adapter.");
+    }
     if (!benchmark.prompt_column.trim()) {
       issues.push("Benchmark card: pick the prompt column.");
     }

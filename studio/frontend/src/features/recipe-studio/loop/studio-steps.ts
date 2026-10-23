@@ -4,15 +4,11 @@
 import { authFetch } from "@/features/auth";
 import { getInferenceStatus, loadModel, unloadModel } from "@/features/chat";
 import { readFastApiError } from "@/lib/format-fastapi-error";
-import {
-  cancelBenchmarkJob,
-  createRecipeTrainingSplit,
-  getBenchmarkJob,
-  inspectSeedUpload,
-  startBenchmarkJob,
-} from "../api";
+import { cancelBenchmark, runBenchmark } from "@/features/benchmark/api/benchmark-api";
+import { createRecipeTrainingSplit, inspectSeedUpload } from "../api";
 import type { RecipeExecutionRecord } from "../execution-types";
-import type { NodeConfig, SeedConfig, TrainCardRun } from "../types";
+import type { BenchmarkResult, NodeConfig, SeedConfig, TrainCardRun } from "../types";
+import { RECIPE_HELDOUT_TASK } from "../utils/benchmark";
 import { findLoopParts, loopRecipeColumns } from "../utils/loop-card";
 import {
   type TrainCardSettings,
@@ -376,38 +372,54 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
         }),
         untilAborted(signal),
       ]);
-      const { job_id: jobId } = await startBenchmarkJob(request);
+      const status = await getInferenceStatus();
+      const onAbort = () => void cancelBenchmark().catch(() => undefined);
+      signal.addEventListener("abort", onAbort, { once: true });
       try {
-        while (true) {
-          await sleep(POLL_MS, signal);
-          const status = await getBenchmarkJob(jobId);
-          if (status.status === "running") {
-            continue;
-          }
-          if (status.status === "error" || !status.result) {
-            throw new Error(status.error ?? "The benchmark failed.");
-          }
-          if (status.result.cancelled) {
-            throw abortError();
-          }
-          deps.updateConfig(benchmark.id, {
+        // The Benchmark card's Recipe held-out task, run as a Benchmarks evals run.
+        const response = await Promise.race([
+          runBenchmark({
+            // biome-ignore lint/style/useNamingConvention: api schema
+            checkpoint_path: status.active_model ?? adapter.outputDir,
+            // biome-ignore lint/style/useNamingConvention: api schema
+            model_source: "local",
+            task: RECIPE_HELDOUT_TASK,
+            recipe: request,
+          }),
+          untilAborted(signal),
+        ]);
+        if (signal.aborted || response.details?.cancelled) {
+          throw abortError();
+        }
+        if (!response.success) {
+          throw new Error(response.message || "The benchmark failed.");
+        }
+        const result = response.details?.recipe as
+          | (BenchmarkResult & {
+              // biome-ignore lint/style/useNamingConvention: api schema
+              run_ids?: Record<string, string>;
+            })
+          | undefined;
+        if (!result) {
+          throw new Error("The benchmark returned no result.");
+        }
+        deps.updateConfig(benchmark.id, {
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          last_result: {
+            ...result,
+            task: RECIPE_HELDOUT_TASK,
             // biome-ignore lint/style/useNamingConvention: ui schema
-            last_result: {
-              ...status.result,
-              // biome-ignore lint/style/useNamingConvention: ui schema
-              finished_at: Date.now(),
-              // biome-ignore lint/style/useNamingConvention: ui schema
-              execution_id: "",
-              rows: status.result.candidate.total,
-            },
-          });
-          return loopScoreFromResult(status.result);
-        }
-      } catch (error) {
-        if (signal.aborted) {
-          await cancelBenchmarkJob(jobId).catch(() => undefined);
-        }
-        throw error;
+            run_ids: result.run_ids,
+            // biome-ignore lint/style/useNamingConvention: ui schema
+            finished_at: Date.now(),
+            // biome-ignore lint/style/useNamingConvention: ui schema
+            execution_id: "",
+            rows: result.candidate.total,
+          },
+        });
+        return loopScoreFromResult(result);
+      } finally {
+        signal.removeEventListener("abort", onAbort);
       }
     },
   };

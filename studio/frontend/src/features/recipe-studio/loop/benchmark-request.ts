@@ -2,7 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { BenchmarkConfig, BenchmarkResult, NodeConfig } from "../types";
-import { BENCHMARK_MAX_ROWS, type BenchmarkRequest } from "../utils/benchmark";
+import { BENCHMARK_MAX_ROWS, type RecipeHeldoutSpec } from "../utils/benchmark";
 import { buildModelConfig, buildModelProvider } from "../utils/payload/builders-model";
 import type { LoopScore } from "./types";
 
@@ -23,7 +23,7 @@ export function buildLoopBenchmarkRequest(input: {
   benchmark: BenchmarkConfig;
   configs: NodeConfig[];
   holdoutPath: string;
-}): { request: BenchmarkRequest | null; errors: string[] } {
+}): { request: RecipeHeldoutSpec | null; errors: string[] } {
   const { benchmark } = input;
   const errors: string[] = [];
   const providers: Record<string, unknown>[] = [

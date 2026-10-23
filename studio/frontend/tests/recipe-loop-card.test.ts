@@ -139,7 +139,7 @@ test("the Benchmark card feeds only the Loop card and the failures seed", () => 
 });
 
 test("setup issues name what still blocks a start", () => {
-  const { configs, feedback, train } = loopRecipe();
+  const { configs, feedback, train, benchmark } = loopRecipe();
   assert.deepEqual(loopSetupIssues(findLoopParts(configs), configs), []);
 
   const withoutSeed = { ...configs };
@@ -155,6 +155,9 @@ test("setup issues name what still blocks a start", () => {
 
   const noHoldout = { ...configs, [train.id]: { ...train, holdoutPercent: "0" } };
   assert.match(loopSetupIssues(findLoopParts(noHoldout), noHoldout).join(" "), /hold out/);
+
+  const lmEval = { ...configs, [benchmark.id]: { ...benchmark, task: "gsm8k" } };
+  assert.match(loopSetupIssues(findLoopParts(lmEval), lmEval).join(" "), /Recipe held-out/);
 });
 
 test("the failures seed's own columns are not fed back into it", () => {

@@ -367,6 +367,7 @@ const benchmark = {
   id: "b1",
   kind: "benchmark" as const,
   name: "benchmark",
+  task: "recipe_heldout",
   model_alias: "",
   baseline_mode: "adapter_off" as const,
   prompt_column: "ticket",
