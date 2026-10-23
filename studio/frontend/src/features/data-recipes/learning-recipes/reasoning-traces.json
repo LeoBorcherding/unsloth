@@ -138,9 +138,9 @@
     "nodes": [
       {
         "id": "note_1",
-        "x": 100,
-        "y": 700,
-        "width": 420,
+        "x": 0,
+        "y": 20,
+        "width": 400,
         "node_type": "markdown_note",
         "name": "note_1",
         "markdown": "##### Reasoning traces\n\n1. Samplers pick a **subject**, **difficulty** and **setting**, so problems don't repeat.\n2. `problem` writes a problem with one short answer.\n3. `solution` is structured output: step-by-step `reasoning` plus a `final_answer`.\n4. `assistant` formats it as `<think>...</think>` followed by the answer, the shape most reasoning fine-tunes train on. Pair it with `problem` as the user turn.\n\nCheck the run's **Quality pass** for duplicate problems before training.",
@@ -149,56 +149,56 @@
       },
       {
         "id": "Local Model",
-        "x": 1180,
-        "y": 700,
+        "x": 780,
+        "y": 0,
         "width": 400
       },
       {
         "id": "problem-writer",
-        "x": 1180,
-        "y": 880,
+        "x": 520,
+        "y": 140,
         "width": 400
       },
       {
         "id": "solver",
-        "x": 1680,
-        "y": 880,
+        "x": 1040,
+        "y": 140,
         "width": 400
       },
       {
         "id": "subject",
-        "x": 100,
-        "y": 1100,
+        "x": 0,
+        "y": 380,
         "width": 400
       },
       {
         "id": "difficulty",
-        "x": 100,
-        "y": 1280,
+        "x": 0,
+        "y": 500,
         "width": 400
       },
       {
         "id": "setting",
-        "x": 100,
-        "y": 1460,
+        "x": 0,
+        "y": 620,
         "width": 400
       },
       {
         "id": "problem",
-        "x": 1180,
-        "y": 1100,
+        "x": 520,
+        "y": 380,
         "width": 400
       },
       {
         "id": "solution",
-        "x": 1680,
-        "y": 1100,
+        "x": 1040,
+        "y": 380,
         "width": 400
       },
       {
         "id": "assistant",
-        "x": 2180,
-        "y": 1100,
+        "x": 1560,
+        "y": 380,
         "width": 400
       }
     ],

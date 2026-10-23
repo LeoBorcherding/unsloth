@@ -170,7 +170,7 @@ const TEMPLATE_CARDS: TemplateCard[] = [
   {
     title: "Tool Calls",
     description:
-      "User requests paired with the function-call arguments that answer them, each call checked as JSON.",
+      "User requests paired with the tool call that answers them, checked as valid JSON.",
     icon: Wrench01Icon,
     difficulty: "Starter",
     learningBadges: ["Tool Calling", "LLM Text", "JSON Validator"],
@@ -186,7 +186,7 @@ const TEMPLATE_CARDS: TemplateCard[] = [
   {
     title: "Reasoning Traces",
     description:
-      "Practice problems with step-by-step reasoning and a final answer, formatted as <think> traces.",
+      "Practice problems with step-by-step reasoning and a final answer in <think> format.",
     icon: AiBrain01Icon,
     difficulty: "Starter",
     learningBadges: ["Structured LLM", "Expression", "Reasoning"],
