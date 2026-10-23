@@ -4,6 +4,7 @@
 import type { ReactElement } from "react";
 import type { NodeConfig, SamplerConfig } from "../types";
 import { getBlockDefinitionForConfig } from "./definitions";
+import { BenchmarkDialog } from "../dialogs/benchmark/benchmark-dialog";
 import { ExpressionDialog } from "../dialogs/expression/expression-dialog";
 import { LlmDialog } from "../dialogs/llm/llm-dialog";
 import { ModelConfigDialog } from "../dialogs/models/model-config-dialog";
@@ -134,6 +135,14 @@ export function renderBlockDialog(
     case "train":
       return config.kind === "train" ? (
         <TrainDialog config={config} onUpdate={update} />
+      ) : null;
+    case "benchmark":
+      return config.kind === "benchmark" ? (
+        <BenchmarkDialog
+          config={config}
+          modelConfigAliases={modelConfigAliases}
+          onUpdate={update}
+        />
       ) : null;
   }
 }

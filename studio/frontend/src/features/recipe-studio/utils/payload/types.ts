@@ -40,7 +40,7 @@ export type RecipePayload = {
       x: number;
       y: number;
       width?: number;
-      node_type?: "markdown_note" | "tool_config" | "train";
+      node_type?: "markdown_note" | "tool_config" | "train" | "benchmark";
       name?: string;
       markdown?: string;
       note_color?: string;
@@ -48,6 +48,7 @@ export type RecipePayload = {
       tools_by_provider?: Record<string, string[]>;
       // Train card settings: the card is not a dataset column.
       train?: Record<string, unknown>;
+      benchmark?: Record<string, unknown>;
     }>;
     edges: {
       from: string;

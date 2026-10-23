@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
+  Analytics01Icon,
   BalanceScaleIcon,
   Clock01Icon,
   CodeIcon,
@@ -51,6 +52,7 @@ import {
   RECIPE_STUDIO_NODE_TONES,
   RECIPE_STUDIO_USER_NODE_TONE,
 } from "../utils/ui-tones";
+import { BenchmarkCardBody } from "./benchmark/benchmark-card-body";
 import { InlineCategoryBadges } from "./inline/inline-category-badges";
 import { InlineExpression } from "./inline/inline-expression";
 import { InlineLlm } from "./inline/inline-llm";
@@ -106,6 +108,9 @@ const NODE_META = {
   note: {
     tone: RECIPE_STUDIO_NODE_TONES.note,
   },
+  benchmark: {
+    tone: RECIPE_STUDIO_NODE_TONES.benchmark,
+  },
   seed: {
     tone: RECIPE_STUDIO_NODE_TONES.seed,
   },
@@ -160,6 +165,9 @@ function resolveNodeIcon(
   }
   if (kind === "note") {
     return PencilEdit02Icon;
+  }
+  if (kind === "benchmark") {
+    return Analytics01Icon;
   }
   if (kind === "model_provider") {
     return Shield02Icon;
@@ -293,9 +301,13 @@ function renderNodeBody(
   summary: string,
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void,
   localProviderNames: Set<string>,
+  executionLocked: boolean,
 ): ReactElement {
   if (config?.kind === "markdown_note") {
     return <MarkdownPreview markdown={config.markdown} />;
+  }
+  if (config?.kind === "benchmark") {
+    return <BenchmarkCardBody config={config} disabled={executionLocked} />;
   }
 
   if (config && isInlineConfig(config)) {
@@ -437,7 +449,9 @@ function RecipeGraphNodeBase({
     data.kind === "sampler" ||
     data.kind === "seed";
   const showSemanticIn =
-    data.kind === "model_config" || data.kind === "validator";
+    data.kind === "model_config" ||
+    data.kind === "validator" ||
+    data.kind === "benchmark";
   const showSemanticOut =
     data.kind === "model_config" ||
     data.kind === "model_provider" ||
@@ -449,6 +463,7 @@ function RecipeGraphNodeBase({
     summary,
     updateConfig,
     localProviderNames,
+    executionLocked,
   );
   const canShowLlmAux =
     config?.kind === "llm" &&
@@ -659,6 +674,18 @@ function RecipeGraphNodeBase({
             handleClassName={NODE_HANDLE_CLASS}
           />
         </>
+      )}
+
+      {data.kind === "benchmark" && (
+        <LabeledHandle
+          id={HANDLE_IDS.benchmarkOut}
+          title="Score and failed examples"
+          type="source"
+          position={Position.Right}
+          className="absolute inset-0 pointer-events-none"
+          labelClassName="sr-only"
+          handleClassName={NODE_HANDLE_CLASS}
+        />
       )}
 
       {showSemanticOut && (

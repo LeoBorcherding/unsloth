@@ -61,6 +61,7 @@ export type RecipeNodeData = {
     | "seed"
     | "note"
     | "train"
+    | "benchmark"
     | "model_provider"
     | "model_config"
     | "tool_config";
@@ -77,6 +78,7 @@ export type RecipeNodeData = {
     | "seed"
     | "markdown_note"
     | "train"
+    | "benchmark"
     | "model_provider"
     | "model_config"
     | "tool_config";
@@ -328,6 +330,77 @@ export type MarkdownNoteConfig = {
   note_opacity?: string;
 };
 
+export type BenchmarkScorer =
+  | "reference"
+  | "json"
+  | "markdown"
+  | "python"
+  | "judge";
+export type BenchmarkBaselineMode = "none" | "adapter_off" | "alias";
+
+export type BenchmarkScoreSummary = {
+  total: number;
+  scored: number;
+  passed: number;
+  errors: number;
+  score: number | null;
+};
+
+export type BenchmarkFailedExample = {
+  prompt: string;
+  reference: string | null;
+  output: string | null;
+  reason: string;
+  row: Record<string, unknown>;
+};
+
+export type BenchmarkResult = {
+  candidate: BenchmarkScoreSummary;
+  baseline?: BenchmarkScoreSummary;
+  delta?: number | null;
+  cancelled: boolean;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  failed_examples: BenchmarkFailedExample[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  failed_total: number;
+};
+
+export type BenchmarkConfig = {
+  id: string;
+  kind: "benchmark";
+  name: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  model_alias: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  baseline_mode: BenchmarkBaselineMode;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  baseline_alias?: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  prompt_column: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  reference_column?: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  system_prompt?: string;
+  scorer: BenchmarkScorer;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  judge_alias?: string;
+  rubric?: string;
+  // ui ergonomics (string for input)
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  holdout_percent: string;
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  max_rows: string;
+  // ui-only: last finished run, so the card and its output handle survive a reload
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  last_result?: BenchmarkResult & {
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    finished_at: number;
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    execution_id: string;
+    rows: number;
+  };
+};
+
 export type SeedConfig = {
   id: string;
   kind: "seed";
@@ -441,6 +514,7 @@ export type NodeConfig =
   | ValidatorConfig
   | ExpressionConfig
   | MarkdownNoteConfig
+  | BenchmarkConfig
   | SeedConfig
   | TrainCardConfig
   | ModelProviderConfig

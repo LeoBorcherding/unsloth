@@ -108,7 +108,10 @@ function getSingleRefRelation(
   if (source.kind === "model_provider" && target.kind === "model_config") {
     return "provider";
   }
-  if (source.kind === "model_config" && target.kind === "llm") {
+  if (
+    source.kind === "model_config" &&
+    (target.kind === "llm" || target.kind === "benchmark")
+  ) {
     return "model_alias";
   }
   if (source.kind === "tool_config" && target.kind === "llm") {
@@ -439,7 +442,10 @@ export function applyRecipeConnection(
     };
     return { edges: nextEdges, configs: { ...configs, [target.id]: next } };
   }
-  if (source.kind === "model_config" && target.kind === "llm") {
+  if (
+    source.kind === "model_config" &&
+    (target.kind === "llm" || target.kind === "benchmark")
+  ) {
     const next = { ...target, model_alias: source.name };
     return { edges: nextEdges, configs: { ...configs, [target.id]: next } };
   }

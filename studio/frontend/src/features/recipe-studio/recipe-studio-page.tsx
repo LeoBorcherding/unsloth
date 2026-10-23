@@ -148,6 +148,7 @@ export function RecipeStudioPage({
     addValidatorNode,
     addMarkdownNoteNode,
     addTrainNode,
+    addBenchmarkNode,
     selectConfig,
     openConfig,
     updateConfig,
@@ -189,6 +190,7 @@ export function RecipeStudioPage({
       addValidatorNode: state.addValidatorNode,
       addMarkdownNoteNode: state.addMarkdownNoteNode,
       addTrainNode: state.addTrainNode,
+      addBenchmarkNode: state.addBenchmarkNode,
       selectConfig: state.selectConfig,
       openConfig: state.openConfig,
       updateConfig: state.updateConfig,
@@ -275,6 +277,7 @@ export function RecipeStudioPage({
     handleAddValidatorFromSheet,
     handleAddMarkdownNoteFromSheet,
     handleAddTrainFromSheet,
+    handleAddBenchmarkFromSheet,
   } = useRecipeEditorGraph({
     nodes,
     edges,
@@ -296,6 +299,7 @@ export function RecipeStudioPage({
     addValidatorNode,
     addMarkdownNoteNode,
     addTrainNode,
+    addBenchmarkNode,
   });
 
   const configList = useMemo(() => Object.values(configs), [configs]);
@@ -772,6 +776,7 @@ export function RecipeStudioPage({
             onAddValidator={handleAddValidatorFromSheet}
             onAddMarkdownNote={handleAddMarkdownNoteFromSheet}
             onAddTrain={handleAddTrainFromSheet}
+            onAddBenchmark={handleAddBenchmarkFromSheet}
             onOpenProcessors={openProcessorsFromSheet}
             copied={copied}
             onCopy={copyRecipe}

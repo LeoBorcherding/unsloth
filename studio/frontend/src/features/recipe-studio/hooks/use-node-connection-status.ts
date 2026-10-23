@@ -25,7 +25,7 @@ export function useNodeConnectionStatus(
       missingDataInput: false,
     };
 
-    if (!config || config.kind === "markdown_note" || config.kind === "train") {
+    if (!config || config.kind === "markdown_note" || config.kind === "train" || config.kind === "benchmark") {
       return empty;
     }
 

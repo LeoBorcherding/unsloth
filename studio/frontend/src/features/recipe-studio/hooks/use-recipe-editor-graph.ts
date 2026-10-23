@@ -35,6 +35,7 @@ const SUPPORTED_DRAG_KINDS: RecipeBlockDragPayload["kind"][] = [
   "expression",
   "note",
   "train",
+  "benchmark",
 ];
 
 function parseRecipeBlockDragPayload(raw: string): RecipeBlockDragPayload | null {
@@ -80,6 +81,7 @@ type UseRecipeEditorGraphArgs = {
   ) => void;
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
   addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
 };
 
 type UseRecipeEditorGraphResult = {
@@ -103,6 +105,7 @@ type UseRecipeEditorGraphResult = {
   ) => void;
   handleAddMarkdownNoteFromSheet: () => void;
   handleAddTrainFromSheet: () => void;
+  handleAddBenchmarkFromSheet: () => void;
 };
 
 export function useRecipeEditorGraph({
@@ -126,6 +129,7 @@ export function useRecipeEditorGraph({
   addValidatorNode,
   addMarkdownNoteNode,
   addTrainNode,
+  addBenchmarkNode,
 }: UseRecipeEditorGraphArgs): UseRecipeEditorGraphResult {
   const baseNodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const baseEdgeIds = useMemo(() => new Set(edges.map((edge) => edge.id)), [edges]);
@@ -237,6 +241,10 @@ export function useRecipeEditorGraph({
         addTrainNode(position, false);
         return;
       }
+      if (payload.kind === "benchmark") {
+        addBenchmarkNode(position, false);
+        return;
+      }
       if (payload.type === "model_provider") {
         addModelProviderNode(position, false);
         return;
@@ -252,6 +260,7 @@ export function useRecipeEditorGraph({
       addLlmNode(payload.type as LlmType, position, false);
     },
     [
+      addBenchmarkNode,
       addExpressionNode,
       addLlmNode,
       addMarkdownNoteNode,
@@ -329,6 +338,10 @@ export function useRecipeEditorGraph({
     addTrainNode(getViewportCenterPosition());
   }, [addTrainNode, getViewportCenterPosition]);
 
+  const handleAddBenchmarkFromSheet = useCallback(() => {
+    addBenchmarkNode(getViewportCenterPosition());
+  }, [addBenchmarkNode, getViewportCenterPosition]);
+
   return {
     handleNodeClick,
     handleNodeDoubleClick,
@@ -346,5 +359,6 @@ export function useRecipeEditorGraph({
     handleAddValidatorFromSheet,
     handleAddMarkdownNoteFromSheet,
     handleAddTrainFromSheet,
+    handleAddBenchmarkFromSheet,
   };
 }
