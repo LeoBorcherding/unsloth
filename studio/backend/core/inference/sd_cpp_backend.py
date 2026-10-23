@@ -32,7 +32,7 @@ import time
 import weakref
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from core.inference.diffusion_auto_policy import build_resolved_record, format_generation_for_log
 from core.inference.diffusion_compat import flux2_inner_dim_for_pick
@@ -2623,6 +2623,8 @@ class _SdState:
     vae_format: Optional[str] = None
     native_speed: str = "off"
     offload_flags: tuple[str, ...] = ()
+    # ``--max-vram`` from a lowered VRAM Budget, kept apart so status still reports only real offload.
+    vram_budget_flags: tuple[str, ...] = ()
     threads: Optional[int] = None
     sampling_method: Optional[str] = None
     flow_shift: Optional[float] = None
@@ -2705,6 +2707,58 @@ def _resolved_server_physical_gpu_id(
         if not any(device_name in spec for spec in specs):
             return None
     return visible[local_ordinal]
+
+
+def _image_card_memory_bytes(
+    device: str, ordinal: Optional[int], pinned: bool
+) -> tuple[Optional[int], Optional[int]]:
+    """(free, total) of the card this load renders on, read with no CUDA context; (None, None) when it is not one
+    known card (an unpinned multi-GPU box lets sd.cpp pick)."""
+    from .video import _h3_card_memory_bytes, _h3_visible_card_count
+
+    if not pinned and _h3_visible_card_count(device) != 1:
+        return None, None
+    return _h3_card_memory_bytes(device, ordinal if pinned else None, allow_context = False)
+
+
+def _image_vram_budget_flags(
+    binary: Optional[str],
+    device: str,
+    ordinal: Optional[int],
+    flags: Sequence[str],
+    off_torch: Any = None,
+) -> list[str]:
+    """``--max-vram`` for a VRAM Budget the user lowered below the default, else nothing (the argv is unchanged).
+
+    Gated on the lowered budget, not applied in auto: a budget under the model's size makes sd.cpp segment the graph
+    and move weights per segment, which is slower than a resident render. CUDA / ROCm only, where the card is read."""
+    if device != "cuda" or off_torch is not None:
+        return []
+    try:
+        from utils.vram_budget_settings import VRAM_FRACTION_DEFAULT, get_vram_budget_fraction
+        fraction = get_vram_budget_fraction()
+    except Exception:  # noqa: BLE001 -- an unreadable setting keeps the base argv
+        return []
+    if fraction >= VRAM_FRACTION_DEFAULT:
+        return []
+    pinned = ordinal is not None and "--backend" in flags
+    free, total = _image_card_memory_bytes(device, ordinal, pinned)
+    out = sd_cpp_args_mod.lowered_vram_budget_flags(
+        flags,
+        free_bytes = free,
+        total_bytes = total,
+        fraction = fraction,
+        default = VRAM_FRACTION_DEFAULT,
+        options = sd_cpp_graph_cut_options(binary),
+    )
+    logger.info(
+        "sd_cpp.vram_budget: %s (budget %.3f, free %s, total %s)",
+        " ".join(out) or "no --max-vram",
+        fraction,
+        free,
+        total,
+    )
+    return out
 
 
 def _memory_policy(memory_mode: Optional[str], cpu_offload: bool) -> str:
@@ -3645,6 +3699,7 @@ class SdCppDiffusionBackend:
                 # this graph.
                 self._cpu_backend_forced = False
                 server: Optional[SdCppServer] = None
+                vram_budget_flags: tuple[str, ...] = ()
                 if mode == "server":
                     assert server_binary is not None
                     # _fetch_assets above runs for minutes with no claim on the tree (there is nothing executing in it
@@ -3716,12 +3771,19 @@ class SdCppDiffusionBackend:
                     # install that later overwrites the executable underneath the live server.
                     started_ok = False
                     try:
+                        server_offload = _offload_with_device_pin_impl(
+                            offload, server_binary, _ordinal()
+                        )
+                        # Read after the old server stopped, so its weights are not counted as used.
+                        vram_budget_flags = tuple(
+                            _image_vram_budget_flags(
+                                server_binary, device, _ordinal(), server_offload, off_torch
+                            )
+                        )
                         server.start(
                             files,
                             vae_format = fam.sd_cpp_vae_format,
-                            offload = _offload_with_device_pin_impl(
-                                offload, server_binary, _ordinal()
-                            ),
+                            offload = [*server_offload, *vram_budget_flags],
                             native_speed = native_speed,
                             threads = _default_threads(),
                             env = spawn_env,
@@ -3800,6 +3862,16 @@ class SdCppDiffusionBackend:
                         _ordinal(),
                     )
                 )
+                if mode == "oneshot":
+                    vram_budget_flags = tuple(
+                        _image_vram_budget_flags(
+                            getattr(engine, "binary", None),
+                            device,
+                            _ordinal(),
+                            committed_offload_flags,
+                            off_torch,
+                        )
+                    )
                 state = _SdState(
                     repo_id = repo_id,
                     display_repo_id = display_repo_id,
@@ -3815,6 +3887,7 @@ class SdCppDiffusionBackend:
                     # Pinned against the binary this load COMMITTED to, which a deferred install or a one-shot
                     # fallback may have changed since the policy was built.
                     offload_flags = committed_offload_flags,
+                    vram_budget_flags = vram_budget_flags,
                     threads = _default_threads(),
                     sampling_method = fam.sd_cpp_sampling_method,
                     flow_shift = fam.sd_cpp_flow_shift,
@@ -3870,7 +3943,7 @@ class SdCppDiffusionBackend:
                 if superseded:
                     return
                 logger.info(
-                    "sd_cpp.loaded: repo=%s gguf=%s device=%s mode=%s speed=%s offload_flags=%s",
+                    "sd_cpp.loaded: repo=%s gguf=%s device=%s mode=%s speed=%s offload_flags=%s%s",
                     state.repo_id,
                     state.gguf_filename,
                     f"{state.device} ({state.off_torch_device}, outside torch)"
@@ -3879,6 +3952,9 @@ class SdCppDiffusionBackend:
                     state.mode,
                     state.native_speed,
                     without_device_backend_flags(state.offload_flags) or "none",
+                    f" vram_budget={' '.join(state.vram_budget_flags)}"
+                    if state.vram_budget_flags
+                    else "",
                 )
         except SdCppCancelled:
             return
@@ -5096,7 +5172,7 @@ class SdCppDiffusionBackend:
                         state.files,
                         params,
                         output_path = out_path,
-                        offload = list(state.offload_flags) or None,
+                        offload = [*state.offload_flags, *state.vram_budget_flags] or None,
                         native_speed = state.native_speed,
                         threads = state.threads,
                         extra_args = extra_args or None,

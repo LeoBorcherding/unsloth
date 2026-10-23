@@ -410,6 +410,32 @@ def graph_cut_budget_gib(
     return int(budget / float(1 << 30) * 100) / 100.0
 
 
+def lowered_vram_budget_flags(
+    flags: Sequence[str],
+    *,
+    free_bytes: Optional[int],
+    total_bytes: Optional[int],
+    fraction: Optional[float],
+    default: float,
+    options: "frozenset[str] | set[str]",
+    env: Optional[dict] = None,
+) -> list[str]:
+    """``--max-vram <GiB>`` for a VRAM Budget lowered below ``default``: ``total * fraction``, never above
+    ``graph_cut_budget_gib(free_bytes)``. Empty (the argv unchanged) at or above the default, on an unread card, with
+    the kill switch off, on a build without the flag, or when ``flags`` already carry a ``--max-vram``."""
+    if fraction is None or float(fraction) >= float(default):
+        return []
+    if "--max-vram" not in options or max_vram_value(flags) is not None:
+        return []
+    if not explicit_vram_budget_enabled(env) or total_bytes is None or free_bytes is None:
+        return []
+    budget = graph_cut_budget_gib(int(int(total_bytes) * float(fraction)), reserve_bytes = 0)
+    free_cap = graph_cut_budget_gib(free_bytes)
+    if budget is None or free_cap is None:
+        return []
+    return with_max_vram_budget(GRAPH_CUT_VRAM_FLAGS, min(budget, free_cap))
+
+
 def _format_gib(value: float) -> str:
     return f"{value:.2f}"
 
