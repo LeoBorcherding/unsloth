@@ -3403,6 +3403,9 @@ def _signal_stop(
                 )
                 if _wait_for_exit(pid, _GRACEFUL_STOP_WAIT_S, created_times):
                     return None
+            # The probe can outlast the server, and Windows reuses PIDs: recheck before /F.
+            elif _wait_for_exit(pid, 0, created_times):
+                return None
             # /T also stops llama-server children, which otherwise keep GPU and port.
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check = True)
         else:

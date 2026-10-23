@@ -649,6 +649,27 @@ def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypat
     assert calls == [("shutdown", ["studio-8901-8550.pid"])]
 
 
+def test_windows_stop_never_kills_a_pid_reused_during_a_failed_probe(monkeypatch, tmp_path):
+    # The identity check and POST can take seconds; a server that exits meanwhile frees its PID.
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = False, exits = False)
+    probed = []
+    real_shutdown = studio_mod._request_graceful_shutdown
+
+    def probe_then_reuse(pid, paths):
+        probed.append(True)
+        return real_shutdown(pid, paths)
+
+    monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", probe_then_reuse)
+    monkeypatch.setattr(
+        studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): not probed
+    )
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("shutdown", ["studio-8901-8550.pid"])]
+
+
 def test_graceful_shutdown_skips_a_stale_record_grouped_under_the_pid(monkeypatch, tmp_path):
     # The stale port may now belong to another Unsloth server, which would answer for this PID.
     from unsloth_cli import _inference
