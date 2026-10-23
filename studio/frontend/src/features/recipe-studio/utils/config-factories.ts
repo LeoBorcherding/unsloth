@@ -14,6 +14,7 @@ import type {
   SamplerConfig,
   SamplerType,
   ToolProfileConfig,
+  TrainCardConfig,
   ValidatorCodeLang,
   ValidatorType,
   ValidatorConfig,
@@ -392,6 +393,32 @@ export function makeMarkdownNoteConfig(
     markdown: "## Note\n\nAdd markdown here.",
     note_color: "#FDE68A",
     note_opacity: "35",
+  };
+}
+
+export function makeTrainConfig(
+  id: string,
+  existing: NodeConfig[],
+): TrainCardConfig {
+  const name = nextName(existing, "train");
+  return {
+    id,
+    kind: "train",
+    name,
+    baseModel: "",
+    method: "qlora",
+    promptColumn: "",
+    responseColumn: "",
+    maxSteps: "60",
+    learningRate: "2e-4",
+    loraRank: "16",
+    loraAlpha: "16",
+    batchSize: "2",
+    contextLength: "2048",
+    holdoutPercent: "10",
+    seed: "3407",
+    outputName: name,
+    lastRun: null,
   };
 }
 
