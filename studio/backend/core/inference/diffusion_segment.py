@@ -1651,17 +1651,24 @@ def remove_background(
     image: Any,
     prompt: Optional[str] = None,
     *,
-    threshold: float = DEFAULT_THRESHOLD,
+    threshold: Optional[float] = None,
     grow: int = 0,
     feather: int = 0,
     trim: bool = False,
     allow_gpu: bool = True,
 ) -> tuple[Any, Any, SegmentResult]:
     """Keep what ``prompt`` names in ``image`` (a PIL image) and make the rest transparent: (cut-out, alpha, the
-    segment result). Raises NothingFoundError when SAM 3 finds none of it."""
+    segment result). Raises NothingFoundError when SAM 3 finds none of it. With no prompt the best match for the
+    main subject is kept whatever its score (``threshold`` defaults to 0 there, DEFAULT_THRESHOLD otherwise)."""
     from core.inference.mcp_images import flattened_rgb
 
-    prompt = (prompt or "").strip() or DEFAULT_SUBJECT
+    prompt = (prompt or "").strip()
+    if not prompt:
+        # SAM 3's presence head scores a vague concept near zero (0.005 for the car in a car poster), but its
+        # best box is still the subject, so the default keeps it rather than finding nothing.
+        prompt = DEFAULT_SUBJECT
+        threshold = 0.0 if threshold is None else threshold
+    threshold = DEFAULT_THRESHOLD if threshold is None else threshold
     if not parse_prompt(prompt):
         raise ValueError("Name the subject to keep, for example: car, dog:2")
     result = _segment_decoded(

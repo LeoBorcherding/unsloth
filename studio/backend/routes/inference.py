@@ -54242,6 +54242,9 @@ async def remove_background(
     from core.inference import image_gallery
     from core.inference.diffusion import decode_b64_image
 
+    # Checked here, not in the model: a validation error would echo a 32 MiB upload back.
+    if (request.image is None) == (request.image_id is None):
+        raise HTTPException(status_code = 422, detail = "Send exactly one of image or image_id.")
     account_access.require_idle_other_accounts()
     recipe: Optional[dict] = None
     try:

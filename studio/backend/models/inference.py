@@ -5636,19 +5636,19 @@ class RemoveBackgroundRequest(BaseModel):
         description = "What to keep, in the segment route's syntax (e.g. 'car', 'dog:2, person'); "
         "empty = 'the main subject'",
     )
-    threshold: float = Field(0.5, ge = 0.0, le = 1.0, description = "Detection score threshold")
+    threshold: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = "Detection score threshold; null = 0.5 for a named prompt, and with no prompt the best "
+        "match is kept whatever its score",
+    )
     grow: int = Field(
         0, ge = -64, le = 64, description = "Widen (or, negative, shrink) the kept area by this many px"
     )
     feather: int = Field(0, ge = 0, le = 64, description = "Blur radius (px) for a soft edge")
     trim: bool = Field(False, description = "Crop to the kept area")
     save: bool = Field(True, description = "Save the cut-out to the gallery")
-
-    @model_validator(mode = "after")
-    def _one_source(self) -> "RemoveBackgroundRequest":
-        if (self.image is None) == (self.image_id is None):
-            raise ValueError("send exactly one of image or image_id")
-        return self
 
 
 class RemoveBackgroundResponse(BaseModel):

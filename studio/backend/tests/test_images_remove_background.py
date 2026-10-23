@@ -143,10 +143,15 @@ def test_default_subject_and_flattened_input(stub):
 
     image = Image.new("RGBA", (64, 48), (200, 30, 30, 255))
     cut, alpha, result = seg.remove_background(image, "  ")
-    assert stub.calls == [("RGB", (64, 48), seg.DEFAULT_SUBJECT, seg.DEFAULT_THRESHOLD)]
+    # No prompt keeps the best match for the main subject, however low SAM 3 scores it.
+    assert stub.calls == [("RGB", (64, 48), seg.DEFAULT_SUBJECT, 0.0)]
     assert cut.size == (64, 48) and result.instances
+    seg.remove_background(image, "car")
+    assert stub.calls[-1][2:] == ("car", seg.DEFAULT_THRESHOLD)
     seg.remove_background(image, "car:2", threshold = 0.3)
     assert stub.calls[-1][2:] == ("car:2", 0.3)
+    seg.remove_background(image, None, threshold = 0.4)
+    assert stub.calls[-1][2:] == (seg.DEFAULT_SUBJECT, 0.4)
 
 
 def test_nothing_found_raises(stub):
@@ -247,7 +252,8 @@ def test_route_errors(client, stub, monkeypatch):
     assert http.post(URL, json = {"image_id": "missing"}).status_code == 404
     assert http.post(URL, json = {"image_id": "../x"}).status_code == 404
     assert http.post(URL, json = {}).status_code == 422
-    assert http.post(URL, json = {"image": image, "image_id": "x"}).status_code == 422
+    r = http.post(URL, json = {"image": image, "image_id": "x"})
+    assert r.status_code == 422 and r.json()["detail"] == "Send exactly one of image or image_id."
     assert http.post(URL, json = {"image": image, "grow": 99}).status_code == 422
     assert http.post(URL, json = {"image": "!!!"}).status_code == 400
     assert http.post(URL, json = {"image": image, "prompt": " , , "}).status_code == 400
