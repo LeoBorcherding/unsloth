@@ -103,6 +103,10 @@ def _params_text(meta: dict[str, Any]) -> str:
     # Static flow shift, read back by the paste parser; base / max shift stay in the recipe chunk only.
     if meta.get("shift") is not None:
         fields += f", Shift: {meta['shift']}"
+    # ADetailer's own keys (adetailer/args.py), so a paste into Studio or a webui with ADetailer restores the pass.
+    if meta.get("detailer"):
+        from core.inference.diffusion_detailer import infotext_fields
+        fields += infotext_fields(meta["detailer"])
     if meta.get("generator"):
         fields += f", Version: {meta['generator']}"
     lines.append(fields)
@@ -263,6 +267,13 @@ def owned_image_path(image_id: str) -> Optional[Path]:
     if path is None or _read_meta(path) is None:
         return None
     return path
+
+
+def owned_image(image_id: str) -> Optional[tuple[Path, dict[str, Any]]]:
+    """(PNG path, recipe) for an Unsloth-owned image, else None."""
+    path = image_path(image_id)
+    meta = _read_meta(path) if path is not None else None
+    return None if meta is None else (path, meta)
 
 
 def thumbnail(path: Path, size: int) -> bytes:

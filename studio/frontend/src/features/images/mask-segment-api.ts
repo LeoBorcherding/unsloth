@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-// The "Mask from text" segmenter routes, kept out of api.ts like the prompt upsampler's: only the lazily loaded Images
+// The segmenter routes ("Mask from text", Remove background), kept out of api.ts like the prompt upsampler's: only the lazily loaded Images
 // page uses them.
 
 import { authFetch } from "@/features/auth";
@@ -10,11 +10,18 @@ import { readFastApiError } from "@/lib/format-fastapi-error";
 import {
   MASK_SEGMENT_ROUTES,
   parseSegmenterStatus,
+  SEGMENTER_STATUS_EVENT,
   parseSegmentResult,
   type SegmenterStatus,
   type SegmentRequest,
   type SegmentResult,
 } from "./lib/mask-from-text";
+import {
+  parseRemoveBackgroundResult,
+  REMOVE_BACKGROUND_ROUTE,
+  type RemoveBackgroundRequest,
+} from "./lib/remove-background";
+import type { GalleryImage } from "./api";
 
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -24,9 +31,13 @@ async function parseJson<T>(response: Response): Promise<T> {
 }
 
 export async function getSegmenterStatus(signal?: AbortSignal): Promise<SegmenterStatus> {
-  return parseSegmenterStatus(
+  const status = parseSegmenterStatus(
     await parseJson<unknown>(await authFetch(MASK_SEGMENT_ROUTES.status, { signal })),
   );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SEGMENTER_STATUS_EVENT, { detail: status }));
+  }
+  return status;
 }
 
 /** Start the background download of the active segmenter variant. Progress is read back from the status route. */
@@ -64,4 +75,18 @@ export function releaseSegmenter(): Promise<void> {
   return (async () => {
     await parseJson<unknown>(await authFetch(MASK_SEGMENT_ROUTES.release, { method: "POST" }));
   })();
+}
+
+/** Cut out the subject of ``body.image`` / ``body.image_id`` and save it to the gallery. */
+export async function removeBackground(body: RemoveBackgroundRequest, signal?: AbortSignal): Promise<GalleryImage> {
+  return parseRemoveBackgroundResult(
+    await parseJson<unknown>(
+      await authFetch(REMOVE_BACKGROUND_ROUTE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, save: true }),
+        signal,
+      }),
+    ),
+  );
 }

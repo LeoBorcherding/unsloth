@@ -5001,6 +5001,70 @@ class LocalizedEditSpec(BaseModel):
 _MAX_CONDITION_PAYLOAD = 128 * 1024 * 1024
 
 
+class DiffusionDetailerSpec(BaseModel):
+    """Detailer (face fix) post-pass, after ADetailer and ComfyUI-Impact-Pack's FaceDetailer: SAM 3 finds the targets,
+    each is inpainted in an enlarged crop and pasted back through a feathered mask. Defaults follow FaceDetailer
+    (core/inference/diffusion_detailer.py). Needs a model whose status `workflows` has 'inpaint' and a downloaded SAM 3."""
+
+    targets: str = Field(
+        "face",
+        min_length = 1,
+        max_length = 500,
+        description = "What to fix, as Mask from text takes it: comma-separated, `:N` caps a target "
+        "(default 8 each, at most 20), e.g. 'face' or 'face, hand:2'",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length = 20000,
+        description = "Prompt for the detail pass; omitted = the image's prompt. [PROMPT] inserts it, [SEP] gives "
+        "later detections their own text (ADetailer).",
+    )
+    negative_prompt: Optional[str] = Field(
+        None, max_length = 20000, description = "Negative prompt for the pass; omitted = the image's"
+    )
+    confidence: float = Field(
+        0.5, ge = 0.0, le = 1.0, description = "SAM 3 score a detection must exceed"
+    )
+    denoise: float = Field(
+        0.5,
+        ge = 0.01,
+        le = 1.0,
+        description = "Inpaint strength of the pass (the UI request builder's floor)",
+    )
+    crop_factor: float = Field(
+        3.0, ge = 1.0, le = 10.0, description = "Crop around each detection, times its box"
+    )
+    guide_size: int = Field(
+        512, ge = 64, le = 2048, description = "The box's (or crop's) short side is enlarged to this"
+    )
+    guide_size_for: Literal["bbox", "crop_region"] = Field(
+        "bbox", description = "What guide_size measures: the detection box or the whole crop"
+    )
+    max_size: int = Field(
+        1024,
+        ge = 64,
+        le = 2048,
+        description = "Caps the enlargement: an enlarged crop's sides stay within this. A crop "
+        "already larger renders at its own size, never shrunk (FaceDetailer's force_inpaint)",
+    )
+    dilation: int = Field(
+        10, ge = -128, le = 128, description = "Grow (or, negative, shrink) each mask by this many px"
+    )
+    feather: int = Field(5, ge = 0, le = 100, description = "Paste-back blur (px) at the mask's edge")
+    drop_size: int = Field(
+        10,
+        ge = 1,
+        le = 1024,
+        description = "Detections with a box side at or below this (px) are skipped",
+    )
+    steps: Optional[int] = Field(
+        None, ge = 1, le = 200, description = "Steps for the pass; omitted = the image's"
+    )
+    guidance: Optional[float] = Field(
+        None, ge = 0.0, le = 100.0, description = "Guidance for the pass; omitted = the image's"
+    )
+
+
 class DiffusionGenerateRequest(BaseModel):
     """Request to generate one image from the loaded diffusion model."""
 
@@ -5265,6 +5329,11 @@ class DiffusionGenerateRequest(BaseModel):
         le = 256,
         description = "Padding (px) around the mask when `inpaint_only_masked` is set; omitted = 32.",
     )
+    detailer: Optional[DiffusionDetailerSpec] = Field(
+        None,
+        description = "Detailer (face fix) post-pass on every image of the run. Omitted = off. Refused (400) "
+        "when the loaded model has no inpaint pipeline or SAM 3 is not downloaded.",
+    )
     hires: Optional[HiresSpec] = Field(
         None,
         description = "Hires fix for text to image: upscale the render and refine it in the same request. "
@@ -5525,6 +5594,11 @@ class GalleryImage(BaseModel):
     inpaint_padding: Optional[int] = Field(
         None, description = "Padding (px) around the mask for an only-masked inpaint"
     )
+    detailer: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "The Detailer pass this image ran: its settings, each detection (target, score, box, crop, "
+        "size, seed) and timing, or `error` when it did not run; null = no pass",
+    )
     created_at: float = Field(..., description = "Creation time (epoch seconds)")
     # Library state, not recipe: stored beside the PNG, so older files simply read as unset.
     pinned: bool = Field(False, description = "Pinned to the front of the gallery")
@@ -5613,6 +5687,58 @@ class MaskSegmentRequest(BaseModel):
         le = 1.0,
         description = "Detection score threshold (ComfyUI SAM3 Detect's default 0.5)",
     )
+
+
+class RemoveBackgroundRequest(BaseModel):
+    """Cut the subject out of an image with SAM 3: what ``prompt`` names stays, the rest turns transparent."""
+
+    image: Optional[str] = Field(
+        None,
+        min_length = 1,
+        max_length = 32 * 1024 * 1024,
+        description = "Base64/data-URL source image; send this or image_id",
+    )
+    image_id: Optional[str] = Field(
+        None,
+        min_length = 1,
+        max_length = 128,
+        description = "Gallery image to cut out instead of an upload; its recipe carries over to the saved copy",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length = 2000,
+        description = "What to keep, in the segment route's syntax (e.g. 'car', 'dog:2, person'); "
+        "empty = 'the main subject'",
+    )
+    threshold: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = "Detection score threshold; null = 0.5 for a named prompt, and with no prompt the best "
+        "match is kept whatever its score",
+    )
+    grow: int = Field(
+        0, ge = -64, le = 64, description = "Widen (or, negative, shrink) the kept area by this many px"
+    )
+    feather: int = Field(0, ge = 0, le = 64, description = "Blur radius (px) for a soft edge")
+    trim: bool = Field(False, description = "Crop to the kept area")
+    save: bool = Field(True, description = "Save the cut-out to the gallery")
+
+
+class RemoveBackgroundResponse(BaseModel):
+    image: Optional[GalleryImage] = Field(None, description = "The saved gallery record, when save")
+    b64_png: Optional[str] = Field(
+        None, description = "The cut-out as a PNG data URL with alpha, when not saved"
+    )
+    mask: str = Field(..., description = "The alpha it was cut with (PNG data URL, cut-out size)")
+    width: int = Field(..., description = "Cut-out width")
+    height: int = Field(..., description = "Cut-out height")
+    prompt: str = Field(..., description = "What was kept")
+    instances: list[dict] = Field(
+        default_factory = list, description = "Each kept detection: prompt, score, box (source px)"
+    )
+    device: str = Field(..., description = "Where SAM 3 ran")
+    elapsed_ms: float = Field(..., description = "Segmentation time")
 
 
 class PromptUpsamplerPreviewRequest(BaseModel):
