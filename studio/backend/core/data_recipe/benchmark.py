@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import ast
 import re
+from pathlib import Path
 from typing import Any, Callable, Optional
 
+from core.data_recipe.jsonable import to_jsonable
 from core.data_recipe.text_format_validators import _validate_text_format
 
 VALIDATOR_SCORERS = ("reference", "json", "markdown", "python")
@@ -27,6 +29,31 @@ _VERDICT_RE = re.compile(r"\b(PASS|FAIL)\b", re.IGNORECASE)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 ChatFn = Callable[[str, list[dict[str, str]]], str]
+
+
+class BenchmarkHoldoutError(ValueError):
+    """Raised when a Train card's held-out split can't be read."""
+
+
+def read_holdout_rows(holdout_path: str, max_rows: int) -> list[dict[str, Any]]:
+    """First ``max_rows`` rows of a Train card's ``splits/holdout-<pct>-seed<seed>/holdout.parquet``.
+    The split is already a seeded shuffle, so its head is a fair sample."""
+    from core.data_recipe.huggingface import RecipeDatasetPublishError, _resolve_recipe_artifact_path
+
+    path = Path(holdout_path).expanduser().resolve(strict = False)
+    if path.name != "holdout.parquet" or path.parent.parent.name != "splits":
+        raise BenchmarkHoldoutError("That is not a Train card's held-out split.")
+    try:
+        _resolve_recipe_artifact_path(str(path.parent.parent.parent))
+    except RecipeDatasetPublishError as exc:
+        raise BenchmarkHoldoutError(str(exc)) from exc
+    if not path.is_file():
+        raise BenchmarkHoldoutError("The held-out split is gone. Train again to recreate it.")
+
+    import pyarrow.parquet as pyarrow_parquet
+
+    table = pyarrow_parquet.read_table(path)
+    return [to_jsonable(row) for row in table.slice(0, max(1, max_rows)).to_pylist()]
 
 
 def _normalize(text: str) -> str:

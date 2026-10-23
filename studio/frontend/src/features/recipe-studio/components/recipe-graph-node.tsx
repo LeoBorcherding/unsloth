@@ -655,27 +655,43 @@ function RecipeGraphNodeBase({
 
       {showSemanticIn && (
         <>
-          <LabeledHandle
-            id={HANDLE_IDS.semanticIn}
-            title="Semantic input"
-            type="target"
-            position={Position.Left}
-            className="absolute inset-0 pointer-events-none"
-            labelClassName="sr-only"
-            handleClassName={NODE_HANDLE_CLASS}
-          />
-          <LabeledHandle
-            id={HANDLE_IDS.semanticInTop}
-            title="Semantic input"
-            type="target"
-            position={Position.Top}
-            className="absolute inset-0 pointer-events-none"
-            labelClassName="sr-only"
-            handleClassName={NODE_HANDLE_CLASS}
-          />
+          {(data.kind !== "benchmark" || layoutDirection !== "TB") && (
+            <LabeledHandle
+              id={HANDLE_IDS.semanticIn}
+              title="Semantic input"
+              type="target"
+              position={Position.Left}
+              className="absolute inset-0 pointer-events-none"
+              labelClassName="sr-only"
+              handleClassName={NODE_HANDLE_CLASS}
+            />
+          )}
+          {(data.kind !== "benchmark" || layoutDirection === "TB") && (
+            <LabeledHandle
+              id={HANDLE_IDS.semanticInTop}
+              title="Semantic input"
+              type="target"
+              position={Position.Top}
+              className="absolute inset-0 pointer-events-none"
+              labelClassName="sr-only"
+              handleClassName={NODE_HANDLE_CLASS}
+            />
+          )}
         </>
       )}
 
+      {data.kind === "benchmark" && (
+        // The Train card's adapter comes in on a data lane, on the side the model edge doesn't use.
+        <LabeledHandle
+          id={layoutDirection === "TB" ? HANDLE_IDS.dataIn : HANDLE_IDS.dataInTop}
+          title="Trained model"
+          type="target"
+          position={layoutDirection === "TB" ? Position.Left : Position.Top}
+          className="absolute inset-0 pointer-events-none"
+          labelClassName="sr-only"
+          handleClassName={NODE_HANDLE_CLASS}
+        />
+      )}
       {data.kind === "benchmark" && (
         <LabeledHandle
           id={HANDLE_IDS.benchmarkOut}

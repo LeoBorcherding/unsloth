@@ -246,3 +246,50 @@ test("the newest finished full run is the benchmark source", () => {
   ]);
   assert.equal(picked?.id, "new-full");
 });
+
+test("a wired-in Train card's held-out split replaces the last-N% slice", () => {
+  const train = {
+    id: "t1",
+    kind: "train",
+    name: "train_1",
+    lastRun: {
+      phase: "completed",
+      jobId: "job-1",
+      outputName: "support-bot",
+      outputDir: "/outputs/support-bot",
+      holdoutPath: "/recipes/run-1/splits/holdout-20-seed3407/holdout.parquet",
+      holdoutRows: 20,
+    },
+  };
+  const edges = [{ source: "t1", target: "b1" }];
+  const trained = benchmark.findTrainedModelInput("b1", edges, { t1: train });
+  assert.deepEqual(trained, {
+    trainName: "train_1",
+    outputName: "support-bot",
+    outputDir: "/outputs/support-bot",
+    holdoutPath: "/recipes/run-1/splits/holdout-20-seed3407/holdout.parquet",
+    holdoutRows: 20,
+  });
+
+  const unfinished = { ...train, lastRun: { ...train.lastRun, phase: "training" } };
+  assert.equal(benchmark.findTrainedModelInput("b1", edges, { t1: unfinished }), null);
+  assert.equal(benchmark.findTrainedModelInput("other", edges, { t1: train }), null);
+
+  const { snapshot, benchmarkId } = addBenchmark(loadTemplate("text-to-python"));
+  const config = {
+    ...(snapshot.configs[benchmarkId] as BenchmarkConfig),
+    prompt_column: "instruction",
+    scorer: "python",
+    max_rows: "15",
+  } satisfies BenchmarkConfig;
+  const { request, errors } = benchmark.buildBenchmarkRequest(
+    config,
+    Object.values(snapshot.configs),
+    [],
+    trained,
+  );
+  assert.deepEqual(errors, []);
+  assert.equal(request?.holdout_path, trained?.holdoutPath);
+  assert.equal(request?.max_rows, 15);
+  assert.deepEqual(request?.rows, []);
+});

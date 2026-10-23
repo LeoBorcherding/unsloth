@@ -2,9 +2,17 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelBenchmarkJob,
   getBenchmarkJob,
@@ -17,6 +25,7 @@ import type { BenchmarkConfig, BenchmarkResult } from "../../types";
 import {
   buildBenchmarkRequest,
   failedExamplesToJsonl,
+  findTrainedModelInput,
   formatBenchmarkDelta,
   formatBenchmarkScore,
   getBenchmarkHoldout,
@@ -26,11 +35,11 @@ import {
 const POLL_MS = 1000;
 
 const SCORER_SHORT: Record<BenchmarkConfig["scorer"], string> = {
-  reference: "reference match",
+  reference: "Reference match",
   judge: "LLM judge",
-  json: "valid JSON",
-  markdown: "valid markdown",
-  python: "valid Python",
+  json: "Valid JSON",
+  markdown: "Valid markdown",
+  python: "Valid Python",
 };
 
 function downloadFailed(name: string, result: BenchmarkResult): void {
@@ -45,28 +54,62 @@ function downloadFailed(name: string, result: BenchmarkResult): void {
   URL.revokeObjectURL(url);
 }
 
-function Stat({
-  label,
-  value,
-  tone,
+function FailedExamplesDialog({
+  name,
+  result,
+  open,
+  onOpenChange,
 }: {
-  label: string;
-  value: string;
-  tone?: "up" | "down";
+  name: string;
+  result: BenchmarkResult;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }): ReactElement {
+  const shown = result.failed_examples.length;
   return (
-    <div className="corner-squircle rounded-md border border-border/60 px-2 py-1.5">
-      <p className="text-ui-10 uppercase text-muted-foreground">{label}</p>
-      <p
-        className={cn(
-          "text-sm font-semibold tabular-nums",
-          tone === "up" && "text-emerald-600 dark:text-emerald-400",
-          tone === "down" && "text-rose-600 dark:text-rose-400",
-        )}
-      >
-        {value}
-      </p>
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Failed examples</DialogTitle>
+          <DialogDescription>
+            {result.failed_total} of {result.candidate.total} held-out rows failed
+            {shown < result.failed_total ? `; the first ${shown} are kept.` : "."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+          {result.failed_examples.map((example, index) => (
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: static list
+              key={index}
+              className="corner-squircle space-y-1 rounded-lg border border-border/60 p-3 text-sm"
+            >
+              <p className="font-medium">{example.prompt}</p>
+              <p className="text-muted-foreground">
+                <span className="text-foreground">Got:</span>{" "}
+                {example.output || "(no answer)"}
+              </p>
+              {example.reference && (
+                <p className="text-muted-foreground">
+                  <span className="text-foreground">Expected:</span> {example.reference}
+                </p>
+              )}
+              {example.reason && (
+                <p className="text-xs text-muted-foreground">{example.reason}</p>
+              )}
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => downloadFailed(name, result)}
+          >
+            Download JSONL
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -79,10 +122,13 @@ export function BenchmarkCardBody({
 }): ReactElement {
   const executions = useRecipeExecutionsStore((state) => state.executions);
   const updateConfig = useRecipeStudioStore((state) => state.updateConfig);
+  const edges = useRecipeStudioStore((state) => state.edges);
+  const configs = useRecipeStudioStore((state) => state.configs);
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [failedOpen, setFailedOpen] = useState(false);
   const executionIdRef = useRef<string>("");
   const rowsRef = useRef(0);
 
@@ -132,41 +178,50 @@ export function BenchmarkCardBody({
     };
   }, [jobId, config.id, updateConfig]);
 
+  const trained = useMemo(
+    () => findTrainedModelInput(config.id, edges, configs),
+    [config.id, edges, configs],
+  );
   const execution = pickBenchmarkExecution(executions);
   const total = execution ? execution.datasetTotal ?? execution.dataset.length : 0;
   const holdout = getBenchmarkHoldout(total, config.holdout_percent, config.max_rows);
   const running = Boolean(jobId) || starting;
+  const sourceLabel = trained
+    ? `${trained.holdoutRows} rows ${trained.trainName} held out`
+    : execution
+      ? `${holdout.limit} held-out rows`
+      : "Run the recipe first";
 
   const run = async () => {
     setError(null);
-    if (!execution) {
+    if (!(trained || execution)) {
       setError("Run the recipe first: the benchmark scores rows from the last finished run.");
       return;
     }
     setStarting(true);
     try {
-      let rows: Record<string, unknown>[];
-      if (execution.dataset.length >= total) {
-        rows = execution.dataset.slice(holdout.offset, holdout.offset + holdout.limit);
-      } else if (execution.jobId) {
-        const page = await getRecipeJobDataset(execution.jobId, {
-          offset: holdout.offset,
-          limit: holdout.limit,
-        });
-        rows = (page.dataset ?? []) as Record<string, unknown>[];
-      } else {
-        rows = [];
+      let rows: Record<string, unknown>[] = [];
+      if (!trained && execution) {
+        if (execution.dataset.length >= total) {
+          rows = execution.dataset.slice(holdout.offset, holdout.offset + holdout.limit);
+        } else if (execution.jobId) {
+          const page = await getRecipeJobDataset(execution.jobId, {
+            offset: holdout.offset,
+            limit: holdout.limit,
+          });
+          rows = (page.dataset ?? []) as Record<string, unknown>[];
+        }
       }
       const allConfigs = Object.values(useRecipeStudioStore.getState().configs);
-      const { request, errors } = buildBenchmarkRequest(config, allConfigs, rows);
+      const { request, errors } = buildBenchmarkRequest(config, allConfigs, rows, trained);
       if (!request) {
         setError(errors.join(" "));
         return;
       }
-      executionIdRef.current = execution.id;
-      rowsRef.current = rows.length;
+      executionIdRef.current = execution?.id ?? "";
+      rowsRef.current = trained ? request.max_rows ?? 0 : rows.length;
       const created = await startBenchmarkJob(request);
-      setProgress({ done: 0, total: rows.length });
+      setProgress(null);
       setJobId(created.job_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -181,69 +236,56 @@ export function BenchmarkCardBody({
     progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="nodrag space-y-2">
+    <div className="nodrag space-y-3">
       <p className="text-xs text-muted-foreground">
-        {config.model_alias || "No model"} · {SCORER_SHORT[config.scorer]}
-        {execution
-          ? ` · ${holdout.limit} of ${holdout.holdout} held-out rows`
-          : " · run the recipe first"}
+        {config.model_alias || "No model"} · {SCORER_SHORT[config.scorer]} · {sourceLabel}
       </p>
       {result && !running && (
-        <div className="space-y-1.5">
-          <div className={cn("grid gap-1.5", result.baseline ? "grid-cols-3" : "grid-cols-1")}>
-            <Stat label="Score" value={formatBenchmarkScore(result.candidate.score)} />
-            {result.baseline && (
-              <>
-                <Stat label="Baseline" value={formatBenchmarkScore(result.baseline.score)} />
-                <Stat
-                  label="Delta"
-                  value={formatBenchmarkDelta(delta)}
-                  tone={
-                    typeof delta === "number" && delta !== 0
-                      ? delta > 0
-                        ? "up"
-                        : "down"
-                      : undefined
-                  }
-                />
-              </>
-            )}
-          </div>
-          <p className="text-ui-11 text-muted-foreground">
-            {result.candidate.passed}/{result.candidate.scored} passed
-            {result.candidate.errors > 0 ? `, ${result.candidate.errors} errored` : ""}
-            {result.cancelled ? " (cancelled)" : ""}
-          </p>
-          {result.failed_examples[0] && (
-            <div className="corner-squircle space-y-0.5 rounded-md bg-muted/40 px-2 py-1.5 text-ui-11">
-              <p className="line-clamp-2">
-                <span className="font-semibold">Failed:</span>{" "}
-                {result.failed_examples[0].prompt}
+        <div className="space-y-2">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-3xl font-semibold leading-none tabular-nums">
+                {formatBenchmarkScore(result.candidate.score)}
               </p>
-              <p className="line-clamp-2 text-muted-foreground">
-                Got: {result.failed_examples[0].output ?? "(no answer)"}
-                {result.failed_examples[0].reference
-                  ? ` · expected ${result.failed_examples[0].reference}`
-                  : ""}
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                {result.candidate.passed} of {result.candidate.scored} passed
+                {result.candidate.errors > 0 ? ` · ${result.candidate.errors} errored` : ""}
+                {result.cancelled ? " · stopped early" : ""}
               </p>
             </div>
-          )}
+            {result.baseline && (
+              <div className="text-right">
+                <p
+                  className={cn(
+                    "text-lg font-semibold leading-none tabular-nums",
+                    typeof delta === "number" && delta > 0 && "text-emerald-600 dark:text-emerald-400",
+                    typeof delta === "number" && delta < 0 && "text-rose-600 dark:text-rose-400",
+                  )}
+                >
+                  {formatBenchmarkDelta(delta)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                  vs baseline {formatBenchmarkScore(result.baseline.score)}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
       {running && (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <Progress value={percent} />
-          <p className="text-ui-11 tabular-nums text-muted-foreground">
-            Scoring {progress?.done ?? 0}/{progress?.total ?? holdout.limit} answers
+          <p className="text-xs tabular-nums text-muted-foreground">
+            {progress ? `Scoring ${progress.done} of ${progress.total} answers` : "Starting..."}
           </p>
         </div>
       )}
-      {error && <p className="text-ui-11 text-destructive">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex items-center gap-1.5">
         {running ? (
           <Button
             type="button"
-            size="xs"
+            size="sm"
             variant="outline"
             disabled={!jobId}
             onClick={() => jobId && void cancelBenchmarkJob(jobId)}
@@ -251,21 +293,29 @@ export function BenchmarkCardBody({
             Stop
           </Button>
         ) : (
-          <Button type="button" size="xs" disabled={disabled} onClick={() => void run()}>
+          <Button type="button" size="sm" disabled={disabled} onClick={() => void run()}>
             {result ? "Run again" : "Run benchmark"}
           </Button>
         )}
         {result && result.failed_total > 0 && !running && (
           <Button
             type="button"
-            size="xs"
+            size="sm"
             variant="ghost"
-            onClick={() => downloadFailed(config.name, result)}
+            onClick={() => setFailedOpen(true)}
           >
-            {result.failed_total} failed (JSONL)
+            {result.failed_total} failed
           </Button>
         )}
       </div>
+      {result && (
+        <FailedExamplesDialog
+          name={config.name}
+          result={result}
+          open={failedOpen}
+          onOpenChange={setFailedOpen}
+        />
+      )}
     </div>
   );
 }
