@@ -185,7 +185,7 @@ export function ExecutionsView({
         const isWide = wideColumns.has(name);
         return (
           <div className={cn(isWide ? "min-w-[calc(48rem*var(--ui-space-scale,1))] max-md:min-w-[calc(20rem*var(--ui-space-scale,1))]" : "min-w-[calc(12rem*var(--ui-space-scale,1))]")}>
-            <p className="whitespace-pre-wrap break-all">{value}</p>
+            <p className={cn("whitespace-pre-wrap break-all", isWide && "max-h-48 overflow-y-auto")}>{value}</p>
           </div>
         );
       },

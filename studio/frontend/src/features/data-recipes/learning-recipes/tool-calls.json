@@ -134,7 +134,7 @@
       {
         "id": "note_1",
         "x": 0,
-        "y": 20,
+        "y": 0,
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_1",
@@ -144,19 +144,19 @@
       },
       {
         "id": "Local Model",
-        "x": 780,
+        "x": 720,
         "y": 0,
         "width": 400
       },
       {
         "id": "tool-writer",
-        "x": 520,
+        "x": 480,
         "y": 140,
         "width": 400
       },
       {
         "id": "tool-caller",
-        "x": 1040,
+        "x": 960,
         "y": 140,
         "width": 400
       },
@@ -186,20 +186,20 @@
       },
       {
         "id": "user_message",
-        "x": 520,
+        "x": 480,
         "y": 380,
         "width": 400
       },
       {
         "id": "arguments",
-        "x": 1040,
+        "x": 960,
         "y": 380,
         "width": 400
       },
       {
         "id": "arguments_valid",
-        "x": 1560,
-        "y": 380,
+        "x": 1440,
+        "y": 446,
         "width": 400
       }
     ],

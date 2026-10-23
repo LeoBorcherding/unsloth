@@ -228,3 +228,48 @@ test("both templates are in the gallery", () => {
     assert.match(page, new RegExp(`learningRecipeId: "${id}"`));
   }
 });
+
+// Card heights as rendered in the editor (measured at 1440x900); notes are 400 wide like the rest.
+const CARD_HEIGHT: Record<string, number> = {
+  note: 290,
+  provider: 84,
+  model: 184,
+  sampler: 81,
+  expression: 189,
+  "llm-text": 212,
+  "llm-structured": 80,
+  validation: 80,
+};
+
+test("the new templates lay out without overlaps and fit the editor at its minimum zoom", () => {
+  for (const name of NEW_TEMPLATES) {
+    const parsed = JSON.parse(loadTemplate(name).text) as {
+      recipe: Rec;
+      ui: { nodes: { id: string; x: number; y: number; width: number; node_type?: string }[] };
+    };
+    const kind = new Map<string, string>();
+    for (const p of list(parsed.recipe.model_providers)) kind.set(String(p.name), "provider");
+    for (const m of list(parsed.recipe.model_configs)) kind.set(String(m.alias), "model");
+    for (const c of list(parsed.recipe.columns)) kind.set(String(c.name), String(c.column_type));
+    const boxes = parsed.ui.nodes.map((n) => {
+      const k = n.node_type === "markdown_note" ? "note" : kind.get(n.id);
+      assert.ok(k && CARD_HEIGHT[k], `${name}: ${n.id}`);
+      return { id: n.id, note: k === "note", x0: n.x, y0: n.y, x1: n.x + n.width, y1: n.y + CARD_HEIGHT[k] };
+    });
+    for (const [i, a] of boxes.entries()) {
+      for (const b of boxes.slice(i + 1)) {
+        const apart = a.x1 + 40 <= b.x0 || b.x1 + 40 <= a.x0 || a.y1 + 30 <= b.y0 || b.y1 + 30 <= a.y0;
+        assert.ok(apart, `${name}: ${a.id} crowds ${b.id}`);
+      }
+    }
+    // Fit ignores notes, so a note outside the cards' box gets cut off on load.
+    const cards = boxes.filter((b) => !b.note);
+    const minX = Math.min(...cards.map((b) => b.x0));
+    const minY = Math.min(...cards.map((b) => b.y0));
+    for (const note of boxes.filter((b) => b.note)) {
+      assert.ok(note.x0 >= minX && note.y0 >= minY, `${name}: note sits outside the fitted area`);
+    }
+    // At the 0.5 zoom floor a 1440px window with the app sidebar open shows ~1900 units.
+    assert.ok(Math.max(...cards.map((b) => b.x1)) - minX <= 1900, `${name} is too wide`);
+  }
+});
