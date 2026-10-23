@@ -80,6 +80,9 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
   feedText(text: string): void;
   endStream(finalText: string): void;
   stop(): void;
+  /** Hold the reply while a possible barge-in is checked; resumePlayback picks it back up. */
+  pausePlayback(): void;
+  resumePlayback(): void;
   primeAudio(): void;
 } {
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -91,6 +94,7 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
   const streamRef = useRef<Stream | null>(null);
   const failedReqRef = useRef(-1);
   const rafRef = useRef<number | null>(null);
+  const pausedRef = useRef(false);
   const onEndRef = useRef(onPlaybackEnd);
   onEndRef.current = onPlaybackEnd;
 
@@ -116,6 +120,10 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
 
   const stop = useCallback(() => {
     reqRef.current += 1;
+    if (pausedRef.current) {
+      pausedRef.current = false;
+      void getPlayCtx()?.resume().catch(() => {});
+    }
     abortRef.current?.abort();
     abortRef.current = null;
     for (const clip of clipsRef.current) {
@@ -169,6 +177,10 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
     (buffer: AudioBuffer) => {
       const ctx = getPlayCtx();
       if (!ctx) return;
+      // WebKit parks the context ("interrupted"/"suspended") when another surface takes
+      // the audio session, e.g. the Audio tab mounting its players; a start() on a parked
+      // context is silent, so wake it first.
+      if (ctx.state !== "running") void ctx.resume().catch(() => {});
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
@@ -276,7 +288,45 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
     [beginStream, endStream],
   );
 
+  // Suspending the context freezes every scheduled clip in place; the run loop's tail wait
+  // reads the frozen clock, so nothing ends early while held.
+  const pausePlayback = useCallback(() => {
+    if (pausedRef.current || clipsRef.current.size === 0) return;
+    pausedRef.current = true;
+    void getPlayCtx()?.suspend().catch(() => {});
+  }, []);
+
+  const resumePlayback = useCallback(() => {
+    if (!pausedRef.current) return;
+    pausedRef.current = false;
+    void getPlayCtx()?.resume().catch(() => {});
+  }, []);
+
   useEffect(() => stop, [stop]);
 
-  return { isSpeaking, isPlaying, speak, beginStream, feedText, endStream, stop, primeAudio };
+  useEffect(() => {
+    const ctx = getPlayCtx();
+    if (!ctx) return;
+    const wake = () => {
+      if (pausedRef.current) return;
+      if (ctx.state !== "running" && clipsRef.current.size > 0) {
+        void ctx.resume().catch(() => {});
+      }
+    };
+    ctx.addEventListener("statechange", wake);
+    return () => ctx.removeEventListener("statechange", wake);
+  }, []);
+
+  return {
+    isSpeaking,
+    isPlaying,
+    speak,
+    beginStream,
+    feedText,
+    endStream,
+    stop,
+    pausePlayback,
+    resumePlayback,
+    primeAudio,
+  };
 }
