@@ -4980,6 +4980,26 @@ class ControlNetSpec(BaseModel):
         return self
 
 
+class IpAdapterSpec(BaseModel):
+    """An image prompt (IP-Adapter): the image steers style and subject alongside the text prompt.
+
+    The adapter is picked by the loaded family (status `supports_ip_adapter`); the client sends only the image.
+    """
+
+    image: str = Field(
+        ...,
+        min_length = 1,
+        max_length = 32 * 1024 * 1024,
+        description = "Base64/data-URL image prompt",
+    )
+    scale: float = Field(
+        0.6,
+        ge = 0.0,
+        le = 1.0,
+        description = "How strongly the image steers the result; 0 disables it",
+    )
+
+
 class LocalizedEditSpec(BaseModel):
     """A localized edit for the unified-edit workflow (Qwen-Image-2.1). It guides a generative edit;
     unlike inpainting it does not keep the pixels outside the region."""
@@ -4999,6 +5019,70 @@ class LocalizedEditSpec(BaseModel):
 
 # All images of one request, base64: ten maximal uploads would otherwise buffer ~320 MiB.
 _MAX_CONDITION_PAYLOAD = 128 * 1024 * 1024
+
+
+class DiffusionDetailerSpec(BaseModel):
+    """Detailer (face fix) post-pass, after ADetailer and ComfyUI-Impact-Pack's FaceDetailer: SAM 3 finds the targets,
+    each is inpainted in an enlarged crop and pasted back through a feathered mask. Defaults follow FaceDetailer
+    (core/inference/diffusion_detailer.py). Needs a model whose status `workflows` has 'inpaint' and a downloaded SAM 3."""
+
+    targets: str = Field(
+        "face",
+        min_length = 1,
+        max_length = 500,
+        description = "What to fix, as Mask from text takes it: comma-separated, `:N` caps a target "
+        "(default 8 each, at most 20), e.g. 'face' or 'face, hand:2'",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length = 20000,
+        description = "Prompt for the detail pass; omitted = the image's prompt. [PROMPT] inserts it, [SEP] gives "
+        "later detections their own text (ADetailer).",
+    )
+    negative_prompt: Optional[str] = Field(
+        None, max_length = 20000, description = "Negative prompt for the pass; omitted = the image's"
+    )
+    confidence: float = Field(
+        0.5, ge = 0.0, le = 1.0, description = "SAM 3 score a detection must exceed"
+    )
+    denoise: float = Field(
+        0.5,
+        ge = 0.01,
+        le = 1.0,
+        description = "Inpaint strength of the pass (the UI request builder's floor)",
+    )
+    crop_factor: float = Field(
+        3.0, ge = 1.0, le = 10.0, description = "Crop around each detection, times its box"
+    )
+    guide_size: int = Field(
+        512, ge = 64, le = 2048, description = "The box's (or crop's) short side is enlarged to this"
+    )
+    guide_size_for: Literal["bbox", "crop_region"] = Field(
+        "bbox", description = "What guide_size measures: the detection box or the whole crop"
+    )
+    max_size: int = Field(
+        1024,
+        ge = 64,
+        le = 2048,
+        description = "Caps the enlargement: an enlarged crop's sides stay within this. A crop "
+        "already larger renders at its own size, never shrunk (FaceDetailer's force_inpaint)",
+    )
+    dilation: int = Field(
+        10, ge = -128, le = 128, description = "Grow (or, negative, shrink) each mask by this many px"
+    )
+    feather: int = Field(5, ge = 0, le = 100, description = "Paste-back blur (px) at the mask's edge")
+    drop_size: int = Field(
+        10,
+        ge = 1,
+        le = 1024,
+        description = "Detections with a box side at or below this (px) are skipped",
+    )
+    steps: Optional[int] = Field(
+        None, ge = 1, le = 200, description = "Steps for the pass; omitted = the image's"
+    )
+    guidance: Optional[float] = Field(
+        None, ge = 0.0, le = 100.0, description = "Guidance for the pass; omitted = the image's"
+    )
 
 
 class DiffusionGenerateRequest(BaseModel):
@@ -5175,6 +5259,12 @@ class DiffusionGenerateRequest(BaseModel):
         "Omitted applies none and behaves exactly as before. Rejected with a clear message when "
         "the loaded model or its quantisation can't apply ControlNet.",
     )
+    ip_adapter: Optional[IpAdapterSpec] = Field(
+        None,
+        description = "Image prompt (IP-Adapter) for this generation: an image plus a 0-1 scale. Omitted "
+        "applies none and behaves exactly as before. Text-to-image only, on models whose status "
+        "`supports_ip_adapter` is true (SDXL); refused with a clear message elsewhere.",
+    )
     sampler: Optional[Literal["default", "euler", "euler_a", "dpmpp_2m", "dpmpp_2m_sde"]] = Field(
         None,
         description = "Sampler for this generation, one of the loaded model's status `samplers` ids. "
@@ -5265,6 +5355,11 @@ class DiffusionGenerateRequest(BaseModel):
         le = 256,
         description = "Padding (px) around the mask when `inpaint_only_masked` is set; omitted = 32.",
     )
+    detailer: Optional[DiffusionDetailerSpec] = Field(
+        None,
+        description = "Detailer (face fix) post-pass on every image of the run. Omitted = off. Refused (400) "
+        "when the loaded model has no inpaint pipeline or SAM 3 is not downloaded.",
+    )
     hires: Optional[HiresSpec] = Field(
         None,
         description = "Hires fix for text to image: upscale the render and refine it in the same request. "
@@ -5314,6 +5409,8 @@ class DiffusionGenerateRequest(BaseModel):
         total = len(self.init_image or "") + sum(len(r) for r in self.reference_images or [])
         if self.localized_edit is not None:
             total += len(self.localized_edit.image)
+        if self.ip_adapter is not None:
+            total += len(self.ip_adapter.image)
         if total > _MAX_CONDITION_PAYLOAD:
             raise ValueError(
                 "the input images together must be at most 128 MiB (base64); use smaller images"
@@ -5442,6 +5539,10 @@ class GalleryImage(BaseModel):
     controlnet: Optional[str] = Field(
         None, description = "ControlNet applied, formatted as 'id:control_type:strength'"
     )
+    ip_adapter: Optional[str] = Field(
+        None, description = "IP-Adapter the image prompt ran through; null = no image prompt"
+    )
+    ip_adapter_scale: Optional[float] = Field(None, description = "Image prompt scale")
     # Conditioned-workflow settings. The images themselves are NOT persisted (user uploads with their own lifetime), so these say what ran and let the client ask for them back.
     workflow: Optional[str] = Field(
         None,
@@ -5524,6 +5625,11 @@ class GalleryImage(BaseModel):
     )
     inpaint_padding: Optional[int] = Field(
         None, description = "Padding (px) around the mask for an only-masked inpaint"
+    )
+    detailer: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "The Detailer pass this image ran: its settings, each detection (target, score, box, crop, "
+        "size, seed) and timing, or `error` when it did not run; null = no pass",
     )
     created_at: float = Field(..., description = "Creation time (epoch seconds)")
     # Library state, not recipe: stored beside the PNG, so older files simply read as unset.
@@ -5970,6 +6076,11 @@ class DiffusionStatusResponse(BaseModel):
         description = "Whether the loaded model can apply a ControlNet (drives the ControlNet "
         "picker's enabled state). Diffusers only, for families with a ControlNet pipeline; False "
         "for the native engine, GGUF-via-diffusers, and torchao fp8/int8 dense.",
+    )
+    supports_ip_adapter: bool = Field(
+        False,
+        description = "Whether the loaded model can take an image prompt (`ip_adapter`). Diffusers SDXL "
+        "loaded resident and not compiled; False for every other family and engine.",
     )
     supports_inpaint_only_masked: bool = Field(
         False,
