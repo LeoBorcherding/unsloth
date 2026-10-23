@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import {
+  Analytics01Icon,
   BalanceScaleIcon,
   Clock01Icon,
   CodeIcon,
@@ -29,6 +30,7 @@ import type {
   SeedSourceType,
 } from "../types";
 import {
+  makeBenchmarkConfig,
   makeExpressionConfig,
   makeLlmConfig,
   makeMarkdownNoteConfig,
@@ -46,7 +48,8 @@ export type BlockKind =
   | "validator"
   | "expression"
   | "seed"
-  | "note";
+  | "note"
+  | "benchmark";
 export type ValidatorBlockType =
   | "validator_python"
   | "validator_sql"
@@ -60,6 +63,7 @@ export type BlockType =
   | ValidatorBlockType
   | "expression"
   | "markdown_note"
+  | "benchmark"
   | "seed"
   | "seed_hf"
   | "seed_local"
@@ -101,7 +105,8 @@ export type BlockDialogKey =
   | "model_provider"
   | "model_config"
   | "tool_config"
-  | "expression";
+  | "expression"
+  | "benchmark";
 
 export type BlockDefinition = {
   kind: BlockKind;
@@ -143,6 +148,12 @@ export const BLOCK_GROUPS: BlockGroup[] = [
     title: "Formulas",
     description: "Build a field from other fields.",
     icon: FunctionIcon,
+  },
+  {
+    kind: "benchmark",
+    title: "Benchmark",
+    description: "Score a model on a held-out slice of this recipe's data.",
+    icon: Analytics01Icon,
   },
   {
     kind: "note",
@@ -401,6 +412,16 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     dialogKey: "markdown_note",
     createConfig: (id, existing) => makeMarkdownNoteConfig(id, existing),
   },
+  {
+    kind: "benchmark",
+    type: "benchmark",
+    title: "Benchmark",
+    description:
+      "Score a model on held-out rows from the last run, with a check or an LLM judge.",
+    icon: Analytics01Icon,
+    dialogKey: "benchmark",
+    createConfig: (id, existing) => makeBenchmarkConfig(id, existing),
+  },
 ];
 
 export function getBlocksForKind(kind: BlockKind): BlockDefinition[] {
@@ -467,6 +488,9 @@ export function getBlockDefinitionForConfig(
   }
   if (config.kind === "markdown_note") {
     return getBlockDefinition("note", "markdown_note");
+  }
+  if (config.kind === "benchmark") {
+    return getBlockDefinition("benchmark", "benchmark");
   }
   return getBlockDefinition("expression", "expression");
 }

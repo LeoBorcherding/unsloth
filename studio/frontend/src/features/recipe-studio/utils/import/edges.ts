@@ -147,7 +147,10 @@ export function buildEdges(
     ) {
       addEdgeByName(config.reference_column_name, config.name);
     }
-    if (config.kind === "llm" && config.model_alias) {
+    if (
+      (config.kind === "llm" || config.kind === "benchmark") &&
+      config.model_alias
+    ) {
       addEdgeByName(config.model_alias, config.name);
     }
     if (config.kind === "llm" && config.tool_alias) {

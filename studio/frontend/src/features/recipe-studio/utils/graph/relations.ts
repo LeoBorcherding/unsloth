@@ -25,7 +25,10 @@ export function isSemanticRelation(
   if (source.kind === "model_provider" && target.kind === "model_config") {
     return true;
   }
-  if (source.kind === "model_config" && target.kind === "llm") {
+  if (
+    source.kind === "model_config" &&
+    (target.kind === "llm" || target.kind === "benchmark")
+  ) {
     return true;
   }
   if (source.kind === "tool_config" && target.kind === "llm") {
