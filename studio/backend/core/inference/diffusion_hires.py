@@ -555,6 +555,9 @@ def _check_request(kwargs: dict) -> None:
     controlnet = kwargs.get("controlnet")
     if controlnet is not None and controlnet[3] not in (None, 0, 0.0):
         raise ValueError("Hires fix cannot be combined with ControlNet yet.")
+    ip_adapter = kwargs.get("ip_adapter")
+    if ip_adapter is not None and ip_adapter[1] not in (None, 0, 0.0):
+        raise ValueError("Hires fix cannot be combined with an image prompt yet.")
 
 
 def run_hires(

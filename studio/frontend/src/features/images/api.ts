@@ -94,6 +94,8 @@ export interface DiffusionStatus {
   supports_lora?: boolean;
   // Whether the loaded model can apply a ControlNet. Diffusers only, for families with a ControlNet pipeline.
   supports_controlnet?: boolean;
+  // Whether the loaded model takes an image prompt (IP-Adapter): diffusers SDXL, resident and not compiled.
+  supports_ip_adapter?: boolean;
   supports_negative_prompt?: boolean;
   // Whether the loaded model's inpaint pipeline can crop to the mask (diffusers padding_mask_crop).
   supports_inpaint_only_masked?: boolean;
@@ -277,6 +279,8 @@ export interface DiffusionGenerateRequest {
   loras?: LoraSpecInput[];
   // ControlNet conditioning for this generation. Rejected (400) when the loaded model cannot apply ControlNet.
   controlnet?: ControlNetSpecInput;
+  // Image prompt (IP-Adapter), text to image only. Rejected (400) when the loaded model cannot take one.
+  ip_adapter?: IpAdapterSpecInput;
   sampler?: string;
   schedule_type?: string;
   // Sent only off their defaults (lib/sd-controls); refused (400) for a model without them.
@@ -302,6 +306,12 @@ export interface DiffusionGenerateRequest {
 export interface LoraSpecInput {
   id: string;
   weight: number;
+}
+
+// An image prompt sent with a generation: the image steers style and subject at `scale` (0..1).
+export interface IpAdapterSpecInput {
+  image: string;
+  scale: number;
 }
 
 // A ControlNet selection sent with a generation.
@@ -373,6 +383,9 @@ export interface GalleryImage {
   baked_loras?: string[];
   loras?: string[];
   controlnet?: string | null;
+  // The IP-Adapter an image prompt ran through, and its scale; the image itself is not persisted.
+  ip_adapter?: string | null;
+  ip_adapter_scale?: number | null;
   // Conditioned-workflow settings. The source/mask/reference/control images are not persisted, so
   // these say what ran and let restore name the inputs to supply again.
   workflow?: string | null;

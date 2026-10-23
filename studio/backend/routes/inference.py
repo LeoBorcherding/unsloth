@@ -52333,6 +52333,22 @@ def _inpaint_mask_kwargs(generate: Any, request: Any) -> dict:
     return out
 
 
+def _ip_adapter_kwargs(generate: Any, request: Any) -> dict:
+    """``ip_adapter`` as (image, scale) for an engine whose generate() takes it; another engine refuses (400)."""
+    spec = getattr(request, "ip_adapter", None)
+    if spec is None:
+        return {}
+    try:
+        import inspect
+        if "ip_adapter" in inspect.signature(generate).parameters:
+            return {"ip_adapter": (spec.image, float(spec.scale))}
+    except (TypeError, ValueError):
+        pass
+    if spec.scale == 0:
+        return {}
+    raise ValueError("Image prompts (IP-Adapter) are supported on the diffusers engine only.")
+
+
 def _hires_kwargs(generate: Any, request: Any) -> dict:
     """Only the set Hires fix / upscaler kwargs; an engine that takes neither refuses (ValueError -> 400)."""
     try:
@@ -52454,6 +52470,7 @@ async def _external_image_generation(
         or body.reference_images
         or body.loras
         or body.controlnet
+        or body.ip_adapter
         or body.prompts
         or body.seeds
         or body.negative_prompt
@@ -52816,6 +52833,7 @@ async def _generate_diffusion_image_run(
                     **_shift_kwargs(backend.generate, request),
                     **_inpaint_mask_kwargs(backend.generate, request),
                     **_hires_kwargs(backend.generate, request),
+                    **_ip_adapter_kwargs(backend.generate, request),
                 )
             break
         except ImageActivationShortfallError as exc:
@@ -52924,6 +52942,9 @@ async def _generate_diffusion_image_run(
                         "upscale": request.upscale,
                         "upscale_model": result.get("upscale_model"),
                         **hires_record_fields(result.get("hires")),
+                        # From the engine: a scale-0 image prompt never loads the adapter, so it is not recorded.
+                        "ip_adapter": result.get("ip_adapter"),
+                        "ip_adapter_scale": result.get("ip_adapter_scale"),
                         "controlnet_guidance": (
                             f"{request.controlnet.guidance_start:g}:{request.controlnet.guidance_end:g}"
                             if request.controlnet and request.controlnet.strength > 0
