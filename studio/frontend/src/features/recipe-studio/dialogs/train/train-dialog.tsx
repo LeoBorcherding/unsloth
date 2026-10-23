@@ -73,12 +73,13 @@ const ADVANCED_FIELDS: NumberField[] = [
     label: "Max seq length",
     hint: "Longer rows are truncated.",
   },
-  {
-    key: "seed",
-    label: "Seed",
-    hint: "Picks which rows are held out, and seeds training.",
-  },
 ];
+
+const SEED_FIELD: NumberField = {
+  key: "seed",
+  label: "Seed",
+  hint: "Picks which rows are held out, and seeds training.",
+};
 
 type TrainDialogProps = {
   config: TrainCardConfig;
@@ -138,7 +139,7 @@ export function TrainDialog({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         {source
           ? `Trains on the latest full run (${source.run_name?.trim() || source.id}, ${source.rows} rows).`
@@ -197,7 +198,7 @@ export function TrainDialog({
           />
         </CollapsibleTrigger>
         <CollapsibleContent className="mt-3 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-3">
             <NameField
               label="Card name"
               hint="Shown on the canvas."
@@ -219,6 +220,7 @@ export function TrainDialog({
                 }
               />
             </div>
+            {numberInput(SEED_FIELD)}
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
