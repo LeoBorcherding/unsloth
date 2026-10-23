@@ -195,13 +195,16 @@ def _run_section_1h(
     is_rocm,
     environ,
     cuda = None,
+    xpu = None,
     platform = "linux",
 ):
     import sys as _real_sys
 
     cuda = cuda if cuda is not None else _FakeCuda()
     logger, recorded = _make_logger()
-    fake_torch = SimpleNamespace(cuda = cuda)
+    fake_torch = SimpleNamespace(cuda = cuda, __version__ = "2.11.0")
+    if xpu is not None:
+        fake_torch.xpu = xpu
 
     from core.training import worker as worker_module
 
@@ -220,6 +223,7 @@ def _run_section_1h(
         "_mem_fraction_env_value": resolve_env,
         "_parse_mem_fraction_env": worker_module._parse_mem_fraction_env,
         "_gpu_memory_fraction": worker_module._gpu_memory_fraction,
+        "_torch_accelerator": worker_module._torch_accelerator,
         "torch": fake_torch,
     }
     # `import torch` inside the block must reach the fake, not the real wheel.
@@ -504,3 +508,78 @@ def test_each_rocm_device_is_solved_from_its_own_properties():
     assert cuda.fractions[0] == pytest.approx(_rocm_memory_fraction(128 * GIB, True, "linux"))
     assert cuda.fractions[0] != cuda.fractions[1]
     assert "unified" in log.info[0] and "discrete" in log.info[1]
+
+
+class _FakeXpu(_FakeCuda):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("name", "Intel(R) Arc(TM) B580 Graphics")
+        kwargs.setdefault("total", 12 * GIB)
+        super().__init__(**kwargs)
+
+
+class _OldXpu(_FakeXpu):
+    """torch.xpu before 2.10: no fraction API at all."""
+
+    set_per_process_memory_fraction = None
+
+
+def test_the_cap_reaches_every_xpu_device():
+    xpu = _FakeXpu(count = 2)
+    _cuda, log = _run_section_1h(
+        is_rocm = False,
+        environ = {_GPU_MEM_FRACTION_ENV: "0.5"},
+        cuda = _FakeCuda(available = False),
+        xpu = xpu,
+    )
+    assert xpu.fractions == {0: pytest.approx(0.5), 1: pytest.approx(0.5)}
+    assert len(log.info) == 2, log.info
+    for index, line in enumerate(log.info):
+        assert f"xpu:{index}" in line and "6.0 of 12.0 GiB allowed" in line
+
+
+def test_an_xpu_torch_without_the_api_warns_and_skips():
+    _cuda, log = _run_section_1h(
+        is_rocm = False,
+        environ = {_GPU_MEM_FRACTION_ENV: "0.5"},
+        cuda = _FakeCuda(available = False),
+        xpu = _OldXpu(),
+    )
+    assert log.info == [] and log.debug == []
+    assert len(log.warning) == 1 and "xpu.set_per_process_memory_fraction" in log.warning[0]
+
+
+def test_an_unset_variable_leaves_xpu_alone():
+    xpu = _FakeXpu()
+    _cuda, log = _run_section_1h(
+        is_rocm = False, environ = {}, cuda = _FakeCuda(available = False), xpu = xpu
+    )
+    assert xpu.fractions == {} and log.info == [] and log.warning == []
+
+
+def test_cuda_still_wins_when_both_report_available():
+    cuda, xpu = _FakeCuda(), _FakeXpu()
+    _run_section_1h(
+        is_rocm = False, environ = {_GPU_MEM_FRACTION_ENV: "0.5"}, cuda = cuda, xpu = xpu
+    )
+    assert cuda.fractions == {0: pytest.approx(0.5)} and xpu.fractions == {}
+
+
+def test_mlx_keeps_its_default_cap_without_an_override():
+    from core.training.worker import _mlx_memory_cap_bytes
+
+    for raw in (None, "", "abc", "0", "1.5", "nan"):
+        assert _mlx_memory_cap_bytes(24 * GIB, raw) == int(24 * GIB * 0.85)
+
+
+@pytest.mark.parametrize("raw, fraction", [("0.5", 0.5), ("1.0", 1.0), (" 0.25 ", 0.25)])
+def test_mlx_takes_the_override_against_the_recommended_working_set(raw, fraction):
+    from core.training.worker import _mlx_memory_cap_bytes
+
+    assert _mlx_memory_cap_bytes(24 * GIB, raw) == int(24 * GIB * fraction)
+
+
+def test_the_mlx_trainer_resolves_the_same_variable():
+    source = _WORKER_PY.read_text(encoding = "utf-8")
+    body = source[source.index("def _run_mlx_training(") :][:4000]
+    assert '_mem_fraction_env_value("mlx")' in body
+    assert "_mlx_memory_cap_bytes(rec_bytes, cap_raw)" in body

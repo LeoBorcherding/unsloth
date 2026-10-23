@@ -2021,33 +2021,61 @@ def _training_vram_budget_fraction(
     return min(current, budget * 1024**3 / denominator_bytes)
 
 
+def _torch_accelerator(torch_mod: Any) -> tuple[str | None, Any]:
+    """``("cuda", torch.cuda)`` (ROCm too) or ``("xpu", torch.xpu)``, else ``(None, None)``. Apple
+    Silicon trains on MLX, capped in ``_run_mlx_training``."""
+    if torch_mod.cuda.is_available():
+        return "cuda", torch_mod.cuda
+    xpu = getattr(torch_mod, "xpu", None)
+    try:
+        if xpu is not None and xpu.is_available():
+            return "xpu", xpu
+    except Exception:
+        pass
+    return None, None
+
+
 def _apply_training_vram_budget(
     torch_mod: Any, single_gb: float | None, per_device_gb: list | None, gpu_ids: list | None
 ) -> dict[int, float]:
     """Cap each visible device at its own budget; returns {ordinal: fraction} for what was set."""
     applied: dict[int, float] = {}
-    if not torch_mod.cuda.is_available():
+    backend, accel = _torch_accelerator(torch_mod)
+    if accel is None:
         return applied
-    get_fraction = getattr(torch_mod.cuda, "get_per_process_memory_fraction", None)
-    divides_by_props = _allocator_divides_by_props_total(getattr(torch_mod, "__version__", ""))
-    for index in range(torch_mod.cuda.device_count()):
+    set_fraction = getattr(accel, "set_per_process_memory_fraction", None)
+    if set_fraction is None:
+        # torch.xpu gained it in 2.10.
+        logger.warning(
+            "Training VRAM budget not applied: torch %s has no %s.set_per_process_memory_fraction",
+            getattr(torch_mod, "__version__", "?"),
+            backend,
+        )
+        return applied
+    get_fraction = getattr(accel, "get_per_process_memory_fraction", None)
+    # XPU's allocator always scales global_mem_size, which is props.total_memory.
+    divides_by_props = backend != "cuda" or _allocator_divides_by_props_total(
+        getattr(torch_mod, "__version__", "")
+    )
+    for index in range(accel.device_count()):
         budget = _device_budget_gb(single_gb, per_device_gb, index, gpu_ids)
         if not budget:
             continue
-        props = torch_mod.cuda.get_device_properties(index)
+        props = accel.get_device_properties(index)
         denominator = int(getattr(props, "total_memory", 0) or 0)
         if not divides_by_props:
-            denominator = int(torch_mod.cuda.mem_get_info(index)[1])
+            denominator = int(accel.mem_get_info(index)[1])
         current = get_fraction(index) if get_fraction is not None else 1.0
         fraction = _training_vram_budget_fraction(budget, denominator, current)
         if fraction is None:
             continue
-        torch_mod.cuda.set_per_process_memory_fraction(fraction, index)
+        set_fraction(float(fraction), index)
         applied[index] = fraction
         logger.info(
-            "Training VRAM budget: set_per_process_memory_fraction(%.4f, cuda:%d), "
+            "Training VRAM budget: set_per_process_memory_fraction(%.4f, %s:%d), "
             "%.1f GiB of %.1f GiB",
             fraction,
+            backend,
             index,
             fraction * denominator / 1024**3,
             denominator / 1024**3,
@@ -3098,6 +3126,16 @@ def _resolve_mlx_max_grad_norm(value):
     return value
 
 
+_MLX_DEFAULT_MEM_FRACTION = 0.85
+
+
+def _mlx_memory_cap_bytes(rec_bytes: int, env_value: str | None) -> int:
+    """MLX's memory limit: a usable ``UNSLOTH_GPU_MEM_FRACTION`` of the recommended working set,
+    else the default 85% of it."""
+    fraction = _parse_mem_fraction_env(env_value)
+    return int(rec_bytes * (_MLX_DEFAULT_MEM_FRACTION if fraction is None else fraction))
+
+
 def _run_mlx_training(event_queue, stop_queue, config):
     """Self-contained MLX training path for Apple Silicon. Uses unsloth_zoo's MLXTrainer directly
     (no torch/SFTTrainer). Mirrors the event_queue protocol so the parent process pump works
@@ -3143,10 +3181,24 @@ def _run_mlx_training(event_queue, stop_queue, config):
         info = mx.device_info()
         rec_bytes = info.get("max_recommended_working_set_size", 0) or 0
         if rec_bytes > 0:
-            memory_cap = int(rec_bytes * 0.85)
+            cap_raw, cap_name = _mem_fraction_env_value("mlx")
+            if cap_raw and _parse_mem_fraction_env(cap_raw) is None:
+                logger.warning(
+                    "Ignoring %s=%r (needs a float in (0.0, 1.0]); keeping the default MLX cap",
+                    cap_name,
+                    cap_raw,
+                )
+            memory_cap = _mlx_memory_cap_bytes(rec_bytes, cap_raw)
             wired_cap = min(int(rec_bytes), memory_cap)
             mx.set_memory_limit(memory_cap)
             mx.set_wired_limit(wired_cap)
+            if _parse_mem_fraction_env(cap_raw) is not None:
+                logger.info(
+                    "GPU memory cap: MLX memory limit %.1f of %.1f GiB recommended working set, from %s",
+                    memory_cap / 1024**3,
+                    rec_bytes / 1024**3,
+                    cap_name,
+                )
 
     model_name = config["model_name"]
     hf_token = _worker_hf_token(config)
@@ -4738,7 +4790,7 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         except Exception as _oom_guard_err:
             logger.debug("Could not set GPU memory fraction: %s", _oom_guard_err)
 
-    # A user preference, unlike the driver-forced ROCm arm; XPU and MPS are not wired yet.
+    # A user preference, unlike the driver-forced ROCm arm. Apple Silicon returned to MLX above.
     # ── 1h. Explicit GPU memory cap ──
     if not _hw.IS_ROCM:
         _cap_raw, _cap_name = _mem_fraction_env_value("cuda")
@@ -4752,17 +4804,33 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         elif _cap_fraction is not None:
             try:
                 import torch as _torch_cap
-                if _torch_cap.cuda.is_available():
-                    _cap = _gpu_memory_fraction(0, False, sys.platform, "cuda", _cap_raw)
+                _cap_backend, _cap_accel = _torch_accelerator(_torch_cap)
+                _cap_set = getattr(_cap_accel, "set_per_process_memory_fraction", None)
+                if _cap_accel is None:
+                    logger.debug(
+                        "%s is set but no torch CUDA or XPU device is available; nothing to cap",
+                        _cap_name,
+                    )
+                elif _cap_set is None:
+                    logger.warning(
+                        "Ignoring %s: torch %s has no %s.set_per_process_memory_fraction; "
+                        "leaving GPU memory uncapped",
+                        _cap_name,
+                        getattr(_torch_cap, "__version__", "?"),
+                        _cap_backend,
+                    )
+                else:
+                    _cap = _gpu_memory_fraction(0, False, sys.platform, _cap_backend, _cap_raw)
                     # Named explicitly: the fraction is PER DEVICE, so `get_device_map` jobs
                     # left cuda:1 and up uncapped.
-                    for _cap_index in range(_torch_cap.cuda.device_count()):
-                        _torch_cap.cuda.set_per_process_memory_fraction(_cap, _cap_index)
-                        _cap_props = _torch_cap.cuda.get_device_properties(_cap_index)
+                    for _cap_index in range(_cap_accel.device_count()):
+                        _cap_set(_cap, _cap_index)
+                        _cap_props = _cap_accel.get_device_properties(_cap_index)
                         _cap_total = int(getattr(_cap_props, "total_memory", 0) or 0)
                         logger.info(
-                            "GPU memory cap: set_per_process_memory_fraction(%.4f, cuda:%d) from %s — %s, %s",
+                            "GPU memory cap: set_per_process_memory_fraction(%.4f, %s:%d) from %s — %s, %s",
                             _cap,
+                            _cap_backend,
                             _cap_index,
                             _cap_name,
                             getattr(_cap_props, "name", "unknown device"),
@@ -4770,11 +4838,6 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                             if _cap_total > 0
                             else "device total unreported by this wheel",
                         )
-                else:
-                    logger.debug(
-                        "%s is set but no torch CUDA device is available; nothing to cap",
-                        _cap_name,
-                    )
             except Exception as _cap_err:
                 logger.debug("Could not set GPU memory fraction: %s", _cap_err)
 
