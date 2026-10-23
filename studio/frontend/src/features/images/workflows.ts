@@ -96,6 +96,7 @@ export const BACKEND_WORKFLOW_RECIPE_LABELS: Record<string, string> = {
   upscale: "Upscale",
   reference: "Reference",
   controlnet: "ControlNet",
+  remove_background: "Remove background",
 };
 
 export function recipeWorkflowLabel(workflow: string | null | undefined): string {

@@ -187,6 +187,10 @@ class SegmenterReleaseTimeoutError(RuntimeError):
     """A GPU handover waited out a call still running on the accelerator: the card is not free yet."""
 
 
+class NothingFoundError(ValueError):
+    """Remove background found nothing the prompt names, so there is no subject to keep."""
+
+
 # ── prompt syntax ───────────────────────────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen = True)
 class Concept:
@@ -1558,6 +1562,12 @@ def segment_image(
     if not parse_prompt(prompt):
         raise ValueError("Describe what to mask, for example: sofa, red lamp, pillow:2")
     image = decode_b64_image(image_b64, mode = "RGB")
+    return _segment_decoded(image, prompt, threshold = threshold, allow_gpu = allow_gpu).to_json()
+
+
+def _segment_decoded(
+    image: Any, prompt: str, *, threshold: float, allow_gpu: bool
+) -> SegmentResult:
     slot, why = _take_render_slot()
     if not why and _renders_pending:
         # A render released SAM 3 and is on its way to the slot: a Find taking it first would reload SAM 3 under it.
@@ -1571,14 +1581,102 @@ def segment_image(
             else "An image model is loading."
         )
     try:
-        return (
-            get_segmenter()
-            .segment(image, prompt, threshold = threshold, allow_gpu = allow_gpu)
-            .to_json()
-        )
+        return get_segmenter().segment(image, prompt, threshold = threshold, allow_gpu = allow_gpu)
     finally:
         if slot is not None:
             slot.release()
+
+
+# ── remove background ───────────────────────────────────────────────────────────────────────────────────────────────
+# The Flows Remove Background block's default subject.
+DEFAULT_SUBJECT = "the main subject"
+MAX_EDGE_PX = 64
+
+
+def _dilate(mask: Any, radius: int) -> Any:
+    """Square dilation of a bool array by ``radius`` px, separable with prefix sums, so its cost does not grow with
+    the radius."""
+    import numpy as np
+
+    for axis in (0, 1):
+        n = mask.shape[axis]
+        sums = np.cumsum(mask, axis = axis, dtype = np.int32)
+        sums = np.concatenate([np.zeros_like(sums.take([0], axis = axis)), sums], axis = axis)
+        index = np.arange(n)
+        hi = np.minimum(index + radius + 1, n)
+        lo = np.maximum(index - radius, 0)
+        mask = (sums.take(hi, axis = axis) - sums.take(lo, axis = axis)) > 0
+    return mask
+
+
+def apply_cutout(
+    image: Any,
+    mask: Any,
+    *,
+    grow: int = 0,
+    feather: int = 0,
+    trim: bool = False,
+) -> tuple[Any, Any]:
+    """(RGBA cut-out, its alpha) from ``image`` and a white-on-black ``mask`` at the image's size. ``grow`` widens
+    (or, negative, shrinks) the kept area by that many px, ``feather`` blurs its edge, ``trim`` crops to what is
+    left. An alpha the image already had is kept, so a cut-out cut again only loses pixels."""
+    import numpy as np
+    from PIL import Image, ImageChops, ImageFilter
+
+    if not -MAX_EDGE_PX <= grow <= MAX_EDGE_PX or not 0 <= feather <= MAX_EDGE_PX:
+        raise ValueError(f"grow and feather must be within {MAX_EDGE_PX} px.")
+    mask = mask.convert("L")
+    if mask.size != image.size:
+        mask = mask.resize(image.size, Image.BILINEAR)
+    keep = np.asarray(mask) > 127
+    if grow > 0:
+        keep = _dilate(keep, grow)
+    elif grow < 0:
+        keep = ~_dilate(~keep, -grow)
+    alpha = Image.fromarray(keep.astype(np.uint8) * 255, "L")
+    if feather:
+        alpha = alpha.filter(ImageFilter.GaussianBlur(feather))
+    out = image.convert("RGBA")
+    if "A" in image.getbands():
+        alpha = ImageChops.multiply(alpha, image.getchannel("A"))
+    out.putalpha(alpha)
+    if trim:
+        box = alpha.getbbox()
+        if box:
+            out, alpha = out.crop(box), alpha.crop(box)
+    return out, alpha
+
+
+def remove_background(
+    image: Any,
+    prompt: Optional[str] = None,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    grow: int = 0,
+    feather: int = 0,
+    trim: bool = False,
+    allow_gpu: bool = True,
+) -> tuple[Any, Any, SegmentResult]:
+    """Keep what ``prompt`` names in ``image`` (a PIL image) and make the rest transparent: (cut-out, alpha, the
+    segment result). Raises NothingFoundError when SAM 3 finds none of it."""
+    from core.inference.mcp_images import flattened_rgb
+
+    prompt = (prompt or "").strip() or DEFAULT_SUBJECT
+    if not parse_prompt(prompt):
+        raise ValueError("Name the subject to keep, for example: car, dog:2")
+    result = _segment_decoded(
+        flattened_rgb(image), prompt, threshold = threshold, allow_gpu = allow_gpu
+    )
+    if not result.instances:
+        raise NothingFoundError(
+            f'Found nothing matching "{prompt}". Name the subject to keep, for example: car, dog:2'
+        )
+    from PIL import Image
+
+    cutout, alpha = apply_cutout(
+        image, Image.open(io.BytesIO(result.mask_png)), grow = grow, feather = feather, trim = trim
+    )
+    return cutout, alpha, result
 
 
 __all__ = [
@@ -1586,6 +1684,7 @@ __all__ = [
     "DEFAULT_THRESHOLD",
     "DEFAULT_VARIANT",
     "MaskSegmenter",
+    "NothingFoundError",
     "SEGMENTER_VARIANTS",
     "SegmenterVariant",
     "SegmenterBusyError",
@@ -1596,6 +1695,7 @@ __all__ = [
     "get_segmenter",
     "parse_prompt",
     "release_segmenter",
+    "remove_background",
     "segment_image",
     "status",
 ]
