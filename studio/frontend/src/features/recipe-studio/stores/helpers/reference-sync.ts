@@ -2,12 +2,30 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type {
+  BenchmarkConfig,
   LlmConfig,
   ModelConfig,
   NodeConfig,
   SamplerConfig,
 } from "../../types";
 import { removeRef, replaceRef } from "../../utils/refs";
+
+function renameBenchmarkAliases(
+  config: BenchmarkConfig,
+  from: string,
+  to: string,
+): BenchmarkConfig {
+  const swap = (value: string | undefined) => (value === from ? to : value);
+  return {
+    ...config,
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    model_alias: swap(config.model_alias) ?? "",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    baseline_alias: swap(config.baseline_alias),
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    judge_alias: swap(config.judge_alias),
+  };
+}
 
 function updateTemplateFields(
   config: NodeConfig,
@@ -86,6 +104,9 @@ export function applyRenameToConfig(
     const base = next as LlmConfig;
     next = { ...base, model_alias: to };
   }
+  if (config.kind === "benchmark") {
+    next = renameBenchmarkAliases(next as BenchmarkConfig, from, to);
+  }
   if (config.kind === "llm" && config.tool_alias === from) {
     const base = next as LlmConfig;
     next = { ...base, tool_alias: to };
@@ -150,6 +171,9 @@ export function applyRemovalToConfig(
   if (config.kind === "llm" && config.model_alias === ref) {
     const base = next as LlmConfig;
     next = { ...base, model_alias: "" };
+  }
+  if (config.kind === "benchmark") {
+    next = renameBenchmarkAliases(next as BenchmarkConfig, ref, "");
   }
   if (config.kind === "llm" && config.tool_alias === ref) {
     const base = next as LlmConfig;

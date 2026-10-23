@@ -61,6 +61,16 @@ export function nodeDataFromConfig(
       layoutDirection,
     };
   }
+  if (config.kind === "benchmark") {
+    return {
+      title: "Benchmark",
+      kind: "benchmark",
+      subtype: "Held-out split",
+      blockType: "benchmark",
+      name: config.name,
+      layoutDirection,
+    };
+  }
   if (config.kind === "markdown_note") {
     return {
       title: "Note",

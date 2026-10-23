@@ -40,12 +40,13 @@ export type RecipePayload = {
       x: number;
       y: number;
       width?: number;
-      node_type?: "markdown_note" | "tool_config";
+      node_type?: "markdown_note" | "tool_config" | "benchmark";
       name?: string;
       markdown?: string;
       note_color?: string;
       note_opacity?: string;
       tools_by_provider?: Record<string, string[]>;
+      benchmark?: Record<string, unknown>;
     }>;
     edges: {
       from: string;

@@ -58,6 +58,7 @@ type SheetView =
   | "validator"
   | "expression"
   | "note"
+  | "benchmark"
   | "processor";
 type SheetKind =
   | "sampler"
@@ -65,7 +66,8 @@ type SheetKind =
   | "llm"
   | "validator"
   | "expression"
-  | "note";
+  | "note"
+  | "benchmark";
 type RootSheetView = Exclude<SheetView, "root">;
 type RootGroup = {
   kind: RootSheetView;
@@ -91,6 +93,7 @@ type BlockSheetProps = {
     type: ValidatorBlockType,
   ) => void;
   onAddMarkdownNote: () => void;
+  onAddBenchmark: () => void;
   onOpenProcessors: () => void;
   copied: boolean;
   onCopy: () => void;
@@ -122,6 +125,9 @@ function getSheetTitle(sheetView: SheetView): string {
   if (sheetView === "note") {
     return "Notes";
   }
+  if (sheetView === "benchmark") {
+    return "Benchmark";
+  }
   if (sheetView === "processor") {
     return "Processor blocks";
   }
@@ -140,6 +146,7 @@ const VIEW_KIND: Record<SheetView, SheetKind | null> = {
   validator: "validator",
   expression: "expression",
   note: "note",
+  benchmark: "benchmark",
   processor: null,
 };
 
@@ -163,6 +170,7 @@ const SEARCHABLE_KINDS: SheetKind[] = [
   "validator",
   "expression",
   "note",
+  "benchmark",
 ];
 const PROCESSOR_TITLE = "Final dataset shape";
 const PROCESSOR_DESCRIPTION = "Rename, reorder, or reshape the final dataset.";
@@ -262,6 +270,7 @@ export function BlockSheet({
   onAddExpression,
   onAddValidator,
   onAddMarkdownNote,
+  onAddBenchmark,
   onOpenProcessors,
   copied,
   onCopy,
@@ -411,6 +420,10 @@ export function BlockSheet({
       onAddExpression();
       return;
     }
+    if (kind === "benchmark") {
+      onAddBenchmark();
+      return;
+    }
     onAddMarkdownNote();
   };
 
@@ -534,16 +547,24 @@ export function BlockSheet({
                     icon={item.icon}
                     title={item.title}
                     description={item.description}
-                    draggable={item.kind === "expression" || item.kind === "note"}
+                    draggable={
+                      item.kind === "expression" ||
+                      item.kind === "note" ||
+                      item.kind === "benchmark"
+                    }
                     onDragStart={
                       item.kind === "expression" && expressionBlocks[0]
                         ? buildDragStart("expression", expressionBlocks[0].type)
                         : item.kind === "note" && noteBlocks[0]
                           ? buildDragStart("note", noteBlocks[0].type)
-                          : undefined
+                          : item.kind === "benchmark"
+                            ? buildDragStart("benchmark", "benchmark")
+                            : undefined
                     }
                     trailing={
-                      item.kind === "expression" || item.kind === "note"
+                      item.kind === "expression" ||
+                      item.kind === "note" ||
+                      item.kind === "benchmark"
                         ? "drag"
                         : "chevron"
                     }
@@ -561,6 +582,11 @@ export function BlockSheet({
                       if (item.kind === "note" && noteBlocks.length === 1) {
                         setSheetOpen(false);
                         onAddMarkdownNote();
+                        return;
+                      }
+                      if (item.kind === "benchmark") {
+                        setSheetOpen(false);
+                        onAddBenchmark();
                         return;
                       }
                       onViewChange(item.kind);
