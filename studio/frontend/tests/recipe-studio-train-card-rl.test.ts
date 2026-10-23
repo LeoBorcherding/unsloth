@@ -27,6 +27,7 @@ const {
   getTrainCardOutput,
   parseTrainCardSettings,
   pickTrainProgressMetric,
+  rewardBreakdown,
   rewardChoices,
   summarizeAdvancedTrainSettings,
   switchTrainObjective,
@@ -307,7 +308,7 @@ test("the card face names the objective's inputs", () => {
 
 test("progress shows reward for GRPO, accuracy for DPO, loss otherwise", () => {
   assert.deepEqual(pickTrainProgressMetric("grpo", 0.01, { reward: 1.25 }), {
-    label: "reward",
+    label: "mean reward",
     value: 1.25,
   });
   assert.deepEqual(
@@ -399,4 +400,29 @@ test("the reward list shows usable library rewards and keeps a picked one that w
       ["deleted", true],
     ],
   );
+});
+
+test("the mean reward is the weighted sum of each reward's own mean", () => {
+  // exact-answer scores 2.0 on a match, so 5 of 8 right is 1.25 on its own.
+  const rl = {
+    reward: 1.25 + 0.5 * 0.5,
+    "rewards/exact_answer/mean": 1.25,
+    "rewards/soft_xml_format/mean": 0.5,
+  };
+  const rewards = [
+    { name: "soft-xml-format", weight: 0.5 },
+    { name: "exact-answer", weight: 1 },
+    { name: "numeric-close", weight: 1 },
+  ];
+  assert.deepEqual(rewardBreakdown(rewards, rl), [
+    { name: "soft-xml-format", value: 0.5 },
+    { name: "exact-answer", value: 1.25 },
+  ]);
+  const weighted = rewardBreakdown(rewards, rl).reduce(
+    (sum, item) =>
+      sum + item.value * (rewards.find((r) => r.name === item.name)?.weight ?? 0),
+    0,
+  );
+  assert.equal(weighted, pickTrainProgressMetric("grpo", null, rl)?.value);
+  assert.deepEqual(rewardBreakdown(rewards, undefined), []);
 });

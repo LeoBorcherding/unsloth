@@ -47,6 +47,7 @@ import {
   parseTrainCardSettings,
   pickTrainProgressMetric,
   pickTrainSourceExecution,
+  rewardBreakdown,
   shortModelName,
   trainCardChips,
 } from "../utils/train-card";
@@ -331,6 +332,20 @@ export function RecipeTrainNode({
     currentLoss,
     tracksRuntime ? rlHistory.at(-1)?.values : undefined,
   );
+  const breakdown =
+    runObjective === "grpo" && tracksRuntime
+      ? rewardBreakdown(config.rewards, rlHistory.at(-1)?.values)
+      : [];
+  const breakdownRow =
+    breakdown.length > 1 ? (
+      <p className="flex flex-wrap gap-x-3 font-mono text-ui-11 tabular-nums text-muted-foreground">
+        {breakdown.map((item) => (
+          <span key={item.name}>
+            {item.name} {item.value.toFixed(2)}
+          </span>
+        ))}
+      </p>
+    ) : null;
   const sparkMetric =
     runObjective === "grpo"
       ? "reward"
@@ -413,6 +428,7 @@ export function RecipeTrainNode({
           {sparkMetric && tracksRuntime && (
             <MetricSparkline points={rlHistory} metric={sparkMetric} />
           )}
+          {breakdownRow}
           <Progress
             value={progressValue}
             indeterminate={totalSteps === 0}
@@ -432,6 +448,7 @@ export function RecipeTrainNode({
           {sparkMetric && tracksRuntime && (
             <MetricSparkline points={rlHistory} metric={sparkMetric} />
           )}
+          {breakdownRow}
         </StatePanel>
       );
       break;

@@ -586,7 +586,7 @@ export function pickTrainProgressMetric(
   rl: Record<string, number> | undefined,
 ): { label: string; value: number } | null {
   if (objective === "grpo" && rl && Number.isFinite(rl.reward)) {
-    return { label: "reward", value: rl.reward };
+    return { label: "mean reward", value: rl.reward };
   }
   if (
     isPreferenceTrainObjective(objective) &&
@@ -596,6 +596,21 @@ export function pickTrainProgressMetric(
     return { label: "accuracy", value: rl["rewards/accuracies"] };
   }
   return loss ? { label: "loss", value: loss } : null;
+}
+
+/** Each reward's mean score this step, unweighted, in the card's order. TRL logs them as
+ *  rewards/<name with underscores>/mean; the mean reward above is their weighted sum. */
+export function rewardBreakdown(
+  rewards: TrainCardReward[],
+  rl: Record<string, number> | undefined,
+): { name: string; value: number }[] {
+  if (!rl) {
+    return [];
+  }
+  return rewards.flatMap((reward) => {
+    const value = rl[`rewards/${reward.name.replace(/-/g, "_")}/mean`];
+    return Number.isFinite(value) ? [{ name: reward.name, value }] : [];
+  });
 }
 
 const PAIR_RULE_WORDS: Record<TrainCardPairRule, string> = {
