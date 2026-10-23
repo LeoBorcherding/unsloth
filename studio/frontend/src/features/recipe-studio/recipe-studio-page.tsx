@@ -382,6 +382,8 @@ export function RecipeStudioPage({
     onExecutionStart: handleExecutionStart,
   });
   const loop = useRecipeLoop({ recipeId, workflowName, runFullForLoop });
+  const loopRunningRef = useRef(loop.running);
+  loopRunningRef.current = loop.running;
   const {
     activeExecution,
     runtimeVisualState,
@@ -472,6 +474,8 @@ export function RecipeStudioPage({
     setRecentCompletedExecution(latestCompleted);
     const hideTimer = window.setTimeout(() => {
       setRecentCompletedExecution(null);
+      // A running loop finishes a dataset every iteration; keep its card on screen.
+      if (loopRunningRef.current) return;
       setActiveView((currentView) =>
         currentView === "editor" ? "executions" : currentView,
       );
