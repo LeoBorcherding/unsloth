@@ -75,13 +75,61 @@ def _flow(config):
     return diffusers.FlowMatchEulerDiscreteScheduler.from_config(config)
 
 
+# Alpha-VLLM/Lumina-Image-2.0 scheduler/scheduler_config.json: static shift 6.
+_LUMINA = dict(
+    base_image_seq_len = 256,
+    base_shift = 0.5,
+    invert_sigmas = False,
+    max_image_seq_len = 4096,
+    max_shift = 1.15,
+    num_train_timesteps = 1000,
+    shift = 6.0,
+    shift_terminal = None,
+    use_dynamic_shifting = False,
+)
+
+
 def _pipeline_timesteps(scheduler, steps = 12, mu = 0.83):
-    # The call every diffusers flow pipeline makes (FLUX, Qwen-Image, Z-Image, Lumina-2, HiDream ...).
+    # FLUX / FLUX.2 / Qwen-Image / Lumina-2 / Krea-2: an np.linspace grid plus mu through retrieve_timesteps.
     import numpy as np
     from diffusers.pipelines.qwenimage.pipeline_qwenimage import retrieve_timesteps
 
     retrieve_timesteps(scheduler, steps, "cpu", sigmas = np.linspace(1.0, 1 / steps, steps), mu = mu)
     return scheduler
+
+
+def _zimage_timesteps(scheduler, steps = 8, mu = None):
+    # Z-Image: a Python list (get_default_z_image_sigmas returns .tolist()).
+    from diffusers.pipelines.z_image import pipeline_z_image as z
+
+    kwargs = {} if mu is None else {"mu": mu}
+    z.retrieve_timesteps(scheduler, steps, "cpu", sigmas = z.get_default_z_image_sigmas(steps), **kwargs)
+    return scheduler
+
+
+def _ideogram_timesteps(scheduler, steps = 10, mu = None):
+    # Ideogram-4: its own logit-normal grid as a list, set_timesteps called directly, no mu.
+    from diffusers.pipelines.ideogram4 import pipeline_ideogram4 as ideo
+
+    scheduler.set_timesteps(sigmas = ideo._logit_normal_sigmas(steps, 0.4).tolist(), device = "cpu")
+    return scheduler
+
+
+def _no_grid_timesteps(scheduler, steps = 10, mu = None):
+    # HiDream's UniPC branch: steps only, the scheduler's own default grid.
+    scheduler.set_timesteps(steps, device = "cpu")
+    return scheduler
+
+
+_CALLS = [
+    (_pipeline_timesteps, _QWEN),
+    (_pipeline_timesteps, _ZIMAGE),
+    (_pipeline_timesteps, _LUMINA),
+    (_zimage_timesteps, _ZIMAGE),
+    (_zimage_timesteps, _QWEN),
+    (_ideogram_timesteps, _ZIMAGE),
+    (_no_grid_timesteps, _LUMINA),
+]
 
 
 @pytest.mark.parametrize("config", [_QWEN, _ZIMAGE, {}])
@@ -92,19 +140,32 @@ def test_flow_matching_offers_the_flow_samplers(config):
     assert sampler_options(None) == []
 
 
-@pytest.mark.parametrize("config", [_QWEN, _ZIMAGE])
+@pytest.mark.parametrize("call, config", _CALLS, ids = lambda v: getattr(v, "__name__", ""))
 @pytest.mark.parametrize("sampler", ["euler", "euler_a", "unipc"])
-def test_flow_samplers_keep_the_resident_schedule(config, sampler):
+def test_flow_samplers_keep_the_resident_schedule(call, config, sampler):
+    from core.inference.diffusion_sampler import bind_flow_sampling
+
     resident = _flow(config)
     built, resolved = build_scheduler(resident, sampler, None)
     assert resolved is None
     # Pipelines read these off the swapped scheduler to compute mu.
     for key in ("base_shift", "max_shift", "base_image_seq_len", "max_image_seq_len"):
         assert built.config.get(key) == resident.config.get(key)
-    expected = _pipeline_timesteps(resident).sigmas
-    got = _pipeline_timesteps(built).sigmas
-    assert got.shape == expected.shape
-    assert (got - expected).abs().max() < 1e-5
+    bind_flow_sampling(built, None)
+    mu = 0.83 if config.get("use_dynamic_shifting") else None
+    expected = call(resident, mu = mu)
+    got = call(built, mu = mu)
+    assert got.sigmas.shape == expected.sigmas.shape
+    assert (got.sigmas - expected.sigmas).abs().max() < 1e-5
+    # The model is fed the same (float) timesteps the resident would give it.
+    assert (got.timesteps.float() - expected.timesteps.float()).abs().max() < 1e-3
+
+
+def test_unbound_unipc_cannot_take_a_list_grid():
+    # What the bind fixes: UniPC's own shift math multiplies the list Z-Image passes.
+    built, _ = build_scheduler(_flow(_ZIMAGE), "unipc", None)
+    with pytest.raises(TypeError):
+        _zimage_timesteps(built)
 
 
 def test_unipc_carries_the_flow_shift():
@@ -190,9 +251,11 @@ def test_unipc_gets_the_flow_forward_process_for_img2img():
 
 def test_shift_override_on_a_dynamic_unipc_is_static():
     from core.inference.diffusion_flow_shift import scheduler_with_flow_shift
+    from core.inference.diffusion_sampler import bind_flow_sampling
 
     built, _ = build_scheduler(_flow(_QWEN), "unipc", None)
     shifted = scheduler_with_flow_shift(built, 3.1)
+    bind_flow_sampling(shifted, None)
     assert shifted.config.flow_shift == 3.1
     assert shifted.config.use_dynamic_shifting is False
     assert shifted.config.shift_terminal is None

@@ -2613,6 +2613,20 @@ def ensure_sd_server_binary(
         return installed or fallback
 
 
+def _recipe_steps(state: "_SdState") -> Optional[int]:
+    """The load's recommended step count (names only, no header read), else its shipped grid's; None = unknown."""
+    from core.inference.diffusion_families import named_generation_params
+    from core.inference.diffusion_flux3 import is_flux3_family
+
+    names = (state.gguf_filename, state.display_repo_id, state.repo_id, state.base_repo)
+    if is_flux3_family(state.family):
+        names = (state.family.name,) + names
+    named = named_generation_params(*names)
+    if named is not None:
+        return int(named[0])
+    return len(state.sample_sigmas) if state.sample_sigmas else None
+
+
 @dataclass(frozen = True)
 class _SdState:
     """The loaded native checkpoint: resolved asset paths + run settings. ``server`` is the resident
@@ -4526,7 +4540,7 @@ class SdCppDiffusionBackend:
                 self._gen = _SdGen(total_steps = int(steps))
             try:
                 sampling_method = sd_cpp_sampling_method(
-                    sampler, schedule_type, state.sampling_method
+                    sampler, schedule_type, state.sampling_method, _recipe_steps(state)
                 )
                 ref_pngs: list[bytes] = []
                 edit_only = bool(getattr(state.family, "edit", False))
@@ -5363,7 +5377,7 @@ class SdCppDiffusionBackend:
             "supports_guidance": True,
             "supports_live_preview": False,
             "prompt_hint": state.family.prompt_hint,
-            "samplers": sd_cpp_sampler_options(),
+            "samplers": sd_cpp_sampler_options(_recipe_steps(state)),
             # "server" = resident sd-server (load once); "oneshot" = legacy per-image sd-cli.
             "native_mode": state.mode,
             # txt2img always; reference and edit only where this build and its loaded assets run them.

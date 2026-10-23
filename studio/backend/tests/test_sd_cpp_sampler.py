@@ -14,25 +14,42 @@ from core.inference.diffusion_sampler import SD_CPP_SAMPLERS, sd_cpp_sampling_me
 from .test_sd_cpp_backend import _FakeEngine, _FakeServer, _loaded_backend
 
 
+_REPOS = {"qwen-image": "unsloth/Qwen-Image-GGUF", "z-image": "unsloth/Z-Image-Turbo-GGUF"}
+
+
+def _backend(fam_name, engine = None):
+    b = _loaded_backend(fam_name = fam_name, engine = engine)
+    b._state = dataclasses.replace(b._state, repo_id = _REPOS[fam_name])
+    return b
+
+
 def _oneshot_params(sampler = None, fam_name = "qwen-image", **kw):
     engine = _FakeEngine()
-    b = _loaded_backend(fam_name = fam_name, engine = engine)
+    b = _backend(fam_name, engine)
     out = b.generate(prompt = "p", steps = 4, guidance = 4.0, seed = 1, sampler = sampler, **kw)
     return engine.calls[-1][1], out
 
 
 def _server_sample_params(sampler = None, fam_name = "qwen-image"):
     server = _FakeServer("sd-server")
-    b = _loaded_backend(fam_name = fam_name)
+    b = _backend(fam_name)
     b._state = dataclasses.replace(b._state, mode = "server", server = server)
     b.generate(prompt = "p", steps = 4, guidance = 4.0, seed = 1, sampler = sampler)
     return server.payloads[-1].get("sample_params", {})
 
 
 def test_status_offers_the_native_samplers():
-    samplers = _loaded_backend("qwen-image").status()["samplers"]
+    samplers = _backend("qwen-image").status()["samplers"]
     assert [o["id"] for o in samplers] == ["default", "euler", "euler_a", "heun", "dpmpp_2m"]
     assert all(o["schedule_types"] == ["automatic"] for o in samplers)
+
+
+def test_a_few_step_load_withholds_dpmpp_2m():
+    # Z-Image-Turbo's recipe is 8 steps; sd.cpp's DPM++ 2M renders noise there.
+    assert "dpmpp_2m" not in [o["id"] for o in _backend("z-image").status()["samplers"]]
+    with pytest.raises(ValueError, match = "DPM\\+\\+ 2M sampler is not available"):
+        _oneshot_params("dpmpp_2m", fam_name = "z-image")
+    assert sd_cpp_sampling_method("dpmpp_2m", None, "euler", None) == "dpm++2m"
 
 
 @pytest.mark.parametrize(
@@ -73,5 +90,5 @@ def test_every_native_name_is_an_sd_cpp_sampling_method():
 def test_route_passes_the_sampler_to_the_native_engine():
     from routes.inference import _sampler_kwargs
 
-    b = _loaded_backend("qwen-image")
+    b = _backend("qwen-image")
     assert _sampler_kwargs(b.generate, "heun", None) == {"sampler": "heun", "schedule_type": None}
