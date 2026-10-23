@@ -181,3 +181,25 @@ test("loop settings parse percentages and turn plateau off with the switch", () 
   const bad = parseLoopSettings({ ...makeLoopConfig("l", []), targetScore: "120", maxRounds: "0" });
   assert.equal(bad.errors.length, 2);
 });
+
+test("a round's run reads the failures seed it just wrote, not the last render's payload", async () => {
+  const { loopRunPayload } = await import("../src/features/recipe-studio/loop/run-payload.ts");
+  const { configs, nodes, edges, feedback } = loopRecipe();
+  // Stands in for the store: the loop reads getState() at run time, after updateConfig.
+  const state = {
+    configs,
+    nodes,
+    edges,
+    processors: [],
+    layoutDirection: "LR" as const,
+    auxNodePositions: {},
+  };
+  const before = JSON.stringify(loopRunPayload(state));
+  assert.ok(before.includes("benchmark-failures-round-1.jsonl"));
+
+  const round2 = "/root/.unsloth/studio/seed-uploads/def_benchmark-failures-round-2.jsonl";
+  state.configs = { ...configs, [feedback.id]: { ...feedback, hf_path: round2 } };
+  const after = JSON.stringify(loopRunPayload(state));
+  assert.ok(after.includes(round2));
+  assert.ok(!after.includes("abc_benchmark-failures-round-1.jsonl"));
+});

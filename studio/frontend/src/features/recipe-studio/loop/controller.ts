@@ -180,7 +180,10 @@ export async function runLoop(input: {
         commit({ holdout });
       }
       setRound({ adapter, status: "scoring" });
-      const result = await steps.score({ round: index, adapter, holdout, signal });
+      // The base model never changes between rounds, so its score is measured once.
+      const baseline =
+        record.rounds.find((round) => round.result?.baseline != null)?.result?.baseline ?? null;
+      const result = await steps.score({ round: index, adapter, holdout, baseline, signal });
       setRound({
         result: {
           ...result,

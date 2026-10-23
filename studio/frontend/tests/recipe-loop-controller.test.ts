@@ -17,8 +17,11 @@ const { buildFeedbackSeedRows, feedbackSeedColumns } = await import(
 const { buildLoopTrainingRequest } = await import(
   "../src/features/recipe-studio/loop/training-request.ts"
 );
-const { buildLoopBenchmarkRequest, loopScoreFromResult } = await import(
+const { buildLoopBenchmarkRequest } = await import(
   "../src/features/recipe-studio/loop/benchmark-request.ts"
+);
+const { HOLDOUT_ROW_ID_KEY, buildRoundScore, splitProbeTest, taggedRows } = await import(
+  "../src/features/recipe-studio/loop/probe-split.ts"
 );
 
 type Steps = Parameters<typeof runLoop>[0]["steps"];
@@ -223,14 +226,14 @@ function fakeSteps(scores: number[], calls: Record<string, unknown[]>): Steps {
         },
       };
     },
-    score: async ({ round, holdout }) => {
-      calls.score.push({ round, holdout: holdout.holdoutPath });
+    score: async ({ round, holdout, baseline }) => {
+      calls.score.push({ round, holdout: holdout.holdoutPath, baseline });
       const score = scores[round - 1] ?? 0;
       return {
         score,
         passed: Math.round(score * 10),
         scored: 10,
-        baseline: null,
+        baseline: baseline ?? 0.1,
         failedExamples: [failure(`missed in round ${round}`, "returns")],
         failedTotal: 1,
       };
@@ -272,6 +275,11 @@ test("each round feeds its failures forward and continues from the last adapter"
   assert.deepEqual(
     (calls.score as { holdout: string }[]).map((call) => call.holdout),
     ["/data/r1/splits/holdout.parquet", "/data/r1/splits/holdout.parquet", "/data/r1/splits/holdout.parquet"],
+  );
+  // The base model is measured in round 1 and handed to later rounds instead of re-run.
+  assert.deepEqual(
+    (calls.score as { baseline: number | null }[]).map((call) => call.baseline),
+    [null, 0.1, 0.1],
   );
   assert.ok(saved.length >= 9, "saved after every step");
 });
@@ -377,53 +385,135 @@ const benchmark = {
   max_rows: "30",
 };
 
-test("the loop benchmarks the loaded adapter on the fixed held-out split", () => {
+test("the loop benchmarks the loaded adapter on one split's rows, baseline only when asked", () => {
+  const rows = [{ ticket: "t", queue: "BIL-2", [HOLDOUT_ROW_ID_KEY]: 4 }];
   const { request, errors } = buildLoopBenchmarkRequest({
     benchmark,
     configs: [],
-    holdoutPath: "/data/r1/splits/holdout-25-seed3407/holdout.parquet",
+    rows,
+    withBaseline: true,
   });
   assert.deepEqual(errors, []);
   assert.ok(request);
-  assert.equal(request.holdout_path, "/data/r1/splits/holdout-25-seed3407/holdout.parquet");
-  assert.deepEqual(request.rows, []);
-  assert.equal(request.max_rows, 30);
+  assert.deepEqual(request.rows, rows);
+  assert.equal(request.holdout_path, undefined);
   assert.equal(request.reference_column, "queue");
   assert.deepEqual(request.baseline, { mode: "adapter_off", alias: null });
   const candidate = request.model_configs.find((config) => config.alias === request.model_alias);
   assert.equal(candidate?.model, "local");
   const provider = request.model_providers.find((p) => p.name === candidate?.provider);
   assert.equal(provider?.is_local, true);
+  const later = buildLoopBenchmarkRequest({ benchmark, configs: [], rows, withBaseline: false });
+  assert.deepEqual(later.request?.baseline, { mode: "none", alias: null });
 
   const missing = buildLoopBenchmarkRequest({
     benchmark: { ...benchmark, reference_column: "" },
     configs: [],
-    holdoutPath: "/x",
+    rows,
+    withBaseline: true,
   });
   assert.equal(missing.request, null);
   assert.match(missing.errors.join(" "), /reference column/);
 });
 
-test("a benchmark that scored nothing is an error, not a 0% round", () => {
-  const result = {
-    candidate: { total: 3, scored: 0, passed: 0, errors: 3, score: null },
+const heldOut = Array.from({ length: 20 }, (_, i) => ({
+  id: 100 + i,
+  row: { ticket: `held-out ticket number ${100 + i}`, topic: "returns", queue: "RTN-4" },
+}));
+
+test("the held-out rows split into disjoint probe and test halves, the same every round", () => {
+  const first = splitProbeTest(heldOut, 3407);
+  const again = splitProbeTest([...heldOut].reverse(), 3407);
+  assert.equal(first.probe.length, 10);
+  assert.equal(first.test.length, 10);
+  assert.deepEqual(first.probe.map((r) => r.id), again.probe.map((r) => r.id));
+  const probeIds = new Set(first.probe.map((r) => r.id));
+  assert.ok(first.test.every((r) => !probeIds.has(r.id)));
+  assert.deepEqual(
+    [...first.probe, ...first.test].map((r) => r.id).sort(),
+    heldOut.map((r) => r.id),
+  );
+  assert.notDeepEqual(
+    splitProbeTest(heldOut, 1).probe.map((r) => r.id),
+    first.probe.map((r) => r.id),
+  );
+  // Tiny splits still leave both sides a row.
+  const two = splitProbeTest(heldOut.slice(0, 2), 3407);
+  assert.equal(two.probe.length, 1);
+  assert.equal(two.test.length, 1);
+});
+
+function failingResult(rows: Record<string, unknown>[]) {
+  return {
+    candidate: { total: rows.length, scored: rows.length, passed: 0, errors: 0, score: 0 },
+    cancelled: false,
+    failed_examples: rows.map((row) => ({
+      prompt: String(row.ticket),
+      reference: String(row.queue),
+      output: "SHP-7",
+      reason: "Answer does not contain the reference.",
+      row,
+    })),
+    failed_total: rows.length,
+  };
+}
+
+test("no test-split row, or text from one, ever reaches the failures seed", () => {
+  const { probe, test: testSplit } = splitProbeTest(heldOut, 3407);
+  const testRows = taggedRows(testSplit);
+  // Every row fails on both splits; a stray test row also turns up in the probe result.
+  const probeResult = failingResult([...taggedRows(probe), testRows[0]]);
+  const score = buildRoundScore({
+    test: { ...failingResult(testRows), baseline: { total: 10, scored: 10, passed: 0, errors: 0, score: 0 } },
+    probe: probeResult,
+    probeRowIds: probe.map((r) => r.id),
+    baseline: null,
+  });
+  assert.equal(score.score, 0);
+  assert.equal(score.probe?.score, 0);
+  assert.equal(score.failedExamples.length, probe.length);
+  assert.ok(score.failedExamples.every((example) => !(HOLDOUT_ROW_ID_KEY in example.row)));
+
+  const seedRows = buildFeedbackSeedRows({
+    failures: score.failedExamples,
+    rows: 40,
+    failureShare: 1,
+    recipeColumns: ["ticket", "topic", "queue"],
+  });
+  const seedText = JSON.stringify(seedRows);
+  for (const row of testSplit) {
+    assert.ok(!seedText.includes(String(row.row.ticket)), `test row ${row.id} leaked into the seed`);
+    assert.ok(!seedText.includes(String(row.id)), `test row id ${row.id} leaked into the seed`);
+  }
+  for (const row of probe) {
+    assert.ok(seedText.includes(String(row.row.ticket)), `probe row ${row.id} should feed the seed`);
+  }
+});
+
+test("a round's score is the test split; a benchmark that scored nothing is an error", () => {
+  const { probe, test: testSplit } = splitProbeTest(heldOut, 3407);
+  const passing = {
+    candidate: { total: 10, scored: 10, passed: 6, errors: 0, score: 0.6 },
     cancelled: false,
     failed_examples: [],
-    failed_total: 3,
+    failed_total: 4,
   };
-  assert.throws(() => loopScoreFromResult(result), /errored/);
-  const scored = loopScoreFromResult({
-    ...result,
-    candidate: { total: 3, scored: 3, passed: 2, errors: 0, score: 2 / 3 },
-    baseline: { total: 3, scored: 3, passed: 1, errors: 0, score: 1 / 3 },
-    failed_examples: [
-      { prompt: "p", reference: "r", output: "o", reason: "Answer does not contain the reference.", row: { a: 1 } },
-    ],
-    failed_total: 1,
+  const score = buildRoundScore({
+    test: passing,
+    probe: { ...failingResult(taggedRows(probe)), candidate: { total: 10, scored: 10, passed: 3, errors: 0, score: 0.3 } },
+    probeRowIds: probe.map((r) => r.id),
+    baseline: 0.05,
   });
-  assert.equal(scored.score, 2 / 3);
-  assert.equal(scored.baseline, 1 / 3);
-  assert.deepEqual(scored.failedExamples, [
-    { prompt: "p", reference: "r", output: "o", row: { a: 1 } },
-  ]);
+  assert.equal(score.score, 0.6);
+  assert.equal(score.passed, 6);
+  assert.deepEqual(score.probe, { score: 0.3, passed: 3, scored: 10 });
+  assert.equal(score.baseline, 0.05);
+  assert.equal(score.failedExamples[0]?.rowId, probe[0]?.id);
+  assert.ok(testSplit.length > 0);
+
+  const nothing = { ...passing, candidate: { total: 3, scored: 0, passed: 0, errors: 3, score: null } };
+  assert.throws(
+    () => buildRoundScore({ test: nothing, probe: passing, probeRowIds: [], baseline: null }),
+    /errored/,
+  );
 });

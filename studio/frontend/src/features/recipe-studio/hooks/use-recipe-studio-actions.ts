@@ -80,6 +80,7 @@ type UseRecipeStudioActionsResult = {
   runFullForLoop: (
     rows: number,
     runName: string,
+    payload: RecipePayload,
   ) => Promise<RecipeExecutionRecord | null>;
   cancelExecution: (id: string) => Promise<void>;
   loadExecutionDatasetPage: (id: string, page: number) => Promise<void>;

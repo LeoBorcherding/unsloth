@@ -593,6 +593,7 @@ type UseRecipeExecutionsResult = {
   runFullForLoop: (
     rows: number,
     runName: string,
+    payload: RecipePayload,
   ) => Promise<RecipeExecutionRecord | null>;
   cancelExecution: (id: string) => Promise<void>;
   loadExecutionDatasetPage: (id: string, page: number) => Promise<void>;
@@ -924,6 +925,8 @@ export function useRecipeExecutions({
       onCreated?: (executionId: string) => void,
       // The loop frees the GPU for training next, so it skips reloading the model it displaced.
       keepModel = false,
+      // The loop edits the seed and runs in the same tick, before this hook's payload re-renders.
+      payloadOverride: RecipePayload | null = null,
     ): Promise<boolean> => {
       const trimmedRunName = typeof runName === "string" ? runName.trim() : "";
       if (kind === "full" && !trimmedRunName) {
@@ -933,7 +936,7 @@ export function useRecipeExecutions({
         return false;
       }
 
-      const payload = readExecutablePayload();
+      const payload = payloadOverride ?? readExecutablePayload();
       if (!payload) {
         return false;
       }
@@ -998,6 +1001,7 @@ export function useRecipeExecutions({
     async (
       rows: number,
       runName: string,
+      payload: RecipePayload,
     ): Promise<RecipeExecutionRecord | null> => {
       const created: { id: string | null } = { id: null };
       const ok = await runWithValidation(
@@ -1008,6 +1012,7 @@ export function useRecipeExecutions({
           created.id = id;
         },
         true,
+        payload,
       );
       if (!(ok && created.id)) return null;
       return (

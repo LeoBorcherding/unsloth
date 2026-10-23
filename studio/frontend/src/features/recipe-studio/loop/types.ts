@@ -22,9 +22,14 @@ export type LoopFailedExample = {
   reference: string | null;
   output: string | null;
   row: Record<string, unknown>;
+  // The held-out row it came from; only probe-split rows may feed the next round.
+  rowId?: number;
 };
 
-/** The Train card's held-out rows from round 1: every round is scored on the same rows. */
+/**
+ * The Train card's held-out rows from round 1. Every round splits them the same way: a probe split
+ * whose failures feed the next round, and a test split that never feeds back and is the score.
+ */
 export type LoopHoldout = {
   sourceJobId: string;
   artifactPath: string;
@@ -32,6 +37,9 @@ export type LoopHoldout = {
   // Row ids of the held-out rows in round 1's dataset, for the Train card's output handle.
   rowIds?: number[];
   rows: number;
+  // The split request that carved them, so later rounds read back the same rows.
+  percent?: number;
+  seed?: number;
 };
 
 export type LoopDataset = {
@@ -53,11 +61,20 @@ export type LoopAdapter = {
   trainRows: number;
 };
 
+export type LoopSplitScore = {
+  score: number;
+  passed: number;
+  scored: number;
+};
+
+/** A round's result: `score` is the test split, the only number the stop rules read. */
 export type LoopScore = {
   score: number;
   passed: number;
   scored: number;
   baseline: number | null;
+  // The probe split's score; its failures are the ones handed to the next round.
+  probe?: LoopSplitScore | null;
   failedExamples: LoopFailedExample[];
   failedTotal: number;
 };
@@ -116,6 +133,11 @@ export type LoopSteps = {
     },
   ) => Promise<{ adapter: LoopAdapter; holdout: LoopHoldout }>;
   score: (
-    input: StepInput & { adapter: LoopAdapter; holdout: LoopHoldout },
+    input: StepInput & {
+      adapter: LoopAdapter;
+      holdout: LoopHoldout;
+      // The base model's test score from an earlier round; null asks this round to measure it.
+      baseline: number | null;
+    },
   ) => Promise<LoopScore>;
 };

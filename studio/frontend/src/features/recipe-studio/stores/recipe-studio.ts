@@ -68,7 +68,7 @@ type SheetView =
   | "loop"
   | "processor";
 
-type RecipeStudioState = {
+export type RecipeStudioState = {
   nodes: RecipeNode[];
   edges: Edge[];
   auxNodePositions: Record<string, XYPosition>;

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import type { BenchmarkConfig, BenchmarkResult, NodeConfig } from "../types";
+import type { BenchmarkConfig, NodeConfig } from "../types";
 import { BENCHMARK_MAX_ROWS, type RecipeHeldoutSpec } from "../utils/benchmark";
 import { buildModelConfig, buildModelProvider } from "../utils/payload/builders-model";
-import type { LoopScore } from "./types";
 
 // The round's adapter is whatever Chat has loaded; "local" makes /v1 answer with the resident model.
 const CANDIDATE_ALIAS = "loop-candidate";
@@ -15,14 +14,21 @@ function clampRows(raw: string): number {
   return Number.isFinite(parsed) ? Math.max(1, Math.min(BENCHMARK_MAX_ROWS, parsed)) : 20;
 }
 
+/** The card's row cap, applied to each of the probe and test splits. */
+export function loopBenchmarkRowCap(benchmark: BenchmarkConfig): number {
+  return clampRows(benchmark.max_rows);
+}
+
 /**
- * The Benchmark card's "Recipe held-out" scoring pointed at the round's adapter: same columns,
- * scorer and row cap as the card, rows read server side from the Train card's held-out split.
+ * The Benchmark card's "Recipe held-out" scoring pointed at the round's adapter: same columns and
+ * scorer as the card, on one split of the held-out rows.
  */
 export function buildLoopBenchmarkRequest(input: {
   benchmark: BenchmarkConfig;
   configs: NodeConfig[];
-  holdoutPath: string;
+  rows: Record<string, unknown>[];
+  // The base model is the same every round, so only the round that measures it asks for it.
+  withBaseline: boolean;
 }): { request: RecipeHeldoutSpec | null; errors: string[] } {
   const { benchmark } = input;
   const errors: string[] = [];
@@ -83,11 +89,7 @@ export function buildLoopBenchmarkRequest(input: {
   }
   return {
     request: {
-      rows: [],
-      // biome-ignore lint/style/useNamingConvention: api schema
-      holdout_path: input.holdoutPath,
-      // biome-ignore lint/style/useNamingConvention: api schema
-      max_rows: clampRows(benchmark.max_rows),
+      rows: input.rows,
       // biome-ignore lint/style/useNamingConvention: api schema
       prompt_column: benchmark.prompt_column.trim(),
       // biome-ignore lint/style/useNamingConvention: api schema
@@ -100,7 +102,7 @@ export function buildLoopBenchmarkRequest(input: {
       model_alias: CANDIDATE_ALIAS,
       // The base model with the adapter switched off is the only baseline one loaded model can give.
       baseline: {
-        mode: benchmark.baseline_mode === "adapter_off" ? "adapter_off" : "none",
+        mode: input.withBaseline && benchmark.baseline_mode === "adapter_off" ? "adapter_off" : "none",
         alias: null,
       },
       // biome-ignore lint/style/useNamingConvention: api schema
@@ -111,30 +113,5 @@ export function buildLoopBenchmarkRequest(input: {
       model_configs: modelConfigs,
     },
     errors: [],
-  };
-}
-
-/** A finished benchmark as a round's score; a run with nothing scored is an error, not a 0. */
-export function loopScoreFromResult(result: BenchmarkResult): LoopScore {
-  const { candidate } = result;
-  if (candidate.score === null || candidate.scored === 0) {
-    throw new Error(
-      candidate.errors > 0
-        ? `Every benchmark row errored (${candidate.errors}). Check that the adapter loaded in Chat.`
-        : "The benchmark scored no rows.",
-    );
-  }
-  return {
-    score: candidate.score,
-    passed: candidate.passed,
-    scored: candidate.scored,
-    baseline: result.baseline?.score ?? null,
-    failedExamples: result.failed_examples.map((example) => ({
-      prompt: example.prompt,
-      reference: example.reference,
-      output: example.output,
-      row: example.row,
-    })),
-    failedTotal: result.failed_total,
   };
 }

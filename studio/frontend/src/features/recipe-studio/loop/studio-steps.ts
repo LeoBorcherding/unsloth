@@ -5,17 +5,18 @@ import { authFetch } from "@/features/auth";
 import { getInferenceStatus, loadModel, unloadModel } from "@/features/chat";
 import { readFastApiError } from "@/lib/format-fastapi-error";
 import { cancelBenchmark, runBenchmark } from "@/features/benchmark/api/benchmark-api";
-import { createRecipeTrainingSplit, inspectSeedUpload } from "../api";
+import { createRecipeTrainingSplit, getRecipeHoldoutRows, inspectSeedUpload } from "../api";
 import type { RecipeExecutionRecord } from "../execution-types";
 import type { BenchmarkResult, NodeConfig, SeedConfig, TrainCardRun } from "../types";
-import { RECIPE_HELDOUT_TASK } from "../utils/benchmark";
+import { RECIPE_HELDOUT_TASK, type RecipeHeldoutSpec } from "../utils/benchmark";
 import { findLoopParts, loopRecipeColumns } from "../utils/loop-card";
 import {
   type TrainCardSettings,
   listTrainableColumns,
   parseTrainCardSettings,
 } from "../utils/train-card";
-import { buildLoopBenchmarkRequest, loopScoreFromResult } from "./benchmark-request";
+import { buildLoopBenchmarkRequest, loopBenchmarkRowCap } from "./benchmark-request";
+import { type HoldoutRow, buildRoundScore, splitProbeTest, taggedRows } from "./probe-split";
 import { feedbackSeedColumns, feedbackSeedToJsonl } from "./feedback-seed";
 import { buildLoopTrainingRequest } from "./training-request";
 import type { FeedbackSeedRow, LoopHoldout, LoopSteps } from "./types";
@@ -300,6 +301,8 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
           holdoutPath: split.holdout_path,
           rowIds: split.holdout_row_ids ?? [],
           rows: split.holdout_rows,
+          percent: settings.holdoutPercent,
+          seed: settings.seed,
         };
       }
       await freeInferenceModel();
@@ -343,21 +346,46 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
       };
     },
 
-    score: async ({ adapter, holdout, signal }) => {
+    score: async ({ adapter, holdout, baseline, signal }) => {
       const configs = deps.configs();
       const { benchmark } = findLoopParts(configs);
       if (!benchmark) {
         throw new Error("The Benchmark card is gone.");
       }
       const { settings } = requireTrainSettings(configs);
-      const { request, errors } = buildLoopBenchmarkRequest({
-        benchmark,
-        configs: Object.values(configs),
-        holdoutPath: holdout.holdoutPath,
+      const percent = holdout.percent ?? settings.holdoutPercent;
+      const seed = holdout.seed ?? settings.seed;
+      const heldOut = await getRecipeHoldoutRows(holdout.sourceJobId, {
+        // biome-ignore lint/style/useNamingConvention: api schema
+        artifact_path: holdout.artifactPath,
+        // biome-ignore lint/style/useNamingConvention: api schema
+        holdout_percent: percent,
+        seed,
+        offset: 0,
+        limit: 500,
       });
-      if (!request) {
-        throw new Error(errors.join(" "));
+      const { probe, test } = splitProbeTest(
+        heldOut.rows.map((row, i) => ({ id: heldOut.row_ids[i] ?? i, row })),
+        seed,
+      );
+      if (probe.length === 0 || test.length === 0) {
+        throw new Error("Too few held-out rows to split into probe and test. Raise the Train card's hold out.");
       }
+      const cap = loopBenchmarkRowCap(benchmark);
+      const request = (rows: HoldoutRow[], withBaseline: boolean) => {
+        const built = buildLoopBenchmarkRequest({
+          benchmark,
+          configs: Object.values(configs),
+          rows: taggedRows(rows.slice(0, cap)),
+          withBaseline,
+        });
+        if (!built.request) {
+          throw new Error(built.errors.join(" "));
+        }
+        return built.request;
+      };
+      const testRequest = request(test, baseline === null);
+      const probeRequest = request(probe, false);
       await Promise.race([
         loadModel({
           // biome-ignore lint/style/useNamingConvention: api schema
@@ -376,8 +404,8 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
       const status = await getInferenceStatus();
       const onAbort = () => void cancelBenchmark().catch(() => undefined);
       signal.addEventListener("abort", onAbort, { once: true });
-      try {
-        // The Benchmark card's Recipe held-out task, run as a Benchmarks evals run.
+      // The Benchmark card's Recipe held-out task, run as a Benchmarks evals run.
+      const run = async (spec: RecipeHeldoutSpec) => {
         const response = await Promise.race([
           runBenchmark({
             // biome-ignore lint/style/useNamingConvention: api schema
@@ -385,7 +413,7 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
             // biome-ignore lint/style/useNamingConvention: api schema
             model_source: "local",
             task: RECIPE_HELDOUT_TASK,
-            recipe: request,
+            recipe: spec,
           }),
           untilAborted(signal),
         ]);
@@ -404,21 +432,32 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
         if (!result) {
           throw new Error("The benchmark returned no result.");
         }
+        return result;
+      };
+      try {
+        const testResult = await run(testRequest);
+        // The card shows the test split: the number the loop stops on.
         deps.updateConfig(benchmark.id, {
           // biome-ignore lint/style/useNamingConvention: ui schema
           last_result: {
-            ...result,
+            ...testResult,
             task: RECIPE_HELDOUT_TASK,
             // biome-ignore lint/style/useNamingConvention: ui schema
-            run_ids: result.run_ids,
+            run_ids: testResult.run_ids,
             // biome-ignore lint/style/useNamingConvention: ui schema
             finished_at: Date.now(),
             // biome-ignore lint/style/useNamingConvention: ui schema
             execution_id: "",
-            rows: result.candidate.total,
+            rows: testResult.candidate.total,
           },
         });
-        return loopScoreFromResult(result);
+        const probeResult = await run(probeRequest);
+        return buildRoundScore({
+          test: testResult,
+          probe: probeResult,
+          probeRowIds: probe.map((row) => row.id),
+          baseline,
+        });
       } finally {
         signal.removeEventListener("abort", onAbort);
       }

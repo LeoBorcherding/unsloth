@@ -31,12 +31,15 @@ function RoundRow({
   round,
   previous,
   best,
+  record,
 }: {
   round: LoopRound;
   previous: LoopRound | null;
   best: boolean;
+  record: LoopRecord;
 }): ReactElement {
   const dataset = round.dataset;
+  const fedNext = record.rounds.some((other) => other.index === round.index + 1);
   const score = round.result?.score ?? null;
   const before = previous?.result?.score ?? null;
   const delta = score !== null && before !== null ? Math.round((score - before) * 100) : null;
@@ -80,9 +83,12 @@ function RoundRow({
       </div>
       {round.result && (
         <p className="text-xs text-muted-foreground">
-          {round.result.passed}/{round.result.scored} held-out rows passed
+          Test {round.result.passed}/{round.result.scored} passed
           {round.result.baseline !== null ? ` · base model ${percent(round.result.baseline)}` : ""}
-          {round.result.failedTotal > 0 ? ` · ${round.result.failedTotal} failed, sent to the next round` : ""}
+          {round.result.probe ? ` · probe ${percent(round.result.probe.score)}` : ""}
+          {round.result.failedTotal > 0 && fedNext
+            ? ` · ${round.result.failedTotal} probe failures fed round ${round.index + 1}`
+            : ""}
         </p>
       )}
       {round.error && <p className="text-xs text-destructive">{round.error}</p>}
@@ -124,7 +130,7 @@ export function LoopHistoryDialog({
           <DialogDescription>
             {describeLoopStatus(record, false)}
             {record.holdout
-              ? ` Every round is scored on the same ${record.holdout.rows} held-out rows from round 1.`
+              ? ` Round 1's ${record.holdout.rows} held-out rows are split in two: probe rows whose failures feed the next round, and test rows that never feed back. The score is the test split.`
               : ""}
           </DialogDescription>
         </DialogHeader>
@@ -144,6 +150,7 @@ export function LoopHistoryDialog({
               round={round}
               previous={record.rounds[i - 1] ?? null}
               best={best?.index === round.index}
+              record={record}
             />
           ))}
         </div>

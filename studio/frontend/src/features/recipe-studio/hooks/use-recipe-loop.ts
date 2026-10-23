@@ -9,6 +9,8 @@ import { createStudioLoopSteps } from "../loop/studio-steps";
 import type { LoopRecord, LoopSettings } from "../loop/types";
 import { useRecipeStudioStore } from "../stores/recipe-studio";
 import { loopRecipeColumns } from "../utils/loop-card";
+import { loopRunPayload } from "../loop/run-payload";
+import type { RecipePayload } from "../utils/payload/types";
 
 export type RecipeLoopView = {
   latest: LoopRecord | null;
@@ -26,6 +28,7 @@ export function useRecipeLoop(input: {
   runFullForLoop: (
     rows: number,
     runName: string,
+    payload: RecipePayload,
   ) => Promise<RecipeExecutionRecord | null>;
 }): RecipeLoopView {
   const { recipeId } = input;
@@ -80,7 +83,7 @@ export function useRecipeLoop(input: {
             recipeName: () => nameRef.current,
             configs: () => store().configs,
             updateConfig: (id, patch) => store().updateConfig(id, patch),
-            runRecipe: (rows, runName) => runRef.current(rows, runName),
+            runRecipe: (rows, runName) => runRef.current(rows, runName, loopRunPayload(store())),
           }),
           recipeColumns: loopRecipeColumns(store().configs),
           signal: controller.signal,
