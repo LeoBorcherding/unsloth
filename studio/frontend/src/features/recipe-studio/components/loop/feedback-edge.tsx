@@ -13,6 +13,8 @@ import { type ReactElement, memo } from "react";
 const RADIUS = 14;
 const GAP = 56;
 const OUT = 32;
+// The label sits just past the seed end of the wire, where the loop closes.
+const LABEL_OFFSET = 40;
 
 function floorBetween(left: number, right: number, start: number) {
   return (state: ReactFlowState): number => {
@@ -79,7 +81,7 @@ export const RecipeFeedbackEdge = memo(function RecipeFeedbackEdge({
         <div
           className="nodrag nopan pointer-events-none absolute rounded-full border border-primary/30 bg-background px-2.5 py-1 text-ui-11 font-medium text-primary shadow-xs"
           style={{
-            transform: `translate(-50%, -50%) translate(${(out + targetX) / 2}px, ${y}px)`,
+            transform: `translate(0, -50%) translate(${targetX + LABEL_OFFSET}px, ${y}px)`,
           }}
         >
           Failed examples feed the next round
