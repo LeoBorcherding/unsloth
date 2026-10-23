@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { DEFAULT_RL_SETTINGS, GRPO_DEFAULT_SYSTEM_PROMPT } from "@/config/training";
 import type {
   ExpressionConfig,
   LlmConfig,
@@ -407,8 +408,20 @@ export function makeTrainConfig(
     name,
     baseModel: "",
     method: "qlora",
+    objective: "sft",
     promptColumn: "",
     responseColumn: "",
+    rewards: DEFAULT_RL_SETTINGS.grpoRewards.map((reward) => ({ ...reward })),
+    pairA: "",
+    pairB: "",
+    pairRule: "a_better",
+    winnerColumn: "",
+    scoreAColumn: "",
+    scoreBColumn: "",
+    numGenerations: String(DEFAULT_RL_SETTINGS.grpoNumGenerations),
+    maxCompletionLength: "200",
+    systemPrompt: GRPO_DEFAULT_SYSTEM_PROMPT,
+    beta: "",
     maxSteps: "60",
     learningRate: "2e-4",
     loraRank: "16",

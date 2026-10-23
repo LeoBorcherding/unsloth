@@ -8,8 +8,11 @@ from pathlib import Path
 import pytest
 
 from core.data_recipe.training_split import (
+    PreferencePairs,
     RecipeTrainingSplitError,
     holdout_row_count,
+    pair_recipe_split,
+    pair_winner,
     read_holdout_rows,
     split_recipe_dataset,
 )
@@ -116,3 +119,123 @@ def test_holdout_rows_route_returns_the_rows_and_their_ids(tmp_path, monkeypatch
     assert [row["id"] for row in page.rows] == page.row_ids
     split = jobs.create_job_training_split("job-1", request)
     assert split.holdout_row_ids[:3] == page.row_ids
+
+
+def _pair_rows() -> list[dict]:
+    return [
+        {"id": 0, "q": "2+2?", "careful": "4", "quick": "5", "judge": "A", "sa": 3, "sb": 1},
+        {"id": 1, "q": "3+3?", "careful": "6", "quick": "6", "judge": "B", "sa": 2, "sb": 2},
+        {"id": 2, "q": "4+4?", "careful": "9", "quick": "8", "judge": "Answer B", "sa": 1, "sb": 4},
+        {"id": 3, "q": "5+5?", "careful": "10", "quick": "11", "judge": "tie", "sa": 5, "sb": 5},
+        {"id": 4, "q": "6+6?", "careful": "12", "quick": "", "judge": "a.", "sa": 4, "sb": 0},
+    ]
+
+
+def test_pair_winner_reads_labels_scores_and_judge_dicts():
+    pairs = PreferencePairs("careful", "quick", "winner", winner_column = "judge")
+    assert pair_winner({"judge": " A "}, pairs) == "a"
+    assert pair_winner({"judge": "Answer B."}, pairs) == "b"
+    assert pair_winner({"judge": "careful"}, pairs) == "a"
+    assert pair_winner({"judge": "2"}, pairs) == "b"
+    assert pair_winner({"judge": "both are fine"}, pairs) is None
+    assert pair_winner({"judge": None}, pairs) is None
+    scores = PreferencePairs("careful", "quick", "scores", score_a_column = "sa", score_b_column = "sb")
+    assert pair_winner({"sa": 3, "sb": "1.5"}, scores) == "a"
+    assert pair_winner({"sa": {"math": {"score": 1}}, "sb": {"math": {"score": 4}}}, scores) == "b"
+    assert pair_winner({"sa": 2, "sb": 2}, scores) is None
+    assert pair_winner({"sa": "n/a", "sb": 2}, scores) is None
+    assert pair_winner({}, PreferencePairs("careful", "quick")) == "a"
+
+
+@pytest.mark.parametrize(
+    ("pairs", "chosen", "rejected", "kept_ids"),
+    [
+        (PreferencePairs("careful", "quick"), ["4", "9", "10"], ["5", "8", "11"], [0, 2, 3]),
+        (
+            PreferencePairs("careful", "quick", "winner", winner_column = "judge"),
+            ["4", "8"],
+            ["5", "9"],
+            [0, 2],
+        ),
+        (
+            PreferencePairs("careful", "quick", "scores", score_a_column = "sa", score_b_column = "sb"),
+            ["4", "8"],
+            ["5", "9"],
+            [0, 2],
+        ),
+    ],
+)
+def test_pairs_keep_clear_winners_only(tmp_path, monkeypatch, pairs, chosen, rejected, kept_ids):
+    import pyarrow.parquet as pq
+
+    _artifact(tmp_path, monkeypatch, [_pair_rows()])
+    split = split_recipe_dataset(artifact_path = "x", holdout_percent = 0, seed = 1)
+    paired = pair_recipe_split(split, artifact_path = "x", seed = 1, pairs = pairs)
+    table = pq.read_table(paired.train_path)
+    assert table.column("chosen").to_pylist() == chosen
+    assert table.column("rejected").to_pylist() == rejected
+    assert table.column("id").to_pylist() == kept_ids
+    assert (paired.kept, paired.dropped) == (len(kept_ids), 5 - len(kept_ids))
+    # Same spec, same file: a second Train click reads the cached pairs.
+    again = pair_recipe_split(split, artifact_path = "x", seed = 1, pairs = pairs)
+    assert again == paired
+
+
+def test_pairs_come_from_training_rows_only(tmp_path, monkeypatch):
+    import pyarrow.parquet as pq
+
+    rows = [dict(row, id = i) for i, row in enumerate(_pair_rows() * 4)]
+    _artifact(tmp_path, monkeypatch, [rows])
+    split = split_recipe_dataset(artifact_path = "x", holdout_percent = 25, seed = 3)
+    paired = pair_recipe_split(
+        split, artifact_path = "x", seed = 3, pairs = PreferencePairs("careful", "quick")
+    )
+    trained = set(pq.read_table(paired.train_path).column("id").to_pylist())
+    assert not trained & set(split.holdout_row_ids)
+    assert paired.kept + paired.dropped == split.train_rows
+
+
+def test_pairs_name_the_missing_column_and_refuse_no_winners(tmp_path, monkeypatch):
+    _artifact(tmp_path, monkeypatch, [_pair_rows()])
+    split = split_recipe_dataset(artifact_path = "x", holdout_percent = 0, seed = 1)
+    with pytest.raises(RecipeTrainingSplitError, match = "Column verdict"):
+        pair_recipe_split(
+            split,
+            artifact_path = "x",
+            seed = 1,
+            pairs = PreferencePairs("careful", "quick", "winner", winner_column = "verdict"),
+        )
+    with pytest.raises(RecipeTrainingSplitError, match = "different columns"):
+        pair_recipe_split(
+            split, artifact_path = "x", seed = 1, pairs = PreferencePairs("careful", "careful")
+        )
+    with pytest.raises(RecipeTrainingSplitError, match = "No row has a clear winner"):
+        pair_recipe_split(
+            split,
+            artifact_path = "x",
+            seed = 1,
+            pairs = PreferencePairs("careful", "quick", "winner", winner_column = "careful"),
+        )
+
+
+def test_split_route_pairs_and_reports_dropped_rows(tmp_path, monkeypatch):
+    from models.data_recipe import TrainingSplitRequest
+    from routes.data_recipe import jobs
+
+    _artifact(tmp_path, monkeypatch, [_pair_rows()])
+
+    class _Manager:
+        def get_status(self, job_id):
+            return {"status": "completed", "artifact_path": "x"}
+
+    monkeypatch.setattr(jobs, "get_job_manager", lambda: _Manager())
+    request = TrainingSplitRequest(
+        holdout_percent = 0,
+        seed = 1,
+        pairs = {"answer_a": "careful", "answer_b": "quick", "rule": "winner", "winner_column": "judge"},
+    )
+    split = jobs.create_job_training_split("job-1", request)
+    assert split.train_path.endswith(".parquet") and "pairs-" in split.train_path
+    assert (split.train_rows, split.pairs_dropped) == (2, 3)
+    plain = jobs.create_job_training_split("job-1", TrainingSplitRequest(holdout_percent = 0, seed = 1))
+    assert (plain.train_rows, plain.pairs_dropped) == (5, 0)

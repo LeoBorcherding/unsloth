@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import type { NodeConfig, TrainCardConfig, TrainCardRun } from "../../types";
+import type {
+  NodeConfig,
+  TrainCardConfig,
+  TrainCardObjective,
+  TrainCardPairRule,
+  TrainCardReward,
+  TrainCardRun,
+} from "../../types";
 import { makeTrainConfig } from "../config-factories";
 import { isRecord, readString } from "./helpers";
 
@@ -20,7 +27,38 @@ const STRING_FIELDS = [
   "holdoutPercent",
   "seed",
   "outputName",
+  "pairA",
+  "pairB",
+  "winnerColumn",
+  "scoreAColumn",
+  "scoreBColumn",
+  "numGenerations",
+  "maxCompletionLength",
+  "systemPrompt",
+  "beta",
 ] as const satisfies readonly (keyof TrainCardConfig)[];
+
+const OBJECTIVES: readonly TrainCardObjective[] = ["sft", "grpo", "dpo", "orpo"];
+const PAIR_RULES: readonly TrainCardPairRule[] = ["a_better", "winner", "scores"];
+
+function readObjective(value: unknown): TrainCardObjective | undefined {
+  return OBJECTIVES.find((objective) => objective === value);
+}
+
+function parseRewards(value: unknown): TrainCardReward[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const rewards: TrainCardReward[] = [];
+  for (const item of value) {
+    const name = isRecord(item) ? readString(item.name)?.trim() : undefined;
+    const weight = isRecord(item) ? Number(item.weight) : Number.NaN;
+    if (name && Number.isFinite(weight)) {
+      rewards.push({ name, weight });
+    }
+  }
+  return rewards;
+}
 
 export function parseUiTrainNodes(input: unknown): UiTrainNode[] {
   if (!Array.isArray(input)) {
@@ -62,6 +100,9 @@ function parseLastRun(value: unknown): TrainCardRun | null {
     artifactPath: readString(value.artifactPath) ?? null,
     baseModel: readString(value.baseModel) ?? "",
     outputName: readString(value.outputName) ?? "",
+    ...(readObjective(value.objective)
+      ? { objective: readObjective(value.objective) }
+      : {}),
     promptColumn: readString(value.promptColumn) ?? "",
     responseColumn: readString(value.responseColumn) ?? "",
     holdoutPercent: count("holdoutPercent"),
@@ -71,6 +112,7 @@ function parseLastRun(value: unknown): TrainCardRun | null {
     holdoutRowIds: rowIds,
     trainRows: count("trainRows"),
     holdoutRows: count("holdoutRows"),
+    ...(count("pairsDropped") > 0 ? { pairsDropped: count("pairsDropped") } : {}),
     phase: readString(value.phase) ?? "idle",
     outputDir: readString(value.outputDir) ?? null,
     startedAt: count("startedAt"),
@@ -92,6 +134,12 @@ export function buildTrainConfigFromUi(
   if (node.train.method === "lora" || node.train.method === "qlora") {
     config.method = node.train.method;
   }
+  config.objective = readObjective(node.train.objective) ?? "sft";
+  const pairRule = PAIR_RULES.find((rule) => rule === node.train.pairRule);
+  if (pairRule) {
+    config.pairRule = pairRule;
+  }
+  config.rewards = parseRewards(node.train.rewards) ?? config.rewards;
   config.lastRun = parseLastRun(node.train.lastRun);
   return config;
 }

@@ -22,6 +22,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useNavigate } from "@tanstack/react-router";
 import { NodeResizer, Position, useUpdateNodeInternals } from "@xyflow/react";
+import type { RlMetricPoint } from "@/features/training";
 import {
   type ReactElement,
   type ReactNode,
@@ -36,6 +37,7 @@ import type { RecipeNode as RecipeGraphNodeType, TrainCardRun } from "../types";
 import { NODE_HANDLE_CLASS } from "../utils/handle-layout";
 import { HANDLE_IDS } from "../utils/handles";
 import {
+  TRAIN_OBJECTIVE_LABELS,
   type TrainCardState,
   describeTrainPhase,
   formatHoldoutSummary,
@@ -43,9 +45,12 @@ import {
   isTrainRunActive,
   listTrainableColumns,
   parseTrainCardSettings,
+  pickTrainProgressMetric,
   pickTrainSourceExecution,
   shortModelName,
+  trainCardChips,
 } from "../utils/train-card";
+import { useRewardLibrary } from "../hooks/use-train-card-inputs";
 import { launchTrainCardRun } from "../utils/train-card-launch";
 import { RECIPE_STUDIO_NODE_TONES } from "../utils/ui-tones";
 import {
@@ -54,7 +59,7 @@ import {
   BaseNodeHeader,
   BaseNodeHeaderTitle,
 } from "./rf-ui/base-node";
-import { LabeledHandle } from "./rf-ui/labeled-handle";
+import { BaseHandle } from "./rf-ui/base-handle";
 
 /** The Train page keeps the run's status in sync; mounted here while a Train card is on the canvas. */
 export function TrainingRuntimeSync(): null {
@@ -136,6 +141,86 @@ function StatePanel({
   );
 }
 
+/** The headline RL metric over the run so far, so a climbing reward reads at a glance. */
+function MetricSparkline({
+  points,
+  metric,
+}: {
+  points: RlMetricPoint[];
+  metric: string;
+}): ReactElement | null {
+  const values = points
+    .map((point) => point.values[metric])
+    .filter((value): value is number => Number.isFinite(value));
+  if (values.length < 2) {
+    return null;
+  }
+  const min = Math.min(...values);
+  const span = Math.max(...values) - min || 1;
+  const path = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * 100;
+      const y = 22 - ((value - min) / span) * 20;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  return (
+    <svg
+      viewBox="0 0 100 24"
+      preserveAspectRatio="none"
+      className="h-6 w-full text-sky-600 dark:text-sky-400"
+      role="img"
+      aria-label={`${metric} over ${values.length} steps`}
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+const PORT_HANDLE_CLASS = cn(NODE_HANDLE_CLASS, "!top-1/2");
+
+/** Inputs on the left, outputs on the right, each named for what flows through it. */
+function TrainPorts({ adapterReady }: { adapterReady: boolean }): ReactElement {
+  return (
+    <div className="relative -mx-3 -mb-2 flex items-center justify-between border-t border-border/50 px-3 py-1.5 text-ui-11 text-muted-foreground">
+      <span data-port-label="in">Dataset</span>
+      <span
+        data-port-label="out"
+        className={cn(adapterReady && "text-emerald-700 dark:text-emerald-400")}
+      >
+        Trained adapter
+      </span>
+      {/* Vertical-layout edges keep their top and bottom ids; this card draws them on the sides too. */}
+      {[HANDLE_IDS.dataIn, HANDLE_IDS.dataInTop].map((handleId) => (
+        <BaseHandle
+          key={handleId}
+          id={handleId}
+          type="target"
+          position={Position.Left}
+          title="Dataset"
+          className={PORT_HANDLE_CLASS}
+        />
+      ))}
+      {[HANDLE_IDS.dataOut, HANDLE_IDS.dataOutBottom].map((handleId) => (
+        <BaseHandle
+          key={handleId}
+          id={handleId}
+          type="source"
+          position={Position.Right}
+          title="Trained adapter"
+          className={PORT_HANDLE_CLASS}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function RecipeTrainNode({
   id,
   data,
@@ -155,6 +240,7 @@ export function RecipeTrainNode({
   const currentStep = useTrainingRuntimeStore((state) => state.currentStep);
   const totalSteps = useTrainingRuntimeStore((state) => state.totalSteps);
   const currentLoss = useTrainingRuntimeStore((state) => state.currentLoss);
+  const rlHistory = useTrainingRuntimeStore((state) => state.rlMetricHistory);
   const navigate = useNavigate();
   const updateNodeInternals = useUpdateNodeInternals();
   const [launching, setLaunching] = useState(false);
@@ -168,6 +254,8 @@ export function RecipeTrainNode({
 
   const source = useMemo(() => pickTrainSourceExecution(executions), [executions]);
   const columns = useMemo(() => listTrainableColumns(configs), [configs]);
+  const objective = config?.kind === "train" ? config.objective : "sft";
+  const { rewardInfo } = useRewardLibrary(objective === "grpo");
   const lastRun = config?.kind === "train" ? (config.lastRun ?? null) : null;
   const tracksRuntime = Boolean(
     lastRun?.jobId && runtimeJobId && lastRun.jobId === runtimeJobId,
@@ -190,7 +278,11 @@ export function RecipeTrainNode({
     return null;
   }
 
-  const { settings, errors } = parseTrainCardSettings(config, columns);
+  const { settings, errors } = parseTrainCardSettings(
+    config,
+    columns,
+    rewardInfo,
+  );
   const active = launching || (tracksRuntime && isTrainRunActive(lastRun));
   const canRun =
     !(executionLocked || active || runtimeBusy) &&
@@ -227,20 +319,24 @@ export function RecipeTrainNode({
     launching,
     launchFailed: launchError !== null,
   });
-  const columnsLabel =
-    settings.promptColumn && settings.responseColumn
-      ? `${settings.promptColumn} → ${settings.responseColumn}`
-      : null;
-  const chips = [
-    columnsLabel,
-    `${config.maxSteps || "?"} steps`,
-    `${config.holdoutPercent || 0}% held out`,
-  ].filter((chip): chip is string => Boolean(chip));
+  const chips = trainCardChips(config);
   const sourceLabel = source
     ? `${source.rows} rows from ${source.run_name?.trim() || "the last full run"}`
     : "";
   const progressValue =
     totalSteps > 0 ? Math.min(100, (currentStep / totalSteps) * 100) : 0;
+  const runObjective = lastRun?.objective ?? "sft";
+  const metric = pickTrainProgressMetric(
+    runObjective,
+    currentLoss,
+    tracksRuntime ? rlHistory.at(-1)?.values : undefined,
+  );
+  const sparkMetric =
+    runObjective === "grpo"
+      ? "reward"
+      : runObjective === "sft"
+        ? null
+        : "rewards/accuracies";
   const runFailed =
     lastRun?.phase === "error" ? (tracksRuntime ? runtimeError : null) : null;
   const hint =
@@ -310,8 +406,13 @@ export function RecipeTrainNode({
               ? `Training · step ${currentStep} of ${totalSteps}`
               : describeTrainPhase(lastRun?.phase ?? "starting")
           }
-          detail={currentLoss ? `loss ${currentLoss.toFixed(3)}` : undefined}
+          detail={
+            metric ? `${metric.label} ${metric.value.toFixed(3)}` : undefined
+          }
         >
+          {sparkMetric && tracksRuntime && (
+            <MetricSparkline points={rlHistory} metric={sparkMetric} />
+          )}
           <Progress
             value={progressValue}
             indeterminate={totalSteps === 0}
@@ -327,7 +428,11 @@ export function RecipeTrainNode({
           icon={Tick02Icon}
           title="Adapter ready"
           detail={lastRun ? formatHoldoutSummary(lastRun) : undefined}
-        />
+        >
+          {sparkMetric && tracksRuntime && (
+            <MetricSparkline points={rlHistory} metric={sparkMetric} />
+          )}
+        </StatePanel>
       );
       break;
     case "stopped":
@@ -383,7 +488,7 @@ export function RecipeTrainNode({
               {config.name}
             </BaseNodeHeaderTitle>
             <p className="truncate text-ui-11 text-muted-foreground">
-              {data.subtype} ·{" "}
+              {TRAIN_OBJECTIVE_LABELS[config.objective]} ·{" "}
               {settings.baseModel
                 ? shortModelName(settings.baseModel)
                 : "No base model yet"}
@@ -459,44 +564,9 @@ export function RecipeTrainNode({
             </Button>
           )}
         </div>
+        <TrainPorts adapterReady={lastRun?.phase === "completed" && !active} />
       </BaseNodeContent>
 
-      <LabeledHandle
-        id={HANDLE_IDS.dataIn}
-        title="Dataset"
-        type="target"
-        position={Position.Left}
-        className="absolute inset-0 pointer-events-none"
-        labelClassName="sr-only"
-        handleClassName={NODE_HANDLE_CLASS}
-      />
-      <LabeledHandle
-        id={HANDLE_IDS.dataInTop}
-        title="Dataset"
-        type="target"
-        position={Position.Top}
-        className="absolute inset-0 pointer-events-none"
-        labelClassName="sr-only"
-        handleClassName={NODE_HANDLE_CLASS}
-      />
-      <LabeledHandle
-        id={HANDLE_IDS.dataOut}
-        title="Trained adapter"
-        type="source"
-        position={Position.Right}
-        className="absolute inset-0 pointer-events-none"
-        labelClassName="sr-only"
-        handleClassName={NODE_HANDLE_CLASS}
-      />
-      <LabeledHandle
-        id={HANDLE_IDS.dataOutBottom}
-        title="Trained adapter"
-        type="source"
-        position={Position.Bottom}
-        className="absolute inset-0 pointer-events-none"
-        labelClassName="sr-only"
-        handleClassName={NODE_HANDLE_CLASS}
-      />
     </BaseNode>
   );
 }

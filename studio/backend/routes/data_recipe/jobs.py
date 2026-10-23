@@ -53,8 +53,10 @@ from core.data_recipe.huggingface import (
 )
 from core.data_recipe.jobs import get_job_manager
 from core.data_recipe.training_split import (
+    PreferencePairs,
     RecipeTrainingSplit,
     RecipeTrainingSplitError,
+    pair_recipe_split,
     read_holdout_rows,
     split_recipe_dataset,
 )
@@ -926,7 +928,7 @@ def download_job_dataset(
     )
 
 
-def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTrainingSplit:
+def _job_artifact_path(job_id: str, payload: TrainingSplitRequest) -> str:
     artifact_path = (payload.artifact_path or "").strip() or None
     status = get_job_manager().get_status(job_id)
     if status is not None:
@@ -940,6 +942,11 @@ def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTra
             status_code = 400,
             detail = "This execution does not have saved dataset files to train on.",
         )
+    return artifact_path
+
+
+def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTrainingSplit:
+    artifact_path = _job_artifact_path(job_id, payload)
     try:
         split = split_recipe_dataset(
             artifact_path = artifact_path,
@@ -967,14 +974,42 @@ def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTra
 
 @router.post("/jobs/{job_id}/training-split", response_model = TrainingSplitResponse)
 def create_job_training_split(job_id: str, payload: TrainingSplitRequest):
-    """Paths a training run reads for this run's dataset, holding out a share of rows when asked."""
+    """Paths a training run reads for this run's dataset, holding out a share of rows when asked,
+    and pairing two answer columns into chosen/rejected for preference training."""
     split = _job_training_split(job_id, payload)
+    train_path, train_rows, pairs_dropped = split.train_path, split.train_rows, 0
+    if payload.pairs is not None:
+        try:
+            paired = pair_recipe_split(
+                split,
+                artifact_path = _job_artifact_path(job_id, payload),
+                seed = payload.seed,
+                pairs = PreferencePairs(**payload.pairs.model_dump()),
+            )
+        except (RecipeDatasetPublishError, RecipeTrainingSplitError) as exc:
+            raise log_and_http_error(
+                exc,
+                400,
+                safe_curated_detail(exc),
+                event = "data_recipe.jobs.preference_pairs_failed",
+                log = logger,
+            ) from exc
+        except Exception as exc:
+            raise log_and_http_error(
+                exc,
+                500,
+                safe_error_detail(exc),
+                event = "data_recipe.jobs.preference_pairs_error",
+                log = logger,
+            ) from exc
+        train_path, train_rows, pairs_dropped = paired.train_path, paired.kept, paired.dropped
     return TrainingSplitResponse(
-        train_path = split.train_path,
+        train_path = train_path,
         holdout_path = split.holdout_path,
-        train_rows = split.train_rows,
+        train_rows = train_rows,
         holdout_rows = split.holdout_rows,
         holdout_row_ids = list(split.holdout_row_ids),
+        pairs_dropped = pairs_dropped,
     )
 
 

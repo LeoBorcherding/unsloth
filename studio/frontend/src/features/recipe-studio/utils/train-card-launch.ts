@@ -17,6 +17,7 @@ import {
   type TrainCardHoldout,
   type TrainCardSettings,
   buildTrainCardMapping,
+  buildTrainCardRlMapping,
 } from "./train-card";
 
 const SETUP_TIMEOUT_MS = 120_000;
@@ -64,6 +65,7 @@ export async function launchTrainCardRun(
     // biome-ignore lint/style/useNamingConvention: api schema
     holdout_percent: settings.holdoutPercent,
     seed: settings.seed,
+    pairs: settings.pairs,
   });
 
   const store = useTrainingConfigStore.getState();
@@ -93,7 +95,27 @@ export async function launchTrainCardRun(
   configured.setContextLength(settings.contextLength);
   configured.setRandomSeed(settings.seed);
   configured.setProjectName(settings.outputName);
-  configured.setDatasetManualMapping(buildTrainCardMapping(settings));
+  if (settings.objective === "sft") {
+    configured.setDatasetManualMapping(buildTrainCardMapping(settings));
+  } else {
+    // The objective sets its own learning rate, so the card's goes in after it.
+    configured.setTrainingObjective(settings.objective);
+    if (useTrainingConfigStore.getState().trainingObjective !== settings.objective) {
+      throw new Error(
+        `${settings.objective.toUpperCase()} cannot train this model. Pick a text model.`,
+      );
+    }
+    configured.setLearningRate(settings.learningRate);
+    configured.setRlRoleMapping(buildTrainCardRlMapping(settings));
+    configured.setRlBeta(settings.beta);
+    if (settings.objective === "grpo") {
+      configured.setGrpoRewards(settings.rewards);
+      configured.setGrpoNumGenerations(settings.numGenerations);
+      configured.setGrpoMaxCompletionLength(settings.maxCompletionLength);
+      configured.setGrpoSystemPrompt(settings.systemPrompt);
+      configured.setGrpoEnableThinking(false);
+    }
+  }
 
   const started = await startTrainingRun();
   const runtime = useTrainingRuntimeStore.getState();
@@ -107,6 +129,7 @@ export async function launchTrainCardRun(
     artifactPath: execution.artifact_path,
     baseModel: settings.baseModel,
     outputName: settings.outputName,
+    objective: settings.objective,
     promptColumn: settings.promptColumn,
     responseColumn: settings.responseColumn,
     holdoutPercent: settings.holdoutPercent,
@@ -116,6 +139,7 @@ export async function launchTrainCardRun(
     holdoutRowIds: split.holdout_row_ids ?? [],
     trainRows: split.train_rows,
     holdoutRows: split.holdout_rows,
+    pairsDropped: split.pairs_dropped ?? 0,
     phase: runtime.phase === "idle" ? "starting" : runtime.phase,
     outputDir: null,
     startedAt: Date.now(),

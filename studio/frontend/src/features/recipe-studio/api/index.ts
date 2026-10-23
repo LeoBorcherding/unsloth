@@ -8,6 +8,7 @@ import {
   readFastApiError,
 } from "@/lib/format-fastapi-error";
 import { openStreamResponse } from "@/lib/open-stream-response";
+import type { TrainCardPairs } from "../utils/train-card";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -39,6 +40,7 @@ export type TrainingSplitRequest = {
   // biome-ignore lint/style/useNamingConvention: api schema
   holdout_percent: number;
   seed: number;
+  pairs?: TrainCardPairs | null;
 };
 
 export type TrainingSplitResponse = {
@@ -52,6 +54,8 @@ export type TrainingSplitResponse = {
   holdout_rows: number;
   // biome-ignore lint/style/useNamingConvention: api schema
   holdout_row_ids: number[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  pairs_dropped?: number;
 };
 
 export type HoldoutRowsResponse = {

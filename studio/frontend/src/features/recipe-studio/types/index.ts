@@ -399,6 +399,14 @@ export type RecipeProcessorConfig = SchemaTransformProcessorConfig;
 
 export type TrainCardMethod = "qlora" | "lora";
 
+/** SFT learns the response column; GRPO learns from rewards; DPO and ORPO from preference pairs. */
+export type TrainCardObjective = "sft" | "grpo" | "dpo" | "orpo";
+
+/** Which of two answer columns is chosen: A always, a winner column saying A or B, or the higher score. */
+export type TrainCardPairRule = "a_better" | "winner" | "scores";
+
+export type TrainCardReward = { name: string; weight: number };
+
 /** The last training run a Train card started: what a downstream card reads off its output handle. */
 export type TrainCardRun = {
   jobId: string | null;
@@ -408,11 +416,15 @@ export type TrainCardRun = {
   artifactPath: string | null;
   baseModel: string;
   outputName: string;
+  /** Older saved runs have none: they were SFT. */
+  objective?: TrainCardObjective;
   promptColumn: string;
   responseColumn: string;
   holdoutPercent: number;
   seed: number;
   trainPath: string;
+  /** DPO/ORPO rows with no clear winner, left out of training. */
+  pairsDropped?: number;
   holdoutPath: string | null;
   holdoutRowIds: number[];
   trainRows: number;
@@ -429,8 +441,21 @@ export type TrainCardConfig = {
   name: string;
   baseModel: string;
   method: TrainCardMethod;
+  objective: TrainCardObjective;
   promptColumn: string;
+  /** SFT: the reply to learn. GRPO: the reference answer rewards compare against. */
   responseColumn: string;
+  rewards: TrainCardReward[];
+  pairA: string;
+  pairB: string;
+  pairRule: TrainCardPairRule;
+  winnerColumn: string;
+  scoreAColumn: string;
+  scoreBColumn: string;
+  numGenerations: string;
+  maxCompletionLength: string;
+  systemPrompt: string;
+  beta: string;
   maxSteps: string;
   learningRate: string;
   loraRank: string;

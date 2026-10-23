@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import type { RewardRecord } from "@/features/training";
 import type { RecipeExecutionRecord } from "../execution-types";
-import type { NodeConfig, TrainCardConfig, TrainCardRun } from "../types";
+import type {
+  NodeConfig,
+  TrainCardConfig,
+  TrainCardObjective,
+  TrainCardPairRule,
+  TrainCardReward,
+  TrainCardRun,
+} from "../types";
 import { makeTrainConfig } from "./config-factories";
 
 /** Node kinds that take a trained adapter off a Train card's output handle. */
@@ -22,11 +30,100 @@ const ACTIVE_PHASES = new Set([
   "training_drafter",
 ]);
 
+export const TRAIN_OBJECTIVE_LABELS: Record<TrainCardObjective, string> = {
+  sft: "SFT",
+  grpo: "GRPO",
+  dpo: "DPO",
+  orpo: "ORPO",
+};
+
+type ObjectiveDefaults = Pick<
+  TrainCardConfig,
+  "learningRate" | "maxSteps" | "contextLength"
+>;
+
+/** Per-objective starting points, from the Unsloth notebooks (GRPO and DPO at 5e-6, ORPO at 8e-6). */
+export const TRAIN_OBJECTIVE_DEFAULTS: Record<TrainCardObjective, ObjectiveDefaults> = {
+  sft: { learningRate: "2e-4", maxSteps: "60", contextLength: "2048" },
+  grpo: { learningRate: "5e-6", maxSteps: "50", contextLength: "1024" },
+  dpo: { learningRate: "5e-6", maxSteps: "60", contextLength: "2048" },
+  orpo: { learningRate: "8e-6", maxSteps: "60", contextLength: "2048" },
+};
+
+/** Switching objective moves the fields still at the old objective's default to the new one's. */
+export function switchTrainObjective(
+  config: TrainCardConfig,
+  objective: TrainCardObjective,
+): Partial<TrainCardConfig> {
+  const from = TRAIN_OBJECTIVE_DEFAULTS[config.objective];
+  const to = TRAIN_OBJECTIVE_DEFAULTS[objective];
+  const patch: Partial<TrainCardConfig> = { objective };
+  for (const key of Object.keys(to) as (keyof ObjectiveDefaults)[]) {
+    if (config[key].trim() === from[key] && to[key] !== from[key]) {
+      patch[key] = to[key];
+    }
+  }
+  return patch;
+}
+
+export function isPreferenceTrainObjective(objective: TrainCardObjective): boolean {
+  return objective === "dpo" || objective === "orpo";
+}
+
+/** A reward from the library: just what the card needs to check its columns. */
+export type TrainRewardInfo = { name: string; compareTo: string | null };
+
+/** Library rewards to pick from: valid rule rewards, plus any picked one the library no longer has. */
+export function rewardChoices(
+  library: RewardRecord[],
+  picked: TrainCardReward[],
+): { name: string; description: string; missing: boolean }[] {
+  const usable = library.filter(
+    (reward) => reward.valid && !reward.shadowed && reward.kind === "rule",
+  );
+  const names = new Set(usable.map((reward) => reward.name));
+  return [
+    ...usable.map((reward) => ({
+      name: reward.name,
+      description: reward.description,
+      missing: false,
+    })),
+    ...picked
+      .filter((reward) => !names.has(reward.name))
+      .map((reward) => ({
+        name: reward.name,
+        description: "Not in the reward library.",
+        missing: true,
+      })),
+  ];
+}
+
+export type TrainCardPairs = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  answer_a: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  answer_b: string;
+  rule: TrainCardPairRule;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  winner_column: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  score_a_column: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  score_b_column: string | null;
+};
+
 export type TrainCardSettings = {
   baseModel: string;
   method: TrainCardConfig["method"];
+  objective: TrainCardObjective;
   promptColumn: string;
   responseColumn: string;
+  rewards: TrainCardReward[];
+  pairs: TrainCardPairs | null;
+  numGenerations: number;
+  maxCompletionLength: number;
+  systemPrompt: string;
+  beta: number | null;
   maxSteps: number;
   learningRate: number;
   loraRank: number;
@@ -106,37 +203,160 @@ function wholeNumber(
   return parsed;
 }
 
+function checkColumns(
+  picked: string[],
+  columns: string[],
+  errors: string[],
+): void {
+  for (const column of picked) {
+    if (column && !columns.includes(column)) {
+      errors.push(`Column ${column} is not in this recipe's output.`);
+    }
+  }
+}
+
+function parsePairs(
+  config: TrainCardConfig,
+  columns: string[],
+  errors: string[],
+): TrainCardPairs {
+  const pairA = config.pairA.trim();
+  const pairB = config.pairB.trim();
+  const winner = config.winnerColumn.trim();
+  const scoreA = config.scoreAColumn.trim();
+  const scoreB = config.scoreBColumn.trim();
+  const picked = [pairA, pairB];
+  if (!(pairA && pairB)) {
+    errors.push("Pick answer A and answer B.");
+  } else if (pairA === pairB) {
+    errors.push("Answer A and answer B must be different columns.");
+  }
+  if (config.pairRule === "winner") {
+    picked.push(winner);
+    if (!winner) {
+      errors.push("Pick the column that names the better answer.");
+    }
+  } else if (config.pairRule === "scores") {
+    picked.push(scoreA, scoreB);
+    if (!(scoreA && scoreB)) {
+      errors.push("Pick a score column for each answer.");
+    }
+  }
+  checkColumns(picked, columns, errors);
+  return {
+    // biome-ignore lint/style/useNamingConvention: api schema
+    answer_a: pairA,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    answer_b: pairB,
+    rule: config.pairRule,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    winner_column: config.pairRule === "winner" ? winner : null,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    score_a_column: config.pairRule === "scores" ? scoreA : null,
+    // biome-ignore lint/style/useNamingConvention: api schema
+    score_b_column: config.pairRule === "scores" ? scoreB : null,
+  };
+}
+
+function checkRewards(
+  rewards: TrainCardReward[],
+  responseColumn: string,
+  library: TrainRewardInfo[],
+  errors: string[],
+): void {
+  if (rewards.length === 0) {
+    errors.push("Pick at least one reward.");
+    return;
+  }
+  const byName = new Map(library.map((reward) => [reward.name, reward]));
+  for (const reward of rewards) {
+    if (!Number.isFinite(reward.weight)) {
+      errors.push(`Reward ${reward.name} needs a numeric weight.`);
+    }
+    const info = byName.get(reward.name);
+    if (library.length > 0 && !info) {
+      errors.push(`Reward ${reward.name} is not in the reward library.`);
+    } else if (info?.compareTo === "answer" && !responseColumn) {
+      errors.push(`Pick the answer column: ${reward.name} checks against it.`);
+    }
+  }
+}
+
 export function parseTrainCardSettings(
   config: TrainCardConfig,
   columns: string[],
+  library: TrainRewardInfo[] = [],
 ): { settings: TrainCardSettings; errors: string[] } {
   const errors: string[] = [];
+  const objective = config.objective;
   const baseModel = config.baseModel.trim();
   if (!baseModel) {
     errors.push("Pick a base model.");
   }
   const promptColumn = config.promptColumn.trim();
   const responseColumn = config.responseColumn.trim();
-  if (!promptColumn || !responseColumn) {
-    errors.push("Pick the prompt and response columns.");
-  } else if (promptColumn === responseColumn) {
-    errors.push("Prompt and response must be different columns.");
-  } else {
-    for (const column of [promptColumn, responseColumn]) {
-      if (!columns.includes(column)) {
-        errors.push(`Column ${column} is not in this recipe's output.`);
-      }
+  const preference = isPreferenceTrainObjective(objective);
+  if (objective === "sft") {
+    if (!promptColumn || !responseColumn) {
+      errors.push("Pick the prompt and response columns.");
+    } else if (promptColumn === responseColumn) {
+      errors.push("Prompt and response must be different columns.");
+    } else {
+      checkColumns([promptColumn, responseColumn], columns, errors);
     }
+  } else if (!promptColumn) {
+    errors.push("Pick the prompt column.");
+  } else if (objective === "grpo" && promptColumn === responseColumn) {
+    errors.push("Prompt and answer must be different columns.");
+  } else {
+    checkColumns(
+      [promptColumn, objective === "grpo" ? responseColumn : ""],
+      columns,
+      errors,
+    );
+  }
+  const pairs = preference ? parsePairs(config, columns, errors) : null;
+  if (objective === "grpo") {
+    checkRewards(config.rewards, responseColumn, library, errors);
   }
   const learningRate = parseNumber(config.learningRate);
   if (!(Number.isFinite(learningRate) && learningRate > 0 && learningRate < 1)) {
     errors.push("Learning rate must be a number between 0 and 1.");
   }
+  const beta = config.beta.trim() ? parseNumber(config.beta) : null;
+  if (
+    beta !== null &&
+    !(Number.isFinite(beta) && (objective === "grpo" ? beta >= 0 : beta > 0))
+  ) {
+    errors.push(
+      objective === "grpo"
+        ? "Beta must be 0 or more."
+        : "Beta must be a number above 0.",
+    );
+  }
+  const grpo = objective === "grpo";
   const settings: TrainCardSettings = {
     baseModel,
     method: config.method,
+    objective,
     promptColumn,
-    responseColumn,
+    responseColumn: preference ? "" : responseColumn,
+    rewards: grpo ? config.rewards : [],
+    pairs,
+    numGenerations: grpo
+      ? wholeNumber("Generations", config.numGenerations, 2, 64, errors)
+      : 4,
+    maxCompletionLength: grpo
+      ? wholeNumber(
+          "Max answer tokens",
+          config.maxCompletionLength,
+          16,
+          32_768,
+          errors,
+        )
+      : 0,
+    systemPrompt: grpo ? config.systemPrompt.trim() : "",
+    beta: objective === "sft" ? null : beta,
     maxSteps: wholeNumber("Steps", config.maxSteps, 1, 100_000, errors),
     learningRate,
     loraRank: wholeNumber("LoRA rank", config.loraRank, 1, 1024, errors),
@@ -172,6 +392,22 @@ export function buildTrainCardMapping(
   };
 }
 
+/** RL roles for the Train page's Column roles. Preference splits add `chosen` and `rejected`. */
+export function buildTrainCardRlMapping(
+  settings: Pick<TrainCardSettings, "objective" | "promptColumn" | "responseColumn">,
+): Record<string, string> {
+  if (settings.objective === "grpo") {
+    return settings.responseColumn
+      ? { [settings.promptColumn]: "prompt", [settings.responseColumn]: "answer" }
+      : { [settings.promptColumn]: "prompt" };
+  }
+  return {
+    [settings.promptColumn]: "prompt",
+    chosen: "chosen",
+    rejected: "rejected",
+  };
+}
+
 export function isTrainRunActive(run: TrainCardRun | null | undefined): boolean {
   return Boolean(run && ACTIVE_PHASES.has(run.phase));
 }
@@ -200,6 +436,7 @@ export type TrainCardOutput = {
   base_model: string;
   // biome-ignore lint/style/useNamingConvention: handle schema
   training_job_id: string;
+  objective: TrainCardObjective;
   // biome-ignore lint/style/useNamingConvention: handle schema
   prompt_column: string;
   // biome-ignore lint/style/useNamingConvention: handle schema
@@ -241,6 +478,7 @@ export function getTrainCardOutput(
     base_model: run.baseModel,
     // biome-ignore lint/style/useNamingConvention: handle schema
     training_job_id: run.jobId,
+    objective: run.objective ?? "sft",
     // biome-ignore lint/style/useNamingConvention: handle schema
     prompt_column: run.promptColumn,
     // biome-ignore lint/style/useNamingConvention: handle schema
@@ -332,9 +570,71 @@ export function describeTrainPhase(phase: string): string {
 }
 
 export function formatHoldoutSummary(run: TrainCardRun): string {
-  return run.holdoutRows > 0
-    ? `${run.trainRows} train / ${run.holdoutRows} held out`
-    : `${run.trainRows} train rows`;
+  const rows =
+    run.objective === "dpo" || run.objective === "orpo" ? "pairs" : "rows";
+  const base =
+    run.holdoutRows > 0
+      ? `${run.trainRows} train ${rows} / ${run.holdoutRows} held out`
+      : `${run.trainRows} train ${rows}`;
+  return run.pairsDropped ? `${base} · ${run.pairsDropped} ties left out` : base;
+}
+
+/** The headline number while training: loss for SFT, mean reward for GRPO, accuracy for DPO/ORPO. */
+export function pickTrainProgressMetric(
+  objective: TrainCardObjective,
+  loss: number | null,
+  rl: Record<string, number> | undefined,
+): { label: string; value: number } | null {
+  if (objective === "grpo" && rl && Number.isFinite(rl.reward)) {
+    return { label: "reward", value: rl.reward };
+  }
+  if (
+    isPreferenceTrainObjective(objective) &&
+    rl &&
+    Number.isFinite(rl["rewards/accuracies"])
+  ) {
+    return { label: "accuracy", value: rl["rewards/accuracies"] };
+  }
+  return loss ? { label: "loss", value: loss } : null;
+}
+
+const PAIR_RULE_WORDS: Record<TrainCardPairRule, string> = {
+  a_better: "A always wins",
+  winner: "winner column",
+  scores: "higher score",
+};
+
+/** Short chips for the card face: what it reads and how long it runs. */
+export function trainCardChips(config: TrainCardConfig): string[] {
+  const prompt = config.promptColumn.trim();
+  const response = config.responseColumn.trim();
+  const chips: string[] = [];
+  if (config.objective === "grpo") {
+    if (prompt) {
+      chips.push(response ? `${prompt} → ${response}` : prompt);
+    }
+    const names = config.rewards.map((reward) => reward.name);
+    chips.push(
+      names.length === 0
+        ? "No rewards"
+        : names.length > 2
+          ? `${names.length} rewards`
+          : names.join(" + "),
+    );
+  } else if (isPreferenceTrainObjective(config.objective)) {
+    const a = config.pairA.trim();
+    const b = config.pairB.trim();
+    if (a && b) {
+      chips.push(`${a} vs ${b}`, PAIR_RULE_WORDS[config.pairRule]);
+    }
+  } else if (prompt && response) {
+    chips.push(`${prompt} → ${response}`);
+  }
+  chips.push(
+    `${config.maxSteps || "?"} steps`,
+    `${config.holdoutPercent || 0}% held out`,
+  );
+  return chips;
 }
 
 const ADVANCED_LABELS = {
@@ -346,9 +646,19 @@ const ADVANCED_LABELS = {
   seed: "seed",
 } as const satisfies Partial<Record<keyof TrainCardConfig, string>>;
 
+const RL_ADVANCED_LABELS = {
+  numGenerations: "generations",
+  maxCompletionLength: "max answer tokens",
+  systemPrompt: "system prompt",
+  beta: "beta",
+} as const satisfies Partial<Record<keyof TrainCardConfig, string>>;
+
 /** The collapsed Advanced row names what differs from a new card's defaults, so nothing changed hides. */
 export function summarizeAdvancedTrainSettings(config: TrainCardConfig): string {
-  const defaults = makeTrainConfig(config.id, []);
+  const defaults = {
+    ...makeTrainConfig(config.id, []),
+    ...TRAIN_OBJECTIVE_DEFAULTS[config.objective],
+  };
   const changed: string[] = [];
   if (config.method !== defaults.method) {
     changed.push("method");
@@ -357,6 +667,17 @@ export function summarizeAdvancedTrainSettings(config: TrainCardConfig): string 
     const field = key as keyof typeof ADVANCED_LABELS;
     if (config[field].trim() !== defaults[field]) {
       changed.push(label);
+    }
+  }
+  const rlFields: (keyof typeof RL_ADVANCED_LABELS)[] =
+    config.objective === "grpo"
+      ? ["numGenerations", "maxCompletionLength", "systemPrompt", "beta"]
+      : config.objective === "sft"
+        ? []
+        : ["beta"];
+  for (const field of rlFields) {
+    if (config[field].trim() !== defaults[field].trim()) {
+      changed.push(RL_ADVANCED_LABELS[field]);
     }
   }
   const outputName = config.outputName.trim();

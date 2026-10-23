@@ -5,9 +5,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import random
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 from core.data_recipe.huggingface import _resolve_recipe_artifact_path
 from utils.paths.path_utils import drop_appledouble_metadata
@@ -96,6 +101,151 @@ def split_recipe_dataset(
         len(holdout_indices),
         tuple(holdout_indices),
     )
+
+
+PAIR_RULES = ("a_better", "winner", "scores")
+
+
+@dataclass(frozen = True)
+class PreferencePairs:
+    """How two answer columns become DPO/ORPO's chosen and rejected."""
+
+    answer_a: str
+    answer_b: str
+    rule: str = "a_better"
+    winner_column: str | None = None
+    score_a_column: str | None = None
+    score_b_column: str | None = None
+
+
+@dataclass(frozen = True)
+class RecipePreferenceSplit:
+    train_path: str
+    kept: int
+    dropped: int
+
+
+def _winner_from_label(value: Any, pairs: PreferencePairs) -> str | None:
+    words = re.sub(r"[^a-z0-9_]+", " ", str(value or "").lower()).split()
+    if words[:1] in (["answer"], ["response"], ["option"]):
+        words = words[1:]
+    if not words:
+        return None
+    if words[0] in ("a", "1", pairs.answer_a.lower()):
+        return "a"
+    if words[0] in ("b", "2", pairs.answer_b.lower()):
+        return "b"
+    return None
+
+
+def _score(value: Any) -> float | None:
+    """A number, a numeric string, or a judge column's {"rubric": {"score": n, ...}}."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, dict):
+        if "score" in value:
+            return _score(value["score"])
+        for nested in value.values():
+            found = _score(nested) if isinstance(nested, dict) else None
+            if found is not None:
+                return found
+    return None
+
+
+def pair_winner(row: dict, pairs: PreferencePairs) -> str | None:
+    """"a", "b", or None for a tie or a row the rule cannot read (dropped from training)."""
+    if pairs.rule == "a_better":
+        return "a"
+    if pairs.rule == "winner":
+        return _winner_from_label(row.get(pairs.winner_column or ""), pairs)
+    score_a = _score(row.get(pairs.score_a_column or ""))
+    score_b = _score(row.get(pairs.score_b_column or ""))
+    if score_a is None or score_b is None or score_a == score_b:
+        return None
+    return "a" if score_a > score_b else "b"
+
+
+def _pair_columns(pairs: PreferencePairs) -> list[str]:
+    if pairs.rule not in PAIR_RULES:
+        raise RecipeTrainingSplitError(f"Unknown pair rule: {pairs.rule}.")
+    columns = [pairs.answer_a, pairs.answer_b]
+    if pairs.rule == "winner":
+        columns.append(pairs.winner_column or "")
+    elif pairs.rule == "scores":
+        columns += [pairs.score_a_column or "", pairs.score_b_column or ""]
+    if not all(columns):
+        raise RecipeTrainingSplitError("Pick every column the pair rule reads.")
+    if pairs.answer_a == pairs.answer_b:
+        raise RecipeTrainingSplitError("Answer A and answer B must be different columns.")
+    return columns
+
+
+def pair_recipe_split(
+    split: RecipeTrainingSplit, *, artifact_path: str, seed: int, pairs: PreferencePairs
+) -> RecipePreferenceSplit:
+    """Adds chosen/rejected columns to the training rows; ties and unreadable rows are left out."""
+    columns = _pair_columns(pairs)
+    import pyarrow
+    import pyarrow.parquet as pyarrow_parquet
+
+    key = hashlib.sha1(json.dumps(asdict(pairs), sort_keys = True).encode()).hexdigest()[:12]
+    train = split.train_path
+    out_dir = (
+        os.path.dirname(train)
+        if split.holdout_path
+        else str(
+            _resolve_recipe_artifact_path(artifact_path) / SPLITS_DIR_NAME / f"holdout-0-seed{seed}"
+        )
+    )
+    out_file = os.path.join(out_dir, f"pairs-{key}.parquet")
+    if os.path.isfile(out_file):
+        kept = pyarrow_parquet.read_metadata(out_file).num_rows
+        return RecipePreferenceSplit(out_file, kept, split.train_rows - kept)
+
+    if os.path.isdir(train):
+        shards = drop_appledouble_metadata(sorted(Path(train).glob("*.parquet")))
+        table = pyarrow.concat_tables([pyarrow_parquet.read_table(shard) for shard in shards])
+    else:
+        table = pyarrow_parquet.read_table(train)
+    missing = [column for column in columns if column not in table.column_names]
+    if missing:
+        raise RecipeTrainingSplitError(f"Column {missing[0]} is not in this run's dataset.")
+
+    keep, chosen, rejected = [], [], []
+    for index, row in enumerate(table.select(list(dict.fromkeys(columns))).to_pylist()):
+        winner = pair_winner(row, pairs)
+        a, b = row.get(pairs.answer_a), row.get(pairs.answer_b)
+        if winner is None or a is None or b is None:
+            continue
+        a, b = str(a), str(b)
+        if not (a.strip() and b.strip()) or a.strip() == b.strip():
+            continue
+        keep.append(index)
+        chosen.append(a if winner == "a" else b)
+        rejected.append(b if winner == "a" else a)
+    if not keep:
+        raise RecipeTrainingSplitError(
+            "No row has a clear winner, so there are no preference pairs to train on."
+        )
+
+    paired = table.take(pyarrow.array(keep))
+    for name in ("chosen", "rejected"):
+        if name in paired.column_names:
+            paired = paired.drop_columns([name])
+    paired = paired.append_column("chosen", pyarrow.array(chosen, pyarrow.string()))
+    paired = paired.append_column("rejected", pyarrow.array(rejected, pyarrow.string()))
+    os.makedirs(out_dir, exist_ok = True)
+    staged = out_file + ".partial"
+    pyarrow_parquet.write_table(paired, staged)
+    os.replace(staged, out_file)
+    return RecipePreferenceSplit(out_file, len(keep), table.num_rows - len(keep))
 
 
 def read_holdout_rows(split: RecipeTrainingSplit, *, offset: int, limit: int) -> list[dict]:

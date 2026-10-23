@@ -229,6 +229,7 @@ test("the output handle names the adapter and the exact held-out rows", () => {
     adapter_path: "/outputs/train_1",
     base_model: "unsloth/Qwen2.5-0.5B-Instruct",
     training_job_id: "job-7",
+    objective: "sft",
     prompt_column: "question",
     response_column: "answer",
     holdout: {
