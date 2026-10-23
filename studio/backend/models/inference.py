@@ -17,6 +17,8 @@ from pydantic import (
     Discriminator,
     Field,
     PrivateAttr,
+    StrictFloat,
+    StrictInt,
     Tag,
     field_validator,
     model_serializer,
@@ -5000,6 +5002,143 @@ class LocalizedEditSpec(BaseModel):
 # All images of one request, base64: ten maximal uploads would otherwise buffer ~320 MiB.
 _MAX_CONDITION_PAYLOAD = 128 * 1024 * 1024
 
+# One X/Y grid's cell ceiling, the same as the Images page Compare grid.
+MAX_XY_CELLS = 64
+
+XYAxisField = Literal[
+    "seed",
+    "steps",
+    "guidance",
+    "sampler",
+    "schedule_type",
+    "shift",
+    "base_shift",
+    "max_shift",
+    "strength",
+    "clip_skip",
+    "cfg_rescale",
+    "variation_seed",
+    "variation_strength",
+    "lora_weight",
+    "prompt_sr",
+]
+
+
+class XYAxisSpec(BaseModel):
+    """One axis of an X/Y grid: a request field and the values its cells take."""
+
+    field: XYAxisField = Field(
+        ...,
+        description = "Request field the axis varies. lora_weight sets the weight of loras[index]; "
+        "prompt_sr (AUTOMATIC1111 Prompt S/R) replaces the first value in the prompt and negative "
+        "prompt with each value in turn, so the first cell keeps the prompt as typed.",
+    )
+    values: list[Union[StrictInt, StrictFloat, str]] = Field(
+        ...,
+        min_length = 1,
+        max_length = MAX_XY_CELLS,
+        description = "Values, one column (X) or row (Y) each",
+    )
+    index: Optional[int] = Field(
+        None, ge = 0, le = 7, description = "lora_weight only: which `loras` entry the axis weights"
+    )
+
+    @model_validator(mode = "after")
+    def _index_only_for_lora(self) -> "XYAxisSpec":
+        if (self.field == "lora_weight") != (self.index is not None):
+            raise ValueError("`index` is required for a lora_weight axis and only allowed there")
+        if self.field == "prompt_sr" and not all(isinstance(v, str) for v in self.values):
+            raise ValueError("prompt_sr values must be strings")
+        if self.field == "prompt_sr" and not self.values[0]:
+            raise ValueError(
+                "prompt_sr: the first value is the text searched for and cannot be empty"
+            )
+        return self
+
+
+class XYGridSpec(BaseModel):
+    """X/Y grid: every combination of the axes' values renders as its own gallery image, plus one
+    labelled grid image (X values across the top, Y values down the left)."""
+
+    x: XYAxisSpec = Field(..., description = "Column axis")
+    y: Optional[XYAxisSpec] = Field(None, description = "Row axis; omitted = a single row")
+
+    @model_validator(mode = "after")
+    def _bounded(self) -> "XYGridSpec":
+        cells = len(self.x.values) * (len(self.y.values) if self.y else 1)
+        if cells > MAX_XY_CELLS:
+            raise ValueError(
+                f"{cells} grid cells is over the limit of {MAX_XY_CELLS}; use fewer values"
+            )
+        y = self.y
+        if y and y.field == self.x.field and y.field != "prompt_sr" and y.index == self.x.index:
+            raise ValueError(f"x and y both vary {y.field}")
+        return self
+
+
+class DiffusionDetailerSpec(BaseModel):
+    """Detailer (face fix) post-pass, after ADetailer and ComfyUI-Impact-Pack's FaceDetailer: SAM 3 finds the targets,
+    each is inpainted in an enlarged crop and pasted back through a feathered mask. Defaults follow FaceDetailer
+    (core/inference/diffusion_detailer.py). Needs a model whose status `workflows` has 'inpaint' and a downloaded SAM 3."""
+
+    targets: str = Field(
+        "face",
+        min_length = 1,
+        max_length = 500,
+        description = "What to fix, as Mask from text takes it: comma-separated, `:N` caps a target "
+        "(default 8 each, at most 20), e.g. 'face' or 'face, hand:2'",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length = 20000,
+        description = "Prompt for the detail pass; omitted = the image's prompt. [PROMPT] inserts it, [SEP] gives "
+        "later detections their own text (ADetailer).",
+    )
+    negative_prompt: Optional[str] = Field(
+        None, max_length = 20000, description = "Negative prompt for the pass; omitted = the image's"
+    )
+    confidence: float = Field(
+        0.5, ge = 0.0, le = 1.0, description = "SAM 3 score a detection must exceed"
+    )
+    denoise: float = Field(
+        0.5,
+        ge = 0.01,
+        le = 1.0,
+        description = "Inpaint strength of the pass (the UI request builder's floor)",
+    )
+    crop_factor: float = Field(
+        3.0, ge = 1.0, le = 10.0, description = "Crop around each detection, times its box"
+    )
+    guide_size: int = Field(
+        512, ge = 64, le = 2048, description = "The box's (or crop's) short side is enlarged to this"
+    )
+    guide_size_for: Literal["bbox", "crop_region"] = Field(
+        "bbox", description = "What guide_size measures: the detection box or the whole crop"
+    )
+    max_size: int = Field(
+        1024,
+        ge = 64,
+        le = 2048,
+        description = "Caps the enlargement: an enlarged crop's sides stay within this. A crop "
+        "already larger renders at its own size, never shrunk (FaceDetailer's force_inpaint)",
+    )
+    dilation: int = Field(
+        10, ge = -128, le = 128, description = "Grow (or, negative, shrink) each mask by this many px"
+    )
+    feather: int = Field(5, ge = 0, le = 100, description = "Paste-back blur (px) at the mask's edge")
+    drop_size: int = Field(
+        10,
+        ge = 1,
+        le = 1024,
+        description = "Detections with a box side at or below this (px) are skipped",
+    )
+    steps: Optional[int] = Field(
+        None, ge = 1, le = 200, description = "Steps for the pass; omitted = the image's"
+    )
+    guidance: Optional[float] = Field(
+        None, ge = 0.0, le = 100.0, description = "Guidance for the pass; omitted = the image's"
+    )
+
 
 class DiffusionGenerateRequest(BaseModel):
     """Request to generate one image from the loaded diffusion model."""
@@ -5265,6 +5404,11 @@ class DiffusionGenerateRequest(BaseModel):
         le = 256,
         description = "Padding (px) around the mask when `inpaint_only_masked` is set; omitted = 32.",
     )
+    detailer: Optional[DiffusionDetailerSpec] = Field(
+        None,
+        description = "Detailer (face fix) post-pass on every image of the run. Omitted = off. Refused (400) "
+        "when the loaded model has no inpaint pipeline or SAM 3 is not downloaded.",
+    )
     hires: Optional[HiresSpec] = Field(
         None,
         description = "Hires fix for text to image: upscale the render and refine it in the same request. "
@@ -5283,6 +5427,12 @@ class DiffusionGenerateRequest(BaseModel):
     )
     model: Optional[str] = Field(
         None, description = "Model name on the connection named by `provider_id`."
+    )
+    xy: Optional[XYGridSpec] = Field(
+        None,
+        description = "X/Y grid: render one image per combination of the axes' values, each saved to "
+        "the gallery with its own recipe, plus one labelled grid image (returned as `grid`). Every "
+        "cell runs at batch size 1 on the same seed unless seed is an axis. Local models only.",
     )
 
     @field_validator("loras")
@@ -5327,6 +5477,21 @@ class DiffusionGenerateRequest(BaseModel):
         if value % 16 != 0:
             raise ValueError("must be a multiple of 16")
         return value
+
+    @model_validator(mode = "after")
+    def _xy_single_image_cells(self) -> "DiffusionGenerateRequest":
+        if self.xy is None:
+            return self
+        if self.batch_size != 1 or self.prompts is not None or self.seeds is not None:
+            raise ValueError(
+                "xy runs every cell at batch size 1: drop batch_size, prompts and seeds"
+            )
+        if self.provider_id:
+            raise ValueError("xy runs on the loaded local model, not a connection")
+        for axis in (self.xy.x, self.xy.y):
+            if axis and axis.field == "lora_weight" and axis.index >= len(self.loras or []):
+                raise ValueError(f"lora_weight axis index {axis.index} has no entry in loras")
+        return self
 
     @model_validator(mode = "after")
     def _batch_seeds_json_safe(self) -> "DiffusionGenerateRequest":
@@ -5525,6 +5690,16 @@ class GalleryImage(BaseModel):
     inpaint_padding: Optional[int] = Field(
         None, description = "Padding (px) around the mask for an only-masked inpaint"
     )
+    xy_grid: Optional[dict[str, Any]] = Field(
+        None,
+        description = "Set on an X/Y grid image: its axes ({field, index, values, labels}) and the "
+        "cell image ids row by row. Its other recipe fields are the first cell's, as in AUTOMATIC1111.",
+    )
+    detailer: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "The Detailer pass this image ran: its settings, each detection (target, score, box, crop, "
+        "size, seed) and timing, or `error` when it did not run; null = no pass",
+    )
     created_at: float = Field(..., description = "Creation time (epoch seconds)")
     # Library state, not recipe: stored beside the PNG, so older files simply read as unset.
     pinned: bool = Field(False, description = "Pinned to the front of the gallery")
@@ -5567,6 +5742,11 @@ class DiffusionGenerateResponse(BaseModel):
     """The persisted gallery records for one generation call (a batch)."""
 
     images: list[GalleryImage] = Field(..., description = "Saved records, one per image in the batch")
+    grid: Optional[GalleryImage] = Field(
+        None,
+        description = "xy only: the labelled grid image, also saved to the gallery; `images` holds "
+        "the cells row by row",
+    )
 
 
 class GalleryListResponse(BaseModel):

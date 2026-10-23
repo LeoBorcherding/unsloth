@@ -11,6 +11,7 @@ import {
   MEMORY_REFUSAL_HEADER,
   MemoryEstimateRefusalError,
 } from "./lib/memory-refusal";
+import type { DetailerRecord, DetailerRequest } from "./lib/detailer";
 import type { PromptEnhancement } from "./lib/prompt-enhance";
 import type { HiresCapability, HiresRequest } from "./lib/hires-choice";
 import type { SdControlsCapability } from "./lib/sd-controls";
@@ -263,6 +264,7 @@ export interface DiffusionGenerateRequest {
   mask_blur?: number;
   inpaint_only_masked?: boolean;
   inpaint_padding?: number;
+  detailer?: DetailerRequest;
   // Upscale (hires fix): factor > 1 with an init_image enlarges the source and re-denoises at low strength.
   upscale?: number;
   allow_oversized?: boolean;
@@ -296,6 +298,18 @@ export interface DiffusionGenerateRequest {
   hires?: HiresRequest;
   // Upscale workflow: a model upscaler id from status.upscale_models; omitted = Lanczos.
   upscale_model?: string | null;
+  // Server-side X/Y grid (API callers; the page's Compare grid builds its cells client-side).
+  xy?: { x: XYAxisSpec; y?: XYAxisSpec };
+}
+
+export interface XYAxisSpec {
+  field:
+    | "seed" | "steps" | "guidance" | "sampler" | "schedule_type" | "shift" | "base_shift" | "max_shift"
+    | "strength" | "clip_skip" | "cfg_rescale" | "variation_seed" | "variation_strength" | "lora_weight"
+    | "prompt_sr";
+  values: Array<number | string>;
+  // lora_weight only: which `loras` entry.
+  index?: number;
 }
 
 // One LoRA selection sent with a generation.
@@ -401,6 +415,8 @@ export interface GalleryImage {
   mask_blur?: number | null;
   inpaint_only_masked?: boolean | null;
   inpaint_padding?: number | null;
+  // The Detailer pass this image ran (settings, detections) or why it did not; absent = none.
+  detailer?: DetailerRecord | null;
   upscale_model?: string | null;
   // Hires fix; `width` / `height` stay the output size, hires_base_* the base pass.
   hires_scale?: number | null;
@@ -411,6 +427,12 @@ export interface GalleryImage {
   hires_base_width?: number | null;
   hires_base_height?: number | null;
   created_at: number;
+  // Set on a server-made X/Y grid image: its axes and the cell ids row by row.
+  xy_grid?: {
+    x: { field: string; index: number | null; values: Array<number | string>; labels: string[] };
+    y?: { field: string; index: number | null; values: Array<number | string>; labels: string[] };
+    cells: string[];
+  } | null;
   // Library state, not recipe: stored beside the PNG, absent on records written before this existed.
   pinned?: boolean;
   archived?: boolean;
@@ -420,6 +442,8 @@ export interface GalleryImage {
 
 export interface DiffusionGenerateResponse {
   images: GalleryImage[];
+  // xy only: the labelled grid, also in the gallery.
+  grid?: GalleryImage | null;
 }
 
 export async function parseJson<T>(response: Response): Promise<T> {
