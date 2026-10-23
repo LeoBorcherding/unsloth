@@ -179,6 +179,42 @@ def upsert_execution(execution: dict) -> bool:
         conn.close()
 
 
+def list_loops(recipe_id: str) -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT record_json FROM data_recipe_loops"
+            " WHERE recipe_id = ? ORDER BY created_at DESC",
+            (recipe_id,),
+        ).fetchall()
+        return [json.loads(r["record_json"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def upsert_loop(loop: dict) -> bool:
+    """False when the recipe does not exist or the id belongs to another recipe's loop."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO data_recipe_loops (id, recipe_id, created_at, record_json)
+            SELECT ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM data_recipes WHERE id = ?2)
+            ON CONFLICT(id) DO UPDATE SET record_json = excluded.record_json
+            WHERE data_recipe_loops.recipe_id = excluded.recipe_id
+            """,
+            (loop["id"], loop["recipeId"], int(loop["createdAt"]), json.dumps(loop)),
+        )
+        stored = conn.execute(
+            "SELECT recipe_id FROM data_recipe_loops WHERE id = ?", (loop["id"],)
+        ).fetchone()
+        conn.commit()
+        return stored is not None and stored["recipe_id"] == loop["recipeId"]
+    finally:
+        conn.close()
+
+
 def import_legacy(recipes: Iterable[dict], executions: Iterable[dict]) -> dict:
     """Insert-only: never overwrites a server record or revives a deleted recipe."""
     conn = get_connection()

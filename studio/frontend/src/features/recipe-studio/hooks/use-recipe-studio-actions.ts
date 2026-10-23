@@ -77,6 +77,10 @@ type UseRecipeStudioActionsResult = {
   } | null;
   runPreview: () => Promise<boolean>;
   runFull: () => Promise<boolean>;
+  runFullForLoop: (
+    rows: number,
+    runName: string,
+  ) => Promise<RecipeExecutionRecord | null>;
   cancelExecution: (id: string) => Promise<void>;
   loadExecutionDatasetPage: (id: string, page: number) => Promise<void>;
   copyRecipe: () => Promise<void>;
@@ -157,6 +161,7 @@ export function useRecipeStudioActions({
     validateResult: executions.validateResult,
     runPreview: executions.runPreview,
     runFull: executions.runFull,
+    runFullForLoop: executions.runFullForLoop,
     cancelExecution: executions.cancelExecution,
     loadExecutionDatasetPage: executions.loadExecutionDatasetPage,
     copyRecipe: persistence.copyRecipe,

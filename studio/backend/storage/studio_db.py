@@ -854,6 +854,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_data_recipe_executions_recipe"
         " ON data_recipe_executions(recipe_id, created_at)"
     )
+    # Closed-loop runs (generate, train, score) and their per-iteration history.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_recipe_loops (
+            id TEXT NOT NULL PRIMARY KEY,
+            recipe_id TEXT NOT NULL REFERENCES data_recipes(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL,
+            record_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_data_recipe_loops_recipe"
+        " ON data_recipe_loops(recipe_id, created_at)"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS research_runs (

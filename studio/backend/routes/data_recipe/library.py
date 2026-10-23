@@ -48,6 +48,14 @@ class ExecutionRecord(BaseModel):
     createdAt: int = _TIME
 
 
+class LoopRecord(BaseModel):
+    # Config and per-iteration history are UI state; only the keys used for storage are typed.
+    model_config = ConfigDict(extra = "allow")
+    id: str = _ID
+    recipeId: str = _ID
+    createdAt: int = _TIME
+
+
 class LegacyImportRequest(BaseModel):
     recipes: list[RecipeRecord] = Field(default_factory = list, max_length = 10_000)
     executions: list[ExecutionRecord] = Field(default_factory = list, max_length = 50_000)
@@ -130,3 +138,17 @@ def put_execution(recipe_id: str, execution_id: str, execution: ExecutionRecord)
         raise HTTPException(status_code = 400, detail = "ID mismatch")
     if not db.upsert_execution(execution.model_dump()):
         raise HTTPException(status_code = 404, detail = "Recipe not found")
+
+
+@router.get("/{recipe_id}/loops")
+def get_loops(recipe_id: str):
+    return {"loops": db.list_loops(recipe_id)}
+
+
+@router.put("/{recipe_id}/loops/{loop_id}", status_code = 204)
+def put_loop(recipe_id: str, loop_id: str, loop: LoopRecord):
+    if loop.id != loop_id or loop.recipeId != recipe_id:
+        raise HTTPException(status_code = 400, detail = "ID mismatch")
+    if not db.upsert_loop(loop.model_dump()):
+        raise HTTPException(status_code = 404, detail = "Recipe not found")
+

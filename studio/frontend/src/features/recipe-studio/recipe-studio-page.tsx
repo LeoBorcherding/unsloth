@@ -33,6 +33,7 @@ import { buildRecipeEditorTourSteps } from "./tour";
 import { BlockSheet } from "./components/block-sheet";
 import { CANVAS_DELETE_KEYS } from "./constants";
 import { LayoutControls } from "./components/controls/layout-controls";
+import { LoopCard } from "./components/loop/loop-card";
 import { RunValidateFloatingControls } from "./components/controls/run-validate-floating-controls";
 import { ViewportControls } from "./components/controls/viewport-controls";
 import { ExecutionsView } from "./components/executions/executions-view";
@@ -57,6 +58,7 @@ import type {
 } from "./execution-types";
 import { isExecutionInProgress } from "./executions/execution-helpers";
 import { useRecipeEditorGraph } from "./hooks/use-recipe-editor-graph";
+import { useRecipeLoop } from "./hooks/use-recipe-loop";
 import { useRecipeRuntimeVisuals } from "./hooks/use-recipe-runtime-visuals";
 import { useRecipeStudioActions } from "./hooks/use-recipe-studio-actions";
 import { useRecipeStudioStore } from "./stores/recipe-studio";
@@ -364,6 +366,7 @@ export function RecipeStudioPage({
     loadExecutionDatasetPage,
     runPreview,
     runFull,
+    runFullForLoop,
     copyRecipe,
     importRecipe,
   } = useRecipeStudioActions({
@@ -378,6 +381,7 @@ export function RecipeStudioPage({
     getCurrentPayloadFromStore,
     onExecutionStart: handleExecutionStart,
   });
+  const loop = useRecipeLoop({ recipeId, workflowName, runFullForLoop });
   const {
     activeExecution,
     runtimeVisualState,
@@ -783,6 +787,9 @@ export function RecipeStudioPage({
               />
             </Panel>
           )}
+        <Panel position="bottom-right" className="m-3">
+          <LoopCard view={loop} disabled={runBusy && !loop.running} />
+        </Panel>
         <RunValidateFloatingControls
           runBusy={runBusy}
           runDialogKind={runDialogKind}
