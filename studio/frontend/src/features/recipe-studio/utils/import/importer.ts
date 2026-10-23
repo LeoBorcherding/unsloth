@@ -18,6 +18,7 @@ import { buildEdges } from "./edges";
 import { isRecord, parseJson, readString } from "./helpers";
 import { parseColumn, parseModelConfig, parseModelProvider } from "./parsers";
 import { parseSeedConfig } from "./parsers/seed-config-parser";
+import { buildTrainConfigFromUi, parseUiTrainNodes } from "./train-node";
 import { buildNodes, parseUi } from "./ui";
 import type { ImportResult } from "./types";
 
@@ -464,6 +465,7 @@ export function importRecipePayload(
   );
   const uiMarkdownNotes = parseUiMarkdownNoteNodes(ui?.nodes);
   const uiToolProfilesByName = parseUiToolProfileNodes(ui?.nodes);
+  const uiTrainNodes = parseUiTrainNodes(ui?.nodes);
 
   for (const note of uiMarkdownNotes) {
     const id = `n${nextId}`;
@@ -476,6 +478,17 @@ export function importRecipePayload(
       note_color: note.note_color ?? "#FDE68A",
       note_opacity: note.note_opacity ?? "35",
     };
+    if (nameToId.has(config.name)) {
+      errors.push(`Duplicate column name: ${config.name}.`);
+      continue;
+    }
+    nameToId.set(config.name, config.id);
+    configs.push(config);
+  }
+
+  for (const trainNode of uiTrainNodes) {
+    const config = buildTrainConfigFromUi(trainNode, `n${nextId}`, configs);
+    nextId += 1;
     if (nameToId.has(config.name)) {
       errors.push(`Duplicate column name: ${config.name}.`);
       continue;

@@ -45,6 +45,7 @@ import {
 import { RecipeNode } from "./components/recipe-graph-node";
 import { RecipeGraphSemanticEdge } from "./components/recipe-graph-semantic-edge";
 import { RecipeStudioHeader } from "./components/recipe-studio-header";
+import { TrainingRuntimeSync } from "./components/recipe-train-node";
 import { DataEdge } from "./components/rf-ui/data-edge";
 import { ExecutionProgressIsland } from "./components/runtime/execution-progress-island";
 import { ConfigDialog } from "./dialogs/config-dialog";
@@ -146,6 +147,7 @@ export function RecipeStudioPage({
     addExpressionNode,
     addValidatorNode,
     addMarkdownNoteNode,
+    addTrainNode,
     selectConfig,
     openConfig,
     updateConfig,
@@ -186,6 +188,7 @@ export function RecipeStudioPage({
       addExpressionNode: state.addExpressionNode,
       addValidatorNode: state.addValidatorNode,
       addMarkdownNoteNode: state.addMarkdownNoteNode,
+      addTrainNode: state.addTrainNode,
       selectConfig: state.selectConfig,
       openConfig: state.openConfig,
       updateConfig: state.updateConfig,
@@ -271,6 +274,7 @@ export function RecipeStudioPage({
     handleAddExpressionFromSheet,
     handleAddValidatorFromSheet,
     handleAddMarkdownNoteFromSheet,
+    handleAddTrainFromSheet,
   } = useRecipeEditorGraph({
     nodes,
     edges,
@@ -291,9 +295,11 @@ export function RecipeStudioPage({
     addExpressionNode,
     addValidatorNode,
     addMarkdownNoteNode,
+    addTrainNode,
   });
 
   const configList = useMemo(() => Object.values(configs), [configs]);
+  const hasTrainCard = configList.some((config) => config.kind === "train");
   const config = activeConfigId ? configs[activeConfigId] : null;
   const dialogOptions = useMemo(
     () => buildDialogOptions(configList),
@@ -765,6 +771,7 @@ export function RecipeStudioPage({
             onAddExpression={handleAddExpressionFromSheet}
             onAddValidator={handleAddValidatorFromSheet}
             onAddMarkdownNote={handleAddMarkdownNoteFromSheet}
+            onAddTrain={handleAddTrainFromSheet}
             onOpenProcessors={openProcessorsFromSheet}
             copied={copied}
             onCopy={copyRecipe}
@@ -838,6 +845,7 @@ export function RecipeStudioPage({
       }
     >
       <main className="flex min-h-0 w-full flex-1 flex-col">
+        {hasTrainCard && <TrainingRuntimeSync />}
         <GuidedTour {...tour.tourProps} />
         <div
           className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden border"

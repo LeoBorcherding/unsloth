@@ -61,6 +61,7 @@ type SheetView =
   | "validator"
   | "expression"
   | "note"
+  | "train"
   | "processor";
 
 type RecipeStudioState = {
@@ -120,6 +121,7 @@ type RecipeStudioState = {
     openDialog?: boolean,
   ) => void;
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   setAuxNodePosition: (id: string, position: XYPosition) => void;
@@ -724,6 +726,13 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         position,
         openDialog,
       );
+    }),
+  addTrainNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(state, "train", "train", position, openDialog);
     }),
   loadRecipe: (snapshot) =>
     set((state) => ({
