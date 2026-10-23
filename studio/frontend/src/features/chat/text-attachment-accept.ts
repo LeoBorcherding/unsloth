@@ -48,6 +48,8 @@ export const TEXT_ATTACHMENT_EXTENSIONS = [
   ".jsonc",
   ".json5",
   ".geojson",
+  ".kml",
+  ".gpx",
   ".har",
   ".avsc",
   ".xml",
@@ -319,14 +321,63 @@ export const TEXT_ATTACHMENT_BASENAMES = [
   "containerfile",
   "dockerfile",
   "makefile",
+  "gnumakefile",
+  "justfile",
+  "procfile",
+  "jenkinsfile",
+  "vagrantfile",
+  "gemfile",
+  "rakefile",
+  "podfile",
+  "brewfile",
+  "pipfile",
+  "caddyfile",
+  "codeowners",
+  "readme",
+  "license",
+  "licence",
+  "copying",
+  "notice",
+  "authors",
+  "contributors",
+  "changelog",
+  // Dotfiles: no extension either. .env stays out, since it usually holds secrets.
+  ".gitignore",
+  ".gitattributes",
+  ".gitmodules",
+  ".dockerignore",
+  ".npmignore",
+  ".prettierignore",
+  ".eslintignore",
+  ".editorconfig",
+  ".npmrc",
+  ".nvmrc",
+  ".yarnrc",
+  ".prettierrc",
+  ".eslintrc",
+  ".babelrc",
+  ".pylintrc",
+  ".flake8",
+  ".clang-format",
+  ".python-version",
+  ".tool-versions",
+  ".bashrc",
+  ".bash_profile",
+  ".zshrc",
+  ".profile",
+  ".vimrc",
+  ".htaccess",
 ] as const;
 const PATH_SEPARATOR_RE = /[\\/]/;
+// "LICENSE(1)", "README copy 2"; mirrored in native_path_policy.rs.
+const DUPLICATE_SUFFIX_RE = /(?:\s*\(\d+\)|\s+(?:-\s+)?copy(?:\s+\d+)?)+$/i;
 
 /** Whether a path or filename belongs to the inline UTF-8 text adapter. */
 export function isTextAttachmentName(path: string): boolean {
   const segments = path.split(PATH_SEPARATOR_RE);
   const name = (segments[segments.length - 1] || path).toLowerCase();
-  if ((TEXT_ATTACHMENT_BASENAMES as readonly string[]).includes(name)) {
+  const base = name.replace(DUPLICATE_SUFFIX_RE, "") || name;
+  if ((TEXT_ATTACHMENT_BASENAMES as readonly string[]).includes(base)) {
     return true;
   }
   const dot = name.lastIndexOf(".");
@@ -1350,4 +1401,6 @@ export const TEXT_ATTACHMENT_ACCEPT = [
   "text/vtt,application/x-subrip,text/x-log,text/calendar,text/vcard,message/rfc822",
   "application/json,application/xml,application/yaml,application/toml,image/svg+xml",
   TEXT_ATTACHMENT_EXTENSIONS.join(","),
+  // assistant-ui matches "README" as ".readme" and ".gitignore" as ".gitignore".
+  TEXT_ATTACHMENT_BASENAMES.map((name) => `.${name.replace(/^\./, "")}`).join(","),
 ].join(",");

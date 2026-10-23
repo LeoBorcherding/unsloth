@@ -3,6 +3,7 @@
 
 import {
   SANDBOX_FILE_TOOLS,
+  SANDBOX_RUN_TOOLS,
   extractCreatedFiles,
 } from "@/components/assistant-ui/sandbox-files";
 import {
@@ -29,6 +30,7 @@ import {
   providerCompactionPart,
   providerCompactionReplayToolCallCount,
 } from "./provider-compaction";
+import { toolModelNoteTarget, withToolModelSuffix } from "../tool-model-suffix";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -111,7 +113,7 @@ function recoveredToolResult(
       // Keep malformed envelopes as text.
     }
   }
-  if (sandbox) {
+  if (sandbox && (SANDBOX_RUN_TOOLS.has(toolName as string) || files.length > 0)) {
     return { text, images: [], sessionId, files };
   }
   if (toolName === SEARCH_IMAGE_TOOL) {
@@ -155,12 +157,19 @@ export function createGenerationToolRecovery(
    *  unconditionally because it owns every card in its stream; a recovery shares the store with
    *  whatever else is on screen, so reaching for a card it never raised is not its business. */
   const armed = new Set<string>();
+  /** Approvals the stream reported granted. Never armed again: a seeded check can predate the frame. */
+  const approved = new Set<string>();
   const armApproval = (
     entry: CarriedPart,
     approvalId: unknown,
     sessionId: string,
   ) => {
-    if (!toolConfirmations || typeof approvalId !== "string" || !approvalId)
+    if (
+      !toolConfirmations ||
+      typeof approvalId !== "string" ||
+      !approvalId ||
+      approved.has(approvalId)
+    )
       return;
     const partId = record(entry.part)?.toolCallId;
     if (typeof partId === "string" && partId) {
@@ -368,8 +377,10 @@ export function createGenerationToolRecovery(
     if (
       event?.type !== "tool_start" &&
       event?.type !== "tool_end" &&
+      event?.type !== "tool_model_note" &&
       event?.type !== "document_citations" &&
-      event?.type !== "compaction_block"
+      event?.type !== "compaction_block" &&
+      event?.type !== "tool_approved"
     ) {
       return;
     }
@@ -388,6 +399,19 @@ export function createGenerationToolRecovery(
     }
     const backendId =
       typeof event.tool_call_id === "string" ? event.tool_call_id : "";
+    // Answered, possibly in another tab: disarm now, not at tool_end. Remembered first so an in-flight
+    // seeded check cannot re-arm it; a frame at or below the snapshot names no card armed here yet.
+    if (event.type === "tool_approved") {
+      if (typeof event.approval_id === "string" && event.approval_id) {
+        approved.add(event.approval_id);
+      }
+      if (seq <= snapshotSeq) return;
+      const entry =
+        (backendId ? pending.get(backendId) : undefined) ??
+        findSavedEntry(backendId, event.approval_id);
+      if (entry) disarmApproval(entry);
+      return;
+    }
     if (event.tool_name === "deep_research") {
       if (event.type === "tool_start")
         researchHandoff.hiddenCallIds.delete(backendId);
@@ -409,6 +433,23 @@ export function createGenerationToolRecovery(
           generationToolCallId: `${runId}:${seq}`,
         };
         pending.set(backendId || `#idless:legacy:${seq}`, entry);
+      }
+      return;
+    }
+    if (event.type === "tool_model_note") {
+      const suffix = typeof event.suffix === "string" ? event.suffix : "";
+      const at = toolModelNoteTarget(
+        carried.map((carriedEntry) => record(carriedEntry.part) ?? {}) as unknown as Parameters<
+          typeof toolModelNoteTarget
+        >[0],
+        backendId,
+      );
+      const part = at === -1 ? undefined : record(carried[at].part);
+      if (part && suffix) {
+        carried[at].part = {
+          ...part,
+          provenance: withToolModelSuffix(record(part.provenance), suffix),
+        } as CarriedPart["part"];
       }
       return;
     }

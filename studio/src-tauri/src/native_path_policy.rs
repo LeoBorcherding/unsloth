@@ -48,6 +48,24 @@ pub fn classify_native_model_path(path: &Path) -> Result<ClassifiedPath, String>
 
 /// Document types the RAG ingest accepts; keep in sync with `config.SUPPORTED_UPLOAD_EXTS`.
 pub const ATTACHMENT_EXTS: &[&str] = &["pdf", "txt", "md", "markdown", "docx", "html", "htm"];
+/// Office, Outlook and saved-page types RAG sources accept from a drop zone; chat drops take only the
+/// ones with a composer adapter (`DOC_EXTS` in `drop-paths.ts`).
+pub const OFFICE_ATTACHMENT_EXTS: &[&str] = &[
+    "doc", "xls", "xlt", "xlsx", "xlsm", "xltx", "xltm", "ppt", "pps", "pptx", "pptm", "ppsx",
+    "ott", "ots", "otp", "msg", "mht", "mhtml", "xhtml", "xht",
+];
+/// Read on the server by the composer; keep in sync with `SERVER_DOCUMENT_ATTACHMENT_EXTENSIONS`.
+pub const SERVER_DOCUMENT_ATTACHMENT_EXTS: &[&str] = &[
+    "doc", "docm", "dotx", "dotm", "xls", "xlt", "xltx", "xltm", "ppt", "pps", "pptm", "potx",
+    "potm", "ppsx", "ppsm", "odp", "ott", "ots", "otp", "msg", "mht", "mhtml", "epub", "xhtml",
+    "xht",
+];
+
+pub fn is_server_document_attachment(path: &Path) -> bool {
+    SERVER_DOCUMENT_ATTACHMENT_EXTS
+        .iter()
+        .any(|ext| has_extension(path, ext))
+}
 /// OpenDocument files the chat composer parses directly rather than indexing as RAG sources.
 pub const OPEN_DOCUMENT_ATTACHMENT_EXTS: &[&str] = &["ods", "odt"];
 pub const RTF_ATTACHMENT_EXTS: &[&str] = &["rtf"];
@@ -166,6 +184,8 @@ pub const TEXT_ATTACHMENT_EXTS: &[&str] = &[
     "jsonc",
     "json5",
     "geojson",
+    "kml",
+    "gpx",
     "har",
     "avsc",
     "xml",
@@ -433,14 +453,91 @@ pub const TEXT_ATTACHMENT_EXTS: &[&str] = &[
     "patch",
 ];
 
-/// Conventional extensionless names represented by dotted frontend accept tokens.
-pub const TEXT_ATTACHMENT_NAMES: &[&str] = &["containerfile", "dockerfile", "makefile"];
+/// Conventional extensionless names and dotfiles represented by dotted frontend accept tokens.
+pub const TEXT_ATTACHMENT_NAMES: &[&str] = &[
+    "containerfile",
+    "dockerfile",
+    "makefile",
+    "gnumakefile",
+    "justfile",
+    "procfile",
+    "jenkinsfile",
+    "vagrantfile",
+    "gemfile",
+    "rakefile",
+    "podfile",
+    "brewfile",
+    "pipfile",
+    "caddyfile",
+    "codeowners",
+    "readme",
+    "license",
+    "licence",
+    "copying",
+    "notice",
+    "authors",
+    "contributors",
+    "changelog",
+    ".gitignore",
+    ".gitattributes",
+    ".gitmodules",
+    ".dockerignore",
+    ".npmignore",
+    ".prettierignore",
+    ".eslintignore",
+    ".editorconfig",
+    ".npmrc",
+    ".nvmrc",
+    ".yarnrc",
+    ".prettierrc",
+    ".eslintrc",
+    ".babelrc",
+    ".pylintrc",
+    ".flake8",
+    ".clang-format",
+    ".python-version",
+    ".tool-versions",
+    ".bashrc",
+    ".bash_profile",
+    ".zshrc",
+    ".profile",
+    ".vimrc",
+    ".htaccess",
+];
 
 pub fn is_text_attachment_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
-        .is_some_and(|name| TEXT_ATTACHMENT_NAMES.contains(&name.as_str()))
+        .is_some_and(|name| TEXT_ATTACHMENT_NAMES.contains(&without_duplicate_suffix(&name)))
+}
+
+fn without_duplicate_suffix(name: &str) -> &str {
+    let mut rest = name;
+    while let Some(shorter) = strip_counter_suffix(rest).or_else(|| strip_copy_suffix(rest)) {
+        if shorter.is_empty() {
+            break;
+        }
+        rest = shorter;
+    }
+    rest
+}
+
+fn strip_counter_suffix(name: &str) -> Option<&str> {
+    let inner = name.strip_suffix(')')?;
+    let open = inner.rfind('(')?;
+    let digits = &inner[open + 1..];
+    (!digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| inner[..open].trim_end())
+}
+
+fn strip_copy_suffix(name: &str) -> Option<&str> {
+    let unnumbered = match name.rsplit_once(' ') {
+        Some((head, tail)) if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => name,
+    };
+    let base = unnumbered.strip_suffix(" copy")?;
+    Some(base.strip_suffix(" -").unwrap_or(base).trim_end())
 }
 
 pub fn is_binary_property_list(path: &Path, bytes: &[u8]) -> bool {
@@ -559,11 +656,23 @@ fn has_soundtracker_pattern_data(bytes: &[u8], pattern_end: usize) -> bool {
     true
 }
 
+/// The MIME a binary .dot/.pot is sent under: the composer reads it on the server, not as text.
+pub fn office_template_mime_type(path: &Path) -> &'static str {
+    if has_extension(path, "pot") {
+        "application/vnd.ms-powerpoint"
+    } else {
+        "application/msword"
+    }
+}
+
+pub fn has_office_template_extension(path: &Path) -> bool {
+    has_extension(path, "dot") || has_extension(path, "pot")
+}
+
 /// Legacy Word `.dot` and PowerPoint `.pot` templates are OLE compound files,
 /// unlike Graphviz `.dot` and gettext `.pot`.
 pub fn is_binary_office_template(path: &Path, bytes: &[u8]) -> bool {
-    (has_extension(path, "dot") || has_extension(path, "pot"))
-        && bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+    has_office_template_extension(path) && bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
 }
 
 /// gfortran writes a compiled `.mod` module as gzip; text `go.mod` never is.
@@ -667,19 +776,21 @@ pub const IMAGE_ATTACHMENT_EXTS: &[&str] = &[
 /// Chat audio attachments; keep in sync with `audio-attachment-adapter.ts` `accept`.
 pub const AUDIO_ATTACHMENT_EXTS: &[&str] = &[
     "wav", "mp3", "m4a", "ogg", "oga", "opus", "flac", "aac", "aiff", "aif", "aifc", "caf", "wma",
-    "amr", "mp2",
+    "amr", "mp2", "m4b", "weba", "mka",
 ];
 
 /// Chat video attachments; keep in sync with `drop-paths.ts`
 /// `CHAT_VIDEO_DROP_ACCEPT`. llama-server decodes with ffmpeg, so this is what
 /// ffmpeg reads, not what the webview can play.
 pub const VIDEO_ATTACHMENT_EXTS: &[&str] = &[
-    "mp4", "m4v", "mov", "webm", "mkv", "avi", "mpg", "mpeg", "wmv", "flv", "3gp", "ogv", "m2ts",
+    "mp4", "m4v", "mov", "webm", "mkv", "avi", "mpg", "mpeg", "wmv", "flv", "3gp", "3g2", "ogv",
+    "m2ts",
 ];
 
 fn accepted_attachment_exts() -> impl Iterator<Item = &'static &'static str> {
     ATTACHMENT_EXTS
         .iter()
+        .chain(OFFICE_ATTACHMENT_EXTS.iter())
         .chain(OPEN_DOCUMENT_ATTACHMENT_EXTS.iter())
         .chain(RTF_ATTACHMENT_EXTS.iter())
         .chain(TOOL_ONLY_ATTACHMENT_EXTS.iter())
@@ -938,7 +1049,7 @@ fn ensure_artifact_root(kind: NativeArtifactKind, canonical_path: &Path) -> Resu
     let Some(home) = dirs::home_dir() else {
         return Err("Could not determine home directory.".to_string());
     };
-    let studio = home.join(".unsloth").join("studio");
+    let studio = crate::studio_home::studio_root_for_home(&home);
     let allowed_root = match kind {
         NativeArtifactKind::TrainingOutput => studio.join("outputs"),
         NativeArtifactKind::Export => studio.join("exports"),
@@ -1041,6 +1152,13 @@ pub(crate) fn reject_sensitive_document_folder(path: &Path) -> Result<(), String
         }
         for relative in [".unsloth"] {
             sensitive_roots.push(home.join(relative));
+        }
+        // Canonical as well: callers pass canonical paths, which carry \\?\ on Windows.
+        if let Some(chosen) = crate::studio_home::chosen_root_for_home(&home) {
+            if let Ok(canonical) = chosen.canonicalize() {
+                sensitive_roots.push(canonical);
+            }
+            sensitive_roots.push(chosen);
         }
     }
     if let Some(config) = dirs::config_dir() {
@@ -1265,6 +1383,23 @@ mod tests {
             "unsloth-native-policy-{name}-{}-{nanos}-{seq}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn duplicate_download_names_stay_text_attachments() {
+        for name in [
+            "LICENSE(1)",
+            "LICENSE (2)",
+            "README copy",
+            "README copy 2",
+            "Makefile - Copy (3)",
+            ".gitignore (1)",
+        ] {
+            assert!(is_text_attachment_name(Path::new(name)), "{name}");
+        }
+        for name in ["notes(1)", ".env (1)", "copy", "(1)", "LICENSE(x)", "notes.txt(1)"] {
+            assert!(!is_text_attachment_name(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

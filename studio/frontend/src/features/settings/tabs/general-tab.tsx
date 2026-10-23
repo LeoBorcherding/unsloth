@@ -28,16 +28,13 @@ import {
   emitTrainingRunsChanged,
   TRAINING_UI_PREFERENCE_KEYS,
 } from "@/features/training";
+import { FLOATING_PANEL_POSITION_KEYS } from "@/hooks/floating-panel-position";
 import {
-  setShowAudioCppUpdateBanner,
-  setShowLlamaUpdateBanner,
-  setShowWhisperUpdateBanner,
-  useShowAudioCppUpdateBanner,
-  useShowLlamaUpdateBanner,
-  useShowWhisperUpdateBanner,
-} from "@/hooks/use-llama-update-pref";
+  NOTIFICATION_PREF_KEYS,
+  type NotificationChannel,
+} from "@/hooks/use-notification-frequency";
 import { useHfTokenValidation } from "@/hooks";
-import { LOCALE_STORAGE_KEY, useT } from "@/i18n";
+import { LOCALE_STORAGE_KEY, type TranslationKey, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
 import {
   SPELLCHECK_STORAGE_KEY,
@@ -66,6 +63,7 @@ import {
   updateUploadLimitSettings,
 } from "../api/upload-limit";
 import { loadCloseToTray, updateCloseToTray } from "../api/close-to-tray";
+import { loadTrayIconVisible, updateTrayIconVisible } from "../api/tray-icon";
 import { loadLaunchAtLogin, updateLaunchAtLogin } from "../api/launch-at-login";
 import { useIsAccountOwner } from "@/features/auth";
 import {
@@ -73,17 +71,24 @@ import {
   LIBRARY_SETTINGS_STORAGE_KEY,
   LIBRARY_VIEW_STORAGE_KEY,
 } from "@/features/library";
+import { DesktopInstallTypeControl } from "../components/full-install-dialog";
 import { ChangePasswordDialog } from "../components/change-password-dialog";
 import { DesktopRepairControl } from "../components/desktop-repair-control";
+import { DeveloperModeSection } from "../components/developer-mode-section";
 import {
   DesktopUpdateControl,
   DesktopUpdateNote,
 } from "../components/desktop-update-control";
 import { DocumentsRagSection } from "../components/documents-rag-section";
 import { LanguageSelect } from "../components/language-select";
-import { TRANSPORT_MODE_STORAGE_KEY } from "@/features/hub";
+import {
+  DOWNLOAD_DIR_STORAGE_KEY,
+  TRANSPORT_MODE_STORAGE_KEY,
+} from "@/features/hub";
 import { DownloadTransportRow } from "../components/download-transport-row";
+import { EngineVersionsSection } from "../components/engine-versions-section";
 import { HubSettingsSection } from "../components/hub-settings-section";
+import { NotificationFrequencySelect } from "../components/notification-frequency-select";
 import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 import { StudioVersionSection } from "../components/studio-version-section";
@@ -92,6 +97,25 @@ import { KEYBOARD_SHORTCUTS_STORAGE_KEY } from "../stores/keyboard-shortcuts-sto
 import { INTERFACE_SCALE_STORAGE_KEY } from "../stores/interface-scale-store";
 import { SETTINGS_PANEL_PREFS_STORAGE_KEY } from "../stores/settings-panel-prefs-store";
 import { CHAT_PROJECT_ATTACHMENT_TARGET_KEY } from "@/features/chat/utils/project-attachment-target";
+
+// whisper.cpp rides along with llama.cpp's card, so it has no line of its own.
+const UPDATE_REMINDER_CHANNELS: {
+  channel: NotificationChannel;
+  name: string;
+  hintKey?: TranslationKey;
+}[] = [
+  { channel: "unsloth", name: "Unsloth" },
+  {
+    channel: "llama",
+    name: "llama.cpp",
+    hintKey: "settings.general.notifications.llamaHint",
+  },
+  {
+    channel: "audio",
+    name: "audio.cpp",
+    hintKey: "settings.general.notifications.audioHint",
+  },
+];
 
 // Keys cleared by "Reset all local preferences". NEVER include auth/session keys here -- that
 // would log the user out (unsloth_auth_token, unsloth_auth_refresh_token, and
@@ -122,6 +146,7 @@ const PREFS_KEYS: string[] = [
   // Outranks the install-wide setting, so a reset that left it behind would keep ignoring
   // transport changes made elsewhere.
   TRANSPORT_MODE_STORAGE_KEY,
+  DOWNLOAD_DIR_STORAGE_KEY,
   // Chat runtime prefs
   CHAT_PROJECT_ATTACHMENT_TARGET_KEY,
   "unsloth_chat_auto_title",
@@ -139,6 +164,7 @@ const PREFS_KEYS: string[] = [
   "unsloth_chat_preferences",
   "unsloth_model_configs",
   "unsloth_model_configs_migrated",
+  "unsloth_model_config_stamps",
   "unsloth_load_settings",
   "unsloth_model_advanced_settings",
   "unsloth_chat_load_on_selection",
@@ -166,18 +192,18 @@ const PREFS_KEYS: string[] = [
   ...TRAINING_UI_PREFERENCE_KEYS,
   // Profile personalization
   "unsloth_user_profile",
+  "unsloth_profile_activity_chart",
   // Guided tour flags
   "tour:studio:v1",
   // Update notifications
-  "unsloth_show_llama_update_banner",
-  "unsloth_show_whisper_update_banner",
-  "unsloth_show_audio_cpp_update_banner",
+  ...NOTIFICATION_PREF_KEYS,
   "unsloth_llama_update_offer_suppression",
   "unsloth_monitor_overlay",
   LOADED_MODELS_PREFERENCE_KEYS.show,
   LOADED_MODELS_PREFERENCE_KEYS.collapsed,
   LOADED_MODELS_PREFERENCE_KEYS.position,
   LOADED_MODELS_PREFERENCE_KEYS.dismissed,
+  ...Object.values(FLOATING_PANEL_POSITION_KEYS),
   // Voice settings
   "unsloth_voice_settings",
   // Retired keys. The onboarding wizard is gone, but installs that ran it still
@@ -210,9 +236,6 @@ export function GeneralTab() {
     (s) => s.persistenceError,
   );
   const hfTokenIsPersisting = useHfTokenStore((s) => s.isPersisting);
-  const showLlamaUpdates = useShowLlamaUpdateBanner();
-  const showWhisperUpdates = useShowWhisperUpdateBanner();
-  const showAudioCppUpdates = useShowAudioCppUpdateBanner();
   const showLoadedModels = useShowLoadedModels();
   const spellCheck = useSpellCheck();
 
@@ -254,6 +277,13 @@ export function GeneralTab() {
     save: updateCloseToTray,
     loadError: t("settings.general.startup.loadError"),
     saveError: t("settings.general.startup.closeToTraySaveError"),
+  });
+  const trayIconSetting = useDesktopBooleanSetting({
+    enabled: isTauri,
+    load: loadTrayIconVisible,
+    save: updateTrayIconVisible,
+    loadError: t("settings.general.startup.loadError"),
+    saveError: t("settings.general.startup.menuBarIconSaveError"),
   });
 
   const draftRef = useRef(draftToken);
@@ -495,7 +525,7 @@ export function GeneralTab() {
         </p>
       </header>
 
-      {/* Desktop-only, and self-gating: outside the desktop app both render
+      {/* Desktop-only, and self-gating: outside the desktop app these render
           nothing and the section keeps just the version rows. */}
       <StudioVersionSection>
         {isTauri ? (
@@ -504,6 +534,7 @@ export function GeneralTab() {
             <DesktopUpdateNote />
           </div>
         ) : null}
+        <DesktopInstallTypeControl />
       </StudioVersionSection>
 
       <SettingsSection title={t("settings.general.account")}>
@@ -562,7 +593,7 @@ export function GeneralTab() {
               <button
                 type="button"
                 onClick={() => setShowToken((s) => !s)}
-                className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+                className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground"
                 aria-label={
                   showToken
                     ? t("settings.general.hideToken")
@@ -660,8 +691,35 @@ export function GeneralTab() {
               />
             </SettingsRow>
           ) : null}
+
+          {trayIconSetting.supported ? (
+            <SettingsRow
+              label={t("settings.general.startup.menuBarIcon")}
+              description={t("settings.general.startup.menuBarIconDescription")}
+            >
+              <div className="flex flex-col items-end gap-1">
+                <Switch
+                  checked={trayIconSetting.value ?? false}
+                  disabled={
+                    trayIconSetting.value === null || trayIconSetting.saving
+                  }
+                  onCheckedChange={(enabled) => void trayIconSetting.update(enabled)}
+                />
+                {trayIconSetting.error ? (
+                  <span className="max-w-[calc(260px*var(--ui-space-scale,1))] text-right text-xs text-destructive">
+                    {trayIconSetting.error}
+                  </span>
+                ) : null}
+              </div>
+            </SettingsRow>
+          ) : null}
         </SettingsSection>
       ) : null}
+
+      {/* Owner-only like the installation-wide block below: its routes are. */}
+      {isOwner ? <DocumentsRagSection /> : null}
+
+      <EngineVersionsSection />
 
       <SettingsSection title={t("settings.general.notifications.sectionTitle")}>
         <SettingsRow
@@ -676,38 +734,34 @@ export function GeneralTab() {
           />
         </SettingsRow>
         <SettingsRow
-          label={t("settings.general.notifications.showLlamaUpdates")}
+          label={t("settings.general.notifications.updateReminders")}
           description={t(
-            "settings.general.notifications.showLlamaUpdatesDescription",
+            "settings.general.notifications.updateRemindersDescription",
           )}
-        >
-          <Switch
-            checked={showLlamaUpdates}
-            onCheckedChange={setShowLlamaUpdateBanner}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t("settings.general.notifications.showWhisperUpdates")}
-          description={t(
-            "settings.general.notifications.showWhisperUpdatesDescription",
-          )}
-        >
-          <Switch
-            checked={showWhisperUpdates}
-            onCheckedChange={setShowWhisperUpdateBanner}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t("settings.general.notifications.showAudioCppUpdates")}
-          description={t(
-            "settings.general.notifications.showAudioCppUpdatesDescription",
-          )}
-        >
-          <Switch
-            checked={showAudioCppUpdates}
-            onCheckedChange={setShowAudioCppUpdateBanner}
-          />
-        </SettingsRow>
+          className="pb-1"
+        />
+        <div className="flex flex-col pb-3">
+          {UPDATE_REMINDER_CHANNELS.map(({ channel, name, hintKey }) => (
+            <div
+              key={channel}
+              data-settings-label={name}
+              className="flex items-center justify-between gap-4 py-1.5"
+            >
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="text-sm text-foreground">{name}</span>
+                {hintKey ? (
+                  <span className="truncate text-xs text-muted-foreground">
+                    {t(hintKey)}
+                  </span>
+                ) : null}
+              </div>
+              <NotificationFrequencySelect
+                channel={channel}
+                label={`${t("settings.general.notifications.updateReminders")}: ${name}`}
+              />
+            </div>
+          ))}
+        </div>
       </SettingsSection>
 
       {/* Installation-wide settings: owner-only routes, so a managed account gets no dead controls. */}
@@ -739,17 +793,15 @@ export function GeneralTab() {
           description={t("settings.general.previewSharing.revokeDescription")}
         >
           <Button
-            variant="outline"
+            variant="destructive"
             size="sm"
             onClick={() => setRevokePreviewOpen(true)}
-            className="text-destructive hover:text-destructive hover:border-destructive/60"
+            className="text-destructive hover:text-destructive"
           >
             {t("settings.general.previewSharing.revokeAction")}
           </Button>
         </SettingsRow>
       </SettingsSection>
-
-      <DocumentsRagSection />
 
       <HubSettingsSection />
 
@@ -831,6 +883,8 @@ export function GeneralTab() {
           />
         </SettingsRow>
       </SettingsSection>
+
+      <DeveloperModeSection />
         </>
       ) : null}
 
@@ -846,7 +900,7 @@ export function GeneralTab() {
             variant="outline"
             size="sm"
             onClick={() => setConfirmOpen(true)}
-            className="text-destructive hover:text-destructive hover:border-destructive/60"
+            className="text-destructive hover:text-destructive"
           >
             {t("settings.general.resetPreferences.action")}
           </Button>
@@ -873,7 +927,7 @@ export function GeneralTab() {
             </Button>
             <Button
               onClick={resetAllPrefs}
-              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+              variant="destructive"
             >
               {t("settings.general.resetPreferences.confirmAction")}
             </Button>
@@ -899,9 +953,9 @@ export function GeneralTab() {
               {t("common.cancel")}
             </Button>
             <Button
+              variant="destructive"
               onClick={() => void revokePreviewLinks()}
               disabled={isRevokingPreview}
-              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
             >
               {isRevokingPreview
                 ? t("settings.general.previewSharing.revoking")

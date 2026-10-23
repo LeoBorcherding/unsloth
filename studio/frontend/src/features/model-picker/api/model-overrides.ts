@@ -20,6 +20,7 @@ import {
   type PerModelConfig,
   deletePerModelConfigsForOverrideKeys,
   normalizePerModelConfig,
+  perModelConfigSnapshot,
 } from "../model-config/per-model-config";
 
 const OVERRIDES_URL = "/api/settings/openai-auto-switch/overrides";
@@ -29,6 +30,9 @@ export interface ApiModelOverride {
   engine_parallelism?: "tensor" | "pipeline" | "data";
   engine_precision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
   engine?: "auto" | "vllm" | "sglang";
+  engine_kv_cache_dtype?: "auto" | "fp8";
+  engine_seed?: number | null;
+  engine_gpu_memory_utilization?: number | null;
   // biome-ignore lint/style/useNamingConvention: API schema
   llama_extra_args?: string[];
   // biome-ignore lint/style/useNamingConvention: API schema
@@ -42,6 +46,13 @@ export interface ApiModelOverride {
   mlx_kv_bits?: number;
   // biome-ignore lint/style/useNamingConvention: API schema
   mlx_int8_prefill?: boolean;
+  // biome-ignore lint/style/useNamingConvention: API schema
+  mlx_ple_offload?: "off" | number | null;
+  // biome-ignore lint/style/useNamingConvention: API schema
+  mlx_expert_offload?: "off" | number | null;
+  // Stored only when false: absent is the 4-bit default.
+  // biome-ignore lint/style/useNamingConvention: API schema
+  load_in_4bit?: boolean;
   // biome-ignore lint/style/useNamingConvention: API schema
   speculative_type?: string;
   // biome-ignore lint/style/useNamingConvention: API schema
@@ -233,6 +244,19 @@ export async function fetchLoadModelOverride(
   if (ggufVariant) {
     query.set("gguf_variant", ggufVariant);
   }
+  // After queued writes: a read racing Forget re-saved the old row.
+  await Promise.all(
+    [loadId, aliasId].map((id) =>
+      writesByKey
+        .get(
+          modelOverrideKey(
+            normalizeModelIdentity(id),
+            normalizeGgufVariantIdentity(ggufVariant),
+          ),
+        )
+        ?.catch(() => {}),
+    ),
+  );
   const res = await authFetch(`${OVERRIDES_URL}?${query.toString()}`);
   if (!res.ok) {
     throw new Error(
@@ -337,6 +361,13 @@ export function fromApiOverride(
     engineParallelism: override.engine_parallelism ?? local.engineParallelism ?? "tensor",
     enginePrecision:
       override.engine_precision ?? local.enginePrecision ?? "auto",
+    engineKvCacheDtype:
+      override.engine_kv_cache_dtype ?? local.engineKvCacheDtype ?? "auto",
+    engineSeed: override.engine_seed ?? local.engineSeed ?? null,
+    engineGpuMemoryUtilization:
+      override.engine_gpu_memory_utilization ??
+      local.engineGpuMemoryUtilization ??
+      null,
     customContextLength: serverStatesPin
       ? (override.custom_context_length ?? null)
       : local.customContextLength,
@@ -365,6 +396,9 @@ export function fromApiOverride(
     tensorParallel: override.tensor_parallel ?? local.tensorParallel,
     disableVision: override.disable_vision ?? local.disableVision,
     mlxInt8Prefill: override.mlx_int8_prefill ?? local.mlxInt8Prefill,
+    mlxPleOffload: override.mlx_ple_offload ?? local.mlxPleOffload,
+    mlxExpertOffload: override.mlx_expert_offload ?? local.mlxExpertOffload,
+    loadIn4bit: override.load_in_4bit ?? local.loadIn4bit,
     chatTemplateOverride:
       override.chat_template_override ?? local.chatTemplateOverride,
     llamaExtraArgs: extraArgs,
@@ -400,6 +434,12 @@ export function toApiOverride(config: PerModelConfig | null): ApiModelOverride {
     engine: config.engine ?? "auto",
     engine_precision: config.enginePrecision ?? "auto",
     engine_parallelism: config.engineParallelism ?? "tensor",
+    engine_kv_cache_dtype: config.engineKvCacheDtype ?? "auto",
+    engine_seed: config.engineSeed ?? null,
+    engine_gpu_memory_utilization: config.engineGpuMemoryUtilization ?? null,
+    // Sent even at Auto: the server keeps a stored knob the payload omits.
+    mlx_ple_offload: config.mlxPleOffload ?? null,
+    mlx_expert_offload: config.mlxExpertOffload ?? null,
   };
   if (config.maxSeqLength && config.maxSeqLength > 0) {
     payload.max_seq_length = config.maxSeqLength;
@@ -463,6 +503,9 @@ export function toApiOverride(config: PerModelConfig | null): ApiModelOverride {
   if (config.mlxInt8Prefill) {
     payload.mlx_int8_prefill = true;
   }
+  if (config.loadIn4bit === false) {
+    payload.load_in_4bit = false;
+  }
   if (config.chatTemplateOverride?.trim()) {
     payload.chat_template_override = config.chatTemplateOverride;
   }
@@ -503,6 +546,9 @@ export function toApiOverride(config: PerModelConfig | null): ApiModelOverride {
 // One in-flight write per model, so writes commit in issue order: otherwise the older
 // response can land last and resurrect the entry the newer one replaced. Models overlap.
 const writesByKey = new Map<string, Promise<ModelOverrideWriteResult>>();
+// A forget clears every alias of a cached repo on the server, so per-key order is not enough: it
+// waits for every write in flight, and every write after it waits for the forget.
+let forgetBarrier: Promise<unknown> = Promise.resolve();
 
 export interface ModelOverrideWriteResult {
   overrides: ApiModelOverrides;
@@ -536,12 +582,18 @@ export async function putModelOverride(
     normalizeModelIdentity(modelId),
     normalizeGgufVariantIdentity(ggufVariant),
   );
-  // Chain on the settled tail: a failed write must not cancel the next one.
-  const previous = writesByKey.get(key) ?? Promise.resolve();
-  const write = previous
-    .catch(() => {})
-    .then(() => sendModelOverride(modelId, ggufVariant, config, options));
+  const isForget = config === null && !options?.keepLaunchFlags;
+  // Chain on the settled tails: a failed write must not cancel the next one.
+  const previous = isForget
+    ? Promise.allSettled([forgetBarrier, ...writesByKey.values()])
+    : Promise.allSettled([forgetBarrier, writesByKey.get(key)]);
+  const write = previous.then(() =>
+    sendModelOverride(modelId, ggufVariant, config, options),
+  );
   writesByKey.set(key, write);
+  if (isForget) {
+    forgetBarrier = write.catch(() => {});
+  }
   try {
     return await write;
   } finally {
@@ -627,6 +679,10 @@ async function sendModelOverride(
   };
 }
 
+// Last write per folded key: a forget's cleanup spares any alias saved after it was sent.
+let syncSeq = 0;
+const lastWriteSeq = new Map<string, number>();
+
 /**
  * Mirror a per-model config save to the backend without blocking the UI. Best-effort: the
  * localStorage write already happened, so a failed sync must not fail the save. Logged, not
@@ -640,9 +696,17 @@ export function syncModelOverride(
   config: PerModelConfig | null,
   options?: PutModelOverrideOptions,
 ): void {
+  const seq = ++syncSeq;
+  lastWriteSeq.set(foldOverrideKey(modelOverrideKey(modelId, ggufVariant)), seq);
+  // localStorage is shared, so this also catches a save from another tab meanwhile.
+  const sent = config === null ? perModelConfigSnapshot() : undefined;
   void putModelOverride(modelId, ggufVariant, config, options)
     .then(({ removedKeys }) => {
-      if (!deletePerModelConfigsForOverrideKeys(removedKeys)) {
+      // An undo, or a save under another alias, already rewrote what this forget reports.
+      const stale = removedKeys.filter(
+        (key) => (lastWriteSeq.get(foldOverrideKey(key)) ?? 0) <= seq,
+      );
+      if (!deletePerModelConfigsForOverrideKeys(stale, sent)) {
         console.warn(
           "Forgot model settings on the server, but this browser kept its own copy.",
         );

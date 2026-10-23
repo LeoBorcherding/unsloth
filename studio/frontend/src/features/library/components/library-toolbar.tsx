@@ -11,7 +11,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   AiEditingIcon,
-  AudioWave01Icon,
   FileEmpty02Icon,
   FilterMailIcon,
   FlimSlateIcon,
@@ -29,7 +28,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { type TranslationKey, useT } from "@/i18n";
 import { ChevronDownStandardIcon } from "@/lib/chevron-icons";
-import { SheetIcon, TestTubeOutlineIcon } from "@/lib/hugeicons-derived";
+import { AiSpeechIcon, SheetIcon, TestTubeOutlineIcon } from "@/lib/hugeicons-derived";
 import { cn } from "@/lib/utils";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import { ArrowDownUpIcon } from "lucide-react";
@@ -57,7 +56,7 @@ const SOURCE_OPTIONS: MenuOption<LibrarySource>[] = [
 const TYPE_OPTIONS: MenuOption<LibraryTypeFilter>[] = [
   { value: "images", label: "library.tabs.images", icon: Image02Icon },
   { value: "videos", label: "library.tabs.videos", icon: FlimSlateIcon },
-  { value: "audio", label: "library.tabs.audio", icon: AudioWave01Icon },
+  { value: "audio", label: "library.tabs.audio", icon: AiSpeechIcon },
   { value: "documents", label: "library.toolbar.documents", icon: FileEmpty02Icon },
   { value: "spreadsheets", label: "library.toolbar.spreadsheets", icon: SheetIcon },
   { value: "presentations", label: "library.toolbar.presentations", icon: Presentation01Icon },
@@ -292,7 +291,7 @@ const NEW_OPTIONS: MenuOption<NewAction>[] = [
   { value: "note", label: "library.create.note", icon: Note01Icon },
   { value: "image", label: "library.create.image", icon: Image02Icon },
   { value: "video", label: "library.create.video", icon: FlimSlateIcon },
-  { value: "audio", label: "library.create.audio", icon: AudioWave01Icon },
+  { value: "audio", label: "library.create.audio", icon: AiSpeechIcon },
   { value: "model", label: "library.create.model", icon: TestTubeOutlineIcon },
   { value: "folder", label: "library.create.folder", icon: Folder01Icon },
 ];
@@ -304,7 +303,7 @@ function NewMenu({ onSelect }: { onSelect: (action: NewAction) => void }) {
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-foreground pl-4 pr-3 font-medium text-ui-14 text-background outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-action pl-4 pr-3 font-medium text-ui-14 text-background outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {t("common.new")}
           <HugeiconsIcon icon={ChevronDownStandardIcon} strokeWidth={2} className="size-4" />

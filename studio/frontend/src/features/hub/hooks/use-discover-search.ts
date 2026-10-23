@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useHubName } from "@/lib/hf-endpoint";
 import { toast } from "@/lib/toast";
+import type { ModelSearchFilters } from "../lib/model-search-filters";
 import {
   clearRemoteBackoff,
   hubAuthFailure,
@@ -15,6 +16,8 @@ import {
   type HfModelSearchChannel,
   type HfSortDirection,
   type HfSortKey,
+  type HfTaskFilter,
+  hubListingSort,
   useHubModelSearch,
 } from "./use-hub-model-search";
 import {
@@ -102,6 +105,9 @@ export function useDiscoverSearch({
   direction,
   channel,
   ownerScope,
+  filters,
+  keepResult,
+  task,
 }: {
   debouncedQuery: string;
   accessToken: string | undefined;
@@ -111,6 +117,9 @@ export function useDiscoverSearch({
   direction: HfSortDirection;
   channel: HfModelSearchChannel | null;
   ownerScope: "unsloth" | "all";
+  filters?: ModelSearchFilters;
+  keepResult?: (result: HfModelResult) => boolean;
+  task?: HfTaskFilter;
 }): DiscoverSearch {
   const { phase, failure } = useHubAvailability();
   const hub = useHubName();
@@ -133,7 +142,10 @@ export function useDiscoverSearch({
     ownerScope,
     enabled: canProbe && isDiscoverTab && !isDatasetMode,
     keepUnsupportedTags: true,
+    keepResult,
     channel,
+    filters,
+    task,
   });
   const datasetSearch = useHubDatasetSearch(debouncedQuery, {
     accessToken,
@@ -141,7 +153,7 @@ export function useDiscoverSearch({
     // and returns [] when false, so a backoff blanked every rendered row.
     enabled: isDiscoverTab && isDatasetMode,
     paused: !canProbe,
-    sortBy,
+    sortBy: hubListingSort(sortBy),
     sortDirection: direction,
   });
 

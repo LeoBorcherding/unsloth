@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { ChevronDownStandardIcon } from "@/lib/chevron-icons";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -39,7 +40,6 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  ChevronDown,
   ExternalLink,
   Pencil,
   Plus,
@@ -62,6 +62,7 @@ import {
   retryResearchRun,
   updateResearchPlan,
 } from "../api/research-api";
+import { useChatRuntimeStore } from "../stores/chat-runtime-store";
 import {
   type ResearchActivity,
   ensureResearchRunFollowed,
@@ -364,22 +365,22 @@ const ActivityRow = memo(function ActivityRow({
       {activity.input ? (
         <p
           className={cn(
-            "line-clamp-3 break-words rounded-xl bg-muted/45 px-3 py-2 text-foreground/80",
+            "line-clamp-3 break-words rounded-lg bg-muted/45 px-3 py-2 text-foreground/80",
             activity.kind === "step" &&
-              "bg-primary/[0.045] ring-1 ring-primary/10",
+              "bg-wash-5 ring-1 ring-wash-10",
           )}
         >
           {activity.input}
         </p>
       ) : null}
       {activity.previewLabels?.length ? (
-        <ul className="space-y-1 rounded-xl bg-muted/35 px-3 py-2">
+        <ul className="space-y-1 rounded-lg bg-muted/35 px-3 py-2">
           {activity.previewLabels.map((label, index) => (
             <li
               key={`${activity.id}-preview-${index}`}
               className="flex gap-2 leading-relaxed"
             >
-              <span aria-hidden className="text-primary/70">
+              <span aria-hidden className="text-foreground/70">
                 ·
               </span>
               <span className="min-w-0 break-words text-foreground/80">
@@ -397,7 +398,7 @@ const ActivityRow = memo(function ActivityRow({
         </div>
       ) : null}
       {activity.plan ? (
-        <div className="space-y-2 rounded-xl bg-muted/35 px-3 py-2.5">
+        <div className="space-y-2 rounded-lg bg-muted/35 px-3 py-2.5">
           <p className="font-medium text-foreground/85">
             {activity.plan.title}
           </p>
@@ -426,7 +427,7 @@ const ActivityRow = memo(function ActivityRow({
           className={cn(
             activity.kind === "step" &&
               activity.state !== "failed" &&
-              "font-medium text-primary/75",
+              "font-medium text-foreground/75",
           )}
         >
           {activity.detail}
@@ -437,7 +438,7 @@ const ActivityRow = memo(function ActivityRow({
           key={`${activity.id}-${source.id ?? source.url}`}
           type="button"
           onClick={() => openLink(source.url)}
-          className="group/source flex w-full items-start gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group/source flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <InternetGlyph className="mt-0.5 size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">
@@ -457,7 +458,7 @@ const ActivityRow = memo(function ActivityRow({
       {activity.evidenceSources?.map((source) => (
         <div
           key={`${activity.id}-${source.chunkId}`}
-          className="rounded-xl bg-muted/45 px-3 py-2"
+          className="rounded-lg bg-muted/45 px-3 py-2"
         >
           <p className="line-clamp-2 break-words font-medium text-foreground/85">
             {source.filename}
@@ -471,7 +472,7 @@ const ActivityRow = memo(function ActivityRow({
         </div>
       ))}
       {activity.excerpt ? (
-        <p className="line-clamp-5 whitespace-pre-wrap break-words rounded-xl bg-muted/45 px-3 py-2 leading-relaxed">
+        <p className="line-clamp-5 whitespace-pre-wrap break-words rounded-lg bg-muted/45 px-3 py-2 leading-relaxed">
           {activity.excerpt}
         </p>
       ) : null}
@@ -488,7 +489,7 @@ const ActivityRow = memo(function ActivityRow({
       <div
         className={cn(
           "relative pl-7 before:absolute before:left-[calc(7px*var(--ui-space-scale,1))] before:top-6 before:h-[calc(100%-12px)] before:w-px before:bg-border last:before:hidden",
-          activity.kind === "step" && "before:bg-primary/20",
+          activity.kind === "step" && "before:bg-wash-20",
         )}
       >
         <CollapsibleTrigger
@@ -516,7 +517,7 @@ const ActivityRow = memo(function ActivityRow({
             })}
           </time>
           {hasDetails ? (
-            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/activity:rotate-180" />
+            <HugeiconsIcon icon={ChevronDownStandardIcon} className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/activity:rotate-180" />
           ) : null}
         </CollapsibleTrigger>
         {hasDetails ? <CollapsibleContent>{content}</CollapsibleContent> : null}
@@ -583,7 +584,7 @@ function PlanReview({ runId }: { runId: string }): ReactElement | null {
 
   return (
     <>
-      <section className="mx-4 mt-3 rounded-2xl border border-primary/20 bg-primary/[0.045] p-3">
+      <section className="mx-4 mt-3 rounded-2xl border border-wash-20 bg-wash-5 p-3">
         <p className="font-heading text-sm font-medium">Research plan ready</p>
         <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">
           {run.plan.title}
@@ -766,6 +767,7 @@ function PlanReview({ runId }: { runId: string }): ReactElement | null {
                 Review later
               </Button>
               <Button
+                variant="dark"
                 disabled={
                   pending ||
                   !draft.title.trim() ||
@@ -799,7 +801,11 @@ function ResearchActions({ runId }: { runId: string }): ReactElement | null {
   const retry = async () => {
     setPending(true);
     try {
-      const retried = await retryResearchRun(run.id);
+      const settings = useChatRuntimeStore.getState();
+      const retried = await retryResearchRun(run.id, {
+        modelTimeoutSeconds: settings.researchModelTimeoutSeconds,
+        websitePolicy: settings.researchWebsitePolicy,
+      });
       ingestResearchUpdate(retried);
       useResearchRunStore.getState().setConnectionError(retried.id, null);
       ensureResearchRunFollowed(retried.id, retried);
@@ -889,21 +895,18 @@ export function ResearchActivityPanel({
       style={
         variant === "panel"
           ? {
-              // The chat-model notice is an opaque absolute bar spanning the whole chat content area, the
-              // panel column included, directly under the header. Clear it the same way the header itself is
-              // cleared, or its first 2.25rem is painted over and unclickable. 0px whenever no notice is on
-              // screen, so this is the geometry it always had.
+              // Keep the panel's controls below the absolute chat header.
               height:
-                "calc(100% - var(--studio-content-top-inset, 0px) - var(--studio-chat-header-height, 48px) - var(--studio-chat-notice-height, 0px))",
+                "calc(100% - var(--studio-content-top-inset, 0px) - var(--studio-chat-header-height, 48px))",
               marginTop:
-                "calc(var(--studio-content-top-inset, 0px) + var(--studio-chat-header-height, 48px) + var(--studio-chat-notice-height, 0px))",
+                "calc(var(--studio-content-top-inset, 0px) + var(--studio-chat-header-height, 48px))",
             }
           : undefined
       }
     >
       <header className="shrink-0 border-b border-border/70 px-4 py-3.5">
         <div className="flex items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-[13px] bg-primary/10 text-primary">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
             <HugeiconsIcon icon={Telescope02Icon} className="size-[calc(18px*var(--ui-space-scale,1))]" />
           </div>
           <div className="min-w-0 flex-1">
@@ -928,7 +931,7 @@ export function ResearchActivityPanel({
             </p>
             {websiteLimitLabel ? (
               <p
-                className="mt-1 flex items-center gap-1 text-ui-10p5 font-medium text-primary/75"
+                className="mt-1 flex items-center gap-1 text-ui-10p5 font-medium text-foreground/75"
                 title={websiteLimitTitle}
               >
                 <InternetGlyph className="size-3" />

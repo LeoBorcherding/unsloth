@@ -24,13 +24,21 @@ import {
 export interface PerModelConfig {
   engineParallelism?: "tensor" | "pipeline" | "data";
   enginePrecision?: "auto" | "bf16" | "fp16" | "int4" | "int8" | "fp8";
+  engineKvCacheDtype?: "auto" | "fp8";
+  engineSeed?: number | null;
+  engineGpuMemoryUtilization?: number | null;
   engine?: "auto" | "vllm" | "sglang";
+  /** Default engine only; optional so older blobs parse, and anything but false is the 4-bit default. */
+  loadIn4bit?: boolean;
   customContextLength: number | null;
   maxSeqLength: number | null;
   kvCacheDtype: string | null;
   mlxKvQuant?: MlxKvQuant | null;
   /** MLX only: run quantized projections with int8 activations, where the model supports it. */
   mlxInt8Prefill?: boolean;
+  /** MLX only: share of the PLE tables / routed experts read from disk, "off", or null for Auto. */
+  mlxPleOffload?: MlxOffload;
+  mlxExpertOffload?: MlxOffload;
   speculativeType: string | null;
   specDraftNMax: number | null;
   /** KV cache dtype for the DRAFT context, sized and quantized independently of kvCacheDtype.
@@ -74,11 +82,17 @@ export const DEFAULT_PER_MODEL_CONFIG: PerModelConfig = {
   engine: "auto",
   enginePrecision: "auto",
   engineParallelism: "tensor",
+  engineKvCacheDtype: "auto",
+  engineSeed: null,
+  engineGpuMemoryUtilization: null,
+  loadIn4bit: true,
   customContextLength: null,
   maxSeqLength: null,
   kvCacheDtype: null,
   mlxKvQuant: null,
   mlxInt8Prefill: false,
+  mlxPleOffload: null,
+  mlxExpertOffload: null,
   speculativeType: null,
   specDraftNMax: null,
   specDraftCacheDtype: null,
@@ -96,13 +110,35 @@ export const DEFAULT_PER_MODEL_CONFIG: PerModelConfig = {
   chatTemplateOverride: null,
 };
 
+/** vLLM --seed / SGLang --random-seed; the backend bounds it to a non-negative int32. */
+export function normalizeEngineSeed(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 2 ** 31 - 1
+    ? value
+    : null;
+}
+
+/** Ceiling on the share of each GPU a managed engine may claim, as the backend bounds it. */
+export function normalizeEngineGpuMemoryUtilization(
+  value: unknown,
+): number | null {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0.05 &&
+    value <= 0.99
+    ? Math.round(value * 1000) / 1000
+    : null;
+}
+
 // Mirrors llama_server_args.py PARALLEL_MIN/MAX; null = follow the server-wide default.
 export const N_PARALLEL_MIN = 1;
 export const N_PARALLEL_MAX = 64;
 
 // Mirrors vram_budget_settings.py VRAM_FRACTION_MIN/MAX/DEFAULT as whole percent (the slider is integer).
 // Server-wide, so these only bound the control; the value lives in /api/settings/vram-budget.
-export const VRAM_BUDGET_PERCENT_MIN = 80;
+export const VRAM_BUDGET_PERCENT_MIN = 10;
 export const VRAM_BUDGET_PERCENT_MAX = 100;
 export const VRAM_BUDGET_PERCENT_DEFAULT = 97;
 // Tenths: a whole percent is ~245 MiB of context on a 24 GB card. Mirrors
@@ -140,6 +176,7 @@ const NO_MLX_REASONS = new Set([
   "mlx_unavailable",
   "no_torch",
   "intel_mac",
+  "rosetta",
   "detection_failed",
 ]);
 
@@ -356,6 +393,15 @@ export function normalizeMlxKvQuant(
 }
 const VALID_KV_CACHE_DTYPES = new Set<string>(KV_CACHE_DTYPES);
 
+export type MlxOffload = "off" | number | null;
+
+export function normalizeMlxOffload(value: unknown): MlxOffload {
+  if (value === "off") return "off";
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
+    : null;
+}
+
 // llama-server's --load-mode enum in --help order. "auto" is the default: the UI shows it, storage keeps null and
 // the backend emits no flag. Never sent verbatim; builds like b10360 reject "auto" as a value.
 export const LOAD_MODES = [
@@ -395,9 +441,10 @@ const LEGACY_MIGRATION_FLAG = "unsloth_model_configs_migrated";
 // would normalize the unknown field straight back out of the record.
 // v2 added nBatch/nUbatch, v3 llamaExtraArgs, v4 disableVision, v5 the llama-server tuning group
 // (loadMode / specDraftCacheDtype / ctxCheckpoints / cacheRam), v6 the reasoning budget pair,
-// v7 mlxKvQuant, v9 mlxInt8Prefill, v10 the per-GPU split, v11 the MLX drafter. v8 is skipped: nightly builds stamped it for the reverted custom
+// v7 mlxKvQuant, v9 mlxInt8Prefill, v10 the per-GPU split, v11 the MLX drafter, v12 the MLX offload pair. v8 is skipped: nightly builds stamped it for the reverted custom
 // llama.cpp config (#12725), so a v8 client must not claim to understand an int8 prefill record.
-const STORAGE_SCHEMA_VERSION = 11;
+const STORAGE_SCHEMA_VERSION = 12;
+const PRE_MLX_OFFLOAD_SCHEMA_VERSION = 11;
 const PRE_MLX_DRAFTER_SCHEMA_VERSION = 10;
 const PRE_TENSOR_SPLIT_SCHEMA_VERSION = 9;
 const PRE_MLX_INT8_PREFILL_SCHEMA_VERSION = 7;
@@ -409,7 +456,8 @@ const PRE_EXTRA_ARGS_SCHEMA_VERSION = 2;
 const PRE_BATCH_SCHEMA_VERSION = 1;
 const MAX_ENTRIES = 500;
 const MAX_PER_MODEL_CONFIG_STORAGE_BYTES = 1024 * 1024;
-export const MAX_CHAT_TEMPLATE_BYTES = 65_536;
+// Mirrors MAX_CHAT_TEMPLATE_BYTES in backend/picker/schemas.py.
+export const MAX_CHAT_TEMPLATE_BYTES = 512 * 1024;
 export const MAX_REASONING_BUDGET_MESSAGE_BYTES = 8_192;
 
 export function isReasoningBudgetMessageValid(value: string): boolean {
@@ -443,6 +491,9 @@ const STORED_CONFIG_FIELDS = new Set([
   "kvCacheDtype",
   "mlxKvQuant",
   "mlxInt8Prefill",
+  "mlxPleOffload",
+  "mlxExpertOffload",
+  "loadIn4bit",
   "speculativeType",
   "specDraftNMax",
   "specDraftCacheDtype",
@@ -1079,6 +1130,12 @@ function normalizeV1(partial: RawConfig): PerModelConfig {
       partial.engine === "vllm" || partial.engine === "sglang"
         ? partial.engine
         : "auto",
+    engineKvCacheDtype: partial.engineKvCacheDtype === "fp8" ? "fp8" : "auto",
+    engineSeed: normalizeEngineSeed(partial.engineSeed),
+    engineGpuMemoryUtilization: normalizeEngineGpuMemoryUtilization(
+      partial.engineGpuMemoryUtilization,
+    ),
+    loadIn4bit: partial.loadIn4bit !== false,
     customContextLength:
       typeof partial.customContextLength === "number" &&
       Number.isFinite(partial.customContextLength) &&
@@ -1088,6 +1145,8 @@ function normalizeV1(partial: RawConfig): PerModelConfig {
     maxSeqLength: normalizeMaxSeqLength(partial.maxSeqLength),
     mlxKvQuant: normalizeMlxKvQuant(partial.mlxKvQuant, partial.mlxKvBits),
     mlxInt8Prefill: partial.mlxInt8Prefill === true,
+    mlxPleOffload: normalizeMlxOffload(partial.mlxPleOffload),
+    mlxExpertOffload: normalizeMlxOffload(partial.mlxExpertOffload),
     kvCacheDtype:
       typeof partial.kvCacheDtype === "string" &&
       VALID_KV_CACHE_DTYPES.has(partial.kvCacheDtype)
@@ -1174,8 +1233,11 @@ function storedSchemaVersion(normalized: PerModelConfig): number {
   const mode = normalized.speculativeType;
   // A kept Auto and the MLX-only modes are values an older client folds back to unset.
   const mlxMode = mode === "auto" || (MLX_ONLY_SPEC_TYPES as readonly string[]).includes(mode ?? "");
-  if (normalized.specDraftModel != null || mlxMode) {
+  if (normalized.mlxPleOffload != null || normalized.mlxExpertOffload != null) {
     return STORAGE_SCHEMA_VERSION;
+  }
+  if (normalized.specDraftModel != null || mlxMode) {
+    return PRE_MLX_OFFLOAD_SCHEMA_VERSION;
   }
   if (normalized.tensorSplit != null) {
     return PRE_MLX_DRAFTER_SCHEMA_VERSION;
@@ -1357,11 +1419,17 @@ export function isDefaultConfig(config: PerModelConfig): boolean {
     (config.engine ?? "auto") === "auto" &&
     (config.enginePrecision ?? "auto") === "auto" &&
     (config.engineParallelism ?? "tensor") === "tensor" &&
+    (config.engineKvCacheDtype ?? "auto") === "auto" &&
+    config.engineSeed == null &&
+    config.engineGpuMemoryUtilization == null &&
+    config.loadIn4bit !== false &&
     config.customContextLength == null &&
     config.maxSeqLength == null &&
     (config.kvCacheDtype ?? null) === DEFAULT_PER_MODEL_CONFIG.kvCacheDtype &&
     (config.mlxKvQuant ?? null) === DEFAULT_PER_MODEL_CONFIG.mlxKvQuant &&
     !config.mlxInt8Prefill &&
+    config.mlxPleOffload == null &&
+    config.mlxExpertOffload == null &&
     config.speculativeType === DEFAULT_PER_MODEL_CONFIG.speculativeType &&
     config.specDraftNMax == null &&
     config.nParallel == null &&
@@ -1437,6 +1505,9 @@ export function savePerModelConfig(
     return false;
   }
   const written = writeMap(map);
+  if (written) {
+    stampWrite(key, map);
+  }
   if (written && evicted) {
     for (const evictedKey of evictedKeys) {
       const id = modelIdFromStorageKey(evictedKey);
@@ -1499,10 +1570,14 @@ export function deletePerModelConfig(
  * can spell one key. */
 function findModelOverrideKeyOwners(
   overrideKey: string,
-): { modelId: string; ggufVariant: string | null }[] {
+): { modelId: string; ggufVariant: string | null; storageKey: string }[] {
   const key = overrideKey.trim();
   const foldedKey = normalizeModelIdentity(key);
-  const owners: { modelId: string; ggufVariant: string | null }[] = [];
+  const owners: {
+    modelId: string;
+    ggufVariant: string | null;
+    storageKey: string;
+  }[] = [];
   for (const storageKey of Object.keys(readMap())) {
     const modelId = modelIdFromStorageKey(storageKey);
     if (!modelId) {
@@ -1514,7 +1589,7 @@ function findModelOverrideKeyOwners(
     );
     if (!variant) {
       if (foldedKey === normalizeModelIdentity(modelId)) {
-        owners.push({ modelId, ggufVariant: null });
+        owners.push({ modelId, ggufVariant: null, storageKey });
       }
       continue;
     }
@@ -1526,19 +1601,71 @@ function findModelOverrideKeyOwners(
       normalizeModelIdentity(key.slice(0, cut)) ===
         normalizeModelIdentity(modelId)
     ) {
-      owners.push({ modelId, ggufVariant: variant });
+      owners.push({ modelId, ggufVariant: variant, storageKey });
     }
   }
   return owners;
 }
 
-/** Delete the records the server keys name; false when one was left behind. */
+// A unique mark per save, beside the records, so another tab's identical re-save still reads as new.
+const WRITE_STAMPS_KEY = "unsloth_model_config_stamps";
+
+function readStamps(): Record<string, string> {
+  if (!canUseStorage()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(localStorage.getItem(WRITE_STAMPS_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stampWrite(key: string, map: StoredMap): void {
+  const stamps: Record<string, string> = {};
+  for (const [k, v] of Object.entries(readStamps())) {
+    if (k in map) {
+      stamps[k] = v;
+    }
+  }
+  stamps[key] = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  try {
+    localStorage.setItem(WRITE_STAMPS_KEY, JSON.stringify(stamps));
+  } catch {
+    // Best-effort: without it a forget's cleanup falls back to comparing contents.
+  }
+}
+
+export type PerModelConfigSnapshot = {
+  readonly records: Readonly<Record<string, unknown>>;
+  readonly stamps: Readonly<Record<string, string>>;
+};
+
+export function perModelConfigSnapshot(): PerModelConfigSnapshot {
+  return { records: readMapRaw(), stamps: readStamps() };
+}
+
+/** Delete the records the server keys name; false when one was left behind. With
+ *  `unchangedSince`, a record written after that snapshot (in any tab) is kept. */
 export function deletePerModelConfigsForOverrideKeys(
   overrideKeys: readonly string[],
+  unchangedSince?: PerModelConfigSnapshot,
 ): boolean {
   let deleted = true;
+  const current = unchangedSince ? perModelConfigSnapshot() : null;
   for (const overrideKey of overrideKeys) {
     for (const owner of findModelOverrideKeyOwners(overrideKey)) {
+      const key = owner.storageKey;
+      if (
+        unchangedSince &&
+        current &&
+        (current.stamps[key] !== unchangedSince.stamps[key] ||
+          JSON.stringify(current.records[key]) !==
+            JSON.stringify(unchangedSince.records[key]))
+      ) {
+        continue;
+      }
       if (!deletePerModelConfig(owner.modelId, owner.ggufVariant)) {
         deleted = false;
       }
