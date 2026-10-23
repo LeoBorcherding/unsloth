@@ -317,6 +317,12 @@ export async function getRecipeJobAnalysis(
   return getJson<Record<string, unknown>>(`/jobs/${jobId}/analysis`);
 }
 
+export async function getRecipeJobQuality(
+  jobId: string,
+): Promise<Record<string, unknown>> {
+  return getJson<Record<string, unknown>>(`/jobs/${jobId}/quality`);
+}
+
 export async function getRecipeJobDataset(
   jobId: string,
   options?: {

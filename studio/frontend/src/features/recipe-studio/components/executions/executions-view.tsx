@@ -25,8 +25,10 @@ import { isExecutionInProgress } from "../../executions/execution-helpers";
 import { ExecutionColumnsTab } from "./execution-columns-tab";
 import { ExecutionDataTab } from "./execution-data-tab";
 import { ExecutionOverviewTab } from "./execution-overview-tab";
+import { ExecutionQualityCard } from "./execution-quality-card";
 import { ExecutionRawTab } from "./execution-raw-tab";
 import { ExecutionSidebar } from "./execution-sidebar";
+import { ExecutionVersionBar } from "./execution-version-bar";
 import {
   type DownloadOutcome,
   downloadExecutionDataset,
@@ -408,6 +410,7 @@ export function ExecutionsView({
           </div>
         ) : (
           <div className="space-y-4">
+            <ExecutionVersionBar execution={selectedExecution} executions={executions} />
             {showProgressPanel && (
               <div className="space-y-3 rounded-2xl border shadow-border border-border/60 bg-card/55 p-3">
                 <div className="flex items-center justify-between">
@@ -471,6 +474,10 @@ export function ExecutionsView({
                   {selectedExecution.error ?? "Unknown error."}
                 </p>
               </div>
+            )}
+
+            {selectedExecution.status === "completed" && selectedExecution.quality && (
+              <ExecutionQualityCard quality={selectedExecution.quality} />
             )}
 
             <Tabs value={detailTab} onValueChange={setDetailTab}>

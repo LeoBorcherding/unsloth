@@ -128,6 +128,9 @@ export function createBaseExecutionRecord(input: {
   rows: number;
   currentSignature: string;
   runName?: string | null;
+  version?: number | null;
+  seed?: number | null;
+  configSnapshot?: Record<string, unknown> | null;
 }): RecipeExecutionRecord {
   const createdAt = Date.now();
   return {
@@ -158,6 +161,10 @@ export function createBaseExecutionRecord(input: {
     datasetPageSize: DATASET_PAGE_SIZE,
     analysis: null,
     processor_artifacts: null,
+    quality: null,
+    version: input.version ?? null,
+    seed: input.seed ?? null,
+    config_snapshot: input.configSnapshot ?? null,
     error: null,
   };
 }
