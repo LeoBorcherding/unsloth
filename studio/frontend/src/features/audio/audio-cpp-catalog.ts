@@ -16,7 +16,7 @@ export const AUDIO_CPP_AUDIO_TYPES: ReadonlySet<string> = new Set([
   AUDIO_CPP_SEP_AUDIO_TYPE,
 ]);
 
-export type AudioCppTask = "tts" | "music" | "asr" | "sep";
+export type AudioCppTask = "tts" | "music" | "asr" | "sep" | "vad";
 
 /** Mirrors AudioWorkflowId; spelled out to keep this file import-free. */
 export type AudioCppWorkflow =
@@ -26,7 +26,8 @@ export type AudioCppWorkflow =
   | "convert"
   | "music"
   | "separate"
-  | "transcribe";
+  | "transcribe"
+  | "detect";
 
 export interface AudioCppModel {
   /** Hub repo id, or `${AUDIO_CPP_REPO}/<folder>` for a package in the shared repo. */
@@ -88,6 +89,46 @@ const VOXTRAL_LANGUAGES = [
   "ar",
   "hi",
   "ko",
+] as const;
+// Primaries of audio.cpp model_specs/nemotron_asr.json, plus "no", the picker's code for nb/nn.
+const NEMOTRON_ASR_LANGUAGES = [
+  "ar",
+  "bg",
+  "cs",
+  "da",
+  "de",
+  "el",
+  "en",
+  "es",
+  "et",
+  "fi",
+  "fr",
+  "he",
+  "hi",
+  "hr",
+  "hu",
+  "it",
+  "ja",
+  "ko",
+  "lt",
+  "lv",
+  "mt",
+  "nb",
+  "nl",
+  "nn",
+  "no",
+  "pl",
+  "pt",
+  "ro",
+  "ru",
+  "sk",
+  "sl",
+  "sv",
+  "th",
+  "tr",
+  "uk",
+  "vi",
+  "zh",
 ] as const;
 
 export const AUDIO_CPP_MODELS: readonly AudioCppModel[] = [
@@ -175,7 +216,11 @@ export const AUDIO_CPP_MODELS: readonly AudioCppModel[] = [
   { id: folder("Parakeet-TDT-0.6B-v3-GGUF"), task: "asr" },
   { id: folder("Canary-180M-Flash-GGUF"), task: "asr", languages: ["en", "de", "es", "fr"] },
   { id: folder("Moonshine-Streaming-GGUF"), task: "asr", languages: ENGLISH },
-  { id: folder("Nemotron-3.5-ASR-Streaming-0.6B-GGUF"), task: "asr", languages: ENGLISH },
+  {
+    id: folder("Nemotron-3.5-ASR-Streaming-0.6B-GGUF"),
+    task: "asr",
+    languages: NEMOTRON_ASR_LANGUAGES,
+  },
   // Diarizes; Transcribe offers it for the Speakers switch.
   { id: folder("MOSS-Transcribe-Diarize-GGUF"), task: "asr" },
   { id: folder("Citrinet-ASR-GGUF"), task: "asr", languages: ENGLISH },
@@ -201,6 +246,8 @@ export const AUDIO_CPP_MODELS: readonly AudioCppModel[] = [
     task: "asr",
     languages: VOXTRAL_LANGUAGES,
   },
+  // Voice mode's speech check: whether a clip the loudness gate cut holds a voice.
+  { id: folder("PulseVAD-GGUF"), task: "vad" },
 ];
 
 /** Shared-repo folders the pickers leave out, and why; the nightly catalog check fails on an unclassified folder. */
@@ -211,6 +258,16 @@ export const AUDIO_CPP_UNOFFERED_FOLDERS: Readonly<Record<string, string>> = {
   "OWSM-GGUF": "needs a newer audio runtime",
   "Sidon-GGUF": "needs a newer audio runtime",
   "Smart-Turn-v3-GGUF": "needs a newer audio runtime",
+  "AST-AudioSet-GGUF": "needs a newer audio runtime",
+  "CED-GGUF": "needs a newer audio runtime",
+  "FireRedVAD-GGUF": "needs a newer audio runtime",
+  "Hviske-v6-GGUF": "needs a newer audio runtime",
+  "MicroWakeWord-GGUF": "needs a newer audio runtime",
+  "MossFormer2-GGUF": "needs a newer audio runtime",
+  "Phonon-2-GGUF": "needs a newer audio runtime",
+  "Sherpa-KWS-GGUF": "needs a newer audio runtime",
+  "TF-GridNet-GGUF": "needs a newer audio runtime",
+  "Voxtral-4B-TTS-2603-GGUF": "needs a newer audio runtime",
   "MioCodec-25Hz-44.1kHz-v2-GGUF": "the codec MioTTS downloads and loads with",
   "Qwen3-ForcedAligner-0.6B-GGUF": "the aligner Transcribe uses for Qwen3-ASR timestamps",
   "MiniMax-H3-Q4-GGUF": "an audio and video package Studio cannot load yet",
@@ -220,7 +277,6 @@ export const AUDIO_CPP_UNOFFERED_FOLDERS: Readonly<Record<string, string>> = {
   "PersonaPlex-GGUF": "duplex speech chat has no page",
   "MMS-Forced-Aligner-GGUF": "forced alignment has no page",
   "Sortformer-Diar-4spk-v1-GGUF": "speaker diarization has no page",
-  "PulseVAD-GGUF": "voice activity detection has no page",
   "MuScriptor-Small-GGUF": "music transcription has no page",
   "Samsone-GGUF": "describes audio rather than transcribing it",
 };
@@ -323,6 +379,14 @@ export function audioCppDisplayName(id: string): string {
   return trimmed.split("/").pop() || trimmed;
 }
 
+/** Hub path of an umbrella folder (`<repo>/tree/main/<Folder>`); null for any other id. */
+export function audioCppHubPath(id: string): string | null {
+  if (!isAudioCppFolderId(id)) {
+    return null;
+  }
+  return `${AUDIO_CPP_REPO}/tree/main/${audioCppDisplayName(id)}`;
+}
+
 export function audioCppModelFor(id: string | null | undefined): AudioCppModel | null {
   return BY_ID.get(normalizedId(id)) ?? null;
 }
@@ -351,6 +415,7 @@ const TASK_WORKFLOW: Record<AudioCppTask, AudioCppWorkflow> = {
   music: "music",
   asr: "transcribe",
   sep: "separate",
+  vad: "detect",
 };
 
 export function audioCppWorkflowsFor(
