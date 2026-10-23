@@ -49,9 +49,172 @@ def test_sdxl_offers_the_popular_samplers():
     assert options["euler_a"] == ["automatic", "uniform"]
 
 
-def test_flow_matching_offers_nothing():
-    assert sampler_options(diffusers.FlowMatchEulerDiscreteScheduler()) == []
+# Qwen/Qwen-Image scheduler/scheduler_config.json: dynamic mu, exponential time shift, terminal stretch.
+_QWEN = dict(
+    base_image_seq_len = 256,
+    base_shift = 0.5,
+    invert_sigmas = False,
+    max_image_seq_len = 8192,
+    max_shift = 0.9,
+    num_train_timesteps = 1000,
+    shift = 1.0,
+    shift_terminal = 0.02,
+    stochastic_sampling = False,
+    time_shift_type = "exponential",
+    use_beta_sigmas = False,
+    use_dynamic_shifting = True,
+    use_exponential_sigmas = False,
+    use_karras_sigmas = False,
+)
+# Tongyi-MAI/Z-Image-Turbo scheduler/scheduler_config.json: static shift.
+_ZIMAGE = dict(num_train_timesteps = 1000, use_dynamic_shifting = False, shift = 3.0)
+_FLOW_IDS = ["default", "euler", "euler_a", "unipc"]
+
+
+def _flow(config):
+    return diffusers.FlowMatchEulerDiscreteScheduler.from_config(config)
+
+
+def _pipeline_timesteps(scheduler, steps = 12, mu = 0.83):
+    # The call every diffusers flow pipeline makes (FLUX, Qwen-Image, Z-Image, Lumina-2, HiDream ...).
+    import numpy as np
+    from diffusers.pipelines.qwenimage.pipeline_qwenimage import retrieve_timesteps
+
+    retrieve_timesteps(scheduler, steps, "cpu", sigmas = np.linspace(1.0, 1 / steps, steps), mu = mu)
+    return scheduler
+
+
+@pytest.mark.parametrize("config", [_QWEN, _ZIMAGE, {}])
+def test_flow_matching_offers_the_flow_samplers(config):
+    options = sampler_options(_flow(config))
+    assert [o["id"] for o in options] == _FLOW_IDS
+    assert all(o["schedule_types"] == ["automatic"] for o in options)
     assert sampler_options(None) == []
+
+
+@pytest.mark.parametrize("config", [_QWEN, _ZIMAGE])
+@pytest.mark.parametrize("sampler", ["euler", "euler_a", "unipc"])
+def test_flow_samplers_keep_the_resident_schedule(config, sampler):
+    resident = _flow(config)
+    built, resolved = build_scheduler(resident, sampler, None)
+    assert resolved is None
+    # Pipelines read these off the swapped scheduler to compute mu.
+    for key in ("base_shift", "max_shift", "base_image_seq_len", "max_image_seq_len"):
+        assert built.config.get(key) == resident.config.get(key)
+    expected = _pipeline_timesteps(resident).sigmas
+    got = _pipeline_timesteps(built).sigmas
+    assert got.shape == expected.shape
+    assert (got - expected).abs().max() < 1e-5
+
+
+def test_unipc_carries_the_flow_shift():
+    built, _ = build_scheduler(_flow(_ZIMAGE), "unipc", None)
+    assert type(built).__name__ == "UniPCMultistepScheduler"
+    assert built.config.use_flow_sigmas is True
+    assert built.config.prediction_type == "flow_prediction"
+    assert built.config.flow_shift == 3.0
+    assert built.config.use_dynamic_shifting is False
+    dynamic, _ = build_scheduler(_flow(_QWEN), "unipc", None)
+    assert dynamic.config.use_dynamic_shifting is True
+    assert dynamic.config.shift_terminal == 0.02
+    assert dynamic.config.time_shift_type == "exponential"
+
+
+def test_euler_a_is_stochastic_flow_euler():
+    built, _ = build_scheduler(_flow(_QWEN), "euler_a", None)
+    assert type(built).__name__ == "FlowMatchEulerDiscreteScheduler"
+    assert built.config.stochastic_sampling is True
+    assert build_scheduler(built, "euler", None)[0].config.stochastic_sampling is False
+
+
+@pytest.mark.parametrize("sampler", ["euler", "euler_a", "unipc"])
+def test_flow_samplers_land_on_the_clean_sample(sampler):
+    # A rectified-flow model that predicts the exact velocity: every correct sampler ends on x0.
+    torch = pytest.importorskip("torch")
+    from core.inference.diffusion_sampler import bind_flow_sampling
+
+    x0 = torch.randn(2, 16, 4, generator = torch.Generator().manual_seed(1))
+    noise = torch.randn(2, 16, 4, generator = torch.Generator().manual_seed(2))
+    built, _ = build_scheduler(_flow(_QWEN), sampler, None)
+    bind_flow_sampling(built, [torch.Generator().manual_seed(s) for s in (5, 6)])
+    _pipeline_timesteps(built, steps = 10)
+    sample = noise.clone()
+    for i, t in enumerate(built.timesteps):
+        velocity = (sample - x0) / built.sigmas[i]
+        sample = built.step(velocity, t, sample, return_dict = False)[0]
+    assert (sample - x0).abs().max() < 1e-4
+
+
+def _euler_a_run(seeds):
+    torch = pytest.importorskip("torch")
+    from core.inference.diffusion_sampler import bind_flow_sampling
+
+    built, _ = build_scheduler(_flow(_QWEN), "euler_a", None)
+    bind_flow_sampling(built, [torch.Generator().manual_seed(s) for s in seeds])
+    _pipeline_timesteps(built, steps = 6)
+    sample = torch.ones(len(seeds), 8, 4)
+    for t in built.timesteps[:-1]:
+        # Zero velocity: the renoise is all that moves the sample.
+        sample = built.step(torch.zeros_like(sample), t, sample, return_dict = False)[0]
+    return sample
+
+
+def test_euler_a_noise_follows_the_request_seeds():
+    torch = pytest.importorskip("torch")
+    torch.manual_seed(0)
+    first = _euler_a_run([7, 8])
+    torch.manual_seed(1)  # the global RNG must not matter
+    again = _euler_a_run([7, 8])
+    assert torch.equal(first, again)
+    # Per image: image 0 of seeds [7, 8] is image 0 of seeds [7, 9].
+    assert torch.equal(_euler_a_run([7, 9])[0], first[0])
+    assert not torch.equal(_euler_a_run([7, 9])[1], first[1])
+
+
+def test_unipc_gets_the_flow_forward_process_for_img2img():
+    torch = pytest.importorskip("torch")
+    from core.inference.diffusion_sampler import bind_flow_sampling
+
+    resident = _pipeline_timesteps(_flow(_ZIMAGE))
+    built, _ = build_scheduler(resident, "unipc", None)
+    assert not hasattr(built, "scale_noise")
+    bind_flow_sampling(built, None)
+    _pipeline_timesteps(built)
+    sample, noise = torch.randn(1, 4, 8), torch.randn(1, 4, 8)
+    for scheduler in (resident, built):
+        scheduler.set_begin_index(4)
+    expected = resident.scale_noise(sample, resident.timesteps[4:5], noise)
+    got = built.scale_noise(sample, built.timesteps[4:5], noise)
+    assert (got - expected).abs().max() < 1e-5
+
+
+def test_shift_override_on_a_dynamic_unipc_is_static():
+    from core.inference.diffusion_flow_shift import scheduler_with_flow_shift
+
+    built, _ = build_scheduler(_flow(_QWEN), "unipc", None)
+    shifted = scheduler_with_flow_shift(built, 3.1)
+    assert shifted.config.flow_shift == 3.1
+    assert shifted.config.use_dynamic_shifting is False
+    assert shifted.config.shift_terminal is None
+    static = scheduler_with_flow_shift(_flow(_QWEN), 3.1)
+    got = _pipeline_timesteps(shifted).sigmas
+    expected = _pipeline_timesteps(static).sigmas
+    assert (got - expected).abs().max() < 1e-5
+
+
+@pytest.mark.parametrize("cls", ["DPMSolverMultistepScheduler", "FlowMatchHeunDiscreteScheduler"])
+def test_left_out_flow_schedulers_cannot_take_the_pipeline_call(cls):
+    flow = {"use_flow_sigmas": True, "prediction_type": "flow_prediction"}
+    scheduler = getattr(diffusers, cls).from_config({**_QWEN, **flow})
+    with pytest.raises(ValueError, match = "custom sigmas"):
+        _pipeline_timesteps(scheduler)
+
+
+def test_unipc_is_withheld_where_it_cannot_follow_the_resident():
+    karras = _flow({**_QWEN, "use_karras_sigmas": True})
+    assert [o["id"] for o in sampler_options(karras)] == ["default", "euler", "euler_a"]
+    with pytest.raises(ValueError, match = "UniPC sampler is not available"):
+        build_scheduler(karras, "unipc", None)
 
 
 def test_flow_configured_dpm_offers_nothing():
@@ -142,7 +305,13 @@ def test_unavailable_choices_are_refused():
     with pytest.raises(ValueError, match = "does not apply"):
         build_scheduler(_sdxl(), "euler_a", "karras")
     with pytest.raises(ValueError, match = "not available"):
-        build_scheduler(diffusers.FlowMatchEulerDiscreteScheduler(), "euler", None)
+        build_scheduler(diffusers.FlowMatchEulerDiscreteScheduler(), "dpmpp_2m", None)
+    with pytest.raises(ValueError, match = "not available"):
+        build_scheduler(_sdxl(), "unipc", None)
+    with pytest.raises(ValueError, match = "Heun sampler is not available"):
+        build_scheduler(_flow(_QWEN), "heun", None)
+    with pytest.raises(ValueError, match = "does not apply"):
+        build_scheduler(diffusers.FlowMatchEulerDiscreteScheduler(), "euler", "karras")
     with pytest.raises(ValueError, match = "Unknown sampler"):
         build_scheduler(_sdxl(), "lms", None)
 
@@ -196,6 +365,8 @@ def test_parameters_text_names_the_sampler():
     assert "Steps: 25, Sampler: DPM++ 2M, Schedule type: Karras, CFG scale: 7," in text
     assert "Sampler" not in _params_text(_meta())
     assert "Schedule type" not in _params_text(_meta(sampler = "euler_a"))
+    assert "Sampler: UniPC," in _params_text(_meta(sampler = "unipc"))
+    assert "Sampler: Heun," in _params_text(_meta(sampler = "heun"))
 
 
 def test_route_refuses_a_sampler_the_engine_cannot_run():

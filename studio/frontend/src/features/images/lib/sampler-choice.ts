@@ -11,6 +11,8 @@ export const SAMPLER_LABELS: Record<string, string> = {
   euler_a: "Euler a",
   dpmpp_2m: "DPM++ 2M",
   dpmpp_2m_sde: "DPM++ 2M SDE",
+  heun: "Heun",
+  unipc: "UniPC",
 };
 
 export const SCHEDULE_LABELS: Record<string, string> = {

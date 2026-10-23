@@ -38,6 +38,30 @@ SCHEDULE_TYPES: dict[str, tuple[str, Optional[str]]] = {
 }
 _SIGMA_FLAGS = ("use_karras_sigmas", "use_exponential_sigmas", "use_beta_sigmas", "use_lu_lambdas")
 
+# Flow-matching replacements for a resident FlowMatchEulerDiscreteScheduler. Every diffusers flow pipeline calls
+# set_timesteps(sigmas=, mu=), so DPM++ 2M (no sigmas) and FlowMatchHeun (neither) cannot run there; FlowMatchLCM is
+# for distilled checkpoints only.
+FLOW_SAMPLERS: dict[str, tuple[str, str, dict[str, Any]]] = {
+    "euler": ("Euler", "FlowMatchEulerDiscreteScheduler", {"stochastic_sampling": False}),
+    "euler_a": ("Euler a", "FlowMatchEulerDiscreteScheduler", {"stochastic_sampling": True}),
+    "unipc": (
+        "UniPC",
+        "UniPCMultistepScheduler",
+        {"use_flow_sigmas": True, "prediction_type": "flow_prediction"},
+    ),
+}
+# Resident settings UniPC has no equivalent for; a scheduler using one keeps the Euler pair only.
+_UNIPC_UNSUPPORTED = ("invert_sigmas",) + _SIGMA_FLAGS[:3]
+
+# sd.cpp --sampling-method names (stable-diffusion.cpp sample_method_to_str). The family default stays sd.cpp's own
+# schedule for each of these: only LCM / TCD / DDIM change it.
+SD_CPP_SAMPLERS: dict[str, tuple[str, str]] = {
+    "euler": ("Euler", "euler"),
+    "euler_a": ("Euler a", "euler_a"),
+    "heun": ("Heun", "heun"),
+    "dpmpp_2m": ("DPM++ 2M", "dpm++2m"),
+}
+
 # AUTOMATIC1111's per-sampler default schedule (modules/sd_samplers_kdiffusion.py); absent = keep the config's.
 _AUTOMATIC_FOR = {"dpmpp_2m": "karras", "dpmpp_2m_sde": "exponential"}
 
@@ -57,6 +81,82 @@ def _class_for(sampler: str, resident: Any) -> Optional[type]:
     import diffusers
 
     return getattr(diffusers, cls_name, None)
+
+
+def _is_flow_euler(scheduler: Any) -> bool:
+    # Exact class: a subclass may override set_timesteps with a grid a swap would drop.
+    cls = type(scheduler)
+    return cls.__name__ == "FlowMatchEulerDiscreteScheduler" and cls.__module__.startswith(
+        "diffusers."
+    )
+
+
+def _takes_flow_timesteps(cls: type) -> bool:
+    import inspect
+    try:
+        params = inspect.signature(cls.set_timesteps).parameters
+    except (TypeError, ValueError):
+        return False
+    return "sigmas" in params and "mu" in params
+
+
+def _automatic_only(sid: str, label: str) -> dict[str, Any]:
+    return {"id": sid, "label": label, "schedule_types": [AUTOMATIC_SCHEDULE]}
+
+
+def _flow_options(scheduler: Any) -> list[dict[str, Any]]:
+    import diffusers
+
+    config = getattr(scheduler, "config", None) or {}
+    options = [_automatic_only(DEFAULT_SAMPLER, SAMPLERS[DEFAULT_SAMPLER][0])]
+    for sid, (label, cls_name, _overrides) in FLOW_SAMPLERS.items():
+        cls = getattr(diffusers, cls_name, None)
+        if cls is None or not _takes_flow_timesteps(cls):
+            continue
+        if sid == "unipc" and any(config.get(k) for k in _UNIPC_UNSUPPORTED):
+            continue
+        options.append(_automatic_only(sid, label))
+    return options if len(options) > 1 else []
+
+
+def _flow_overrides(sampler: str, cls: type, config: Any) -> dict[str, Any]:
+    overrides = dict(FLOW_SAMPLERS[sampler][2])
+    if "flow_shift" in _init_params(cls):
+        # UniPC's static shift is flow_shift; dynamic shifting, terminal stretch and mu carry over by name.
+        overrides["flow_shift"] = float(config.get("shift", 1.0))
+    return overrides
+
+
+def bind_flow_sampling(scheduler: Any, generator: Any) -> None:
+    """Per-call fixups for a flow scheduler swapped in by ``build_scheduler`` (or rebuilt from one).
+
+    img2img / inpaint flow pipelines call ``scale_noise``, which only FlowMatchEuler defines; UniPC keeps flow sigmas
+    in [0, 1] with the same step / begin index bookkeeping, so that forward process carries over unchanged. And flow
+    pipelines call ``step`` without a generator, so Euler a's renoise would draw from the global RNG and a seed would
+    not repeat: route it through the request's generator(s). A list must match the latent batch to be used."""
+    config = getattr(scheduler, "config", None) or {}
+    if config.get("use_flow_sigmas") and not hasattr(scheduler, "scale_noise"):
+        import types
+
+        import diffusers
+
+        scheduler.scale_noise = types.MethodType(
+            diffusers.FlowMatchEulerDiscreteScheduler.scale_noise, scheduler
+        )
+    if not config.get("stochastic_sampling") or generator is None:
+        return
+    step = type(scheduler).step.__get__(scheduler)
+
+    @wraps(step)
+    def _step(model_output: Any, timestep: Any, sample: Any, *args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("generator") is None:
+            gen = generator
+            if isinstance(gen, (list, tuple)) and len(gen) != sample.shape[0]:
+                gen = None
+            kwargs["generator"] = gen
+        return step(model_output, timestep, sample, *args, **kwargs)
+
+    scheduler.step = _step
 
 
 def _schedule_types_for(cls: type) -> list[str]:
@@ -88,9 +188,11 @@ def _options_for(scheduler_cls: type) -> tuple[tuple[str, str, tuple[str, ...]],
 def sampler_options(scheduler: Any) -> list[dict[str, Any]]:
     """Samplers the resident scheduler can be swapped for, each with the schedule types it takes.
 
-    Empty when the scheduler lists no compatible classes (every flow-matching model), so the
-    control is absent there rather than offering choices that cannot run. Read on every status poll,
-    hence cached per class."""
+    A diffusers FlowMatchEulerDiscreteScheduler gets FLOW_SAMPLERS (automatic schedule only). Empty for any
+    other scheduler listing no compatible classes, so the control is absent there rather than offering choices
+    that cannot run. Read on every status poll, hence the epsilon side is cached per class."""
+    if scheduler is not None and _is_flow_euler(scheduler):
+        return _flow_options(scheduler)
     config = getattr(scheduler, "config", None) or {}
     # A DPM / UniPC scheduler driving a flow model lists the epsilon samplers as compatible too.
     if (
@@ -130,7 +232,7 @@ def build_scheduler(
     ValueError for a choice this model does not offer."""
     sampler = sampler or DEFAULT_SAMPLER
     schedule_type = schedule_type or AUTOMATIC_SCHEDULE
-    if sampler not in SAMPLERS:
+    if sampler_label(sampler) is None and sampler != DEFAULT_SAMPLER:
         raise ValueError(f"Unknown sampler '{sampler}'.")
     if schedule_type not in SCHEDULE_TYPES:
         raise ValueError(f"Unknown schedule type '{schedule_type}'.")
@@ -139,13 +241,20 @@ def build_scheduler(
     options = {o["id"]: o for o in sampler_options(resident)}
     if sampler not in options:
         raise ValueError(
-            f"The {SAMPLERS[sampler][0]} sampler is not available for the loaded model."
+            f"The {sampler_label(sampler)} sampler is not available for the loaded model."
         )
     if schedule_type not in options[sampler]["schedule_types"]:
         raise ValueError(
             f"The {SCHEDULE_TYPES[schedule_type][0]} schedule type does not apply to the "
-            f"{SAMPLERS[sampler][0]} sampler."
+            f"{options[sampler]['label']} sampler."
         )
+    if sampler != DEFAULT_SAMPLER and _is_flow_euler(resident):
+        import diffusers
+
+        cls = getattr(diffusers, FLOW_SAMPLERS[sampler][1])
+        # Defaulted keys made explicit: from_config drops them, and pipelines read base_shift & co. for mu.
+        config = {k: v for k, v in resident.config.items() if k != "_use_default_values"}
+        return cls.from_config(config, **_flow_overrides(sampler, cls, config)), None
     cls = _class_for(sampler, resident)
     params = _init_params(cls)
     overrides = {k: v for k, v in SAMPLERS[sampler][2].items() if k in params}
@@ -172,8 +281,33 @@ def build_scheduler(
 
 
 def sampler_label(sampler: Optional[str]) -> Optional[str]:
-    entry = SAMPLERS.get(sampler or "")
+    key = sampler or ""
+    entry = SAMPLERS.get(key) or FLOW_SAMPLERS.get(key) or SD_CPP_SAMPLERS.get(key)
     return entry[0] if entry and sampler != DEFAULT_SAMPLER else None
+
+
+def sd_cpp_sampler_options() -> list[dict[str, Any]]:
+    """The native engine's sampler choices, same shape as ``sampler_options``."""
+    return [_automatic_only(DEFAULT_SAMPLER, SAMPLERS[DEFAULT_SAMPLER][0])] + [
+        _automatic_only(sid, label) for sid, (label, _method) in SD_CPP_SAMPLERS.items()
+    ]
+
+
+def sd_cpp_sampling_method(
+    sampler: Optional[str], schedule_type: Optional[str], family_default: Optional[str]
+) -> Optional[str]:
+    """``--sampling-method`` for a request: the family's own for the default, else the mapped name.
+
+    Raises ValueError for a sampler or schedule the native engine does not offer."""
+    if (schedule_type or AUTOMATIC_SCHEDULE) != AUTOMATIC_SCHEDULE:
+        raise ValueError("Schedule types are not adjustable on the native sd.cpp engine.")
+    sampler = sampler or DEFAULT_SAMPLER
+    if sampler == DEFAULT_SAMPLER:
+        return family_default
+    if sampler not in SD_CPP_SAMPLERS:
+        label = sampler_label(sampler) or sampler
+        raise ValueError(f"The {label} sampler is not available on the native sd.cpp engine.")
+    return SD_CPP_SAMPLERS[sampler][1]
 
 
 def schedule_label(schedule_type: Optional[str]) -> Optional[str]:
