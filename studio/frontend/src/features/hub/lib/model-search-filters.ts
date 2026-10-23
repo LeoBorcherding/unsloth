@@ -1,12 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { ggufRepoParams } from "../../../lib/model-size.ts";
+
+/** Who uploaded a model: the unsloth org, any other organization, or a personal account. */
+export type HubUploader = "unsloth" | "organization" | "personal";
+
+export const HUB_UPLOADERS: readonly HubUploader[] = [
+  "unsloth",
+  "organization",
+  "personal",
+];
+
 export interface ModelSearchFilters {
   minParams?: number;
   maxParams?: number;
   minContext?: number;
   maxContext?: number;
-  organizationsOnly?: boolean;
+  /** Absent lists every uploader. */
+  uploaders?: HubUploader[];
+  /** Dataset rows; the dataset list filters on these, the model search ignores them. */
+  minRows?: number;
+  maxRows?: number;
 }
 
 export function hasModelSearchFilters(filters: ModelSearchFilters): boolean {
@@ -102,24 +117,33 @@ export async function* filterModelListing(
     const model = raw as ListingModel;
     if (
       !matchesRange(
-        model.safetensors?.total ?? model.gguf?.total,
+        model.safetensors?.total ??
+          (model.gguf
+            ? ggufRepoParams(model.name, model.gguf.total)
+            : undefined),
         filters.minParams,
         filters.maxParams,
       )
     ) {
       return null;
     }
-    if (filters.organizationsOnly) {
-      // isVerified would drop unverified labs such as Qwen; personal accounts 404 here.
+    const uploaders = filters.uploaders;
+    if (uploaders && uploaders.length < HUB_UPLOADERS.length) {
       const owner = model.name.split("/")[0];
-      let isOrganization = owners.get(owner);
-      if (!isOrganization) {
-        isOrganization = fetchJson(
-          `/api/organizations/${encodeURIComponent(owner)}/overview`,
-        ).then((data) => data !== null);
-        owners.set(owner, isOrganization);
-      }
-      if (!(await isOrganization)) {
+      const wantsOrganization = uploaders.includes("organization");
+      if (owner.toLowerCase() === "unsloth") {
+        if (!uploaders.includes("unsloth")) return null;
+      } else if (wantsOrganization !== uploaders.includes("personal")) {
+        // isVerified would drop unverified labs such as Qwen; personal accounts 404 here.
+        let isOrganization = owners.get(owner);
+        if (!isOrganization) {
+          isOrganization = fetchJson(
+            `/api/organizations/${encodeURIComponent(owner)}/overview`,
+          ).then((data) => data !== null);
+          owners.set(owner, isOrganization);
+        }
+        if ((await isOrganization) !== wantsOrganization) return null;
+      } else if (!wantsOrganization) {
         return null;
       }
     }

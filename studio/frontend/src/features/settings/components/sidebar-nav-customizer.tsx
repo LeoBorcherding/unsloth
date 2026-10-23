@@ -4,6 +4,7 @@
 import {
   ChefHatIcon,
   DashboardCircleIcon,
+  DashboardSpeed01Icon,
   Download01Icon,
   DragDropVerticalIcon,
   FlimSlateIcon,
@@ -44,11 +45,15 @@ const ITEM_META: Record<
   recipes: { icon: ChefHatIcon, labelKey: "shell.navigation.recipes" },
   export: { icon: Download01Icon, labelKey: "shell.navigation.export" },
   api: { icon: ApiIcon, labelKey: "shell.navigation.api" },
+  benchmarks: {
+    icon: DashboardSpeed01Icon,
+    labelKey: "shell.navigation.benchmarks",
+  },
 };
 
 function FixedRow({ icon, label }: { icon: IconSvgElement; label: string }) {
   return (
-    <div className="flex h-9 items-center gap-2.5 rounded-lg px-2 text-muted-foreground/70">
+    <div className="flex h-9 items-center gap-2.5 rounded-md px-2 text-muted-foreground/70">
       {/* Spacer where the drag handle sits on movable rows. */}
       <span className="size-4" aria-hidden="true" />
       <HugeiconsIcon icon={icon} strokeWidth={1.75} className="size-4" />
@@ -89,7 +94,7 @@ function MovableRow({
         boxShadow: "0 4px 16px rgb(0 0 0 / 0.18)",
         zIndex: 10,
       }}
-      className="relative flex h-9 items-center gap-2.5 rounded-lg px-2"
+      className="relative flex h-9 items-center gap-2.5 rounded-md px-2"
     >
       <button
         type="button"
@@ -149,7 +154,7 @@ export function SidebarNavCustomizer() {
       !sidebarNavRowPinned(item, sidebarNavAuto, { projectsSectionShowing }),
   ).length;
   return (
-    <div className="flex flex-col rounded-xl border border-border/70 p-1.5">
+    <div className="flex flex-col rounded-lg border border-border/70 p-1">
       <FixedRow icon={PencilEdit02Icon} label={t("shell.navigation.newChat")} />
       <Reorder.Group
         axis="y"

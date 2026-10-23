@@ -106,6 +106,7 @@ import {
   ArchivedMediaView,
 } from "../components/archived-media-dialog";
 import { DocumentsRagSection } from "../components/documents-rag-section";
+import { ReembedDocumentsRow } from "../components/reembed-documents-row";
 import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 import { UploadedFilesView } from "../components/uploaded-files-dialog";
@@ -859,7 +860,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
                 data-settings-label={t(`settings.data.${label}`)}
                 aria-label={t(`settings.data.${label}`)}
                 onClick={() => setSubpage(page)}
-                className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-border/60 px-3 py-2.5 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="btn-fill flex min-w-0 items-center justify-between gap-2 rounded-full px-3 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <HugeiconsIcon
@@ -1042,7 +1043,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
               <DropdownMenuTrigger asChild={true}>
                 {/* Fixed width so switching actions never resizes the row. */}
                 <Button
-                  variant="outline"
+                  variant="picker"
                   size="sm"
                   disabled={count === 0}
                   className="w-44 justify-between"
@@ -1198,6 +1199,8 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
             <LinkedFoldersManager />
           </div>
         ) : null}
+        {/* The owner sees it beside the embedding model below. */}
+        {!isOwner ? <ReembedDocumentsRow /> : null}
       </SettingsSection>
 
       {/* Embedding model settings are installation-wide (owner-only routes). */}
