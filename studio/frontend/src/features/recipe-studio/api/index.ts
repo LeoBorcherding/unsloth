@@ -8,8 +8,7 @@ import {
   readFastApiError,
 } from "@/lib/format-fastapi-error";
 import { openStreamResponse } from "@/lib/open-stream-response";
-import type { BenchmarkResult } from "../types";
-import type { BenchmarkRequest } from "../utils/benchmark";
+import type { LoadedModelStatus } from "../utils/benchmark";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -598,25 +597,12 @@ export async function removeUnstructuredBlock(blockId: string): Promise<void> {
   }
 }
 
-export type BenchmarkJobStatus = {
-  // biome-ignore lint/style/useNamingConvention: api schema
-  job_id: string;
-  status: "running" | "completed" | "cancelled" | "error";
-  progress: { done: number; total: number };
-  result: BenchmarkResult | null;
-  error: string | null;
-};
-
-export async function startBenchmarkJob(
-  request: BenchmarkRequest,
-): Promise<JobCreateResponse> {
-  return postJson<JobCreateResponse>("/benchmark/jobs", request);
-}
-
-export async function getBenchmarkJob(jobId: string): Promise<BenchmarkJobStatus> {
-  return getJson<BenchmarkJobStatus>(`/benchmark/jobs/${jobId}`);
-}
-
-export async function cancelBenchmarkJob(jobId: string): Promise<void> {
-  await postJson<unknown>(`/benchmark/jobs/${jobId}/cancel`, {});
+/** What Chat has loaded, for the Benchmark card's GGUF gate on lm-eval tasks. */
+export async function fetchLoadedModelStatus(): Promise<LoadedModelStatus | null> {
+  try {
+    const response = await authFetch("/api/inference/status");
+    return response.ok ? ((await response.json()) as LoadedModelStatus) : null;
+  } catch {
+    return null;
+  }
 }

@@ -433,6 +433,8 @@ export function makeBenchmarkConfig(
     id,
     kind: "benchmark",
     name: nextName(existing, "benchmark"),
+    task: "recipe_heldout",
+    limit: "50",
     // biome-ignore lint/style/useNamingConvention: ui schema
     model_alias: firstModel?.name ?? "",
     // biome-ignore lint/style/useNamingConvention: ui schema
