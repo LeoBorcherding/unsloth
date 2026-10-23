@@ -241,8 +241,10 @@ def test_a_revocation_records_the_load_mode_the_retry_runs_with(tmp_path, monkey
     record has to follow, or the next "Don't reserve system RAM" reloads a child that does not
     reserve anything."""
     from core.inference.llama_server_args import resolve_effective_load_state
+    from test_offload_planner_launch import _linux_dio_gate
 
     _settings(monkeypatch, False, False)
+    _linux_dio_gate(monkeypatch)
     plan = Plan(changed = True, n_ctx = 8192, n_parallel = 2, load_mode_none = True)
     cmds, backend = _launch_refused_then_ok(
         tmp_path, monkeypatch, plan, caps = {"supports_load_mode": True}

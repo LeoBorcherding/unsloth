@@ -282,6 +282,19 @@ def test_a_planner_owned_launch_on_windows_carries_the_clamp_and_not_the_tuning_
     assert "--ctx-checkpoints" not in cmd
 
 
+def _linux_dio_gate(monkeypatch):
+    """Pin the Windows-only DirectIO gate to its off-Windows answer: on win32 it spawns a
+    `--list-devices` probe through the faked Popen, which the argv counts then include."""
+    import core.inference.llama_server_args as lsa
+    from core.inference import llama_cpp
+
+    def requires(*, supports_load_mode, gpu_offload_confirmed):
+        return False
+
+    monkeypatch.setattr(llama_cpp, "no_reserve_requires_dio", requires)
+    monkeypatch.setattr(lsa, "no_reserve_requires_dio", requires)
+
+
 def _launch_crash_then_ok(
     tmp_path,
     monkeypatch,

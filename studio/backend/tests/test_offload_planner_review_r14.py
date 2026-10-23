@@ -15,7 +15,7 @@ if _TESTS_DIR not in sys.path:
 import pytest  # noqa: E402
 
 from core.inference.offload_planner import Plan  # noqa: E402
-from test_offload_planner_launch import _flag, _launch_crash_then_ok  # noqa: E402
+from test_offload_planner_launch import _flag, _launch_crash_then_ok, _linux_dio_gate  # noqa: E402
 
 
 def _locks(cmd):
@@ -30,6 +30,7 @@ def test_a_revoked_all_on_gpu_plan_relaunches_with_the_page_lock(tmp_path, monke
     import utils.model_memory_settings as mm
 
     monkeypatch.setattr(mm, "get_model_memory_settings", lambda: (True, False))
+    _linux_dio_gate(monkeypatch)
     plan = Plan(changed = True, n_ctx = 8192, n_parallel = 1)
     cmds, backend = _launch_crash_then_ok(
         tmp_path, monkeypatch, plan, caps = {"supports_load_mode": load_mode}

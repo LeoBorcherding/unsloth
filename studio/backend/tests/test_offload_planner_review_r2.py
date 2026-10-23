@@ -136,6 +136,9 @@ def _two_card_launch(tmp_path, monkeypatch, plan):
     from test_offload_planner_launch import DENSE
 
     monkeypatch.setenv("UNSLOTH_SMART_OFFLOAD", "1")
+    # On ROCm torch HIP_VISIBLE_DEVICES outranks the CUDA mask under test, so an inherited one hid it.
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
     card = 12 * 1024
     backend, gguf = _backend(tmp_path, vulkan = False, memory = [(0, card, card), (1, card, card)])
 

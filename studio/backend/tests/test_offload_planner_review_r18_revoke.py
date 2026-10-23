@@ -139,9 +139,11 @@ def test_the_outer_retry_re_arms_the_page_lock_an_inner_revocation_already_armed
     drafterless retry is built from the planned argv, which never had it, and the revocation there
     read the cleared kept-every-layer bit (and a host-resident flag already set) and skipped it."""
     from core.inference.llama_server_args import resolve_effective_load_state
+    from test_offload_planner_launch import _linux_dio_gate
     from test_offload_planner_review_r17 import _satisfied
 
     _settings(monkeypatch, True, False)
+    _linux_dio_gate(monkeypatch)
     plan = Plan(changed = True, n_ctx = 8192, n_parallel = 1)
     cmds, backend = _launch_planned_mtp(
         tmp_path, monkeypatch, plan, caps = {"supports_load_mode": True}

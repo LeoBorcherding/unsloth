@@ -470,6 +470,9 @@ def _sm_none_launch(
     cls = llama_mod.LlamaCppBackend
     monkeypatch.setenv("UNSLOTH_SMART_OFFLOAD", "1")
     monkeypatch.setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+    # On ROCm torch HIP_VISIBLE_DEVICES outranks the CUDA mask under test, so an inherited one hid it.
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising = False)
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising = False)
     if mask is None:
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
     else:

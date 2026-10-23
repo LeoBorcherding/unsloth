@@ -1738,10 +1738,11 @@ def test_a_partial_shard_set_still_abstains():
 
 def test_split_shard_paths_follow_llama_cpp_naming():
     paths = split_shard_paths("/m/model-Q4-00002-of-00003.gguf")
+    # os.path.join, as the code does, so the separator is a backslash on Windows.
     assert paths == [
-        "/m/model-Q4-00001-of-00003.gguf",
-        "/m/model-Q4-00002-of-00003.gguf",
-        "/m/model-Q4-00003-of-00003.gguf",
+        os.path.join("/m", "model-Q4-00001-of-00003.gguf"),
+        os.path.join("/m", "model-Q4-00002-of-00003.gguf"),
+        os.path.join("/m", "model-Q4-00003-of-00003.gguf"),
     ]
     assert split_shard_paths("/m/model-Q4.gguf") is None
 
