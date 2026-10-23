@@ -22479,6 +22479,7 @@ class LlamaCppBackend:
             "flux",
             # Krea 2 GGUFs from some converters (molbal/krea2-gguf), #14474.
             "krea2",
+            "moss_image",
         )
     )
     # Archs shared by more than one family, so the header alone does NOT say whether the

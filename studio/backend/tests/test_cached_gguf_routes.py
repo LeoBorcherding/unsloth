@@ -2648,6 +2648,16 @@ def test_krea2_gguf_is_an_image_model_not_chat(monkeypatch):
     assert models_route._arch_to_task("qwen_image", ("org/Qwen-Image-GGUF",)) == "text-to-image"
 
 
+def test_moss_image_gguf_is_an_image_model_not_chat():
+    """unsloth/MOSS-Image-SFT-GGUF declares general.architecture = moss_image; unlisted, it fell
+    through to text-generation and the Images picker's On device list dropped it."""
+    for hints in ((), ("unsloth/MOSS-Image-SFT-GGUF", "MOSS-Image-SFT-UD-Q4_K_XL.gguf")):
+        assert models_route._arch_to_task("moss_image", hints) == "text-to-image"
+    from core.inference.llama_cpp import LlamaCppBackend
+
+    assert "moss_image" in LlamaCppBackend._IMAGE_ARCHES
+
+
 def test_arch_to_task_hides_unsupported_diffusion_from_chat():
     assert models_route._arch_to_task("flux") == "text-to-image"
     assert models_route._arch_to_task("z_image") == "text-to-image"
