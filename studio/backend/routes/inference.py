@@ -51,6 +51,7 @@ from hub.services.models.account_access import media_link_account, media_link_ta
 from utils.account_context import (
     OWNER_ACCOUNT_ID,
     account_thread,
+    arun_as,
     current_account,
     current_account_id,
     is_owner_context,
@@ -150,6 +151,7 @@ from core.inference.orchestrator import (
     _summed_tool_loop_stats,
     routed_slot,
 )
+from core.inference.inference_gate import gated_async_client, holds_inference
 from core.inference.llama_admission import (
     LlamaAdmissionCancelled,
     LlamaAdmissionConfig,
@@ -3815,6 +3817,9 @@ from models.inference import (
     GalleryImage,
     GalleryListResponse,
     ImageGenerationRequest,
+    ImageQueueJob,
+    ImageQueueMoveRequest,
+    ImageQueueResponse,
     ImageGenerationData,
     ImageGenerationResponse,
     AudioSpeechRequest,
@@ -5986,7 +5991,7 @@ async def _await_stt_disconnect_then_cancel(request, sidecar, cancel_event) -> N
 
 
 def _cancelable_nonstreaming_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
+    return gated_async_client(
         limits = httpx.Limits(max_connections = 1, max_keepalive_connections = 0),
         trust_env = False,
         verify = _local_ssl_context(),
@@ -8335,11 +8340,22 @@ def _direct_llama_request(counted: bool = True):
     if not counted:
         yield
         return
+    from core.rag.conversation_archive import _pause_prewarm, hold_inference
+
+    # Inference too (caption / OCR, TTS): background archive embedding stays paused. A worker thread (caption /
+    # OCR) also waits out the batch in flight; the TTS route enters this on the event loop, and its generation
+    # runs the gated generate_audio_response in a thread, which waits there.
+    release = hold_inference()
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        _pause_prewarm()
     _direct_llama_request_started()
     try:
         yield
     finally:
         _direct_llama_request_finished()
+        release()
 
 
 def _direct_llama_is_busy() -> bool:
@@ -27461,6 +27477,7 @@ async def _transcribe_audio_bytes(
     )
 
 
+@holds_inference
 async def _transcribe_audio_result(
     raw: bytes,
     model: Optional[str],
@@ -27542,12 +27559,16 @@ async def _transcribe_audio_result(
         )
         load_options = {"on_phase": on_phase} if on_phase is not None else {}
         if source_path is not None and timestamps:
-            await asyncio.to_thread(sidecar.ensure_aligner, model, on_phase, cancel_event)
+            await asyncio.to_thread(
+                holds_inference(sidecar.ensure_aligner), model, on_phase, cancel_event
+            )
             # Started with its aligner now, or transcribe_path would restart it.
             load_options["timestamps"] = True
         await asyncio.to_thread(
-            functools.partial(
-                load_stt, model, serving_engine, cancel_event, device = device, **load_options
+            holds_inference(
+                functools.partial(
+                    load_stt, model, serving_engine, cancel_event, device = device, **load_options
+                )
             )
         )
         loaded = getattr(sidecar, "loaded_model", None)
@@ -27555,19 +27576,21 @@ async def _transcribe_audio_result(
             account_access.note_resident_account(f"stt:{serving_engine}", loaded)
         if source_path is not None:
             result = await asyncio.to_thread(
-                functools.partial(
-                    sidecar.transcribe_path,
-                    source_path,
-                    model,
-                    language,
-                    timestamps = timestamps,
-                    cancel_event = cancel_event,
-                    on_phase = on_phase,
+                holds_inference(
+                    functools.partial(
+                        sidecar.transcribe_path,
+                        source_path,
+                        model,
+                        language,
+                        timestamps = timestamps,
+                        cancel_event = cancel_event,
+                        on_phase = on_phase,
+                    )
                 )
             )
         elif on_progress is not None and serving_engine in ("transformers", "mtmd"):
             result = await asyncio.to_thread(
-                transcribe,
+                holds_inference(transcribe),
                 raw,
                 model,
                 language,
@@ -27576,10 +27599,12 @@ async def _transcribe_audio_result(
                 on_progress = on_progress,
             )
         elif cancel_event is None:
-            result = await asyncio.to_thread(transcribe, raw, model, language, fast)
+            result = await asyncio.to_thread(
+                holds_inference(transcribe), raw, model, language, fast
+            )
         else:
             result = await asyncio.to_thread(
-                transcribe,
+                holds_inference(transcribe),
                 raw,
                 model,
                 language,
@@ -30455,16 +30480,23 @@ def _fit_external_context(
     payload,
     *,
     tools: Optional[list[dict]] = None,
+    branch: Optional[list[dict]] = None,
+    tool_loop: bool = False,
 ) -> tuple[list[dict], Optional[dict], Optional[int]]:
+    """``branch`` is the client's request when ``messages`` is a tool loop's conversation, so recall
+    queries the user's turn rather than a controller re-prompt the loop appended."""
     from core.inference.context_window import (
         estimate_message_tokens_without_unpriced_media,
         estimate_messages_tokens_conservative,
         messages_without_unpriced_media,
         prompt_budget,
+        retrieval_budget,
     )
     from core.inference.llama_cpp import (
+        _archive_and_recall,
         _boundary_metadata,
         _compaction_fit_kwargs,
+        _conversation_recall_reserve,
         _fit_with_instruction_pins,
         _keeps_compaction_boundary,
         _records_boundary,
@@ -30505,7 +30537,7 @@ def _fit_external_context(
     policy = _request_context_policy(payload)
     ratio = _request_compaction_headroom_ratio(payload)
     thread_id = payload.thread_id
-    # No archive to search here, so a checkpoint reset may not start and the fit stays rolling.
+    # Recall below is inline and rolling (every evicting fit), so a checkpoint reset may not start.
     sticky, sticky_is_checkpoint = _sticky_compaction_state(
         thread_id,
         messages,
@@ -30520,13 +30552,37 @@ def _fit_external_context(
         count_tokens = _count,
         keeps_boundary = _keeps_compaction_boundary(thread_id),
         recall_offered = False,
+        reserve_tokens = _conversation_recall_reserve(thread_id),
         sticky_dropped = sticky,
         sticky_is_checkpoint = sticky_is_checkpoint,
         estimate_message = estimate_message_tokens_without_unpriced_media,
         **_compaction_fit_kwargs(policy, ratio),
     )
     if truncation and _records_boundary(truncation):
+        # From the fit, not the recalled list: inline recall swaps the latest user dict and the
+        # anchor is matched by identity.
         truncation = {**truncation, **_boundary_metadata(fitted, messages, ratio)}
+    if truncation:
+        # The catalogue is chosen before this fit, so the turn that first evicts has no
+        # search_conversation: recall inline, as the local plain path does, or a question about
+        # an evicted attachment on that turn gets "I have no record of it".
+        recall = _archive_and_recall(
+            fitted,
+            messages,
+            branch_messages = branch or messages,
+            thread_id = str(thread_id) if thread_id else None,
+            style = "inline",
+            recall_done = not truncation.get("fits", True),
+            recall_budget_tokens = retrieval_budget(
+                context_length,
+                max_tokens,
+                truncation.get("prompt_tokens_after") or 0,
+                reply_returns = tool_loop,
+            ),
+            count_tokens = _count,
+        )
+        fitted = recall["conversation"]
+        truncation = {**truncation, **recall["counts"]}
     return fitted, truncation, max_tokens
 
 
@@ -31319,6 +31375,14 @@ async def _proxy_to_external_provider(
             full_access = bool(payload.bypass_permissions),
             full_access_only = True,
         )
+        # The compaction nudge is not part of the general nudge: once the thread has an archive
+        # the catalogue carries search_conversation, and without this the model is never told
+        # that turns it cannot see exist, so it answers that it has no record of them. Not when
+        # no call can happen: the loop withdraws the catalogue and inline recall still runs.
+        if not _tool_calls_are_disabled(payload):
+            _external_nudge = _apply_compaction_nudge(
+                _external_nudge, external_studio_tools, payload = payload
+            )
     _served_template = None
     if (
         provider_type == "llama_cpp"
@@ -31366,6 +31430,7 @@ async def _proxy_to_external_provider(
     _external_context_fitter = None
     _compaction_fallback = None
     if payload.compaction_threshold and _rolling_context_policy(payload) is not None:
+        _request_branch = chat_messages
 
         async def _external_context_fitter(messages):
             nonlocal _external_truncation
@@ -31374,6 +31439,8 @@ async def _proxy_to_external_provider(
                 messages,
                 payload,
                 tools = _external_fit_tools,
+                branch = _request_branch,
+                tool_loop = run_studio_tool_loop and not _tool_calls_are_disabled(payload),
             )
             fitted = _date_a_fitted_system_turn(fitted, request, run_studio_tool_loop)
             if truncation and truncation.get("dropped_messages"):
@@ -34594,6 +34661,9 @@ async def produce_openai_chat_completions(
                             chunks.append(_gguf_chat_delta_line(ChoiceDelta(content = final_visible)))
                         return chunks
 
+                    # Set by the frame that ends a park: other tabs clear their prompt on it, so it
+                    # is forwarded first and the slot is retaken before the generator does more.
+                    resume_before_next = False
                     while True:
                         if cancel_event.is_set():
                             mark_current_response_failed()
@@ -34603,6 +34673,10 @@ async def produce_openai_chat_completions(
                             mark_current_response_failed()
                             api_monitor.finish(monitor_id, "cancelled")
                             return
+
+                        if resume_before_next:
+                            resume_before_next = False
+                            await _park_admission(False)
 
                         next_task = asyncio.create_task(
                             asyncio.to_thread(next, gen, _tool_sentinel)
@@ -34648,7 +34722,7 @@ async def produce_openai_chat_completions(
                                 and event.get("status") == "awaiting_approval"
                             )
                         ):
-                            await _park_admission(False)
+                            resume_before_next = True
 
                         if event["type"] == "heartbeat":
                             # Tool-wrapper heartbeat while a server-side tool blocks; keeps SSE alive.
@@ -34660,6 +34734,7 @@ async def produce_openai_chat_completions(
                             "tool_args",
                             "skill_load",
                             "tool_model_note",
+                            "tool_approved",
                         ):
                             if (
                                 event["type"] == "skill_load"
@@ -36660,8 +36735,8 @@ async def produce_openai_chat_completions(
                         yield _OPENAI_TOOL_HEARTBEAT_SSE
                         continue
 
-                    if event["type"] in ("tool_output", "tool_args"):
-                        # Live stdout/stderr, or tool-call arguments as the model writes them.
+                    if event["type"] in ("tool_output", "tool_args", "tool_approved"):
+                        # Live stdout/stderr, tool-call arguments as the model writes them, or an approval.
                         if _ui_events:
                             yield f"data: {json.dumps(event)}\n\n"
                         elif _drop_keepalive.due():
@@ -40334,7 +40409,7 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
             from core.inference.llama_cpp import LlamaCppBackend
             from core.inference.llama_keepwarm import mark_response_failed
 
-            client = httpx.AsyncClient(
+            client = gated_async_client(
                 timeout = _llama_streaming_generation_timeout(),
                 trust_env = False,
                 verify = _local_ssl_context(),
@@ -43564,7 +43639,7 @@ async def _responses_stream(
                     _relay_recording_tool_extras(upstream.body_iterator, current_subject)
                 )
             else:
-                client = httpx.AsyncClient(
+                client = gated_async_client(
                     timeout = _llama_streaming_generation_timeout(),
                     trust_env = False,
                     verify = _local_ssl_context(),
@@ -48747,7 +48822,7 @@ async def _anthropic_passthrough_stream(
         # finalizer has anything orphaned to finalize. Each aclose is wrapped in
         # `try: ... except Exception: pass` so nested anyio cleanup noise can't
         # bubble out.
-        client = httpx.AsyncClient(
+        client = gated_async_client(
             timeout = _llama_streaming_generation_timeout(),
             limits = httpx.Limits(max_keepalive_connections = 0),
             trust_env = False,
@@ -50064,7 +50139,7 @@ async def _openai_passthrough_stream_admitted(
 
         # Keep the pre-header window short so accepted SSE clients receive
         # immediate headers in the common timeout-reduced stall.
-        client = httpx.AsyncClient(
+        client = gated_async_client(
             timeout = _llama_streaming_generation_timeout(),
             limits = httpx.Limits(max_keepalive_connections = 0),
             trust_env = False,
@@ -52674,7 +52749,12 @@ async def generate_diffusion_image(
 ):
     if request.provider_id:
         return await _external_image_generation(request, http_request)
-    return await _generate_diffusion_image_core(request)
+    global _direct_image_runs
+    _direct_image_runs += 1
+    try:
+        return await _generate_diffusion_image_core(request)
+    finally:
+        _direct_image_runs -= 1
 
 
 async def _generate_diffusion_image_core(
@@ -53931,6 +54011,173 @@ async def cancel_diffusion_generation(
         cancel = functools.partial(cancel, expected_account = expected)
     cancelled = await asyncio.get_running_loop().run_in_executor(_CANCEL_EXECUTOR, cancel)
     return {"cancelled": bool(cancelled or upsampling)}
+
+
+# ── Image generation queue ──
+
+# Direct /images/generate runs in flight: the queue waits them out, so a job queued behind one starts after it.
+_direct_image_runs = 0
+_image_queue = None
+_QUEUE_MODEL_CHANGED_MSG = (
+    "The image model changed since this job was queued. Queue it again on the loaded model."
+)
+
+
+def _resident_load(status: dict):
+    from core.inference.diffusion_families import load_identity
+    if not status.get("loaded"):
+        return None
+    return load_identity(status.get("repo_id"), status.get("base_repo"), status.get("family"))
+
+
+async def _wait_for_direct_image_runs() -> None:
+    while _direct_image_runs > 0 or _diffusion_persist_active > 0:
+        await asyncio.sleep(0.25)
+
+
+async def _run_queued_image_job(job) -> list[str]:
+    from core.inference.diffusion_engine_router import get_active_diffusion_engine
+    from core.inference.diffusion_families import DIFFUSION_CANCELLED_MSG
+    from core.inference.image_queue import JobCancelled
+
+    async def _run() -> list[str]:
+        # v1 never reloads: a job runs only on the model that was resident when it was queued.
+        status = await asyncio.to_thread(get_active_diffusion_engine().status)
+        if _resident_load(status) != job.load:
+            raise RuntimeError(_QUEUE_MODEL_CHANGED_MSG)
+        try:
+            response = await _generate_diffusion_image_core(job.request)
+        except HTTPException as exc:
+            if exc.status_code == 409 and exc.detail == DIFFUSION_CANCELLED_MSG:
+                raise JobCancelled() from exc
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("message") or detail.get("detail") or json.dumps(detail)
+            raise RuntimeError(str(detail)) from exc
+        return [image.id for image in response.images]
+
+    return await arun_as(job.account, _run())
+
+
+def _get_image_queue():
+    global _image_queue
+    if _image_queue is None:
+        from core.inference.image_queue import ImageGenerationQueue
+        _image_queue = ImageGenerationQueue(_run_queued_image_job, _wait_for_direct_image_runs)
+    return _image_queue
+
+
+def _image_queue_job(queue, job) -> ImageQueueJob:
+    request = job.request
+    return ImageQueueJob(
+        id = job.id,
+        status = job.status,
+        position = queue.position(job),
+        prompt = request.prompt,
+        width = request.width,
+        height = request.height,
+        steps = request.steps if "steps" in request.model_fields_set else None,
+        seed = request.seed,
+        batch_size = request.batch_size,
+        workflow = request.workflow,
+        loras = [f"{l.id}:{l.weight:g}" for l in request.loras or []],
+        created_at = job.created_at,
+        started_at = job.started_at,
+        finished_at = job.finished_at,
+        error = job.error,
+        image_ids = job.image_ids,
+    )
+
+
+def _image_queue_response(queue) -> ImageQueueResponse:
+    from core.inference.image_queue import FINISHED, QUEUED, RUNNING
+
+    jobs = queue.jobs(current_account_id())
+    ordered = (
+        [job for job in jobs if job.status == RUNNING]
+        + [job for job in jobs if job.status == QUEUED]
+        + [job for job in reversed(jobs) if job.status in FINISHED]
+    )
+    return ImageQueueResponse(jobs = [_image_queue_job(queue, job) for job in ordered])
+
+
+def _queued_job_or_404(queue, job_id: str):
+    job = queue.get(current_account_id(), job_id)
+    if job is None:
+        raise HTTPException(status_code = 404, detail = "Queued image job not found.")
+    return job
+
+
+@studio_router.post("/images/queue", response_model = ImageQueueJob)
+async def enqueue_diffusion_image(
+    request: DiffusionGenerateRequest, current_subject: str = Depends(get_current_subject)
+):
+    """Add a generate request to the queue. Jobs run one at a time, in queue order, through the same path as
+    POST /images/generate, and their images land in the gallery. A job runs only on the model loaded when it was
+    queued: nothing loaded is a 409 here, and a model swapped in meanwhile fails the job instead of reloading."""
+    from core.inference.diffusion_engine_router import get_active_diffusion_engine
+    from core.inference.diffusion_families import DIFFUSION_NOT_LOADED_MSG
+    from core.inference.image_queue import QueueFull
+
+    if request.provider_id:
+        raise HTTPException(
+            status_code = 400,
+            detail = "The queue runs on the loaded image model; a saved connection generates directly.",
+        )
+    status = await asyncio.to_thread(get_active_diffusion_engine().status)
+    if account_access.managed_account():
+        await asyncio.to_thread(account_access.require_media_generation_access, status, "diffusion")
+        await asyncio.to_thread(account_access.require_media_adapters, request)
+    load = _resident_load(status)
+    if load is None:
+        raise HTTPException(status_code = 409, detail = DIFFUSION_NOT_LOADED_MSG)
+    queue = _get_image_queue()
+    try:
+        job = queue.enqueue(current_account(), request, load)
+    except QueueFull as exc:
+        raise HTTPException(status_code = 409, detail = str(exc))
+    return _image_queue_job(queue, job)
+
+
+@studio_router.get("/images/queue", response_model = ImageQueueResponse)
+async def list_diffusion_queue(current_subject: str = Depends(get_current_subject)):
+    return _image_queue_response(_get_image_queue())
+
+
+@studio_router.post("/images/queue/{job_id}/cancel", response_model = ImageQueueJob)
+async def cancel_diffusion_queue_job(
+    job_id: str, current_subject: str = Depends(get_current_subject)
+):
+    """Cancel one job. A queued job never runs; the running one stops like Stop does, and the queue moves on."""
+    from core.inference.image_queue import RUNNING
+
+    queue = _get_image_queue()
+    job = _queued_job_or_404(queue, job_id)
+    queue.cancel(job.account_id, job.id)
+    if job.status == RUNNING:
+        await cancel_diffusion_generation(target = None, current_subject = current_subject)
+    return _image_queue_job(queue, job)
+
+
+@studio_router.post("/images/queue/{job_id}/move", response_model = ImageQueueResponse)
+async def move_diffusion_queue_job(
+    job_id: str,
+    payload: ImageQueueMoveRequest,
+    current_subject: str = Depends(get_current_subject),
+):
+    queue = _get_image_queue()
+    job = _queued_job_or_404(queue, job_id)
+    if queue.move(job.account_id, job.id, payload.index) is None:
+        raise HTTPException(status_code = 409, detail = "Only a queued job can be moved.")
+    return _image_queue_response(queue)
+
+
+@studio_router.delete("/images/queue", response_model = ImageQueueResponse)
+async def clear_diffusion_queue(current_subject: str = Depends(get_current_subject)):
+    """Drop your queued and finished jobs. A running job finishes; Stop it to end it early."""
+    queue = _get_image_queue()
+    queue.clear(current_account_id())
+    return _image_queue_response(queue)
 
 
 # ── FLUX.3 prompt upsampler (llama.cpp sidecar) ──────────────────────────────────────────────────────────
