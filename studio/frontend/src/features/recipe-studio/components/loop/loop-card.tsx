@@ -37,7 +37,7 @@ const NUMBER_FIELDS: Array<{
   { key: "baseRows", label: "Rows, first iteration", step: 50, min: 1 },
   { key: "rowsPerIteration", label: "Rows added each time", step: 50, min: 1 },
   { key: "holdoutRows", label: "Held-out rows", step: 16, min: 0 },
-  { key: "maxSteps", label: "Train steps", step: 10, min: 1 },
+  { key: "epochs", label: "Epochs", step: 1, min: 1 },
 ];
 
 function formatScore(value: number | null): string {

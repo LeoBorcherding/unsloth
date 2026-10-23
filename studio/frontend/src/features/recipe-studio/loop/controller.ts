@@ -26,7 +26,7 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   rowsPerIteration: 200,
   holdoutRows: 64,
   modelName: "unsloth/SmolLM2-135M-Instruct",
-  maxSteps: 30,
+  epochs: 1,
   learningRate: "2e-4",
 };
 

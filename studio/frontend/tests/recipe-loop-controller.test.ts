@@ -235,7 +235,7 @@ test("training reads the recipe datasets through the recipes/ dataset root", () 
       { version: "recipe_b", rows: 50, executionId: null },
     ],
     holdout: { version: "recipe_hold", rows: 32, executionId: null },
-    config: { modelName: "unsloth/SmolLM2-135M-Instruct", maxSteps: 30, learningRate: "2e-4" },
+    config: { modelName: "unsloth/SmolLM2-135M-Instruct", epochs: 1, learningRate: "2e-4" },
     iteration: 2,
   });
   assert.deepEqual(request.local_datasets, [
@@ -247,7 +247,7 @@ test("training reads the recipe datasets through the recipes/ dataset root", () 
   const noHoldout = buildLoopTrainingRequest({
     datasets: [],
     holdout: null,
-    config: { modelName: "m", maxSteps: 1, learningRate: "1e-4" },
+    config: { modelName: "m", epochs: 1, learningRate: "1e-4" },
     iteration: 1,
   });
   assert.deepEqual(noHoldout.local_eval_datasets, []);

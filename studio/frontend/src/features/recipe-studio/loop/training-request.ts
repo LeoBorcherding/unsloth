@@ -24,7 +24,7 @@ export function datasetVersionFromArtifact(
 export function buildLoopTrainingRequest(input: {
   datasets: LoopDataset[];
   holdout: LoopDataset | null;
-  config: { modelName: string; maxSteps: number; learningRate: string };
+  config: { modelName: string; epochs: number; learningRate: string };
   iteration: number;
 }): Record<string, unknown> {
   const { datasets, holdout, config } = input;
@@ -37,7 +37,9 @@ export function buildLoopTrainingRequest(input: {
     local_eval_datasets: holdout ? [recipeDatasetRef(holdout)] : [],
     // Two evals per run; the last one is the iteration's score.
     eval_steps: 0.5,
-    max_steps: config.maxSteps,
+    num_epochs: config.epochs,
+    batch_size: 8,
+    gradient_accumulation_steps: 1,
     learning_rate: config.learningRate,
     load_in_4bit: true,
     max_seq_length: 1024,

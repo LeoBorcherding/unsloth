@@ -18,7 +18,8 @@ export type LoopConfig = {
   // Generated once and scored against every iteration; 0 lets training split its own eval rows.
   holdoutRows: number;
   modelName: string;
-  maxSteps: number;
+  // Epochs over every row so far, so a bigger dataset also trains longer.
+  epochs: number;
   learningRate: string;
 };
 
