@@ -70,7 +70,7 @@ const ADVANCED_FIELDS: NumberField[] = [
   { key: "batchSize", label: "Batch size", hint: "Rows per device step." },
   {
     key: "contextLength",
-    label: "Max sequence length",
+    label: "Max seq length",
     hint: "Longer rows are truncated.",
   },
   {
@@ -196,7 +196,7 @@ export function TrainDialog({
             summary={summarizeAdvancedTrainSettings(config)}
           />
         </CollapsibleTrigger>
-        <CollapsibleContent className="mt-3 space-y-4">
+        <CollapsibleContent className="mt-3 space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <NameField
               label="Card name"
@@ -219,6 +219,8 @@ export function TrainDialog({
                 }
               />
             </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
             <div className="grid gap-1.5">
               <FieldLabel
                 label="Method"
