@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { Button } from "@/components/ui/button";
+import { usePlatformStore } from "@/config/env";
 import {
   Tooltip,
   TooltipContent,
@@ -9,6 +10,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   parseYamlConfig,
+  parseYamlRlSettings,
   serializeConfigToYaml,
   useTrainingConfigStore,
 } from "@/features/training";
@@ -41,7 +43,16 @@ export function ConfigActions() {
   const applyYamlConfig = (content: string, filename: string) => {
     try {
       const config = parseYamlConfig(content);
-      useTrainingConfigStore.getState().applyConfigPatch(config);
+      const { trainingObjective, ...rl } = parseYamlRlSettings(content);
+      const store = useTrainingConfigStore.getState();
+      // MLX has no RL trainer: an RL file loads its other settings for SFT.
+      const isMac = usePlatformStore.getState().deviceType === "mac";
+      // Objective first: it swaps in the RL learning rate, which the file's own value then overrides.
+      store.setTrainingObjective(isMac ? "sft" : trainingObjective);
+      store.applyConfigPatch(config);
+      if (!isMac && Object.keys(rl).length > 0) {
+        useTrainingConfigStore.setState(rl);
+      }
       toast.success(t("studio.training.configLoaded"), {
         description: filename,
       });
@@ -139,7 +150,7 @@ export function ConfigActions() {
           <Button
             variant="outline"
             size="sm"
-            className="h-9 cursor-pointer rounded-lg"
+            className="h-9 cursor-pointer rounded-full"
             onClick={() => void handleLoadConfig()}
           >
             <HugeiconsIcon icon={CloudUploadIcon} className="size-3.5" />
@@ -155,7 +166,7 @@ export function ConfigActions() {
           <Button
             variant="outline"
             size="sm"
-            className="h-9 cursor-pointer rounded-lg"
+            className="h-9 cursor-pointer rounded-full"
             onClick={handleSaveConfig}
           >
             <HugeiconsIcon icon={Archive04Icon} className="size-3.5" />
@@ -171,7 +182,7 @@ export function ConfigActions() {
           <Button
             variant="outline"
             size="sm"
-            className="h-9 cursor-pointer rounded-lg"
+            className="h-9 cursor-pointer rounded-full"
             onClick={handleResetConfig}
             disabled={!selectedModel}
           >

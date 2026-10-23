@@ -105,7 +105,6 @@ SKILL_NAME = "matrix-skill"
 
 @seeder("skill")
 def seed_skill(account) -> dict[str, str]:
-    # Skills of a managed account live in its own workspace; the owner reads the home folders.
     from core.inference import skills as skills_module
 
     if account.is_owner:
@@ -113,7 +112,7 @@ def seed_skill(account) -> dict[str, str]:
     else:
         root = run_as(account, workspace_root) / "skills" / SKILL_NAME
     root.mkdir(parents = True, exist_ok = True)
-    # Quoted: the sentinel carries a colon, which a plain YAML scalar cannot.
+    # Quoted: the sentinel carries a colon.
     (root / "SKILL.md").write_text(
         f"---\nname: {SKILL_NAME}\ndescription: {json.dumps(SENTINEL, ensure_ascii = False)}\n"
         "---\nInstructions\n",
@@ -123,6 +122,25 @@ def seed_skill(account) -> dict[str, str]:
 
     _invalidate_agent_skills_cache()
     return {"name": SKILL_NAME}
+
+
+REWARD_NAME = "matrix-reward"
+
+
+@seeder("reward")
+def seed_reward(account) -> dict[str, str]:
+    # Library rewards live in each account's own workspace (the install root for the owner).
+    from core.training import rewards as rewards_module
+
+    root = run_as(account, rewards_module._user_root) / REWARD_NAME
+    root.mkdir(parents = True, exist_ok = True)
+    (root / "REWARD.md").write_text(
+        f"---\nname: {REWARD_NAME}\nkind: rule\n"
+        f"description: {json.dumps(SENTINEL, ensure_ascii = False)}\n"
+        "---\ntype: length\nmax_chars: 10\nscore: {over: -1.0, under: 0.0}\n",
+        encoding = "utf-8",
+    )
+    return {"name": REWARD_NAME}
 
 
 CORE_FACTORIES = {
@@ -166,14 +184,12 @@ CORE_FACTORIES = {
         "mcp", {"display_name": EDITED}, fragment = EDITED
     ),
     "routes.mcp_servers:DELETE:/{server_id}": Factory("mcp", success = 204),
-    # Seeded disabled: its own account gets 400 before any network call, every other account 404.
     "routes.mcp_servers:GET:/{server_id}/ui-resource": Factory(
         "mcp", success = 400, query = {"uri": "ui://matrix/app.html"}
     ),
     "routes.mcp_servers:POST:/{server_id}/ui-tool-call": Factory(
         "mcp", {"tool_name": "refresh"}, success = 400
     ),
-    # Nothing cached for the seeded server: its own account gets 409, every other account 404.
     "routes.mcp_servers:GET:/{server_id}/tools": Factory("mcp", success = 409),
     "routes.skills:PUT:/{name}/enabled": Factory(
         "skill", {"enabled": False}, fragment = SKILL_NAME, absent = SENTINEL
@@ -186,6 +202,11 @@ CORE_FACTORIES = {
         absent = SENTINEL,
     ),
     "routes.skills:DELETE:/{name}": Factory("skill", success = 204, absent = SENTINEL),
+    # The export re-renders the YAML, which single-quotes the sentinel and doubles its apostrophe.
+    "routes.rewards:GET:/{name}/export": Factory(
+        "reward", fragment = SENTINEL.replace("'", "''"), absent = SENTINEL
+    ),
+    "routes.rewards:DELETE:/{name}": Factory("reward", success = 204, absent = SENTINEL),
 }
 
 

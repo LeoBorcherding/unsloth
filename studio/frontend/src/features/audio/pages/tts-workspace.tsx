@@ -439,7 +439,7 @@ function ClipBadge({ text }: { text: string | null | undefined }) {
   return (
     <span
       title={text}
-      className="max-w-[40%] shrink-0 truncate rounded-4xl bg-muted px-2 py-0.5 text-ui-11 text-muted-foreground"
+      className="max-w-[40%] shrink-0 truncate rounded-full bg-muted px-2 py-0.5 text-ui-11 text-muted-foreground"
     >
       {text}
     </span>

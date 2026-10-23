@@ -14,12 +14,18 @@ import {
 import { translate, useT } from "@/i18n";
 import { PlayIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { type ReactElement, useEffect, useState } from "react";
+import { type ReactElement, Suspense, lazy, useEffect, useState } from "react";
 import { ChartsSection } from "./sections/charts-section";
 import { ProgressSection } from "./sections/progress-section";
 import { mapRunConfigToOverride } from "./sections/run-config-override";
 
 type StudioT = ReturnType<typeof useT>;
+
+const RlChartsGrid = lazy(() =>
+  import("./sections/charts/rl-charts").then((module) => ({
+    default: module.RlChartsGrid,
+  })),
+);
 
 interface HistoricalTrainingViewProps {
   runId: string;
@@ -179,7 +185,7 @@ export function HistoricalTrainingView({
 
   if (loading) {
     return (
-      <div className="rounded-xl border bg-card p-8 text-sm text-muted-foreground">
+      <div className="rounded-2xl border bg-card p-8 text-sm text-muted-foreground">
         {t("studio.history.loadingRun")}
       </div>
     );
@@ -187,13 +193,16 @@ export function HistoricalTrainingView({
 
   if (error || !detail) {
     return (
-      <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-8 text-sm text-red-500">
+      <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-8 text-sm text-red-500">
         {error ?? t("studio.history.runNotFound")}
       </div>
     );
   }
 
   const viewData = mapToViewData(detail, t);
+  const rlHistory = (detail.metrics.rl_history ?? []).map(
+    ({ step, ...values }) => ({ step, values }),
+  );
   const configOverride = mapRunConfigToOverride(detail.config);
 
   return (
@@ -237,6 +246,11 @@ export function HistoricalTrainingView({
         gradNormHistory={viewData.gradNormHistory}
         evalLossHistory={viewData.evalLossHistory}
       />
+      {rlHistory.length > 0 ? (
+        <Suspense fallback={null}>
+          <RlChartsGrid history={rlHistory} />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

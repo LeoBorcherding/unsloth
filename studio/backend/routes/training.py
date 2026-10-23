@@ -100,6 +100,7 @@ from hub.dependencies import get_hf_token, get_request_hf_token
 from hub.utils.host_paths import redact_host_paths
 from hub.utils.hf_tokens import HfTokenArg, cached_read_refused, hf_token_arg
 
+from utils.security.consent import managed_remote_code_refused
 from utils.utils import (
     canonical_model_repo_id,
     hf_dns_dead,
@@ -117,6 +118,7 @@ from models import (
     TrainingProgress,
 )
 from models.training import (
+    _normalized_reward_name,
     DiffusionCaptionUpdateRequest,
     DiffusionDatasetExample,
     DiffusionDatasetExamplesResponse,
@@ -1259,6 +1261,9 @@ def _reject_untrainable_model_request(
                         "training_remote_model_not_decision",
                         f"{request.model_name} is not a decision model (Laya or Clef).",
                     )
+                if _is_decision_checkpoint(request) and managed_account():
+                    # A Hub decision adapter loads its base as well: authorize it like any adapter.
+                    _authorize_adapter_base(request.model_name, hf_token)
                 return _ModelPreflightResult(model_name, model_local_path, cached_model_pin)
             if remote_format == "gguf":
                 raise _training_start_error(
@@ -1293,9 +1298,27 @@ def _reject_untrainable_model_request(
                 "needs joint_head.safetensors and joint_head_config.json beside config.json "
                 "(or LoRA adapters).",
             )
+        if managed_account() and _has_adapter_metadata(folder):
+            # FastDecisionModel loads the adapter's base: check and pin it like any adapter.
+            from core.export.decision import DecisionExportError, adapter_base
+
+            try:
+                adapter_base(folder)
+            except DecisionExportError as exc:
+                raise _training_start_error(400, "training_decision_adapter_base", str(exc))
+            base = _authorize_adapter_base(str(folder), hf_token)
+            # The worker re-reads the pin at the model root, so pin only a root adapter.
+            pin = None if request.model_subfolder else base or ""
+            return _ModelPreflightResult(model_name, model_local_path, None, adapter_base_pin = pin)
         return _ModelPreflightResult(model_name, model_local_path, None)
     has_trainable_weights = _has_trainable_local_weights(path, request.model_name)
     if has_trainable_weights:
+        if managed_account() and _has_adapter_metadata(path):
+            # The loader still follows adapter_config.json to its base, so check and pin it.
+            adapter_base = _authorize_adapter_base(str(path), hf_token)
+            return _ModelPreflightResult(
+                model_name, model_local_path, cached_model_pin, adapter_base_pin = adapter_base or ""
+            )
         return _ModelPreflightResult(model_name, model_local_path, cached_model_pin)
     if _has_adapter_metadata(path) or (
         model_format == "adapter" and _has_local_adapter_weights(path)
@@ -1398,7 +1421,7 @@ def _validate_decision_request(request: TrainingStartRequest, via_api_key: bool 
     if not is_owner_context():
         raise HTTPException(
             status_code = 403,
-            detail = "Only the Studio owner can fine-tune decision models, since only the "
+            detail = "Only the Unsloth owner can fine-tune decision models, since only the "
             "owner's fine-tunes can be served by the Decision API.",
         )
     if sys.version_info < (3, 10):
@@ -1535,6 +1558,30 @@ _RESUME_CACHE_FIELDS = (
     "dataset_local_path",
     "dataset_snapshot_path",
 )
+
+
+def _stored_reward_specs(stored: dict) -> dict[str, dict]:
+    """name -> reward spec stored with a run. A resume scores with these, not the library's
+    current rules, which may have been edited or deleted since."""
+    specs = stored.get("reward_specs")
+    if not isinstance(specs, list):
+        return {}
+    return {
+        spec["name"]: spec
+        for spec in specs
+        if isinstance(spec, dict) and isinstance(spec.get("name"), str) and spec.get("rule")
+    }
+
+
+def _resume_reward_mismatch(stored_specs: dict[str, dict], selections) -> bool:
+    """A resumed GRPO run must keep the source run's rewards and weights: the checkpoint's
+    optimizer state belongs to that summed reward."""
+    if not stored_specs:
+        return False
+    stored = {name: float(spec.get("weight", 1.0)) for name, spec in stored_specs.items()}
+    return stored != {_normalized_reward_name(s.name): float(s.weight) for s in selections}
+
+
 _RESUME_CHECKPOINT_STRUCTURE_FIELDS = (
     "load_in_4bit",
     "use_lora",
@@ -1608,6 +1655,13 @@ def _prepare_resume_resource_provenance(
                 detail = "The training type does not match the source run.",
             )
         request.training_type = stored_training_type
+    # The checkpoint's optimizer and trainer state belong to one loss.
+    stored_objective = stored.get("objective") or "sft"
+    if request.objective != stored_objective:
+        raise HTTPException(
+            status_code = 409,
+            detail = "The training objective does not match the source run.",
+        )
     for field in _RESUME_CHECKPOINT_STRUCTURE_FIELDS:
         if field not in stored:
             continue
@@ -2256,6 +2310,40 @@ async def start_training(
             if not request.dataset_streaming and _hf_dataset_is_the_source(request):
                 await asyncio.to_thread(_refuse_unauthorized_cached_dataset, request, hf_token)
 
+        reward_specs: list[dict] = []
+        if request.objective != "sft" and _hw.DEVICE == _hw.DeviceType.MLX:
+            raise HTTPException(
+                status_code = 400,
+                detail = f"{request.objective.upper()} is not available on Apple Silicon (MLX) yet.",
+            )
+        if request.objective == "grpo":
+            from core.training.rewards import (
+                RewardError,
+                RewardNotFoundError,
+                get_reward,
+                normalize_reward_name,
+            )
+
+            stored_specs = (
+                _stored_reward_specs(training_run_config(resume_run)) if resume_run else {}
+            )
+            if resume_run and _resume_reward_mismatch(stored_specs, request.grpo_rewards):
+                raise HTTPException(
+                    status_code = 409,
+                    detail = "The GRPO rewards do not match the source run.",
+                )
+            # Stored with the run, so later library edits never change what it says it trained with.
+            try:
+                for selection in request.grpo_rewards:
+                    spec = stored_specs.get(normalize_reward_name(selection.name)) or get_reward(
+                        selection.name
+                    )
+                    reward_specs.append({**spec, "weight": selection.weight})
+            except RewardNotFoundError as exc:
+                raise HTTPException(status_code = 404, detail = str(exc)) from exc
+            except RewardError as exc:
+                raise HTTPException(status_code = 400, detail = str(exc)) from exc
+
         device_backend = getattr(_hw.DEVICE, "value", "") or ""
         training_optimizer = normalize_training_optimizer_for_device(
             request.optim,
@@ -2331,7 +2419,21 @@ async def start_training(
             "use_rslora": request.use_rslora,
             "use_loftq": request.use_loftq,
             "use_dora": request.use_dora,
-            "train_on_completions": request.train_on_completions,
+            "train_on_completions": request.train_on_completions and request.objective == "sft",
+            "objective": request.objective,
+            "rl_settings": {
+                "beta": request.rl_beta,
+                "max_prompt_length": request.rl_max_prompt_length,
+                "num_generations": request.grpo_num_generations,
+                "max_completion_length": request.grpo_max_completion_length,
+                "temperature": request.grpo_temperature,
+                "variant": request.grpo_variant,
+                "enable_thinking": request.grpo_enable_thinking,
+                "system_prompt": (request.rl_system_prompt or "").strip() or None,
+                "mask_truncated_completions": request.grpo_mask_truncated_completions,
+                "epsilon_high": request.grpo_epsilon_high,
+            },
+            "reward_specs": reward_specs,
             "finetune_vision_layers": request.finetune_vision_layers,
             "finetune_language_layers": request.finetune_language_layers,
             "finetune_attention_modules": request.finetune_attention_modules,
@@ -2354,7 +2456,8 @@ async def start_training(
             "require_exact_dataset_resource": resume_requires_exact_dataset,
             "require_validated_model_snapshot": cached_model_pin is not None,
             "adapter_base_pin": getattr(model_preflight, "adapter_base_pin", None),
-            "trust_remote_code": request.trust_remote_code,
+            # A managed account never forwards remote code to the worker.
+            "trust_remote_code": request.trust_remote_code and not managed_remote_code_refused(),
             "approved_remote_code_fingerprint": request.approved_remote_code_fingerprint,
             "subject": current_subject,
             "gpu_ids": request.gpu_ids,
@@ -2877,6 +2980,7 @@ def _build_training_status(
             "grad_norm_steps": list(getattr(backend, "grad_norm_step_history", [])),
             "eval_loss": list(backend.eval_loss_history),
             "eval_steps": list(backend.eval_step_history),
+            "rl": list(getattr(backend, "rl_metric_history", [])),
         }
 
     return TrainingStatus(
@@ -3049,6 +3153,7 @@ async def stream_training_progress(
             progress: Optional[Any] = None,
             grad_norm_override: Optional[float] = None,
             eval_loss_override: Optional[float] = None,
+            rl_metrics_override: Optional[dict] = None,
         ) -> TrainingProgress:
             total = max(total_steps, 0)
             if step < 0 or total == 0:
@@ -3066,6 +3171,10 @@ async def stream_training_progress(
             eval_loss = eval_loss_override
             if eval_loss is None and progress:
                 eval_loss = getattr(progress, "eval_loss", None)
+            if rl_metrics_override is not None:
+                rl_metrics = rl_metrics_override or None
+            else:
+                rl_metrics = getattr(progress, "rl_metrics", None) if progress else None
 
             return TrainingProgress(
                 job_id = job_id,
@@ -3081,6 +3190,7 @@ async def stream_training_progress(
                 grad_norm = grad_norm,
                 num_tokens = num_tokens,
                 eval_loss = eval_loss,
+                rl_metrics = rl_metrics,
             )
 
         def format_sse(
@@ -3113,6 +3223,12 @@ async def stream_training_progress(
                     getattr(backend, "grad_norm_history", []),
                 )
             }
+            # Each replayed step carries its own RL numbers, not the latest ones.
+            rl_by_step = {
+                entry["step"]: {k: v for k, v in entry.items() if k != "step"}
+                for entry in getattr(backend, "rl_metric_history", [])
+                if isinstance(entry, dict) and "step" in entry
+            }
             for i, step_val in enumerate(backend.step_history):
                 if not is_current_job():
                     return
@@ -3134,6 +3250,7 @@ async def stream_training_progress(
                         epoch_replay,
                         progress = tp_replay,
                         grad_norm_override = grad_norm_by_step.get(step_val),
+                        rl_metrics_override = rl_by_step.get(step_val, {}),
                     )
                     if not is_current_job():
                         return
@@ -3586,6 +3703,11 @@ def _resolve_diffusion_data_dir(raw: str) -> Path:
     from utils.paths import datasets_root
 
     value = str(raw or "").strip()
+    from utils.paths.path_utils import is_network_or_device_path
+
+    # Before dataset resolution touches the disk: a share path is already an outbound SMB sign-in.
+    if is_network_or_device_path(value) and managed_account():
+        raise HTTPException(status_code = 403, detail = "Path is outside this account's workspace")
     if value and "\x00" not in value:
         p = Path(value)
         # A single component that is not "..", so joining under datasets_root() cannot escape it.
@@ -4416,7 +4538,7 @@ async def upload_diffusion_dataset(
     if cleaned.casefold() in _reserved_diffusion_dataset_names():
         raise HTTPException(
             status_code = 400,
-            detail = f"'{cleaned}' is reserved for Studio's internal dataset storage.",
+            detail = f"'{cleaned}' is reserved for Unsloth's internal dataset storage.",
         )
     folder = _resolve_dataset_folder(name, must_exist = False)
     # serialize same-folder imports because the training interlock permits mutations; duplicate checks run here
