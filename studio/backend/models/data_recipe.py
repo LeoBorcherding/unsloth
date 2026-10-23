@@ -71,7 +71,7 @@ class TrainingSplitRequest(BaseModel):
         description = "Execution artifact path captured by the UI for completed runs",
     )
     holdout_percent: int = Field(default = 0, ge = 0, le = 50)
-    seed: int = Field(default = 3407, ge = 0)
+    seed: int = Field(default = 3407, ge = 0, le = 2**31 - 1)
 
 
 class TrainingSplitResponse(BaseModel):
