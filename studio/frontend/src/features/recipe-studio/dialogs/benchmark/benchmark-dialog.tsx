@@ -109,7 +109,12 @@ export function BenchmarkDialog({
 
   return (
     <div className="space-y-4">
-      <NameField value={config.name} onChange={(value) => onUpdate({ name: value })} />
+      <NameField
+        label="Card name"
+        hint="Name shown on the canvas."
+        value={config.name}
+        onChange={(value) => onUpdate({ name: value })}
+      />
       <div className="grid gap-1.5">
         <FieldLabel
           label="Model to test"
@@ -247,7 +252,7 @@ export function BenchmarkDialog({
           <FieldLabel
             label="Held-out %"
             htmlFor={id("holdout")}
-            hint="The last N% of the run's rows. Train only on the rows before them."
+            hint="For a model you picked by hand: the last N% of the run's rows. A wired-in Train card's own held-out rows replace this."
           />
           <Input
             id={id("holdout")}

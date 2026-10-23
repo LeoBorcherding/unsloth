@@ -18,7 +18,13 @@ from pydantic import BaseModel, Field
 
 from auth.authentication import get_current_credential
 from auth.storage import CredentialRotated
-from core.data_recipe.benchmark import MAX_BENCHMARK_ROWS, SCORERS, run_benchmark
+from core.data_recipe.benchmark import (
+    MAX_BENCHMARK_ROWS,
+    SCORERS,
+    BenchmarkHoldoutError,
+    read_holdout_rows,
+    run_benchmark,
+)
 from core.data_recipe.service import require_ui_session_for_host_env_credentials
 from core.training.account_jobs import managed_account
 from loggers import get_logger
@@ -39,7 +45,10 @@ class BenchmarkBaseline(BaseModel):
 
 
 class BenchmarkRequest(BaseModel):
-    rows: list[dict[str, Any]] = Field(min_length = 1, max_length = MAX_BENCHMARK_ROWS)
+    rows: list[dict[str, Any]] = Field(default_factory = list, max_length = MAX_BENCHMARK_ROWS)
+    # A Train card's held-out split; read here instead of ``rows`` so the scored rows are the ones it never saw.
+    holdout_path: Optional[str] = None
+    max_rows: int = Field(default = 20, ge = 1, le = MAX_BENCHMARK_ROWS)
     prompt_column: str = Field(min_length = 1)
     reference_column: Optional[str] = None
     system_prompt: str = ""
@@ -146,6 +155,14 @@ def start_benchmark(
     request: Request,
     credential: tuple = Depends(get_current_credential),
 ):
+    rows = payload.rows
+    if payload.holdout_path:
+        try:
+            rows = read_holdout_rows(payload.holdout_path, payload.max_rows)
+        except BenchmarkHoldoutError as exc:
+            raise HTTPException(status_code = 400, detail = str(exc)) from exc
+    if not rows:
+        raise HTTPException(status_code = 400, detail = "No held-out rows to score.")
     if payload.scorer == "judge" and not payload.judge_alias:
         raise HTTPException(status_code = 400, detail = "Pick a judge model for LLM judge scoring.")
     if payload.baseline.mode == "alias" and not payload.baseline.alias:
@@ -215,7 +232,7 @@ def start_benchmark(
         raise
 
     spec = {
-        "rows": payload.rows,
+        "rows": rows,
         "prompt_column": payload.prompt_column,
         "reference_column": payload.reference_column,
         "system_prompt": payload.system_prompt,
@@ -229,7 +246,7 @@ def start_benchmark(
         _jobs[job_id] = {
             "job_id": job_id,
             "status": "running",
-            "progress": {"done": 0, "total": len(payload.rows) * (2 if "baseline" in targets else 1)},
+            "progress": {"done": 0, "total": len(rows) * (2 if "baseline" in targets else 1)},
             "result": None,
             "error": None,
             "started_at": time.time(),

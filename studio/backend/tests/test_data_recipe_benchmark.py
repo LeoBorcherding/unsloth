@@ -192,3 +192,68 @@ def test_managed_account_cannot_reach_external_providers(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         route.start_benchmark(payload, SimpleNamespace(), (None, False))
     assert exc.value.status_code == 403
+
+
+def _write_split(root, rows):
+    import pyarrow
+    import pyarrow.parquet as pyarrow_parquet
+
+    split = root / "recipe-run" / "splits" / "holdout-20-seed3407"
+    split.mkdir(parents = True)
+    pyarrow_parquet.write_table(pyarrow.Table.from_pylist(rows), split / "holdout.parquet")
+    return split / "holdout.parquet"
+
+
+def test_train_card_holdout_is_read_server_side(monkeypatch, tmp_path):
+    from core.data_recipe import huggingface
+
+    monkeypatch.setattr(huggingface, "recipe_datasets_root", lambda: tmp_path)
+    monkeypatch.setattr(huggingface, "resolve_dataset_path", lambda value: __import__("pathlib").Path(value))
+    path = _write_split(tmp_path, ROWS)
+    from core.data_recipe.benchmark import read_holdout_rows
+
+    assert read_holdout_rows(str(path), 2) == ROWS[:2]
+
+    captured = {}
+    monkeypatch.setattr(route, "_inject_local_providers", _fake_inject)
+    monkeypatch.setattr(route, "managed_account", lambda: False)
+
+    class _Thread:
+        def __init__(self, target, args, **kwargs):
+            captured["spec"] = args[1]
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(route.threading, "Thread", _Thread)
+    route._jobs.clear()
+    route.start_benchmark(
+        _payload(rows = [], holdout_path = str(path), max_rows = 2, scorer = "reference"),
+        SimpleNamespace(),
+        (None, False),
+    )
+    assert captured["spec"]["rows"] == ROWS[:2]
+    route._jobs.clear()
+
+
+def test_holdout_outside_recipe_storage_is_refused(monkeypatch, tmp_path):
+    from core.data_recipe import huggingface
+
+    monkeypatch.setattr(huggingface, "recipe_datasets_root", lambda: tmp_path / "datasets")
+    monkeypatch.setattr(huggingface, "resolve_dataset_path", lambda value: __import__("pathlib").Path(value))
+    path = _write_split(tmp_path, ROWS)
+    monkeypatch.setattr(route, "managed_account", lambda: False)
+    route._jobs.clear()
+    with pytest.raises(HTTPException) as exc:
+        route.start_benchmark(
+            _payload(rows = [], holdout_path = str(path), scorer = "reference"),
+            SimpleNamespace(),
+            (None, False),
+        )
+    assert exc.value.status_code == 400
+    with pytest.raises(HTTPException):
+        route.start_benchmark(
+            _payload(rows = [], holdout_path = str(tmp_path / "x.parquet"), scorer = "reference"),
+            SimpleNamespace(),
+            (None, False),
+        )

@@ -14,6 +14,55 @@ import { buildModelConfig, buildModelProvider } from "./payload/builders-model";
 
 export const BENCHMARK_MAX_ROWS = 200;
 
+// What a Train card's output handle carries (its `lastRun`, recipes-train-on-dataset-card-v2). Read
+// structurally so this card doesn't depend on the Train card's types.
+export type TrainedModelInput = {
+  trainName: string;
+  outputName: string;
+  outputDir: string | null;
+  holdoutPath: string;
+  holdoutRows: number;
+};
+
+export function readTrainedModelInput(source: unknown): TrainedModelInput | null {
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const config = source as { kind?: unknown; name?: unknown; lastRun?: unknown };
+  if (config.kind !== "train" || !config.lastRun || typeof config.lastRun !== "object") {
+    return null;
+  }
+  const run = config.lastRun as Record<string, unknown>;
+  const holdoutPath = typeof run.holdoutPath === "string" ? run.holdoutPath.trim() : "";
+  if (run.phase !== "completed" || !holdoutPath) {
+    return null;
+  }
+  return {
+    trainName: typeof config.name === "string" ? config.name : "train",
+    outputName: typeof run.outputName === "string" ? run.outputName : "",
+    outputDir: typeof run.outputDir === "string" ? run.outputDir : null,
+    holdoutPath,
+    holdoutRows: typeof run.holdoutRows === "number" ? run.holdoutRows : 0,
+  };
+}
+
+export function findTrainedModelInput(
+  benchmarkId: string,
+  edges: Array<{ source: string; target: string }>,
+  configs: Record<string, unknown>,
+): TrainedModelInput | null {
+  for (const edge of edges) {
+    if (edge.target !== benchmarkId) {
+      continue;
+    }
+    const input = readTrainedModelInput(configs[edge.source]);
+    if (input) {
+      return input;
+    }
+  }
+  return null;
+}
+
 export type BenchmarkHoldout = {
   offset: number;
   limit: number;
@@ -118,15 +167,20 @@ export type BenchmarkRequest = {
   model_providers: Record<string, unknown>[];
   // biome-ignore lint/style/useNamingConvention: api schema
   model_configs: Record<string, unknown>[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_path?: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  max_rows?: number;
 };
 
 export function buildBenchmarkRequest(
   config: BenchmarkConfig,
   configs: NodeConfig[],
   rows: Record<string, unknown>[],
+  trained: TrainedModelInput | null = null,
 ): { request: BenchmarkRequest | null; errors: string[] } {
   const errors = validateBenchmarkConfig(config);
-  if (rows.length === 0) {
+  if (!trained && rows.length === 0) {
     errors.push("No held-out rows. Run the recipe first.");
   }
   const modelConfigs = new Map<string, ModelConfig>();
@@ -186,6 +240,14 @@ export function buildBenchmarkRequest(
       model_providers: Array.from(builtProviders.values()),
       // biome-ignore lint/style/useNamingConvention: api schema
       model_configs: builtConfigs,
+      ...(trained
+        ? {
+            // biome-ignore lint/style/useNamingConvention: api schema
+            holdout_path: trained.holdoutPath,
+            // biome-ignore lint/style/useNamingConvention: api schema
+            max_rows: clampInt(config.max_rows, 20, 1, BENCHMARK_MAX_ROWS),
+          }
+        : {}),
     },
     errors: [],
   };
