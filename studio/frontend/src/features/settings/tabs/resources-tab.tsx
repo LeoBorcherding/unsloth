@@ -28,7 +28,7 @@ import {
   deviceSharedMemorySplitGb,
   gpuMemoryTotalsGb,
   gpuVramUsedIsPerDevice,
-  resolveGpuVramUsedGb,
+  resolveGpuVramUsage,
 } from "@/hooks/gpu-vram";
 import {
   aggregateGpuMemoryTotalGb,
@@ -376,14 +376,15 @@ export function ResourcesTab() {
         ? (modelsDiskUsed / modelsDisk.total_gb) * 100
         : 0;
     const display = gpuMemoryDisplay(displayedGpu);
-    const usageDevices = display.usageDevices;
-    const gpuMemoryTotals = gpuMemoryTotalsGb(usageDevices);
-    const vramTotal = gpuMemoryTotals.total;
     // null usage = unknown (e.g. Windows ROCm perf counter); 0 would fabricate a
     // total, so the device's own row stays unknown. The host figure can still be
-    // known when no device's is (#7452).
+    // known when no device's is (#7452). Totals cover only the devices it counts.
+    const vramUsage = resolveGpuVramUsage(display.usageGpu);
+    const usageDevices = vramUsage.devices;
+    const gpuMemoryTotals = gpuMemoryTotalsGb(usageDevices);
+    const vramTotal = gpuMemoryTotals.total;
     const perDeviceKnown = gpuVramUsedIsPerDevice(usageDevices);
-    const vramUsed = resolveGpuVramUsedGb(display.usageGpu);
+    const vramUsed = vramUsage.usedGb;
     const vramUsageKnown = vramUsed !== null;
     const vramFree = perDeviceKnown
       ? usageDevices.reduce(
@@ -524,13 +525,14 @@ export function ResourcesTab() {
           .join(" · ")
     : null;
   const unknownLabel = t("settings.resources.environment.unknown");
+  const unifiedPool = metrics.vramShared > 0 && metrics.vramDedicated === 0;
   const vramCapacityLabel =
-    metrics.vramShared > 0
+    metrics.vramShared > 0 && !unifiedPool
       ? t("settings.resources.environment.vramWithShared", {
           vram: formatGiB(metrics.vramDedicated),
           shared: formatGiB(metrics.vramShared),
         })
-      : formatGiB(metrics.vramTotal);
+      : formatGiB(unifiedPool ? metrics.vramShared : metrics.vramTotal);
   // The placeholder's cpu backend and empty package list are not facts about the host either.
   const hostReading = (value: string) => (hostUnread ? unknownLabel : value);
   // systemInfo.gpu rather than displayedGpu: this describes the TRAINING view of the host,
@@ -686,11 +688,15 @@ export function ResourcesTab() {
                 : hasGpu
                   ? memoryDisplay.sharedOnly
                     ? t("settings.resources.gpu.sharedWithSystemRam")
-                    : metrics.vramUsageKnown
-                      ? t("settings.resources.liveMonitor.free", {
-                          value: formatGiB(metrics.vramFree),
+                    : unifiedPool && memoryDisplay.unifiedAvailableGb !== null
+                      ? t("settings.resources.gpu.estimatedAvailable", {
+                          value: formatGiB(memoryDisplay.unifiedAvailableGb),
                         })
-                      : unknownLabel
+                      : metrics.vramUsageKnown
+                        ? t("settings.resources.liveMonitor.free", {
+                            value: formatGiB(metrics.vramFree),
+                          })
+                        : unknownLabel
                   : gpuMismatch
                     ? t("settings.resources.liveMonitor.gpuUnusableDetail")
                     : backendLabel
@@ -700,7 +706,9 @@ export function ResourcesTab() {
               !memoryDisplay.sharedOnly &&
               memoryDisplay.sharedDevices.length > 0
                 ? `${t("settings.resources.gpu.sharedWithSystemRam")}\n${t("settings.resources.gpu.estimatedAvailable", { value: memoryDisplay.sharedAvailableGb === null ? unknownLabel : formatGiB(memoryDisplay.sharedAvailableGb) })}`
-                : undefined
+                : unifiedPool && !memoryDisplay.sharedOnly
+                  ? t("settings.resources.gpu.sharedWithSystemRam")
+                  : undefined
             }
             percent={metrics.vramUsageKnown ? metrics.vramPercent : null}
           />
@@ -1137,7 +1145,7 @@ export function ResourcesTab() {
                     ? t("settings.resources.storage.openAction")
                     : t("settings.resources.storage.copyAction")
                 }
-                className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+                className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               >
                 {isTauri ? (
                   <FolderOpenIcon className="size-3.5" />
