@@ -115,3 +115,28 @@ def test_fix_is_idempotent(restore_lazy_load_kernel):
     first = hub_kernels.lazy_load_kernel
     fix_transformers_mamba_ssm_without_causal_conv1d_cuda()
     assert hub_kernels.lazy_load_kernel is first
+
+
+class _LazyAliasModule(types.ModuleType):
+    # Like transformers 5.5's `image_processing_<x>_fast` aliases: any missing attribute imports a processor.
+    accesses = 0
+
+    def __getattr__(self, name):
+        type(self).accesses += 1
+        raise RuntimeError("operator torchvision::nms does not exist")
+
+
+def test_sweep_skips_lazy_aliases_and_rebinds_modeling_modules(
+    monkeypatch, restore_lazy_load_kernel
+):
+    original = hub_kernels.lazy_load_kernel
+    alias = _LazyAliasModule("transformers.models.fake_alias.image_processing_fake_alias_fast")
+    modeling = types.ModuleType("transformers.models.fake_mamba.modeling_fake_mamba")
+    modeling.lazy_load_kernel = original
+    monkeypatch.setitem(sys.modules, alias.__name__, alias)
+    monkeypatch.setitem(sys.modules, modeling.__name__, modeling)
+    monkeypatch.setattr(_LazyAliasModule, "accesses", 0)
+    fix_transformers_mamba_ssm_without_causal_conv1d_cuda()
+    assert _LazyAliasModule.accesses == 0
+    assert modeling.lazy_load_kernel is hub_kernels.lazy_load_kernel
+    assert modeling.lazy_load_kernel is not original

@@ -10853,10 +10853,12 @@ def fix_transformers_mamba_ssm_without_causal_conv1d_cuda():
     lazy_load_kernel._unsloth_mamba_ssm_guard = True
     hub_kernels.lazy_load_kernel = lazy_load_kernel
     # Modeling files bind it by name at import; patch the ones already loaded and the package re-export.
+    # Read __dict__, not getattr: transformers' lazy image-processor aliases import (and warn) on getattr.
     for name, module in list(sys.modules.items()):
-        if (
-            name == "transformers.integrations" or name.startswith("transformers.models.")
-        ) and getattr(module, "lazy_load_kernel", None) is original:
+        if not (name == "transformers.integrations" or name.startswith("transformers.models.")):
+            continue
+        namespace = getattr(module, "__dict__", None)
+        if isinstance(namespace, dict) and namespace.get("lazy_load_kernel") is original:
             module.lazy_load_kernel = lazy_load_kernel
 
 
