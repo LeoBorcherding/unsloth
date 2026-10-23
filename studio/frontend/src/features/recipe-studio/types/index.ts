@@ -403,10 +403,18 @@ export type TrainCardMethod = "qlora" | "lora";
 export type TrainCardRun = {
   jobId: string | null;
   executionId: string;
+  /** The recipe run the split came from, so the held-out rows can be read back. */
+  sourceJobId: string | null;
+  artifactPath: string | null;
   baseModel: string;
   outputName: string;
+  promptColumn: string;
+  responseColumn: string;
+  holdoutPercent: number;
+  seed: number;
   trainPath: string;
   holdoutPath: string | null;
+  holdoutRowIds: number[];
   trainRows: number;
   holdoutRows: number;
   phase: string;
