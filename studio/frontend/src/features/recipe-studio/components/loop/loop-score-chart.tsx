@@ -83,7 +83,12 @@ export function LoopScoreChart({
           {labels && (
             <text
               x={x(point.index)}
-              y={y(point.score) - 8}
+              // Just under the target line, a label above the dot would sit on the target label.
+              y={
+                y(point.score) > y(target) && y(point.score) - y(target) < 22
+                  ? y(point.score) + 16
+                  : y(point.score) - 8
+              }
               textAnchor="middle"
               className="fill-foreground text-[11px] font-medium tabular-nums"
             >
