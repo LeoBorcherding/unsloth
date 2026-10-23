@@ -29,6 +29,8 @@ export type LoopHoldout = {
   sourceJobId: string;
   artifactPath: string;
   holdoutPath: string;
+  // Row ids of the held-out rows in round 1's dataset, for the Train card's output handle.
+  rowIds?: number[];
   rows: number;
 };
 

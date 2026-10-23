@@ -9,8 +9,10 @@ import type {
   ModelConfig,
   ModelProviderConfig,
   NodeConfig,
+  TrainCardConfig,
 } from "../types";
 import { buildModelConfig, buildModelProvider } from "./payload/builders-model";
+import { getTrainCardOutput } from "./train-card";
 
 export const BENCHMARK_MAX_ROWS = 200;
 export const RECIPE_HELDOUT_TASK = "recipe_heldout";
@@ -104,8 +106,7 @@ export function lmEvalRunToResult(detail: LmEvalRunDetail): BenchmarkResult {
   };
 }
 
-// What a Train card's output handle carries (its `lastRun`, recipes-train-on-dataset-card-v2). Read
-// structurally so this card doesn't depend on the Train card's types.
+// What the Benchmark card reads off a Train card: its output handle contract (`getTrainCardOutput`).
 export type TrainedModelInput = {
   trainName: string;
   outputName: string;
@@ -115,24 +116,18 @@ export type TrainedModelInput = {
 };
 
 export function readTrainedModelInput(source: unknown): TrainedModelInput | null {
-  if (!source || typeof source !== "object") {
+  const output = getTrainCardOutput(source as NodeConfig | undefined);
+  const holdoutPath = output?.holdout?.parquet_path.trim() ?? "";
+  if (!(output?.holdout && holdoutPath)) {
     return null;
   }
-  const config = source as { kind?: unknown; name?: unknown; lastRun?: unknown };
-  if (config.kind !== "train" || !config.lastRun || typeof config.lastRun !== "object") {
-    return null;
-  }
-  const run = config.lastRun as Record<string, unknown>;
-  const holdoutPath = typeof run.holdoutPath === "string" ? run.holdoutPath.trim() : "";
-  if (run.phase !== "completed" || !holdoutPath) {
-    return null;
-  }
+  const config = source as TrainCardConfig;
   return {
-    trainName: typeof config.name === "string" ? config.name : "train",
-    outputName: typeof run.outputName === "string" ? run.outputName : "",
-    outputDir: typeof run.outputDir === "string" ? run.outputDir : null,
+    trainName: config.name || "train",
+    outputName: config.lastRun?.outputName ?? "",
+    outputDir: output.adapter_path,
     holdoutPath,
-    holdoutRows: typeof run.holdoutRows === "number" ? run.holdoutRows : 0,
+    holdoutRows: output.holdout.rows,
   };
 }
 

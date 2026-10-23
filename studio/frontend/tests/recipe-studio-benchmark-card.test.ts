@@ -248,6 +248,7 @@ test("the newest finished full run is the benchmark source", () => {
 });
 
 test("a wired-in Train card's held-out split replaces the last-N% slice", () => {
+  // Read through the Train card's output handle (`holdout.parquet_path`), not its lastRun fields.
   const train = {
     id: "t1",
     kind: "train",
@@ -255,9 +256,17 @@ test("a wired-in Train card's held-out split replaces the last-N% slice", () => 
     lastRun: {
       phase: "completed",
       jobId: "job-1",
+      baseModel: "unsloth/Qwen2.5-0.5B-Instruct",
+      promptColumn: "ticket",
+      responseColumn: "queue",
       outputName: "support-bot",
       outputDir: "/outputs/support-bot",
+      sourceJobId: "recipe-job-1",
+      artifactPath: "/recipes/run-1",
+      holdoutPercent: 20,
+      seed: 3407,
       holdoutPath: "/recipes/run-1/splits/holdout-20-seed3407/holdout.parquet",
+      holdoutRowIds: [80, 81],
       holdoutRows: 20,
     },
   };
@@ -271,6 +280,8 @@ test("a wired-in Train card's held-out split replaces the last-N% slice", () => 
     holdoutRows: 20,
   });
 
+  const noSplit = { ...train, lastRun: { ...train.lastRun, sourceJobId: "" } };
+  assert.equal(benchmark.findTrainedModelInput("b1", edges, { t1: noSplit }), null);
   const unfinished = { ...train, lastRun: { ...train.lastRun, phase: "training" } };
   assert.equal(benchmark.findTrainedModelInput("b1", edges, { t1: unfinished }), null);
   assert.equal(benchmark.findTrainedModelInput("other", edges, { t1: train }), null);

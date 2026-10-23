@@ -298,6 +298,7 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
           sourceJobId: dataset.jobId,
           artifactPath: dataset.artifactPath,
           holdoutPath: split.holdout_path,
+          rowIds: split.holdout_row_ids ?? [],
           rows: split.holdout_rows,
         };
       }
@@ -316,7 +317,7 @@ export function createStudioLoopSteps(deps: StudioLoopDeps): LoopSteps {
           seed: settings.seed,
           trainPath: split.train_path,
           holdoutPath: fixed.holdoutPath,
-          holdoutRowIds: [],
+          holdoutRowIds: fixed.rowIds ?? [],
           trainRows: split.train_rows,
           holdoutRows: fixed.rows,
           phase,
