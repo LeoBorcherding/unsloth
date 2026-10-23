@@ -293,3 +293,70 @@ test("a wired-in Train card's held-out split replaces the last-N% slice", () => 
   assert.equal(request?.max_rows, 15);
   assert.deepEqual(request?.rows, []);
 });
+
+test("the card offers the Benchmarks registry: recipe task first, curated lm-eval tasks without subtasks", () => {
+  const tasks = benchmark.getCardTasks([
+    { id: "mmlu", name: "MMLU", description: "Massive Multitask", runner: "lm_eval" },
+    { id: "mmlu_anatomy", name: "mmlu_anatomy", description: "Massive Multitask", runner: "lm_eval" },
+    { id: "gsm8k", name: "GSM8K", description: "Grade-school math", runner: "lm_eval" },
+    { id: "some_raw_task", name: "some_raw_task", runner: "lm_eval" },
+    { id: "arc_easy", name: "ARC-Easy", description: "added later", runner: "lm_eval" },
+    { id: "recipe_heldout", name: "Recipe held-out", description: "Rows", runner: "recipe" },
+  ]);
+  assert.deepEqual(
+    tasks.map((task) => task.id),
+    ["recipe_heldout", "mmlu", "gsm8k", "arc_easy"],
+  );
+});
+
+test("lm-eval tasks are greyed out unless Chat has a GGUF loaded", () => {
+  assert.equal(benchmark.lmEvalBlockedReason({ active_model: "x.gguf", is_gguf: true }), null);
+  assert.equal(
+    benchmark.lmEvalBlockedReason({ active_model: "/outputs/lora", is_gguf: false }),
+    benchmark.LM_EVAL_NEEDS_GGUF,
+  );
+  assert.match(benchmark.lmEvalBlockedReason(null) ?? "", /Load a GGUF/);
+  assert.equal(benchmark.isRecipeTask("gsm8k"), false);
+  assert.equal(benchmark.isRecipeTask("recipe_heldout"), true);
+});
+
+test("an lm-eval run reads like a recipe result: headline metric and failed samples", () => {
+  const result = benchmark.lmEvalRunToResult({
+    task: "gsm8k",
+    metrics: [
+      { name: "exact_match,flexible-extract", score: 0.4 },
+      { name: "exact_match,strict-match", score: 0.3 },
+    ],
+    default_metric: "exact_match,strict-match",
+    n_samples: 3,
+    samples: [
+      { question: "1+1", target: "2", response: "2", correct: true },
+      { question: "2+2", target: "4", response: "5", correct: false },
+      { question: "3+3", target: "6", response: null, correct: false },
+    ],
+  });
+  assert.equal(result.candidate.score, 0.3);
+  assert.equal(result.candidate.passed, 1);
+  assert.equal(result.failed_total, 2);
+  assert.deepEqual(result.failed_examples[0], {
+    prompt: "2+2",
+    reference: "4",
+    output: "5",
+    reason: "",
+    row: {},
+  });
+});
+
+test("an lm-eval card keeps its task and sample limit through save and reload", () => {
+  const parsed = benchmark.parseBenchmarkSettings("n9", "bench", {
+    ...benchmark.serializeBenchmarkSettings({
+      ...makeBenchmarkConfig("n1", []),
+      task: "gsm8k",
+      limit: "25",
+    }),
+  });
+  assert.equal(parsed.task, "gsm8k");
+  assert.equal(parsed.limit, "25");
+  assert.equal(benchmark.parseBenchmarkSettings("n9", "bench", {}).task, "recipe_heldout");
+  assert.deepEqual(benchmark.validateBenchmarkConfig({ ...makeBenchmarkConfig("n1", []), task: "gsm8k" }), []);
+});

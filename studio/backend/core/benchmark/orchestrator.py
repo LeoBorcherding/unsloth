@@ -299,6 +299,7 @@ class BenchmarkOrchestrator:
         params: dict,
         account = None,
         op_seq: Optional[int] = None,
+        task_fn = None,
     ) -> dict:
         """Run a benchmark in a worker thread.
 
@@ -323,7 +324,8 @@ class BenchmarkOrchestrator:
 
         self._append_log("stdout", "Starting benchmark run...")
 
-        future = self._executor.submit(_run_benchmark_task, params)
+        # task_fn runs a non-lm_eval task (Recipe held-out) through the same slot.
+        future = self._executor.submit(task_fn or _run_benchmark_task, params)
 
         result: Any = None
         error: Optional[str] = None

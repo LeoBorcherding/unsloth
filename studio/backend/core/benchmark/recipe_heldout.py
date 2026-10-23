@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Held-out recipe split scoring for the Benchmark card: answer each row with the model under
-test (and optionally a baseline), score the answer with a validator or an LLM judge."""
+"""The "Recipe held-out" benchmark task: answer held-out rows of a recipe run with the model under
+test (and optionally a baseline), and score each answer with a check or an LLM judge.
+
+Runs through the same orchestrator slot and run storage as the lm-eval tasks, but talks to any
+OpenAI-compatible chat endpoint, so it also scores a LoRA adapter that lm-eval can't load yet."""
 
 from __future__ import annotations
 
 import ast
+import math
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -14,6 +19,7 @@ from typing import Any, Callable, Optional
 from core.data_recipe.jsonable import to_jsonable
 from core.data_recipe.text_format_validators import _validate_text_format
 
+RECIPE_HELDOUT_TASK_ID = "recipe_heldout"
 VALIDATOR_SCORERS = ("reference", "json", "markdown", "python")
 SCORERS = (*VALIDATOR_SCORERS, "judge")
 MAX_BENCHMARK_ROWS = 200
@@ -186,7 +192,7 @@ def run_benchmark(
             if is_cancelled():
                 cancelled = True
                 break
-            result: dict[str, Any] = {"index": index, "passed": False, "error": None}
+            result: dict[str, Any] = {"index": index, "passed": False, "error": None, "output": None}
             try:
                 output = strip_thinking(chat(target, messages))
                 passed, reason = _score_answer(spec, chat, prompt, output, reference)
@@ -200,6 +206,20 @@ def run_benchmark(
             break
 
     candidate = per_target["candidate"]
+    samples = {
+        target: [
+            {
+                "doc_id": r["index"],
+                "question": _cell(rows[r["index"]], prompt_column),
+                "target": _cell(rows[r["index"]], reference_column),
+                "response": r.get("output"),
+                "raw_response": r.get("error") or r.get("reason") or None,
+                "correct": bool(r["passed"]),
+            }
+            for r in results
+        ]
+        for target, results in per_target.items()
+    }
     failed = []
     for result in candidate:
         if result["passed"]:
@@ -224,4 +244,68 @@ def run_benchmark(
         "cancelled": cancelled,
         "failed_examples": failed[:MAX_FAILED_EXAMPLES],
         "failed_total": len(failed),
+        "samples": samples,
     }
+
+
+def eval_metrics(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """The pass rate as an ``acc,none`` metric, so the Benchmarks history reads it as the headline."""
+    score, n = summary.get("score"), summary.get("scored") or 0
+    if score is None:
+        return []
+    stderr = math.sqrt(score * (1 - score) / (n - 1)) if n > 1 else None
+    return [{"name": "acc,none", "score": round(score, 4), "stderr": None if stderr is None else f"{stderr:.4f}"}]
+
+
+DEFAULT_MAX_TOKENS = 512
+DEFAULT_TIMEOUT_S = 120
+
+
+def resolve_chat_target(
+    alias: str, configs: dict[str, dict[str, Any]], providers: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """URL, headers and body template for one model block of the recipe."""
+    mc = configs.get(alias)
+    if mc is None:
+        raise ValueError(f"Model {alias} is not in the recipe.")
+    provider = providers.get(str(mc.get("provider") or ""))
+    if provider is None:
+        raise ValueError(f"Model {alias} has no provider.")
+    params = dict(mc.get("inference_parameters") or {})
+    api_key = provider.get("api_key") or ""
+    env_name = provider.get("api_key_env")
+    if not api_key and isinstance(env_name, str) and env_name:
+        api_key = os.environ.get(env_name, "")
+    body: dict[str, Any] = {"model": mc.get("model") or "local"}
+    body.update(provider.get("extra_body") or {})
+    body.update(params.pop("extra_body", None) or {})
+    timeout = params.pop("timeout", None) or DEFAULT_TIMEOUT_S
+    params.setdefault("max_tokens", DEFAULT_MAX_TOKENS)
+    params.setdefault("temperature", 0)
+    body.update(params)
+    headers = dict(provider.get("extra_headers") or {})
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return {
+        "url": f"{str(provider.get('endpoint') or '').rstrip('/')}/chat/completions",
+        "headers": headers,
+        "body": body,
+        "timeout": float(timeout),
+    }
+
+
+def post_chat(client: Any, target: dict[str, Any], messages: list[dict[str, str]]) -> str:
+    response = client.post(
+        target["url"],
+        json = {**target["body"], "messages": messages, "stream": False},
+        headers = target["headers"],
+        timeout = target["timeout"],
+    )
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail") or response.text
+        except ValueError:
+            detail = response.text
+        raise RuntimeError(f"HTTP {response.status_code}: {str(detail)[:300]}")
+    message = response.json()["choices"][0]["message"]
+    return str(message.get("content") or "")

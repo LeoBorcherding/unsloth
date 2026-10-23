@@ -11,28 +11,34 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
-import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
 import {
-  cancelBenchmarkJob,
-  getBenchmarkJob,
-  getRecipeJobDataset,
-  startBenchmarkJob,
-} from "../../api";
+  cancelBenchmark,
+  getBenchmarkRunDetail,
+  listBenchmarkRuns,
+  runBenchmark,
+  streamBenchmarkLogs,
+} from "@/features/benchmark/api/benchmark-api";
+import { cn } from "@/lib/utils";
+import { Link } from "@tanstack/react-router";
+import { type ReactElement, useMemo, useState } from "react";
+import { fetchLoadedModelStatus, getRecipeJobDataset } from "../../api";
 import { useRecipeExecutionsStore } from "../../stores/recipe-executions";
 import { useRecipeStudioStore } from "../../stores/recipe-studio";
 import type { BenchmarkConfig, BenchmarkResult } from "../../types";
 import {
+  type LmEvalRunDetail,
   buildBenchmarkRequest,
   failedExamplesToJsonl,
   findTrainedModelInput,
   formatBenchmarkDelta,
   formatBenchmarkScore,
   getBenchmarkHoldout,
+  isRecipeTask,
+  lmEvalBlockedReason,
+  lmEvalRunToResult,
   pickBenchmarkExecution,
 } from "../../utils/benchmark";
 
-const POLL_MS = 1000;
 
 const SCORER_SHORT: Record<BenchmarkConfig["scorer"], string> = {
   reference: "Reference match",
@@ -72,8 +78,11 @@ function FailedExamplesDialog({
         <DialogHeader>
           <DialogTitle>Failed examples</DialogTitle>
           <DialogDescription>
-            {result.failed_total} of {result.candidate.total} held-out rows failed
-            {shown < result.failed_total ? `; the first ${shown} are kept.` : "."}
+            {result.failed_total} of {result.candidate.total} held-out rows
+            failed
+            {shown < result.failed_total
+              ? `; the first ${shown} are kept.`
+              : "."}
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
@@ -90,11 +99,14 @@ function FailedExamplesDialog({
               </p>
               {example.reference && (
                 <p className="text-muted-foreground">
-                  <span className="text-foreground">Expected:</span> {example.reference}
+                  <span className="text-foreground">Expected:</span>{" "}
+                  {example.reference}
                 </p>
               )}
               {example.reason && (
-                <p className="text-xs text-muted-foreground">{example.reason}</p>
+                <p className="text-xs text-muted-foreground">
+                  {example.reason}
+                </p>
               )}
             </div>
           ))}
@@ -124,121 +136,199 @@ export function BenchmarkCardBody({
   const updateConfig = useRecipeStudioStore((state) => state.updateConfig);
   const edges = useRecipeStudioStore((state) => state.edges);
   const configs = useRecipeStudioStore((state) => state.configs);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
   const [failedOpen, setFailedOpen] = useState(false);
-  const executionIdRef = useRef<string>("");
-  const rowsRef = useRef(0);
 
-  useEffect(() => {
-    if (!jobId) {
-      return;
-    }
-    let stopped = false;
-    const timer = window.setInterval(async () => {
-      try {
-        const status = await getBenchmarkJob(jobId);
-        if (stopped) {
-          return;
-        }
-        setProgress(status.progress);
-        if (status.status === "running") {
-          return;
-        }
-        window.clearInterval(timer);
-        setJobId(null);
-        if (status.status === "error") {
-          setError(status.error ?? "Benchmark failed.");
-          return;
-        }
-        if (status.result) {
-          updateConfig(config.id, {
-            // biome-ignore lint/style/useNamingConvention: ui schema
-            last_result: {
-              ...status.result,
-              // biome-ignore lint/style/useNamingConvention: ui schema
-              finished_at: Date.now(),
-              // biome-ignore lint/style/useNamingConvention: ui schema
-              execution_id: executionIdRef.current,
-              rows: rowsRef.current,
-            },
-          });
-        }
-      } catch (err) {
-        window.clearInterval(timer);
-        setJobId(null);
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    }, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [jobId, config.id, updateConfig]);
-
+  const recipeTask = isRecipeTask(config.task);
   const trained = useMemo(
     () => findTrainedModelInput(config.id, edges, configs),
     [config.id, edges, configs],
   );
   const execution = pickBenchmarkExecution(executions);
-  const total = execution ? execution.datasetTotal ?? execution.dataset.length : 0;
-  const holdout = getBenchmarkHoldout(total, config.holdout_percent, config.max_rows);
-  const running = Boolean(jobId) || starting;
-  const sourceLabel = trained
-    ? `${trained.holdoutRows} rows ${trained.trainName} held out`
-    : execution
-      ? `${holdout.limit} held-out rows`
-      : "Run the recipe first";
+  const total = execution
+    ? (execution.datasetTotal ?? execution.dataset.length)
+    : 0;
+  const holdout = getBenchmarkHoldout(
+    total,
+    config.holdout_percent,
+    config.max_rows,
+  );
+  const taskLabel = recipeTask ? SCORER_SHORT[config.scorer] : config.task;
+  const sourceLabel = !recipeTask
+    ? `first ${config.limit || "all"} samples · loaded GGUF`
+    : trained
+      ? `${trained.holdoutRows} rows ${trained.trainName} held out`
+      : execution
+        ? `${holdout.limit} held-out rows`
+        : "Run the recipe first";
+
+  const recipeSpec = async (): Promise<Record<string, unknown> | null> => {
+    if (!(trained || execution)) {
+      setError(
+        "Run the recipe first: the benchmark scores rows from the last finished run.",
+      );
+      return null;
+    }
+    let rows: Record<string, unknown>[] = [];
+    if (!trained && execution) {
+      if (execution.dataset.length >= total) {
+        rows = execution.dataset.slice(
+          holdout.offset,
+          holdout.offset + holdout.limit,
+        );
+      } else if (execution.jobId) {
+        const page = await getRecipeJobDataset(execution.jobId, {
+          offset: holdout.offset,
+          limit: holdout.limit,
+        });
+        rows = (page.dataset ?? []) as Record<string, unknown>[];
+      }
+    }
+    const allConfigs = Object.values(useRecipeStudioStore.getState().configs);
+    const { request, errors } = buildBenchmarkRequest(
+      config,
+      allConfigs,
+      rows,
+      trained,
+    );
+    if (!request) {
+      setError(errors.join(" "));
+      return null;
+    }
+    return request;
+  };
 
   const run = async () => {
     setError(null);
-    if (!(trained || execution)) {
-      setError("Run the recipe first: the benchmark scores rows from the last finished run.");
-      return;
-    }
-    setStarting(true);
-    try {
-      let rows: Record<string, unknown>[] = [];
-      if (!trained && execution) {
-        if (execution.dataset.length >= total) {
-          rows = execution.dataset.slice(holdout.offset, holdout.offset + holdout.limit);
-        } else if (execution.jobId) {
-          const page = await getRecipeJobDataset(execution.jobId, {
-            offset: holdout.offset,
-            limit: holdout.limit,
-          });
-          rows = (page.dataset ?? []) as Record<string, unknown>[];
-        }
-      }
-      const allConfigs = Object.values(useRecipeStudioStore.getState().configs);
-      const { request, errors } = buildBenchmarkRequest(config, allConfigs, rows, trained);
-      if (!request) {
-        setError(errors.join(" "));
+    const status = await fetchLoadedModelStatus();
+    let params: Parameters<typeof runBenchmark>[0];
+    if (recipeTask) {
+      const spec = await recipeSpec();
+      if (!spec) {
         return;
       }
-      executionIdRef.current = execution?.id ?? "";
-      rowsRef.current = trained ? request.max_rows ?? 0 : rows.length;
-      const created = await startBenchmarkJob(request);
-      setProgress(null);
-      setJobId(created.job_id);
+      params = {
+        // biome-ignore lint/style/useNamingConvention: api schema
+        checkpoint_path: status?.active_model ?? "",
+        // biome-ignore lint/style/useNamingConvention: api schema
+        model_source: "local",
+        task: config.task,
+        recipe: spec,
+      };
+    } else {
+      const blocked = lmEvalBlockedReason(status);
+      if (blocked || !status?.active_model) {
+        setError(blocked);
+        return;
+      }
+      const limit = Number.parseInt(config.limit ?? "", 10);
+      params = {
+        // biome-ignore lint/style/useNamingConvention: api schema
+        checkpoint_path: status.active_model,
+        // biome-ignore lint/style/useNamingConvention: api schema
+        model_source: "local",
+        task: config.task,
+        limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+      };
+    }
+    setRunning(true);
+    setProgress(null);
+    const logs = new AbortController();
+    void streamBenchmarkLogs({
+      signal: logs.signal,
+      onEvent: (event) => {
+        if (event.entry?.stream !== "progress") {
+          return;
+        }
+        try {
+          const value = JSON.parse(event.entry.line) as {
+            current?: number;
+            total?: number;
+          };
+          if (
+            typeof value.current === "number" &&
+            typeof value.total === "number"
+          ) {
+            setProgress({ done: value.current, total: value.total });
+          }
+        } catch {
+          // not a progress payload
+        }
+      },
+    }).catch(() => undefined);
+    try {
+      const response = await runBenchmark(params);
+      if (!response.success) {
+        setError(response.message);
+        return;
+      }
+      let result: BenchmarkResult;
+      let runIds: Record<string, string>;
+      if (recipeTask) {
+        const recipe = response.details?.recipe as BenchmarkResult & {
+          // biome-ignore lint/style/useNamingConvention: api schema
+          run_ids: Record<string, string>;
+        };
+        result = recipe;
+        runIds = recipe.run_ids;
+      } else {
+        const runs = await listBenchmarkRuns();
+        const latest = runs.runs.find((item) => item.task === config.task);
+        if (!latest) {
+          setError("The run finished but its result wasn't stored.");
+          return;
+        }
+        const detail = await getBenchmarkRunDetail(latest.id);
+        result = lmEvalRunToResult({
+          ...detail,
+          // biome-ignore lint/style/useNamingConvention: api schema
+          default_metric: latest.default_metric,
+        } as LmEvalRunDetail);
+        runIds = { candidate: latest.id };
+      }
+      updateConfig(config.id, {
+        // biome-ignore lint/style/useNamingConvention: ui schema
+        last_result: {
+          ...result,
+          task: config.task,
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          run_ids: runIds,
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          finished_at: Date.now(),
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          execution_id: execution?.id ?? "",
+          rows: result.candidate.total,
+        },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setStarting(false);
+      logs.abort();
+      setRunning(false);
     }
   };
 
-  const result = config.last_result;
+  const result =
+    config.last_result?.task === config.task ||
+    (!config.last_result?.task && recipeTask)
+      ? config.last_result
+      : undefined;
   const delta = result?.delta;
   const percent =
-    progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+    progress && progress.total > 0
+      ? Math.round((progress.done / progress.total) * 100)
+      : 0;
 
   return (
     <div className="nodrag space-y-3">
       <p className="text-xs text-muted-foreground">
-        {config.model_alias || "No model"} · {SCORER_SHORT[config.scorer]} · {sourceLabel}
+        {recipeTask ? config.model_alias || "No model" : "lm-eval"} ·{" "}
+        {taskLabel} · {sourceLabel}
       </p>
       {result && !running && (
         <div className="space-y-2">
@@ -249,7 +339,9 @@ export function BenchmarkCardBody({
               </p>
               <p className="mt-1 text-xs text-muted-foreground tabular-nums">
                 {result.candidate.passed} of {result.candidate.scored} passed
-                {result.candidate.errors > 0 ? ` · ${result.candidate.errors} errored` : ""}
+                {result.candidate.errors > 0
+                  ? ` · ${result.candidate.errors} errored`
+                  : ""}
                 {result.cancelled ? " · stopped early" : ""}
               </p>
             </div>
@@ -258,8 +350,12 @@ export function BenchmarkCardBody({
                 <p
                   className={cn(
                     "text-lg font-semibold leading-none tabular-nums",
-                    typeof delta === "number" && delta > 0 && "text-emerald-600 dark:text-emerald-400",
-                    typeof delta === "number" && delta < 0 && "text-rose-600 dark:text-rose-400",
+                    typeof delta === "number" &&
+                      delta > 0 &&
+                      "text-emerald-600 dark:text-emerald-400",
+                    typeof delta === "number" &&
+                      delta < 0 &&
+                      "text-rose-600 dark:text-rose-400",
                   )}
                 >
                   {formatBenchmarkDelta(delta)}
@@ -276,7 +372,9 @@ export function BenchmarkCardBody({
         <div className="space-y-1.5">
           <Progress value={percent} />
           <p className="text-xs tabular-nums text-muted-foreground">
-            {progress ? `Scoring ${progress.done} of ${progress.total} answers` : "Starting..."}
+            {progress
+              ? `Scoring ${progress.done} of ${progress.total}`
+              : "Starting..."}
           </p>
         </div>
       )}
@@ -287,13 +385,17 @@ export function BenchmarkCardBody({
             type="button"
             size="sm"
             variant="outline"
-            disabled={!jobId}
-            onClick={() => jobId && void cancelBenchmarkJob(jobId)}
+            onClick={() => void cancelBenchmark()}
           >
             Stop
           </Button>
         ) : (
-          <Button type="button" size="sm" disabled={disabled} onClick={() => void run()}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={disabled}
+            onClick={() => void run()}
+          >
             {result ? "Run again" : "Run benchmark"}
           </Button>
         )}
@@ -305,6 +407,11 @@ export function BenchmarkCardBody({
             onClick={() => setFailedOpen(true)}
           >
             {result.failed_total} failed
+          </Button>
+        )}
+        {result && !running && (
+          <Button type="button" size="sm" variant="ghost" asChild={true}>
+            <Link to="/benchmarks">History</Link>
           </Button>
         )}
       </div>

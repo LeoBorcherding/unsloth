@@ -16,7 +16,6 @@ backend_path = Path(__file__).parent.parent.parent
 if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
-from .benchmark import router as benchmark_router
 from .jobs import download_router as jobs_download_router
 from .jobs import router as jobs_router
 from .library import router as library_router
@@ -30,7 +29,6 @@ _header_authenticated.include_router(validate_router)
 _header_authenticated.include_router(jobs_router)
 _header_authenticated.include_router(mcp_router)
 _header_authenticated.include_router(library_router)
-_header_authenticated.include_router(benchmark_router)
 
 router = APIRouter()
 # Kept out of the group above: the download link is fetched without a header, so it brings its

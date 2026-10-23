@@ -367,6 +367,10 @@ export type BenchmarkConfig = {
   id: string;
   kind: "benchmark";
   name: string;
+  // a task id from the Benchmarks registry (/api/benchmarks/evals/tasks)
+  task: string;
+  // lm-eval tasks: score the first N samples (string for input)
+  limit?: string;
   // biome-ignore lint/style/useNamingConvention: ui schema
   model_alias: string;
   // biome-ignore lint/style/useNamingConvention: ui schema
@@ -391,6 +395,9 @@ export type BenchmarkConfig = {
   // ui-only: last finished run, so the card and its output handle survive a reload
   // biome-ignore lint/style/useNamingConvention: ui schema
   last_result?: BenchmarkResult & {
+    task?: string;
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    run_ids?: Record<string, string>;
     // biome-ignore lint/style/useNamingConvention: ui schema
     finished_at: number;
     // biome-ignore lint/style/useNamingConvention: ui schema

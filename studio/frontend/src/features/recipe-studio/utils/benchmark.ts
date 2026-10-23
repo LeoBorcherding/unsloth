@@ -13,6 +13,96 @@ import type {
 import { buildModelConfig, buildModelProvider } from "./payload/builders-model";
 
 export const BENCHMARK_MAX_ROWS = 200;
+export const RECIPE_HELDOUT_TASK = "recipe_heldout";
+export const LM_EVAL_NEEDS_GGUF =
+  "lm-eval scores a GGUF served by llama.cpp. Load a GGUF in Chat; LoRA adapters and other models get these tasks once #7703 (completions with logprobs) lands.";
+
+export type BenchmarkTaskOption = {
+  id: string;
+  name: string;
+  description?: string;
+  runner?: "lm_eval" | "recipe";
+};
+
+// The registry lists every lm-eval subtask too; the card offers the curated ones (they carry a
+// description) without their children, so a task added to the registry shows up here unchanged.
+export function getCardTasks(tasks: BenchmarkTaskOption[]): BenchmarkTaskOption[] {
+  const curated = tasks.filter((task) => task.description);
+  const top = curated.filter(
+    (task) =>
+      !curated.some((other) => other.id !== task.id && task.id.startsWith(`${other.id}_`)),
+  );
+  return [
+    ...top.filter((task) => task.runner === "recipe"),
+    ...top.filter((task) => task.runner !== "recipe"),
+  ];
+}
+
+export function isRecipeTask(task: string | undefined): boolean {
+  return !task || task === RECIPE_HELDOUT_TASK;
+}
+
+export type LoadedModelStatus = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  active_model?: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  is_gguf?: boolean;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  gguf_variant?: string | null;
+};
+
+export function lmEvalBlockedReason(status: LoadedModelStatus | null): string | null {
+  if (!status?.active_model) {
+    return "Load a GGUF in Chat to run lm-eval tasks.";
+  }
+  return status.is_gguf ? null : LM_EVAL_NEEDS_GGUF;
+}
+
+export type LmEvalRunDetail = {
+  task: string;
+  metrics: Array<{ name: string; score: number }>;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  default_metric?: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  n_samples: number;
+  samples?: Array<{
+    question: string;
+    target: string;
+    response?: string | null;
+    correct: boolean;
+  }>;
+};
+
+// An lm-eval run in the card's result shape, so the score, the failed examples and the output
+// handle read the same for every task.
+export function lmEvalRunToResult(detail: LmEvalRunDetail): BenchmarkResult {
+  const metric =
+    detail.metrics.find((item) => item.name === detail.default_metric) ?? detail.metrics[0];
+  const samples = detail.samples ?? [];
+  const failed = samples.filter((sample) => !sample.correct);
+  const n = detail.n_samples || samples.length;
+  const score = metric ? metric.score : null;
+  return {
+    candidate: {
+      total: n,
+      scored: n,
+      passed: samples.length ? samples.length - failed.length : Math.round((score ?? 0) * n),
+      errors: 0,
+      score,
+    },
+    cancelled: false,
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    failed_examples: failed.slice(0, 50).map((sample) => ({
+      prompt: sample.question,
+      reference: sample.target || null,
+      output: sample.response ?? null,
+      reason: "",
+      row: {},
+    })),
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    failed_total: failed.length,
+  };
+}
 
 // What a Train card's output handle carries (its `lastRun`, recipes-train-on-dataset-card-v2). Read
 // structurally so this card doesn't depend on the Train card's types.
@@ -130,6 +220,9 @@ export function getBenchmarkAliases(config: BenchmarkConfig): string[] {
 
 export function validateBenchmarkConfig(config: BenchmarkConfig): string[] {
   const errors: string[] = [];
+  if (!isRecipeTask(config.task)) {
+    return errors;
+  }
   if (!config.model_alias.trim()) {
     errors.push("Connect or pick the model to test.");
   }
@@ -148,7 +241,8 @@ export function validateBenchmarkConfig(config: BenchmarkConfig): string[] {
   return errors;
 }
 
-export type BenchmarkRequest = {
+// The `recipe` field of POST /api/benchmarks/evals/run for the recipe_heldout task.
+export type RecipeHeldoutSpec = {
   rows: Record<string, unknown>[];
   // biome-ignore lint/style/useNamingConvention: api schema
   prompt_column: string;
@@ -178,7 +272,7 @@ export function buildBenchmarkRequest(
   configs: NodeConfig[],
   rows: Record<string, unknown>[],
   trained: TrainedModelInput | null = null,
-): { request: BenchmarkRequest | null; errors: string[] } {
+): { request: RecipeHeldoutSpec | null; errors: string[] } {
   const errors = validateBenchmarkConfig(config);
   if (!trained && rows.length === 0) {
     errors.push("No held-out rows. Run the recipe first.");
@@ -350,6 +444,8 @@ export function parseBenchmarkSettings(
     // biome-ignore lint/style/useNamingConvention: ui schema
     judge_alias: readText(input.judge_alias),
     rubric: readText(input.rubric),
+    task: readText(input.task) || RECIPE_HELDOUT_TASK,
+    limit: readText(input.limit),
     // biome-ignore lint/style/useNamingConvention: ui schema
     holdout_percent: readText(input.holdout_percent) ?? "20",
     // biome-ignore lint/style/useNamingConvention: ui schema

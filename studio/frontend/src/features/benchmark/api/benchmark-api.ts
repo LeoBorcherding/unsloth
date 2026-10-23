@@ -68,6 +68,8 @@ export interface BenchmarkTaskInfo {
   name: string;
   description?: string;
   task_type?: string;
+  /** lm_eval tasks need a GGUF; "recipe" tasks run from a Data Recipes Benchmark card. */
+  runner?: "lm_eval" | "recipe";
 }
 
 export interface BenchmarkTasksResponse {
@@ -104,6 +106,9 @@ export interface BenchmarkRunParams {
   batch_size?: string;
   num_fewshot?: number | null;
   max_tokens?: number | null;
+  limit?: number | null;
+  /** Inputs for the recipe_heldout task. */
+  recipe?: Record<string, unknown>;
 }
 
 export async function runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkOperationResponse> {
