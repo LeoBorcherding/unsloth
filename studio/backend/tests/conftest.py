@@ -1056,6 +1056,7 @@ def _drop_the_model_memory_memo_between_tests():
     leaves it memoized, so the next test on that worker inside the TTL sees "Keep model in GPU
     memory" on: model_memory_owns_placement() turns true and the spill planner stands down.
     """
+
     def _clear():
         # Tests may swap in a stub module with no memo (test_server_tuning_flags does).
         cache = getattr(sys.modules.get("utils.model_memory_settings"), "_cache", None)
