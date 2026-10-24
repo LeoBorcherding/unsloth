@@ -111,6 +111,11 @@ const SETTING_RESETS = {
       tensorSplit: null,
     },
   },
+  // vLLM / SGLang GPU switches can't turn off the last GPU, so this is the only way back to unpinned.
+  engineGpus: {
+    isDefault: (c) => c.selectedGpuIds == null,
+    patch: { selectedGpuIds: undefined, selectedGpuIndexKind: undefined },
+  },
   loadMode: {
     isDefault: (c) => c.loadMode == null,
     patch: { loadMode: null },

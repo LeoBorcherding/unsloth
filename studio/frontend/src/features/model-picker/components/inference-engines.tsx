@@ -18,7 +18,7 @@ import { useT } from "@/i18n";
 import { isEngineGpuDevice, useGpuDevices } from "@/hooks/use-gpu-info";
 import { formatGiB } from "@/lib/memory/format";
 import { cn } from "@/lib/utils";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   type EngineStatus,
   type InferenceEngine,
@@ -304,6 +304,7 @@ export function InferenceEnginePicker({
   seed = null,
   onSeedChange,
   onGpuChange,
+  gpuReset,
 }: {
   value: InferenceEngine;
   onChange: (engine: InferenceEngine) => void;
@@ -323,6 +324,7 @@ export function InferenceEnginePicker({
   seed?: number | null;
   onSeedChange: (seed: number | null) => void;
   onGpuChange: (ids: number[]) => void;
+  gpuReset?: ReactNode;
 }) {
   const { engines, error } = useEngines();
   const t = useT();
@@ -408,7 +410,10 @@ export function InferenceEnginePicker({
               aria-label={t("managedEngines.gpu")}
               className="space-y-2"
             >
-              <span className="text-ui-13">{t("managedEngines.gpu")}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-ui-13">{t("managedEngines.gpu")}</span>
+                {gpuReset}
+              </div>
               <p className="text-ui-12 text-muted-foreground">
                 {t("managedEngines.gpuHelp")}
               </p>

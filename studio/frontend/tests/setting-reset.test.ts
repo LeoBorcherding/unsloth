@@ -44,6 +44,7 @@ const CHANGED: [Setting, Partial<Config>][] = [
   ["reasoningBudget", { reasoningBudget: 0 }],
   ["reasoningBudgetMessage", { reasoningBudgetMessage: "Done thinking." }],
   ["gpuMemory", { gpuMemoryMode: "manual", gpuLayers: 20, nCpuMoe: 4 }],
+  ["engineGpus", { selectedGpuIds: [1], selectedGpuIndexKind: "physical" }],
   ["loadMode", { loadMode: "mlock" }],
   ["ctxCheckpoints", { ctxCheckpoints: 0 }],
   ["cacheRam", { cacheRam: -1 }],
