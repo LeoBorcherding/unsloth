@@ -462,7 +462,13 @@ def test_desktop_secret_stops_the_backend_it_owns(monkeypatch):
         )
         response = http.post("/api/desktop/shutdown", headers = {"X-Desktop-Secret": raw})
         assert response.status_code == 200
-        assert response.json() == {"status": "shutting_down"}
+        from core.training.training import _SHUTDOWN_STOP_TIMEOUT_S
+
+        # `unsloth studio stop` reads this to wait out the save before taskkill /F.
+        assert response.json() == {
+            "status": "shutting_down",
+            "save_budget_s": _SHUTDOWN_STOP_TIMEOUT_S,
+        }
         deadline = time.monotonic() + 5
         while not fired and time.monotonic() < deadline:
             time.sleep(0.05)

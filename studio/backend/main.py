@@ -2496,7 +2496,12 @@ def _schedule_shutdown(request: Request) -> dict:
             os.kill(os.getpid(), signal.SIGTERM)
 
     request.app.state._shutdown_task = asyncio.create_task(_delayed_shutdown())
-    return {"status": "shutting_down"}
+    # `unsloth studio stop` waits past this before taskkill /F; only this process knows the value.
+    try:
+        from core.training.training import _SHUTDOWN_STOP_TIMEOUT_S as save_budget_s
+    except Exception:
+        save_budget_s = None
+    return {"status": "shutting_down", "save_budget_s": save_budget_s}
 
 
 def _get_cached_system_gpu_info(

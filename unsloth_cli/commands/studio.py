@@ -3340,18 +3340,29 @@ def _graceful_shutdown_on_sigterm() -> None:
 _GRACEFUL_STOP_WAIT_S = 150.0
 
 
-def _graceful_stop_wait_s() -> float:
-    # A raised server budget moves the wait with it (assumes the server shares this environment).
+def _graceful_stop_wait_s(reported: "float | None" = None) -> float:
+    # The server reports its budget; an older one doesn't, so fall back to this environment's.
+    budget = reported
+    if budget is None:
+        try:
+            budget = float(os.environ.get("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S") or "")
+        except ValueError:
+            return _GRACEFUL_STOP_WAIT_S
+    return max(_GRACEFUL_STOP_WAIT_S, budget + 30.0)
+
+
+def _reported_save_budget(response) -> "float | None":
     try:
-        configured = float(os.environ.get("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S") or "")
-    except ValueError:
-        return _GRACEFUL_STOP_WAIT_S
-    return max(_GRACEFUL_STOP_WAIT_S, configured + 30.0)
+        budget = json.loads(response.read() or b"{}").get("save_budget_s")
+        return float(budget) if budget is not None else None
+    except Exception:
+        return None
 
 
-def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
-    """POST /api/shutdown to the server behind a per-port record. Windows has no SIGTERM, and
-    taskkill /F skips the handler that stops and saves a running training job."""
+def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> "float | None":
+    """POST /api/shutdown to the server behind a per-port record and return how long to wait
+    for it, or None if no server answered. Windows has no SIGTERM, and taskkill /F skips the
+    handler that stops and saves a running training job."""
     from unsloth_cli._inference import (
         _recorded_loopback_bases,
         _studio_token,
@@ -3371,7 +3382,7 @@ def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
                 continue
             token = _studio_token()
             if token is None:
-                return False
+                return None
             request = urllib.request.Request(
                 f"{base}/api/shutdown",
                 data = b"",
@@ -3379,11 +3390,11 @@ def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
                 method = "POST",
             )
             try:
-                with urlopen_no_redirect(request, timeout = 10):
-                    return True
+                with urlopen_no_redirect(request, timeout = 10) as response:
+                    return _graceful_stop_wait_s(_reported_save_budget(response))
             except Exception:
                 continue
-    return False
+    return None
 
 
 def _wait_for_exit(
@@ -3411,12 +3422,13 @@ def _signal_stop(
         return f"refusing to signal PID {pid}"
     try:
         if sys.platform == "win32":
-            if _request_graceful_shutdown(pid, paths):
+            wait = _request_graceful_shutdown(pid, paths)
+            if wait is not None:
                 typer.echo(
                     f"Asked Unsloth server (PID {pid}) to shut down; a running training "
                     "job is saved first."
                 )
-                if _wait_for_exit(pid, _graceful_stop_wait_s(), created_times):
+                if _wait_for_exit(pid, wait, created_times):
                     return None
             # The probe can outlast the server, and Windows reuses PIDs: recheck before /F.
             elif _wait_for_exit(pid, 0, created_times):
