@@ -3377,7 +3377,11 @@ def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
     return False
 
 
-def _wait_for_exit(pid: int, timeout: float, created_times: "Sequence[float | None]" = ()) -> bool:
+def _wait_for_exit(
+    pid: int,
+    timeout: float,
+    created_times: "Sequence[float | None]" = (),
+) -> bool:
     deadline = time.monotonic() + timeout
     # A PID reused by another process after the server exited counts as exited, never as one to kill.
     while _pid_alive(pid) and _pid_is_studio_server(pid, created_times):
@@ -3388,7 +3392,9 @@ def _wait_for_exit(pid: int, timeout: float, created_times: "Sequence[float | No
 
 
 def _signal_stop(
-    pid: int, paths: "Sequence[Path]" = (), created_times: "Sequence[float | None]" = ()
+    pid: int,
+    paths: "Sequence[Path]" = (),
+    created_times: "Sequence[float | None]" = (),
 ) -> "str | None":
     import signal as _signal
 
