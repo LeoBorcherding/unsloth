@@ -36411,6 +36411,62 @@ def _raise_ignored_completions_params(body: dict) -> None:
         _raise_unsupported_openai_parameter("best_of", "best_of is not supported for completions.")
 
 
+async def _recover_dead_llama_passthrough(llama_backend) -> None:
+    """Recover a resident child even if its health probe has already marked it down.
+
+    The backend's respawn lock and unload epoch prevent concurrent requests from
+    launching duplicate children or reviving a deliberately unloaded model.
+    """
+    process = getattr(llama_backend, "_process", None)
+    if process is not None and process.poll() is not None:
+        await _passthrough_retry_url(llama_backend, httpx.ConnectError("llama-server exited"))
+
+
+async def _post_llama_nonstreaming_with_respawn(
+    client,
+    llama_backend,
+    body,
+    *,
+    path = "/v1/completions",
+    timeout,
+    cancel_event = None,
+):
+    """Retry one lost connection before returning any completion/tokenizer output.
+
+    A slow live server is never respawned here. Resolve both URL and child key on
+    every attempt: a replacement can change either. A forced unload/cancel wins
+    over recovery, including one arriving while load_model runs off the event loop.
+    """
+    for attempt in range(2):
+        _raise_if_nonstreaming_request_cancelled(cancel_event)
+        try:
+            response = await client.post(
+                f"{llama_backend.base_url}{path}",
+                json = body,
+                timeout = timeout,
+                headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
+            )
+            _raise_if_nonstreaming_request_cancelled(cancel_event)
+            return response
+        except httpx.RequestError as exc:
+            _raise_if_nonstreaming_request_cancelled(cancel_event)
+            if attempt == 0 and _is_lost_upstream_connection(exc):
+                retry_url = await _passthrough_retry_url(llama_backend, exc, path = path)
+                _raise_if_nonstreaming_request_cancelled(cancel_event)
+                if retry_url is not None:
+                    continue
+            status = 504 if isinstance(exc, httpx.TimeoutException) else 502
+            raise HTTPException(
+                status_code = status,
+                detail = openai_error_body(
+                    "llama-server timed out."
+                    if status == 504
+                    else "Lost connection to llama-server.",
+                    status = status,
+                ),
+            ) from exc
+
+
 @router.post("/completions")
 @account_access.gpu_busy_route
 async def openai_completions(request: Request, current_subject: str = Depends(get_current_subject)):
@@ -36449,6 +36505,8 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
     # Opt-in: load the requested local GGUF before the loaded-state check.
     body = await _auto_switch_from_request_body(request, current_subject, gguf_only = True)
     llama_backend = get_llama_cpp_backend()
+    if isinstance(body, dict) and not body.get("stream", False) and _completions_prompt_present(body):
+        await _recover_dead_llama_passthrough(llama_backend)
     if not llama_backend.is_loaded:
         _status, _detail = await _no_model_loaded_error(
             "No GGUF model loaded. Load a GGUF model first.",
@@ -36719,10 +36777,12 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
                         if _cancel_event.is_set():
                             raise asyncio.CancelledError()
                         _single_body = dict(body, prompt = prompt)
-                        _resp = await _client.post(
-                            target_url,
-                            json = _single_body,
+                        _resp = await _post_llama_nonstreaming_with_respawn(
+                            _client,
+                            llama_backend,
+                            _single_body,
                             timeout = _llama_non_streaming_generation_timeout(),
+                            cancel_event = _cancel_event,
                         )
                         if _cancel_event.is_set():
                             raise asyncio.CancelledError()
@@ -36799,11 +36859,12 @@ async def openai_completions(request: Request, current_subject: str = Depends(ge
         _direct_llama_request_started()
         try:
             try:
-                resp = await _client.post(
-                    target_url,
-                    json = body,
-                    headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
+                resp = await _post_llama_nonstreaming_with_respawn(
+                    _client,
+                    llama_backend,
+                    body,
                     timeout = _llama_non_streaming_generation_timeout(),
+                    cancel_event = _cancel_event,
                 )
             except httpx.RequestError:
                 # The watcher closed the client out from under the request: report the cancel, not a transport failure.
@@ -37494,6 +37555,8 @@ async def llama_tokenize(request: Request, current_subject: str = Depends(get_cu
     """
     llama_backend = get_llama_cpp_backend()
     body = await _auto_switch_from_request_body(request, current_subject, gguf_only = True)
+    if isinstance(body, dict):
+        await _recover_dead_llama_passthrough(llama_backend)
     if not llama_backend.is_loaded:
         _status, _detail = await _no_model_loaded_error(
             "No GGUF model loaded. Load a GGUF model first.",
@@ -37505,14 +37568,14 @@ async def llama_tokenize(request: Request, current_subject: str = Depends(get_cu
     if not isinstance(body, dict):
         raise HTTPException(status_code = 400, detail = "Request body must be a JSON object")
 
-    target_url = f"{llama_backend.base_url}/tokenize"
     _client = _cancelable_nonstreaming_client()
     try:
-        _resp = await _client.post(
-            target_url,
-            json = body,
+        _resp = await _post_llama_nonstreaming_with_respawn(
+            _client,
+            llama_backend,
+            body,
+            path = "/tokenize",
             timeout = 30,
-            headers = _openai_passthrough_upstream_headers(llama_backend = llama_backend),
         )
     except httpx.RequestError as _exc:
         raise HTTPException(status_code = 502, detail = _friendly_error(_exc))
@@ -43222,7 +43285,12 @@ def _is_lost_upstream_connection(exc) -> bool:
     return isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError))
 
 
-async def _passthrough_retry_url(llama_backend, exc):
+async def _passthrough_retry_url(
+    llama_backend,
+    exc,
+    *,
+    path = "/v1/chat/completions",
+):
     """Fresh upstream URL after respawning a dead llama-server, else None.
 
     A crashed server relaunches on a NEW ephemeral port, so a passthrough still
@@ -43230,8 +43298,8 @@ async def _passthrough_retry_url(llama_backend, exc):
     respawn-and-retry in generate_chat_completion. None when an MTP+tensor crash
     already scheduled its own recovery, or when nothing needed respawning.
 
-    Shared by both passthrough surfaces: /v1/messages and /v1/chat/completions post
-    to the same upstream route, and a crash strands whichever one is in use.
+    Chat, text completions and tokenization share recovery; callers select the
+    upstream path. A crash strands whichever surface is in use.
     """
     recover = getattr(llama_backend, "_maybe_recover_from_mtp_crash", None)
     if recover is not None and recover(exc):
@@ -43244,7 +43312,7 @@ async def _passthrough_retry_url(llama_backend, exc):
     if respawn is None or not await asyncio.to_thread(respawn):
         return None
     logger.warning("llama-server was unreachable; respawned it and retrying the passthrough")
-    return f"{llama_backend.base_url}/v1/chat/completions"
+    return f"{llama_backend.base_url}{path}"
 
 
 async def _anthropic_passthrough_stream(
