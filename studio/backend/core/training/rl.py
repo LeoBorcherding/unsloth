@@ -1,0 +1,422 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+"""DPO, ORPO and GRPO for Studio training: dataset shaping and trainer construction.
+
+GRPO runs without vLLM: Unsloth only switches TRL to vLLM rollouts when the model carries a
+``vllm_engine``, which Studio never loads, so generation goes through TRL's own path.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import logging
+import math
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+OBJECTIVES = ("sft", "dpo", "orpo", "grpo")
+PREFERENCE_OBJECTIVES = ("dpo", "orpo")
+RL_ROLES = {
+    "dpo": ("prompt", "chosen", "rejected", "system"),
+    "orpo": ("prompt", "chosen", "rejected", "system"),
+    "grpo": ("prompt", "answer", "system"),
+}
+_REQUIRED_ROLES = {
+    "dpo": ("prompt", "chosen", "rejected"),
+    "orpo": ("prompt", "chosen", "rejected"),
+    "grpo": ("prompt",),
+}
+_AUTO_ROLE_NAMES = {
+    "prompt": ("prompt", "question", "instruction", "problem", "query", "input"),
+    "answer": ("answer", "solution", "final_answer", "target", "label"),
+    "chosen": ("chosen", "accepted", "preferred"),
+    "rejected": ("rejected", "dispreferred"),
+    "system": ("system", "system_prompt"),
+}
+_RL_ROW_KEYS = ("prompt", "answer", "chosen", "rejected")
+# Names TRL's GRPOTrainer passes to every reward itself (grpo_trainer.py, the reward_func call and
+# the reward_kwargs it adds), so a dataset column with one of them collides or is overwritten.
+_REWARD_CALL_KEYS = (
+    "prompts",
+    "completions",
+    "completion_ids",
+    "trainer_state",
+    "log_extra",
+    "log_metric",
+    "environments",
+)
+PYTHON_REWARD_ISOLATION_FIELD = "grpo_python_reward_isolation"
+REWARD_ISOLATION_METRIC = "sandbox/python_rewards_os_isolation"
+DEFAULT_BETA = {"dpo": 0.1, "orpo": 0.1, "grpo": 0.0}
+# variant -> (loss_type, importance_sampling_level). dapo is TRL's and Unsloth's default; gspo is
+# sequence-level ratios with the dr_grpo normaliser, as in the Unsloth vision GRPO notebooks.
+GRPO_VARIANTS = {
+    "dapo": ("dapo", "token"),
+    "dr_grpo": ("dr_grpo", "token"),
+    "bnpo": ("bnpo", "token"),
+    "grpo": ("grpo", "token"),
+    "gspo": ("dr_grpo", "sequence"),
+}
+# Unsloth's GRPO patch still logs the pre-0.20 TRL key completion_length next to completions/*.
+_RL_LOG_PREFIXES = (
+    "reward",
+    "rewards/",
+    "kl",
+    "completions/",
+    "completion_length",
+    "frac_reward_zero_std",
+    "logps/",
+    "nll_loss",
+    "log_odds",
+)
+
+
+def install_fsdp_import_stub() -> bool:
+    """TRL's GRPOTrainer imports FSDP at module level, which needs ``torch._C._distributed_c10d``.
+    AMD's Windows ROCm torch wheels ship without it, so GRPO cannot even import there. Single-GPU
+    GRPO never wraps the model in FSDP, so a stand-in class is enough. Call before importing unsloth."""
+    import sys
+    import types
+
+    try:
+        import torch.distributed.fsdp  # noqa: F401
+        return False
+    except Exception:
+        for name in [n for n in sys.modules if n.startswith("torch.distributed.fsdp")]:
+            sys.modules.pop(name, None)
+
+    class FullyShardedDataParallel:  # never instantiated without a process group
+        pass
+
+    stub = types.ModuleType("torch.distributed.fsdp")
+    stub.FullyShardedDataParallel = FullyShardedDataParallel
+    sys.modules["torch.distributed.fsdp"] = stub
+    try:
+        import torch.distributed as dist
+        dist.fsdp = stub
+    except Exception:
+        pass
+    return True
+
+
+def rl_log_metrics(logs: dict) -> Optional[dict]:
+    """GRPO/DPO/ORPO log keys (reward, rewards/<fn>/mean, kl, rewards/margins, ...) that the fixed
+    progress fields have no slot for."""
+    out = {}
+    for key, value in logs.items():
+        if not isinstance(key, str) or not key.startswith(_RL_LOG_PREFIXES):
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            continue
+        out[key] = float(value)
+    return out or None
+
+
+def normalize_objective(value: Any) -> str:
+    objective = str(value or "sft").strip().lower()
+    return objective if objective in OBJECTIVES else "sft"
+
+
+def resolve_role_columns(
+    columns: list[str],
+    objective: str,
+    mapping: Optional[dict] = None,
+) -> dict[str, str]:
+    """role -> column. Explicit mapping wins; otherwise match common column names."""
+    roles = RL_ROLES[objective]
+    resolved: dict[str, str] = {}
+    for column, role in (mapping or {}).items():
+        if isinstance(column, str) and column in columns and role in roles and role not in resolved:
+            resolved[role] = column
+    for role in roles:
+        if role in resolved:
+            continue
+        for name in _AUTO_ROLE_NAMES[role]:
+            match = next((c for c in columns if c.lower() == name), None)
+            if match and match not in resolved.values():
+                resolved[role] = match
+                break
+    missing = [r for r in _REQUIRED_ROLES[objective] if r not in resolved]
+    if missing:
+        raise ValueError(
+            f"{objective.upper()} needs dataset columns for: {', '.join(missing)}. "
+            f"Map them under Column roles (found columns: {', '.join(columns)})."
+        )
+    return resolved
+
+
+def _as_messages(value: Any, role: str) -> list[dict]:
+    if isinstance(value, list) and all(isinstance(m, dict) and "content" in m for m in value):
+        return [{"role": str(m.get("role", role)), "content": str(m["content"])} for m in value]
+    return [{"role": role, "content": "" if value is None else str(value)}]
+
+
+def prompt_turns(value: Any, system_prompt: Optional[str] = None) -> list[dict]:
+    """A row's prompt as the reward sees it in training: its turns, the system prompt first."""
+    prompt = _as_messages(value, "user")
+    if system_prompt and not any(m["role"] == "system" for m in prompt):
+        prompt = [{"role": "system", "content": str(system_prompt)}] + prompt
+    return prompt
+
+
+def _assistant_turns(value: Any) -> list[dict]:
+    # Preference datasets often store chosen/rejected as the whole conversation; keep only the reply.
+    messages = _as_messages(value, "assistant")
+    last_other = max((i for i, m in enumerate(messages) if m["role"] != "assistant"), default = -1)
+    return messages[last_other + 1 :] or [{"role": "assistant", "content": ""}]
+
+
+def format_rl_dataset(
+    dataset,
+    objective: str,
+    mapping: Optional[dict] = None,
+    keep_columns: tuple[str, ...] = (),
+    num_proc: Optional[int] = None,
+    system_prompt: Optional[str] = None,
+):
+    """Shape a raw dataset into TRL's conversational prompt/chosen/rejected or prompt/answer rows.
+    ``system_prompt`` fills in for rows with no system message of their own."""
+    columns = list(getattr(dataset, "column_names", None) or [])
+    if not columns:
+        raise ValueError(f"{objective.upper()} training needs a dataset with known columns.")
+    roles = resolve_role_columns(columns, objective, mapping)
+    # "*": Python rewards can read any column, so keep them all. A role column stays under its own
+    # name too, since a rule's compare_to may name the column mapped to answer.
+    wanted = columns if "*" in keep_columns else keep_columns
+    extra = [
+        c for c in wanted if c in columns and c not in _RL_ROW_KEYS and c not in _REWARD_CALL_KEYS
+    ]
+
+    def convert(row: dict) -> dict:
+        system = row.get(roles["system"]) if "system" in roles else None
+        out: dict[str, Any] = {
+            "prompt": prompt_turns(row[roles["prompt"]], system or system_prompt)
+        }
+        if objective == "grpo":
+            if "answer" in roles:
+                answer = row[roles["answer"]]
+                out["answer"] = "" if answer is None else str(answer)
+        else:
+            out["chosen"] = _assistant_turns(row[roles["chosen"]])
+            out["rejected"] = _assistant_turns(row[roles["rejected"]])
+        for column in extra:
+            out[column] = row[column]
+        return out
+
+    drop = [c for c in columns if c not in extra]
+    kwargs = {"remove_columns": drop}
+    if num_proc and num_proc > 1:
+        kwargs["num_proc"] = num_proc
+    return dataset.map(convert, **kwargs), roles
+
+
+def render_prompts_without_thinking(
+    dataset,
+    tokenizer,
+    enable_thinking: bool,
+    num_proc: Optional[int] = None,
+):
+    """TRL's GRPOTrainer applies the chat template with no kwargs, so a Qwen3-style template always
+    opens a thinking block and short completion budgets run out inside it. Render the prompts to
+    text here with ``enable_thinking`` set; TRL then passes the strings through untouched."""
+    template = getattr(tokenizer, "chat_template", None) or ""
+    if "enable_thinking" not in template:
+        return dataset, False
+
+    def render(row: dict) -> dict:
+        return {
+            "prompt": tokenizer.apply_chat_template(
+                row["prompt"],
+                tokenize = False,
+                add_generation_prompt = True,
+                enable_thinking = enable_thinking,
+            )
+        }
+
+    kwargs = {"num_proc": num_proc} if num_proc and num_proc > 1 else {}
+    return dataset.map(render, **kwargs), True
+
+
+def _config_kwargs(config_cls, config_args: dict) -> dict:
+    allowed = {f.name for f in dataclasses.fields(config_cls)}
+    return {k: v for k, v in config_args.items() if k in allowed}
+
+
+def rl_lengths(objective: str, max_seq_length: int, settings: dict) -> tuple[int, int]:
+    """(max_prompt_length, max_completion_length) within max_seq_length."""
+    max_seq_length = max(int(max_seq_length or 2048), 64)
+    default_prompt = max_seq_length // (4 if objective == "grpo" else 2)
+    prompt = int(settings.get("max_prompt_length") or default_prompt)
+    prompt = min(max(prompt, 16), max_seq_length - 16)
+    completion = settings.get("max_completion_length")
+    completion = int(completion) if completion else max_seq_length - prompt
+    return prompt, max(16, min(completion, max_seq_length - prompt))
+
+
+def _reward_funcs(
+    reward_specs,
+    worker_cls,
+    make_python,
+    make_rule,
+    *,
+    mode = "required",
+    isolation = None,
+) -> list:
+    """In ``reward_specs`` order, since TRL pairs ``reward_weights`` with them by position.
+    ``mode`` is the os_sandbox mode: ``required`` refuses a host without OS isolation, ``auto``
+    is the user's opt-in to software safeguards. The worker's isolation is copied into ``isolation``."""
+    from core.inference.os_sandbox import _FALLBACK_NOTE, SandboxUnavailableError
+    from core.training.python_rewards import PythonRewardError
+
+    python = [s for s in reward_specs if s.get("kind") == "python"]
+    python_funcs = {}
+    if python:
+        try:
+            worker = worker_cls(python, mode = mode).start()
+        except SandboxUnavailableError as exc:
+            # The sandbox's own fallback note says tools "still run", which reads wrong on a refusal.
+            remediation = (exc.remediation or "").replace(_FALLBACK_NOTE, "").strip()
+            raise PythonRewardError(
+                f"Python rewards need the OS sandbox, and it is not available here ({exc}). "
+                f"{remediation} To run them with software safeguards only, which do not "
+                "stop a reward from reading your files, writing outside its folder or using the "
+                f'network, set {PYTHON_REWARD_ISOLATION_FIELD} to "auto".'
+            ) from exc
+        if worker.isolation.get("os_isolation"):
+            logger.info("Python rewards run with %s", worker.isolation)
+        else:
+            logger.warning("Python rewards run WITHOUT OS isolation (%s)", worker.isolation)
+        if isolation is not None:
+            isolation.update(worker.isolation)
+        python_funcs = dict(zip((s["name"] for s in python), make_python(python, worker)))
+    return [
+        python_funcs[s["name"]] if s.get("kind") == "python" else make_rule(s) for s in reward_specs
+    ]
+
+
+def with_reward_isolation(metrics: Optional[dict], isolation: Optional[dict]) -> Optional[dict]:
+    """Add the Python reward worker's isolation (1 = OS sandbox, 0 = software safeguards only)
+    to a step's RL metrics, so /status and the stored history say which one the run had."""
+    if not metrics or not isolation:
+        return metrics
+    return {**metrics, REWARD_ISOLATION_METRIC: 1.0 if isolation.get("os_isolation") else 0.0}
+
+
+def build_rl_trainer(
+    objective: str,
+    *,
+    model,
+    tokenizer,
+    train_dataset,
+    eval_dataset,
+    config_args: dict,
+    settings: dict,
+    reward_specs: Optional[list[dict]] = None,
+):
+    """Construct the TRL trainer for a non-SFT objective. Unsloth's PatchFastRL has already
+    swapped these classes for its own on import."""
+    import trl
+
+    max_seq_length = int(config_args.get("max_seq_length") or 2048)
+    max_prompt_length, max_completion_length = rl_lengths(objective, max_seq_length, settings)
+    beta = settings.get("beta")
+    beta = DEFAULT_BETA[objective] if beta is None else float(beta)
+    reward_isolation: dict = {}
+
+    # SFT-only keys from the shared config builder.
+    base = {
+        k: v
+        for k, v in config_args.items()
+        if k not in ("dataset_text_field", "packing", "max_seq_length", "dataset_kwargs")
+    }
+
+    if objective in PREFERENCE_OBJECTIVES:
+        try:
+            from unsloth import PatchDPOTrainer
+            PatchDPOTrainer()
+        except ImportError:
+            pass
+        config_cls = trl.DPOConfig if objective == "dpo" else trl.ORPOConfig
+        trainer_cls = trl.DPOTrainer if objective == "dpo" else trl.ORPOTrainer
+        args = config_cls(
+            **_config_kwargs(config_cls, base),
+            beta = beta,
+            max_length = max_seq_length,
+            max_prompt_length = max_prompt_length,
+        )
+        kwargs = {
+            "model": model,
+            "args": args,
+            "train_dataset": train_dataset,
+            "processing_class": tokenizer,
+        }
+        if objective == "dpo":
+            kwargs["ref_model"] = None
+    elif objective == "grpo":
+        from core.training.python_rewards import RewardWorker, make_python_reward_funcs
+        from core.training.rewards import make_reward_func
+
+        if not reward_specs:
+            raise ValueError("GRPO needs at least one reward selected.")
+        if settings.get("enable_thinking") is not None:
+            train_dataset, _ = render_prompts_without_thinking(
+                train_dataset, tokenizer, bool(settings["enable_thinking"])
+            )
+            if eval_dataset is not None:
+                eval_dataset, _ = render_prompts_without_thinking(
+                    eval_dataset, tokenizer, bool(settings["enable_thinking"])
+                )
+        loss_type, sampling_level = GRPO_VARIANTS.get(
+            settings.get("variant") or "dapo", GRPO_VARIANTS["dapo"]
+        )
+        variant_args = _config_kwargs(
+            trl.GRPOConfig,
+            {
+                "loss_type": loss_type,
+                "importance_sampling_level": sampling_level,
+                "mask_truncated_completions": bool(settings.get("mask_truncated_completions")),
+                "epsilon_high": settings.get("epsilon_high"),
+            },
+        )
+        args = trl.GRPOConfig(
+            **_config_kwargs(trl.GRPOConfig, base),
+            **variant_args,
+            use_vllm = False,
+            beta = beta,
+            temperature = float(settings.get("temperature") or 1.0),
+            num_generations = int(settings.get("num_generations") or 4),
+            max_prompt_length = max_prompt_length,
+            max_completion_length = max_completion_length,
+            reward_weights = [float(s.get("weight", 1.0)) for s in reward_specs],
+            log_completions = False,
+        )
+        kwargs = {
+            "model": model,
+            "args": args,
+            "train_dataset": train_dataset,
+            "processing_class": tokenizer,
+            "reward_funcs": _reward_funcs(
+                reward_specs,
+                RewardWorker,
+                make_python_reward_funcs,
+                make_reward_func,
+                mode = "auto" if settings.get("python_reward_isolation") == "auto" else "required",
+                isolation = reward_isolation,
+            ),
+        }
+        trainer_cls = trl.GRPOTrainer
+    else:
+        raise ValueError(f"Unknown RL objective: {objective}")
+
+    if eval_dataset is not None:
+        kwargs["eval_dataset"] = eval_dataset
+    trainer = trainer_cls(**kwargs)
+    if reward_isolation:
+        trainer._unsloth_reward_isolation = reward_isolation
+    return trainer
