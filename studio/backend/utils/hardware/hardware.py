@@ -1136,7 +1136,7 @@ _GPU_NAME_GFX_TABLE: "list[tuple[str, str]]" = [
 _ROCM_SUPPORTED_GFX_WINDOWS_ONLY = frozenset({"gfx1010", "gfx1011", "gfx1012", "gfx1153"})
 
 # install_python_stack._LINUX_UNCOVERED_AMD_GFX: the arches the Linux installers leave on CPU torch.
-_LINUX_UNCOVERED_AMD_GFX = _ROCM_SUPPORTED_GFX_WINDOWS_ONLY | {"gfx803"}
+_LINUX_UNCOVERED_AMD_GFX = _ROCM_SUPPORTED_GFX_WINDOWS_ONLY | {"gfx803", "gfx90c"}
 
 # Krackan Point 2 (gfx1153) names overlap the table's gfx1152 row; the Linux installers read them
 # first and leave CPU torch on purpose (install_python_stack._LINUX_KRACKAN2_NAME_RE).
@@ -2207,7 +2207,13 @@ def clear_gpu_cache():
         if torch.cuda.is_available() and any(
             torch.cuda.memory_reserved(i) for i in range(torch.cuda.device_count())
         ):
-            torch.cuda.synchronize()
+            # An unload beside another backend's render: a device sync must not land inside its graph recording.
+            sync = torch.cuda.synchronize
+            try:
+                from core.inference.diffusion_cuda_graph import synchronize_outside_capture as sync
+            except Exception:  # noqa: BLE001 - no Studio diffusion backend here: a plain sync
+                pass
+            sync()
         # Both are no-ops without an allocator and neither creates a context.
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
