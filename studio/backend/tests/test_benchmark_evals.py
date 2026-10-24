@@ -285,6 +285,30 @@ def test_studio_scoring_requests_use_neutral_defaults_without_mutating_payload(m
     assert "presence_penalty" not in seen[-1]
 
 
+def test_studio_gguf_reuses_harness_exponential_backoff(monkeypatch):
+    import requests
+    from core.benchmark.gguf_client import StudioGGUFLM
+
+    lm = StudioGGUFLM(base_url = "http://localhost:8888", api_key = "sk-test", max_retries = 2)
+    seen = []
+    sleeps = []
+
+    def post(url, *, json, timeout):
+        seen.append(json)
+        response = requests.Response()
+        response.status_code = 503 if len(seen) < 3 else 200
+        response._content = b'{"choices":[{"text":" recovered"}]}'
+        return response
+
+    monkeypatch.setattr(lm._session, "post", post)
+    monkeypatch.setattr("lm_eval.models.gguf.time.sleep", sleeps.append)
+    assert lm._generate_one(("question", {"max_gen_toks": 32768})) == " recovered"
+    assert sleeps == [5, 10]
+    assert len(seen) == 3
+    assert all(body["presence_penalty"] == 0 and body["max_tokens"] == 32768 for body in seen)
+    assert lm._session.headers["Authorization"] == "Bearer sk-test"
+
+
 def test_run_from_an_executor_records_the_requesting_account(monkeypatch):
     # The route runs backend.run in an executor thread, which does not inherit
     # the request's account context; it passes the account explicitly.

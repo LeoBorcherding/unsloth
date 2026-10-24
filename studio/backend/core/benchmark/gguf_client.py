@@ -10,7 +10,6 @@ sampling defaults so evaluation does not inherit Studio's chat recommendations.
 """
 
 import logging
-import time
 
 import requests
 from requests.exceptions import RequestException
@@ -40,8 +39,8 @@ class StudioGGUFLM(GGUFLM):
         self,
         url,
         payload,
-        retries = 3,
-        delay = 5,
+        retries = None,
+        delay = None,
     ):
         if url == self.completions_url:
             # Omitted values otherwise inherit per-model chat recommendations
@@ -56,15 +55,10 @@ class StudioGGUFLM(GGUFLM):
                 "min_p": 0.0,
                 **payload,
             }
-        for _ in range(retries):
-            try:
-                response = self._session.post(url, json = payload, timeout = self.timeout)
-                response.raise_for_status()
-                return response.json()
-            except RequestException as e:
-                logger.error("RequestException: %s", e)
-                time.sleep(delay)
-        raise RuntimeError(f"Failed to get a valid response after {retries} retries.")
+        return super()._post_with_retries(url, payload, retries = retries, delay = delay)
+
+    def _post_request(self, url, payload):
+        return self._session.post(url, json = payload, timeout = self.timeout)
 
     def _detect_total_slots(self):
         try:
