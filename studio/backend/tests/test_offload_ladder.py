@@ -324,6 +324,31 @@ def test_the_cost_gate_prices_the_cache_the_bottom_rung_moves():
     assert plan.predicted_request_ms > plan.predicted_fit_request_ms
 
 
+def test_the_cost_gate_prices_the_recurrent_state_the_bottom_rung_moves():
+    """--no-kv-offload puts a hybrid model's recurrent state on the host with the cache, so the
+    rung has to pay for it; priced on the attention cache alone, a large state was free."""
+
+    def rung(recurrent_bytes):
+        layout = dataclasses.replace(
+            graded_moe(n_blocks = 8, attn = 0.4),
+            kv_bytes_per_token_f16 = 4 * GIB / 8192,
+            recurrent_bytes = recurrent_bytes,
+        )
+        return plan_placement(
+            layout,
+            [int(2.5 * GIB)],
+            94 * GIB,
+            8192,
+            opts = opts(
+                allow_attention_spill = True,
+                allow_kv_host_fallback = True,
+                require_cost_win = True,
+            ),
+        )
+
+    assert rung(4 * GIB).predicted_request_ms > rung(0).predicted_request_ms
+
+
 def test_the_cache_rung_checks_each_card_without_the_cache_it_moved():
     """Device by device, the rung was charged the very cache --no-kv-offload takes off the cards,
     so it abstained on every multi-GPU load it exists for."""

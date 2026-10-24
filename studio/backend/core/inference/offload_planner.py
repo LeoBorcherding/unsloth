@@ -2372,19 +2372,10 @@ def _finish(
     gave_up_a_knob = knobs is not None and (
         knobs.mmproj_to_host or knobs.draft_dropped or knobs.n_parallel < max(1, opts.n_parallel)
     )
-    # The cache the bottom rung moved, priced in the gate and the penalty alike; a -nkvo the caller
-    # typed is on the host in the fallback too, so it is no cost of this plan.
-    rung_kv_host_bytes = (
-        cache_bytes(
-            layout,
-            n_ctx,
-            kv_quantised = quantised,
-            kv_bytes_floor = kv_bytes_floor,
-            trust_floor = opts.kv_bytes_at is not None,
-        )
-        if kv_on_host_rung
-        else 0
-    )
+    # The cache (and recurrent state, which -nkvo moves too) the bottom rung moved, priced in the
+    # gate and the penalty alike; a -nkvo the caller typed is on the host in the fallback too, so it
+    # is no cost of this plan.
+    rung_kv_host_bytes = kv_host_bytes if kv_on_host_rung else 0
     plan_ms = fit_ms = 0.0
     if opts.require_cost_win and budget is not None and (units or spill_lm_head):
         declined, plan_ms, fit_ms = _cost_gate(
