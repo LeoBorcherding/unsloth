@@ -585,6 +585,23 @@ def test_windows_stop_falls_back_to_taskkill_when_the_server_does_not_exit(monke
     ]
 
 
+def test_windows_stop_waits_past_a_raised_server_save_budget(monkeypatch, tmp_path):
+    # The server saves for up to UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S; /F before that cuts the save.
+    studio_mod, _calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = True, exits = False)
+    monkeypatch.setenv("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S", "300")
+    waits = []
+    monkeypatch.setattr(
+        studio_mod,
+        "_wait_for_exit",
+        lambda pid, timeout, created_times = (): waits.append(timeout) or False,
+    )
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert waits[0] > 300
+
+
 def test_windows_stop_kills_when_no_server_answers(monkeypatch, tmp_path):
     studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = False, exits = False)
 

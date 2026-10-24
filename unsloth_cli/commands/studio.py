@@ -3340,6 +3340,15 @@ def _graceful_shutdown_on_sigterm() -> None:
 _GRACEFUL_STOP_WAIT_S = 150.0
 
 
+def _graceful_stop_wait_s() -> float:
+    # A raised server budget moves the wait with it (assumes the server shares this environment).
+    try:
+        configured = float(os.environ.get("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S") or "")
+    except ValueError:
+        return _GRACEFUL_STOP_WAIT_S
+    return max(_GRACEFUL_STOP_WAIT_S, configured + 30.0)
+
+
 def _request_graceful_shutdown(pid: int, paths: "Sequence[Path]") -> bool:
     """POST /api/shutdown to the server behind a per-port record. Windows has no SIGTERM, and
     taskkill /F skips the handler that stops and saves a running training job."""
@@ -3407,7 +3416,7 @@ def _signal_stop(
                     f"Asked Unsloth server (PID {pid}) to shut down; a running training "
                     "job is saved first."
                 )
-                if _wait_for_exit(pid, _GRACEFUL_STOP_WAIT_S, created_times):
+                if _wait_for_exit(pid, _graceful_stop_wait_s(), created_times):
                     return None
             # The probe can outlast the server, and Windows reuses PIDs: recheck before /F.
             elif _wait_for_exit(pid, 0, created_times):
