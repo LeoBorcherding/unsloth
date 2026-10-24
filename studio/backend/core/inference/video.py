@@ -294,7 +294,12 @@ from .video_minimax_h3_te import (
 )
 from .video_encode import encode_x264
 from .video_nvenc import encode_nvenc, nvenc_gpu
-from .video_stream_encode import claim_stream, offer_stream, open_stream_encode
+from .video_stream_encode import (
+    claim_stream,
+    offer_stream,
+    open_h3_stream_encode,
+    open_stream_encode,
+)
 from utils.hardware import clear_gpu_cache
 
 from core.inference.inference_gate import holds_inference, pauses_background_embedding
@@ -11936,7 +11941,9 @@ class VideoBackend:
                         dtype = getattr(state, "dtype", None),
                         attention_backend = getattr(state, "attention_backend", None),
                         speed_mode = getattr(state, "speed_mode", None),
-                        speed_optims = tuple(getattr(state, "speed_optims", ()) or ()),
+                        speed_optims = video_stream_residency.live_speed_optims(
+                            state.pipe, getattr(state, "speed_optims", ())
+                        ),
                         transformer_cache = request_cache_mode,
                         vae_tiling = getattr(state, "vae_tiling", None),
                         memory_mode = getattr(state, "memory_mode", None),
@@ -12409,6 +12416,11 @@ class VideoBackend:
                     and not fam.has_audio
                     and ltx25_render_call is None,
                     logger = logger,
+                ) or open_h3_stream_encode(
+                    pipe,
+                    out_fps,
+                    engage = fam.modular_workflow and ltx25_render_call is None,
+                    logger = logger,
                 )
                 previewer = LatentPreviewer.create(
                     family = fam.name,
@@ -12469,8 +12481,8 @@ class VideoBackend:
                     audio = getattr(output, "audio", None)
                     audio_track = audio[0] if fam.has_audio and audio is not None else None
                     audio_sample_rate = None
-                # Encoded during the decode when its frames are exactly these (_encode_mp4 claims it).
-                with offer_stream(stream_session if audio_track is None else None):
+                # Encoded during the decode when its frames (and soundtrack) are exactly these (_encode_mp4 claims it).
+                with offer_stream(stream_session):
                     if audio_sample_rate is None:
                         mp4_bytes = self._encode_mp4(
                             video_frames, out_fps, audio_track, pipe if fam.has_audio else None
@@ -13220,6 +13232,11 @@ class VideoBackend:
         what the gallery persists."""
         if audio is None:
             streamed = claim_stream(video_frames, fps)
+            if streamed is not None:
+                return streamed
+        elif pipe is not None and audio_sample_rate:
+            # MiniMax-H3: encoded during the decode with this soundtrack's stream declared up front
+            streamed = claim_stream(video_frames, fps, audio, int(audio_sample_rate))
             if streamed is not None:
                 return streamed
         from diffusers.utils.export_utils import encode_video
