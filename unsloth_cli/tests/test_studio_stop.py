@@ -538,3 +538,203 @@ def test_stop_drops_a_record_whose_stable_identity_proves_pid_reuse(monkeypatch,
     assert result.exit_code == 0, result.output
     assert killed == []
     assert not record.exists()
+
+
+def _install_windows(monkeypatch, tmp_path, *, shutdown_ok, exits):
+    """win32 stop with taskkill and the shutdown POST recorded, nothing reaching a real process."""
+    studio_mod, live, _killed = _install(monkeypatch, tmp_path, alive = {8550})
+    monkeypatch.setattr(sys, "platform", "win32")
+    calls = []
+
+    def fake_run(argv, **_kwargs):
+        calls.append(("taskkill", argv))
+        live.discard(int(argv[2]))
+
+    def fake_shutdown(pid, paths):
+        calls.append(("shutdown", sorted(p.name for p in paths)))
+        if shutdown_ok and exits:
+            live.discard(8550)
+        return 0.0 if shutdown_ok else None
+
+    monkeypatch.setattr(studio_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", fake_shutdown, raising = False)
+    monkeypatch.setattr(studio_mod, "_GRACEFUL_STOP_WAIT_S", 0.0, raising = False)
+    _write_pid(tmp_path, "studio-8901-8550.pid", 8550)
+    return studio_mod, calls
+
+
+def test_windows_stop_asks_the_server_to_shut_down_before_any_kill(monkeypatch, tmp_path):
+    # taskkill /F skips the SIGTERM path that stops and saves a running training job.
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = True, exits = True)
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("shutdown", ["studio-8901-8550.pid"])]
+
+
+def test_windows_stop_falls_back_to_taskkill_when_the_server_does_not_exit(monkeypatch, tmp_path):
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = True, exits = False)
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ("shutdown", ["studio-8901-8550.pid"]),
+        ("taskkill", ["taskkill", "/PID", "8550", "/T", "/F"]),
+    ]
+
+
+def test_graceful_shutdown_waits_past_the_budget_the_server_reports(monkeypatch, tmp_path):
+    # The server saves for up to its own UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S; /F before that
+    # cuts the save, and stop may run from a shell that never set the variable.
+    from unsloth_cli import _inference
+
+    studio_mod = _studio()
+    record = tmp_path / "studio-8901-8550.pid"
+    record.write_text("8550\n1700000000.0\n127.0.0.1", encoding = "utf-8")
+    monkeypatch.delenv("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S", raising = False)
+    reply = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def read(self):
+            return reply[0]
+
+    monkeypatch.setattr(_inference, "_studio_token", lambda: "tok")
+    monkeypatch.setattr(_inference, "urlopen_no_redirect", lambda request, timeout: _Response())
+    monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: True)
+    monkeypatch.setattr(studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): True)
+
+    reply[:] = [b'{"status": "shutting_down", "save_budget_s": 300}']
+    assert studio_mod._request_graceful_shutdown(8550, [record]) > 300
+    # A server from before the field: this environment's value, else the fixed floor.
+    reply[:] = [b'{"status": "shutting_down"}']
+    assert studio_mod._request_graceful_shutdown(8550, [record]) == 150.0
+    monkeypatch.setenv("UNSLOTH_STUDIO_SHUTDOWN_STOP_TIMEOUT_S", "300")
+    assert studio_mod._request_graceful_shutdown(8550, [record]) > 300
+
+
+def test_windows_stop_kills_when_no_server_answers(monkeypatch, tmp_path):
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = False, exits = False)
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert [c[0] for c in calls] == ["shutdown", "taskkill"]
+
+
+def test_graceful_shutdown_sends_the_token_only_to_a_verified_server(monkeypatch, tmp_path):
+    from unsloth_cli import _inference
+
+    studio_mod = _studio()
+    record = tmp_path / "studio-8901-8550.pid"
+    record.write_text("8550\n1700000000.0\n127.0.0.1", encoding = "utf-8")
+    posted = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_open(request, timeout):
+        posted.append((request.full_url, request.get_method(), request.headers["Authorization"]))
+        return _Response()
+
+    monkeypatch.setattr(_inference, "_studio_token", lambda: "tok")
+    monkeypatch.setattr(_inference, "urlopen_no_redirect", fake_open)
+    monkeypatch.setattr(studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): True)
+
+    monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: False)
+    assert studio_mod._request_graceful_shutdown(8550, [record]) is None
+    assert posted == []
+
+    monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: True)
+    assert studio_mod._request_graceful_shutdown(8550, [record]) is not None
+    assert posted == [("http://127.0.0.1:8901/api/shutdown", "POST", "Bearer tok")]
+    # The legacy studio.pid has no port, so there is nothing to ask.
+    assert studio_mod._request_graceful_shutdown(8550, [tmp_path / "studio.pid"]) is None
+
+
+def test_windows_stop_never_kills_a_pid_reused_after_the_server_exited(monkeypatch, tmp_path):
+    # The 150 s wait outlives the identity check stop ran before asking, so it has to hold for the kill too.
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = True, exits = False)
+    reused = []
+    real_shutdown = studio_mod._request_graceful_shutdown
+
+    def shutdown_then_reuse(pid, paths):
+        reused.append(True)
+        return real_shutdown(pid, paths)
+
+    monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", shutdown_then_reuse)
+    monkeypatch.setattr(
+        studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): not reused
+    )
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("shutdown", ["studio-8901-8550.pid"])]
+
+
+def test_windows_stop_never_kills_a_pid_reused_during_a_failed_probe(monkeypatch, tmp_path):
+    # The identity check and POST can take seconds; a server that exits meanwhile frees its PID.
+    studio_mod, calls = _install_windows(monkeypatch, tmp_path, shutdown_ok = False, exits = False)
+    probed = []
+    real_shutdown = studio_mod._request_graceful_shutdown
+
+    def probe_then_reuse(pid, paths):
+        probed.append(True)
+        return real_shutdown(pid, paths)
+
+    monkeypatch.setattr(studio_mod, "_request_graceful_shutdown", probe_then_reuse)
+    monkeypatch.setattr(
+        studio_mod, "_pid_is_studio_server", lambda pid, created_times = (): not probed
+    )
+
+    result = _run_stop(studio_mod)
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("shutdown", ["studio-8901-8550.pid"])]
+
+
+def test_graceful_shutdown_skips_a_stale_record_grouped_under_the_pid(monkeypatch, tmp_path):
+    # The stale port may now belong to another Unsloth server, which would answer for this PID.
+    from unsloth_cli import _inference
+
+    studio_mod = _studio()
+    stale = tmp_path / "studio-8901-8550.pid"
+    stale.write_text("8550\n1600000000.0\n127.0.0.1", encoding = "utf-8")
+    live = tmp_path / "studio-8902-8550.pid"
+    live.write_text("8550\n1700000000.0\n127.0.0.1", encoding = "utf-8")
+    posted = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def fake_open(request, timeout):
+        posted.append(request.full_url)
+        return _Response()
+
+    monkeypatch.setattr(_inference, "_studio_token", lambda: "tok")
+    monkeypatch.setattr(_inference, "urlopen_no_redirect", fake_open)
+    monkeypatch.setattr(_inference, "verify_studio_identity", lambda base: True)
+    monkeypatch.setattr(
+        studio_mod,
+        "_pid_is_studio_server",
+        lambda pid, created_times = (): 1700000000.0 in created_times,
+    )
+
+    assert studio_mod._request_graceful_shutdown(8550, [stale, live]) is not None
+    assert posted == ["http://127.0.0.1:8902/api/shutdown"]
