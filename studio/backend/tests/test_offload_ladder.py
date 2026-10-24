@@ -349,6 +349,29 @@ def test_the_cost_gate_prices_the_recurrent_state_the_bottom_rung_moves():
     assert rung(4 * GIB).predicted_request_ms > rung(0).predicted_request_ms
 
 
+def test_the_cost_gate_ranks_a_cache_only_rung():
+    """With no weights to spill, the rung moved only the cache, and the gate never ran: emitted
+    under require_cost_win with both request costs at zero."""
+    layout = dataclasses.replace(
+        graded_moe(n_blocks = 8, down = 0.0, up = 0.0, gate = 0.0, attn = 0.05),
+        kv_bytes_per_token_f16 = 4 * GIB / 8192,
+    )
+    plan = plan_placement(
+        layout,
+        [3 * GIB],
+        94 * GIB,
+        8192,
+        opts = opts(
+            allow_attention_spill = False,
+            allow_kv_host_fallback = True,
+            allow_lm_head_spill = False,
+            require_cost_win = True,
+        ),
+    )
+    assert plan.declined_by_gate, plan.reason
+    assert plan.predicted_request_ms > plan.predicted_fit_request_ms > 0
+
+
 def test_the_cache_rung_checks_each_card_without_the_cache_it_moved():
     """Device by device, the rung was charged the very cache --no-kv-offload takes off the cards,
     so it abstained on every multi-GPU load it exists for."""

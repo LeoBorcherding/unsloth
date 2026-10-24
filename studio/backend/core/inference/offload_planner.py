@@ -2120,7 +2120,7 @@ def _cost_gate(
 ) -> tuple[Optional[Plan], float, float]:
     """An abstaining Plan when ``--fit on`` is as good as this spill, else None."""
     plan = _spill_placement(layout, units, spill_lm_head, kv_host_bytes)
-    if not plan.host_groups:
+    if not plan.host_groups and not plan.kv_host_bytes:
         return None, 0.0, 0.0
 
     # Measured unambiguously worse than the fitter: refuse before comparing.
@@ -2377,7 +2377,12 @@ def _finish(
     # is no cost of this plan.
     rung_kv_host_bytes = kv_host_bytes if kv_on_host_rung else 0
     plan_ms = fit_ms = 0.0
-    if opts.require_cost_win and budget is not None and (units or spill_lm_head):
+    # A cache-only rung moves no weights but is still a move to rank.
+    if (
+        opts.require_cost_win
+        and budget is not None
+        and (units or spill_lm_head or rung_kv_host_bytes)
+    ):
         declined, plan_ms, fit_ms = _cost_gate(
             layout,
             opts,
