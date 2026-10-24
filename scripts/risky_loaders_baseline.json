@@ -494,6 +494,14 @@
       "file": "unsloth/import_fixes.py",
       "rule": "dynamic-import",
       "sink": "import_module",
+      "digest": "0ddcdb288b420229",
+      "count": 1,
+      "reason": "Submodules of a mamba-ssm kernel transformers already loaded, under two fixed names (_MAMBA_SSM_CONV_MODULES); no input reaches the name."
+    },
+    {
+      "file": "unsloth/import_fixes.py",
+      "rule": "dynamic-import",
+      "sink": "import_module",
       "digest": "1cf4f547b72b3f63",
       "count": 1,
       "reason": "Iterates the fixed _VLLM_COMPILED_EXTENSIONS tuple to surface ABI-broken vLLM extensions."

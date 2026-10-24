@@ -368,6 +368,7 @@ from .import_fixes import (
     fix_transformers_config_only_remote_code,
     fix_transformers_remote_rope_scaling_none,
     fix_transformers_is_torch_fx_available,
+    fix_transformers_mamba_ssm_without_causal_conv1d_cuda,
     fix_transformers5_remote_code_model_api,
     fix_xformers_performance_issue,
     fix_flash_attn_4_namespace_shadow,
@@ -453,6 +454,8 @@ fix_transformers_longcat_lsa_config()
 # Remote code written for 4.x reads plain RoPE as rope_scaling None and imports is_torch_fx_available.
 fix_transformers_remote_rope_scaling_none()
 fix_transformers_is_torch_fx_available()
+# Lazy: wraps lazy_load_kernel, so nothing is checked until a Mamba-family model is built.
+fix_transformers_mamba_ssm_without_causal_conv1d_cuda()
 # Probe-gated and lazy: only wraps get_class_in_module, so the siglip image
 # modules are imported and patched when a checkpoint's own modeling file runs,
 # not on every `import unsloth`.
@@ -529,6 +532,7 @@ del fix_transformers_validate_rope_ignore_keys
 del fix_transformers_longcat_lsa_config
 del fix_transformers_remote_rope_scaling_none
 del fix_transformers_is_torch_fx_available
+del fix_transformers_mamba_ssm_without_causal_conv1d_cuda
 del fix_transformers5_remote_code_model_api
 del fix_xformers_performance_issue
 del fix_flash_attn_4_namespace_shadow
