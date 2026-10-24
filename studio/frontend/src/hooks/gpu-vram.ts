@@ -17,6 +17,7 @@ export interface MemoryTotalDevice {
   /** `hardware.py` sets `shared_memory` only on Windows, so a Linux ROCm APU arrives
    *  as `unified_memory: true, shared_memory: false`. */
   unified_memory?: boolean;
+  no_torch_kernels?: boolean;
 }
 
 export interface GpuMemoryTotalsGb {
@@ -102,6 +103,17 @@ export function gpuMemoryTotalsGb(
     shared,
     total: roundToDevicePrecision(dedicated + shared),
   };
+}
+
+/** Total of the GPUs a run gets by default: an iGPU or a card torch cannot run counts
+ *  only when there is no discrete card beside it. Mirrors `defaultGpuIds`. */
+export function defaultGpuMemoryTotalGb(devices: MemoryTotalDevice[]): number {
+  // Training never runs on a card torch has no kernels for, even when it is the only discrete one.
+  const usable = devices.filter((device) => device.no_torch_kernels !== true);
+  const primary = usable.filter((device) => !sharesHostMemoryDevice(device));
+  return gpuMemoryTotalsGb(
+    primary.length ? primary : usable.length ? usable : devices,
+  ).total;
 }
 
 /** One device row's total split the way the VRAM tile splits it; null for dedicated-only VRAM. A Windows ROCm iGPU

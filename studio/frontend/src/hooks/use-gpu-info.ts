@@ -12,18 +12,21 @@ import {
   type PinnableGpuContext,
   type ReconciledGpuSelection,
   type SystemGpuDevice,
+  defaultGpuIds,
   pickLoadDevice,
   pinnableGpuContext,
   reconcileGpuSelection,
   resolveGpuSelectionContext,
 } from "./gpu-selection";
 import {
+  defaultGpuMemoryTotalGb,
   gpuMemoryTotalsGb,
   gpuSharedHostMemoryGb,
   sharesHostMemory,
   systemRamAvailableOutsideSharedPoolGb,
 } from "./gpu-vram";
 import {
+  type GpuDevice,
   type SystemInfoResponse,
   fetchSystemInfo,
   getCachedSystemInfo,
@@ -31,6 +34,7 @@ import {
 } from "./use-system";
 
 export {
+  defaultGpuIds,
   pinnableGpuContext,
   reconcileGpuSelection,
   type GpuIndexKind,
@@ -72,6 +76,9 @@ export interface GpuInfo {
   /** The same aggregate with shared-memory devices left out: the VRAM that is a pool
    *  BESIDE system RAM rather than a capped view of it. */
   dedicatedMemoryTotalGb: number;
+  /** VRAM of the GPUs a run gets by default: an iGPU or a card torch cannot run is left out
+   *  when a discrete card is present, as the GPU picker leaves it unticked. */
+  defaultMemoryTotalGb: number;
   /** Largest single device's VRAM. Image/video loads live on ONE device (no tensor split), so their fit math must use a single device, not the multi-GPU sum. */
   maxDeviceMemoryGb: number;
   /** VRAM of the device an image/video load actually lands on: the lowest visible ordinal, since resolve_diffusion_device_target() returns a bare "cuda" and torch places on the current device. On a heterogeneous host this is NOT maxDeviceMemoryGb, and sizing a pick against the larger card would recommend a checkpoint that OOMs the smaller one. */
@@ -93,6 +100,55 @@ export interface GpuInfo {
   /** Whether host available memory was reported, including a real zero. */
   systemRamAvailableKnown?: boolean;
   systemRamTotalGb: number;
+  /** Apple MLX only: what llama.cpp and MLX admit right now, `min(working set, free) * 0.85`
+   *  (`_apple_metal_memory_budget_bytes`). Null on every other host and on older backends. */
+  unifiedLoadBudgetGb?: number | null;
+  /** `min(working set, free + AGX in use) * 0.85`: the budget once the loader has freed a resident model. */
+  unifiedLoadCeilingGb?: number | null;
+}
+
+/** `_APPLE_UNIFIED_MEMORY_FRACTION` in llama_cpp.py and mlx_inference.py. */
+const APPLE_UNIFIED_MEMORY_FRACTION = 0.85;
+
+function finitePositive(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+// A real 0 GiB free reading is the most pressured case, so it must not read as unknown.
+function finiteNonNegative(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function appleUnifiedLoadBudgetGb(
+  data: SystemInfoResponse | null,
+  devices: readonly GpuDevice[],
+  afterUnload = false,
+): number | null {
+  if (data?.device_backend !== "mlx" || devices.length !== 1) return null;
+  const device = devices[0];
+  const workingSetGb = finitePositive(device.metal_working_set_gb);
+  if (device.shared_memory !== true || workingSetGb === null) return null;
+  let freeGb =
+    finiteNonNegative(device.vram_free_gb) ??
+    finiteNonNegative(data.memory?.available_gb);
+  if (afterUnload) {
+    // The AGX in-use figure holds the resident model's Metal buffers, which the loader frees first;
+    // other apps' memory stays counted. Unknown usage leaves only the working-set ceiling.
+    const usedGb = finiteNonNegative(device.vram_used_gb);
+    freeGb = freeGb !== null && usedGb !== null ? freeGb + usedGb : null;
+  }
+  // Floored to 0.25 GiB: free memory drifts every poll, and each change re-renders every picker row.
+  return (
+    Math.floor(
+      Math.min(workingSetGb, freeGb ?? workingSetGb) *
+        APPLE_UNIFIED_MEMORY_FRACTION *
+        4,
+    ) / 4
+  );
 }
 
 const DEFAULT_GPU: GpuInfo = {
@@ -110,6 +166,7 @@ const DEFAULT_GPU: GpuInfo = {
   memoryTotalGb: 0,
   memorySharedGb: 0,
   dedicatedMemoryTotalGb: 0,
+  defaultMemoryTotalGb: 0,
   maxDeviceMemoryGb: 0,
   loadDeviceMemoryGb: 0,
   loadDeviceSharedMemory: false,
@@ -121,6 +178,8 @@ const DEFAULT_GPU: GpuInfo = {
   systemRamAvailableHostGb: 0,
   systemRamAvailableKnown: false,
   systemRamTotalGb: 0,
+  unifiedLoadBudgetGb: null,
+  unifiedLoadCeilingGb: null,
 };
 
 function toGpuInfo(
@@ -177,6 +236,7 @@ function toGpuInfo(
     name: devices[0]?.name ?? "Unknown",
     memoryTotalGb: memoryTotals.total,
     dedicatedMemoryTotalGb: memoryTotals.dedicated,
+    defaultMemoryTotalGb: defaultGpuMemoryTotalGb(devices),
     memorySharedGb: memoryTotals.shared,
     maxDeviceMemoryGb: devices.reduce(
       (max, d) => Math.max(max, d.memory_total_gb ?? 0),
@@ -190,6 +250,8 @@ function toGpuInfo(
       unifiedMemory: loadDevice?.unified_memory === true,
     }),
     deviceCount: devices.length,
+    unifiedLoadBudgetGb: appleUnifiedLoadBudgetGb(data, devices),
+    unifiedLoadCeilingGb: appleUnifiedLoadBudgetGb(data, devices, true),
   };
 }
 
@@ -256,6 +318,7 @@ function toGpuDevices(
       sharedMemory: d.shared_memory === true,
       sharedMemoryHostBackedGb: d.shared_memory_host_backed_gb,
       unifiedMemory: d.unified_memory === true,
+      noTorchKernels: d.no_torch_kernels === true,
       // The XPU ban is about torch-xpu ordinals no applicator speaks, so /load
       // and /validate 400 them. A Vulkan ordinal is not one of those, so it
       // stays pickable even when this list arrives from an XPU host.
@@ -288,6 +351,29 @@ export function withStableSchemes(current: GpuInfo, next: GpuInfo): GpuInfo {
   return next;
 }
 
+const RAM_DRIFT_TOLERANCE_GB = 0.25;
+
+/** Keeps `current` when only free RAM drifted, so subscribed pages do not re-render on every poll. */
+export function nextGpuInfo(current: GpuInfo, next: GpuInfo): GpuInfo {
+  const ramDrift = Math.max(
+    Math.abs(current.systemRamAvailableGb - next.systemRamAvailableGb),
+    Math.abs(current.systemRamAvailableHostGb - next.systemRamAvailableHostGb),
+  );
+  const withoutLiveRam = (info: GpuInfo) =>
+    JSON.stringify({
+      ...info,
+      systemRamAvailableGb: 0,
+      systemRamAvailableHostGb: 0,
+    });
+  if (
+    ramDrift < RAM_DRIFT_TOLERANCE_GB &&
+    withoutLiveRam(current) === withoutLiveRam(next)
+  ) {
+    return current;
+  }
+  return withStableSchemes(current, next);
+}
+
 /** Aggregate GPU info from /api/system; shares one module-level fetch across all GPU hooks. */
 function useGpuInfoSource(source: "gpu" | "inference_gpu"): GpuInfo {
   const cachedSystem = getCachedSystemInfo();
@@ -301,11 +387,7 @@ function useGpuInfoSource(source: "gpu" | "inference_gpu"): GpuInfo {
     const sync = (data: SystemInfoResponse) => {
       if (cancelled) return;
       const next = toGpuInfo(data, source);
-      setGpu((current) =>
-        JSON.stringify(current) === JSON.stringify(next)
-          ? current
-          : withStableSchemes(current, next),
-      );
+      setGpu((current) => nextGpuInfo(current, next));
     };
     const update = () => {
       fetchSystemInfo().then((d) => {
@@ -461,5 +543,7 @@ export function reconcileCachedGpuSelection(
     savedIndexKind,
     context.indexKind,
     context.ids,
+    // An untouched picker shows these ticked, so that is what /load sends. Diffusion takes one card.
+    forDiffusion ? null : defaultGpuIds(context.devices),
   );
 }

@@ -247,7 +247,10 @@ import {
   beginServerModelWait,
   statusPollSignal,
 } from "../lib/server-model-wait";
-import { syncModelCapabilities } from "../hooks/use-chat-model-runtime";
+import {
+  syncInferenceStatusToStore,
+  syncModelCapabilities,
+} from "../hooks/use-chat-model-runtime";
 import {
   clampReasoningEffortToLevels,
   externalMaxOutputTokensNeedsConnectionCap,
@@ -2774,6 +2777,15 @@ const VISIBLE_MODEL_RUNTIME_KEYS = [
   "mlxKvQuantNote",
   "mlxInt8Prefill",
   "loadedMlxInt8PrefillRequested",
+  "mlxPleOffload",
+  "mlxExpertOffload",
+  "loadedMlxPleOffloadRequested",
+  "loadedMlxExpertOffloadRequested",
+  "loadedMlxPleOffload",
+  "loadedMlxExpertOffload",
+  "mlxPleOffloadReason",
+  "mlxExpertOffloadReason",
+  "loadedMlxOffloadDiskBytes",
   "loadedContextBudget",
   "loadedIsMultimodal",
   "loadedIsDiffusion",
@@ -3668,14 +3680,20 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
       config.gpuMemoryMode ?? currentStore.gpuMemoryMode;
     const effectiveGpuLayers = config.gpuLayers ?? GPU_LAYERS_AUTO;
     const effectiveNCpuMoe = config.nCpuMoe ?? 0;
-    if (config.selectedGpuIds != null) {
-      // Warm the device cache first: on a cold cache the reconcile passes a stale cross-host pick through unvalidated.
-      await ensureGpuDeviceCache();
-    }
+    // Warm the device cache first: on a cold cache the reconcile passes a stale cross-host pick through unvalidated,
+    // and Automatic loses its default pick (an iGPU beside a discrete card stays out only once devices are known).
+    await ensureGpuDeviceCache();
     let isDiffusion = false;
+    // Automatic pins a default pick on a mixed iGPU host, and /load rejects gpu_ids for DiffusionGemma on
+    // some hosts, so classify the GGUF first in that case too.
+    const automaticPinsDefault =
+      config.selectedGpuIds == null &&
+      reconcilePersistedGpuIds(null, undefined, false) != null;
     if (
       candidate.kind === "gguf" &&
-      (config.selectedGpuIds != null || config.tensorParallel === true)
+      (config.selectedGpuIds != null ||
+        config.tensorParallel === true ||
+        automaticPinsDefault)
     ) {
       // Prepare the token before this probe: the Hub 401s an invalid Authorization header even for
       // a public repo, aborting the candidate before recovery can run.
@@ -3745,14 +3763,12 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
     const effectiveTensorParallel = isDiffusion ? false : config.tensorParallel;
     // The diffusion runner has no projector to skip, so the toggle is inert there.
     const effectiveDisableVision = isDiffusion ? false : config.disableVision;
-    const effectiveGpuIds =
-      config.selectedGpuIds !== undefined
-        ? reconcilePersistedGpuIds(
-            config.selectedGpuIds,
-            config.selectedGpuIndexKind,
-            isDiffusion,
-          )
-        : null;
+    // No saved pick (a model never configured) reconciles as Automatic, so it still gets the default pick.
+    const effectiveGpuIds = reconcilePersistedGpuIds(
+      config.selectedGpuIds ?? null,
+      config.selectedGpuIndexKind,
+      isDiffusion,
+    );
     // Under Manual GPU memory with Auto layers llama.cpp's --fit owns context sizing, so send 0
     // or the per-model pin (GGUF-only).
     const fitMaxSeqLength = resolveFitMaxSeqLength(
@@ -3856,6 +3872,8 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
       cache_type_kv: config.kvCacheDtype,
       mlx_kv_quant: config.mlxKvQuant ?? null,
       mlx_int8_prefill: config.mlxInt8Prefill ?? false,
+      mlx_ple_offload: config.mlxPleOffload ?? null,
+      mlx_expert_offload: config.mlxExpertOffload ?? null,
       speculative_type: effectiveSpeculativeType,
       spec_draft_n_max: effectiveSpecDraftNMax,
       ...mlxDrafter,
@@ -4264,9 +4282,7 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
     // Fetch the default as a managed download job and hand it to /api/inference/load only once the bytes are here.
     try {
       const rt = useChatRuntimeStore.getState();
-      if (rt.selectedGpuIds != null) {
-        await ensureGpuDeviceCache();
-      }
+      await ensureGpuDeviceCache();
       const defaultGpuIds = reconcilePersistedGpuIds(
         rt.selectedGpuIds,
         rt.selectedGpuIndexKind,
@@ -9188,6 +9204,10 @@ export function createOpenAIStreamAdapter(
             toast.error("Generation failed", {
               description: msg || "Unknown error",
             });
+          }
+          // Only a status read shows a killed worker's model is gone; quiet, the failure has its toast.
+          if (!isExternalRequest) {
+            void syncInferenceStatusToStore({ includeLoras: false, quiet: true });
           }
         }
         // An explicit Stop is an abort too, but it must persist its reason instead of
