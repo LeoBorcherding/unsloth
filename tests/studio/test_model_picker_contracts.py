@@ -3839,8 +3839,8 @@ def test_every_run_settings_gear_marks_saved_settings():
 
 
 def test_saved_state_keeps_an_mlx_auto_apart_from_unset():
-    """MLX persists an explicit Auto distinct from unset, so the header's saved check must not fold
+    """MLX persists an explicit Auto distinct from unset, so the footer's saved check must not fold
     them together there, or a newly picked Auto reads as already saved and is dropped on close."""
     page = " ".join(_read("features/model-picker/components/model-config-page.tsx").split())
-    assert "{ unsetIsAuto: !targetIsMlx }" in page
+    assert "storedSpeculativeAuto(runtimeConfig, targetIsMlx)" in page
     assert "storedSpeculativeAuto(next, targetIsMlx)" in page
