@@ -412,8 +412,11 @@ export const BUDGET = {
   // Skill ZIP import/export (#14181) adds 2,721 B raw / 758 B transfer to the eager Skills dialog
   // and locale strings (6,929,934 -> 6,932,655 B raw, 2,087,782 -> 2,088,540 B transfer against
   // fb104d2b57, one machine and build, Node 22.23.2, unchanged at 99 chunks). Raised by that growth.
-  transferBytes: 2_088_648,
-  rawBytes: 6_932_971,
+  // The "drafter_planner" spec-fallback message in the chat settings sheet (#9872) adds 212 B raw /
+  // 25 B transfer (6,932,829 -> 6,933,041 B raw, 2,088,616 -> 2,088,641 B transfer against d4dab132e0,
+  // one machine and build, Node 24, 99 chunks). Raised by that.
+  transferBytes: 2_088_673,
+  rawBytes: 6_933_183,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
