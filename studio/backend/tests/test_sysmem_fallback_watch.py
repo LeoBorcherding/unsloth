@@ -308,6 +308,18 @@ def test_nvidia_smi_probe_gives_no_sample_when_the_mask_is_in_cuda_ordinals(monk
     assert LlamaCppBackend._nvidia_smi_free_total_mib(runner = lambda: out) == [(1, 200, 24564)]
 
 
+def test_nvidia_smi_probe_gives_no_sample_for_an_unmappable_uuid_mask(monkeypatch):
+    """A UUID/MIG mask that cannot be mapped to PCI indices is still a mask: sampling every row
+    lets a full card the launch never uses peg the watch."""
+    from core.inference.llama_cpp import LlamaCppBackend
+
+    out = "0, 160, 16303\n1, 200, 24564\n"
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-0f1e2d3c-aaaa-bbbb-cccc-000000000001")
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising = False)
+    assert LlamaCppBackend._nvidia_smi_free_total_mib(runner = lambda: out) == []
+    assert LlamaCppBackend._nvidia_smi_free_total_mib([1], runner = lambda: out) == []
+
+
 def test_nvidia_smi_probe_drops_unreadable_totals(monkeypatch):
     from core.inference.llama_cpp import LlamaCppBackend
 

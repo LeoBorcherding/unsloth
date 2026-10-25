@@ -14488,6 +14488,9 @@ class LlamaCppBackend:
         if allowed is not None and os.environ.get("CUDA_DEVICE_ORDER") != "PCI_BUS_ID":
             # CUDA ordinals and nvidia-smi PCI indices do not share an order: no sample when unmapped.
             return []
+        if allowed is None and os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
+            # A UUID/MIG mask that did not resolve still hides cards; every row would be a guess.
+            return []
         wanted = {int(i) for i in gpu_indices} if gpu_indices else None
         rows: list[tuple[int, int, int]] = []
         for line in str(out).strip().splitlines():
