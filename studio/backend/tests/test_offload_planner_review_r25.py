@@ -233,3 +233,16 @@ def test_the_text_only_projector_retry_does_not_respawn_the_revoked_plan(tmp_pat
     assert "-ot" not in text_only, text_only
     fits = [text_only[i + 1] for i, tok in enumerate(text_only) if tok == "--fit"]
     assert fits and fits[-1] == "on", text_only
+
+
+def test_the_paging_watch_stays_off_when_the_kv_cache_is_on_the_host(tmp_path, monkeypatch):
+    # Host-resident KV slows decode under the link floor while the weights keep VRAM full.
+    cmd, _env, _inputs, watch, _backend = _sm_none(
+        tmp_path,
+        monkeypatch,
+        _resident_plan(),
+        order = "PCI_BUS_ID",
+        extra_args = ["--split-mode", "none", "--no-kv-offload"],
+    )
+    assert "--no-kv-offload" in cmd, cmd
+    assert watch.get("fully_gpu_offloaded") is False, watch

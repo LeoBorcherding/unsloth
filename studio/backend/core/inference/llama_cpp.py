@@ -37207,7 +37207,9 @@ class LlamaCppBackend:
                                 )
                                 and not _mem_host_resident
                                 and not _fit_on_recovered
-                                and not fit_is_effectively_on(_last_spawn_cmd, env),
+                                and not fit_is_effectively_on(_last_spawn_cmd, env)
+                                # A host-resident cache is legitimately slow with the weights filling VRAM.
+                                and _kv_offload_from_args(_last_spawn_cmd, env),
                             ),
                         )
                     except Exception as e:
