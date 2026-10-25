@@ -845,6 +845,7 @@ export const en = {
       guidedTour: "Guided Tour",
       help: "Help",
       logOut: "Log out",
+      logOutNeedsPassword: "Set a password in Settings > Remote access before logging out, so you can sign back in.",
       shutdown: "Shutdown",
     },
     commandPalette: {
@@ -996,6 +997,11 @@ export const en = {
   },
   settings: {
     accounts: {
+      signsInAs: "Signs in as {username}",
+      signsInAsOwner: "Signs in as {alias} or {username}",
+      signInName: "Your sign-in name",
+      signInNameDescription: "The name you type to sign in when this installation has more than one account. unsloth always works too. Leave empty to use only unsloth.",
+      signInNameSave: "Save name",
       title: "Accounts",
       description: "Create private Unsloth accounts. New users sign in with a one-time setup code and choose a password.",
       username: "Username",

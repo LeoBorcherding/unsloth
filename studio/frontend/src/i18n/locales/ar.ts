@@ -789,6 +789,7 @@ export const ar = {
       guidedTour: "جولة إرشادية",
       help: "مساعدة",
       logOut: "تسجيل الخروج",
+      logOutNeedsPassword: "عيّن كلمة مرور في الإعدادات > الوصول عن بُعد قبل تسجيل الخروج، حتى تتمكن من تسجيل الدخول مرة أخرى.",
       shutdown: "إيقاف التشغيل",
     },
     commandPalette: {
@@ -938,6 +939,11 @@ export const ar = {
   },
   settings: {
     accounts: {
+      signsInAs: "يسجّل الدخول باسم {username}",
+      signsInAsOwner: "يسجّل الدخول باسم {alias} أو {username}",
+      signInName: "اسم تسجيل الدخول",
+      signInNameDescription: "الاسم الذي تكتبه لتسجيل الدخول عندما يكون في هذا التثبيت أكثر من حساب. يعمل unsloth دائمًا أيضًا. اتركه فارغًا لاستخدام unsloth فقط.",
+      signInNameSave: "حفظ الاسم",
       title: "الحسابات",
       description: "أنشئ حسابات Unsloth خاصة. يسجّل المستخدمون الجدد الدخول برمز إعداد يُستخدم مرة واحدة ثم يختارون كلمة مرور.",
       username: "اسم المستخدم",

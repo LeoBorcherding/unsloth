@@ -888,6 +888,7 @@ export const sv = {
       guidedTour: "Guidad tur",
       help: "Hjälp",
       logOut: "Logga ut",
+      logOutNeedsPassword: "Ange ett lösenord under Inställningar > Fjärråtkomst innan du loggar ut, så att du kan logga in igen.",
       shutdown: "Stäng av",
     },
     commandPalette: {
@@ -1034,6 +1035,11 @@ export const sv = {
   },
   settings: {
     accounts: {
+      signsInAs: "Loggar in som {username}",
+      signsInAsOwner: "Loggar in som {alias} eller {username}",
+      signInName: "Ditt inloggningsnamn",
+      signInNameDescription: "Namnet du skriver för att logga in när installationen har mer än ett konto. unsloth fungerar alltid också. Lämna tomt för att bara använda unsloth.",
+      signInNameSave: "Spara namn",
       title: "Konton",
       description:
         "Skapa privata Unsloth-konton. Nya användare loggar in med en engångskod för konfiguration och väljer ett lösenord.",

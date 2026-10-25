@@ -58,6 +58,7 @@ import {
   regenerateSetupCode,
   setAccountActive,
   setAccountModelAllowlist,
+  setOwnerLoginAlias,
   type AccountSetupCode,
   type StudioAccount,
 } from "../api/accounts";
@@ -88,12 +89,17 @@ function OwnerAccountsTab() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [aliasDraft, setAliasDraft] = useState("");
 
   useEffect(() => {
     let canceled = false;
     void fetchAccounts()
       .then((result) => {
-        if (!canceled) setAccounts(result);
+        if (canceled) return;
+        setAccounts(result);
+        setAliasDraft(
+          result.find((account) => account.role === "owner")?.login_alias ?? "",
+        );
       })
       .catch((reason: unknown) => {
         if (!canceled)
@@ -147,12 +153,21 @@ function OwnerAccountsTab() {
     });
   }
 
+  function saveSignInName() {
+    if (busy) return;
+    void perform(async () => {
+      setAliasDraft((await setOwnerLoginAlias(aliasDraft)) ?? "");
+    });
+  }
+
   const confirming = resetting ?? retiring;
   const editorOpen = creating || setup !== null;
   const filteredAccounts = accounts.filter((account) =>
-    account.username
-      .toLocaleLowerCase(locale)
-      .includes(query.trim().toLocaleLowerCase(locale)),
+    [account.username, account.display_name ?? ""].some((name) =>
+      name
+        .toLocaleLowerCase(locale)
+        .includes(query.trim().toLocaleLowerCase(locale)),
+    ),
   );
   const dateFormatter = new Intl.DateTimeFormat(locale, {
     year: "numeric",
@@ -291,19 +306,29 @@ function OwnerAccountsTab() {
                   <td className="rounded-l-md py-3 pl-3 pr-3">
                     <div className="flex items-center gap-2.5">
                       <UserAvatar
-                        name={account.username}
-                        imageUrl={null}
+                        name={account.display_name || account.username}
+                        imageUrl={account.avatar_url ?? null}
                         size="sm"
                         className="size-8"
                       />
                       <div className="min-w-0 space-y-0.5">
                         <p className="break-all text-sm font-medium">
-                          {account.username}
+                          {account.display_name || account.username}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {account.role === "owner"
                             ? t("settings.accounts.owner")
                             : t("settings.accounts.privateAccount")}
+                        </p>
+                        <p className="break-all text-xs text-muted-foreground">
+                          {account.role === "owner" && account.login_alias
+                            ? t("settings.accounts.signsInAsOwner", {
+                                alias: account.login_alias,
+                                username: account.username,
+                              })
+                            : t("settings.accounts.signsInAs", {
+                                username: account.username,
+                              })}
                         </p>
                         {account.role !== "owner" &&
                           account.model_allowlist?.length ? (
@@ -473,6 +498,33 @@ function OwnerAccountsTab() {
               )}
             </p>
           )}
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <Label htmlFor="owner-sign-in-name" className="text-sm font-medium">
+          {t("settings.accounts.signInName")}
+        </Label>
+        <p className="max-w-lg text-xs text-muted-foreground">
+          {t("settings.accounts.signInNameDescription")}
+        </p>
+        <div className="flex items-center gap-3">
+          <Input
+            id="owner-sign-in-name"
+            value={aliasDraft}
+            onChange={(event) => setAliasDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") saveSignInName();
+            }}
+            placeholder="unsloth"
+            autoCapitalize="none"
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1"
+          />
+          <Button variant="outline" size="sm" disabled={busy} onClick={saveSignInName}>
+            {t("settings.accounts.signInNameSave")}
+          </Button>
+        </div>
       </section>
 
       <ManagedProviderUrlsSection />

@@ -2,7 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useAppShellReadySignal } from "@/components/app-readiness";
-import { apiUrl } from "@/lib/api-base";
+import { apiUrl, isTauri } from "@/lib/api-base";
 import { normalizeAccountUsername, transitionBrowserAccount } from "@/lib/account-transition";
 import { sessionAccount, useLoginMode } from "../account-session";
 import { fetchAuthStatus, loginFromForm, loginWithPassword, setLoginMode, type TokenResponse } from "../login-client";
@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import type { SyntheticEvent } from "react";
 import { refreshSession, refreshSessionOutcome } from "../api";
+import { clearDesktopSignedOut, continueAsDesktopOwner } from "../tauri-auto-auth";
 import {
   deadlineFromStatus,
   formatCountdown,
@@ -92,7 +93,8 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
       // install). /api/auth/status is the source of truth for requires_password_change.
       try {
         const result = await fetchAuthStatus();
-        const requiresChange = result.login_mode === "multi"
+        // Desktop never saw the seeded password; "Continue as owner" is its way back in.
+        const requiresChange = result.login_mode === "multi" || isTauri
           ? hasAuthToken() && mustChangePassword()
           : result.requires_password_change;
         if (!canceled) {
@@ -321,6 +323,7 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
       }
 
       const finishSession = () => {
+        if (isTauri) clearDesktopSignedOut();
         setLoginMode(loginMode);
         if (!isLoginMode) setRequiresPasswordChange(false);
         setMustChangePassword(isLoginMode && token.must_change_password);
@@ -346,6 +349,20 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
       // Show the backend message as-is.
       const msg = err instanceof Error ? err.message : "Auth failed.";
       setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleContinueAsOwner() {
+    setError(null);
+    setLoading(true);
+    try {
+      if (await continueAsDesktopOwner()) {
+        navigate({ to: getPostAuthRoute() });
+      } else {
+        setError("Sign in with your username and password.");
+      }
     } finally {
       setLoading(false);
     }
@@ -409,6 +426,9 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
             />
             <p id="setup-code-hint" className="text-sm text-muted-foreground">
               First sign in? Paste the setup code your administrator gave you as the password.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Installation owner? Sign in as unsloth, or the sign-in name shown in Settings &gt; Accounts.
             </p>
           </div>
         )}
@@ -567,6 +587,18 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
         >
           {loading ? "Please wait..." : submitLabel}
         </Button>
+        {/* Single mode only: there the shell secret proves the owner, who may never have set a password. */}
+        {isTauri && isLoginMode && loginMode === "single" && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="mx-auto flex w-fit"
+            disabled={loading || statusLoading}
+            onClick={() => void handleContinueAsOwner()}
+          >
+            Continue as owner
+          </Button>
+        )}
       </form>
 
       {showSwitchLink && (

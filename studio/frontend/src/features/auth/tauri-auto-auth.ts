@@ -35,6 +35,35 @@ export function isTauriLoginRequired(): boolean {
   return tauriLoginRequired;
 }
 
+// Set by an explicit Desktop log out so the shell secret does not sign the owner straight back in.
+// "unsloth"-prefixed, so an account switch's localStorage purge also clears it.
+export const DESKTOP_SIGNED_OUT_KEY = "unsloth.desktop-signed-out.v1";
+
+export function isDesktopSignedOut(): boolean {
+  try {
+    return window.localStorage.getItem(DESKTOP_SIGNED_OUT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markDesktopSignedOut(): void {
+  tauriLoginRequired = true;
+  try {
+    window.localStorage.setItem(DESKTOP_SIGNED_OUT_KEY, "1");
+  } catch {
+    // Without storage the in-memory flag still holds for this window.
+  }
+}
+
+export function clearDesktopSignedOut(): void {
+  try {
+    window.localStorage.removeItem(DESKTOP_SIGNED_OUT_KEY);
+  } catch {
+    // Nothing stored to clear.
+  }
+}
+
 const TAURI_AUTH_FAILURE_FALLBACK =
   "Desktop authentication failed. Update or repair the managed Unsloth install, then restart Unsloth.";
 const BACKEND_NOT_READY_MESSAGE = "Backend is not ready";
@@ -78,6 +107,14 @@ async function doTauriAutoAuth(options: TauriAutoAuthOptions): Promise<boolean> 
       clearTauriAuthFailure();
       return true;
     }
+  }
+
+  if (isDesktopSignedOut()) {
+    tauriLoginRequired = true;
+    clearTauriAuthFailure();
+    const { router } = await import("@/app/router");
+    await router.navigate({ to: "/login", replace: true });
+    return options.force === true;
   }
 
   try {
@@ -145,4 +182,11 @@ export function tauriAutoAuth(
     );
   }
   return pending.promise;
+}
+
+/** "Continue as owner" on the Desktop login page: the shell secret signs the owner in, single mode only. */
+export async function continueAsDesktopOwner(): Promise<boolean> {
+  clearDesktopSignedOut();
+  await tauriAutoAuth({ force: true });
+  return !tauriLoginRequired && hasAuthToken();
 }

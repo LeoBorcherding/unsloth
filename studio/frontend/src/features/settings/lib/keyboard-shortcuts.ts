@@ -211,9 +211,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   def("clearAllUnreads", "Shift+Escape", {
     nonMacDefaultBinding: "Mod+Alt+Shift+KeyU",
   }),
-  // Desktop signs out through the OS account menu, and the sidebar hides its
-  // own logout item there, so this row would bind a chord that cannot fire.
-  def("logOut", null, { webOnly: true }),
+  def("logOut", null),
   def("openSettings", "Mod+Comma"),
   // Bare ⏎ / Esc: both register only while a tool call is waiting.
   def("approveToolRequest", "Enter", { allowBareKey: true }),

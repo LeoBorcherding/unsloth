@@ -135,6 +135,9 @@ def test_owner_alice_bob_endpoint_matrix(matrix, actor, operation, target):
                 "created_at",
                 "setup_code_pending",
                 "model_allowlist",
+                "login_alias",
+                "display_name",
+                "avatar_url",
             }
             for row in response.json()["accounts"]
         )
@@ -933,3 +936,91 @@ def test_keyless_callers_cannot_manage_accounts(auth_env):
     with pytest.raises(accounts.HTTPException) as refused:
         accounts._require_ui_session(via_api_key)
     assert refused.value.status_code == 403
+
+
+def set_alias(
+    client,
+    alias,
+    actor = "unsloth",
+):
+    return client.put(
+        "/api/accounts/owner/login-alias", headers = headers(actor), json = {"login_alias": alias}
+    )
+
+
+def test_owner_signs_in_with_a_chosen_name_and_unsloth_keeps_working(auth_env):
+    client, _, _ = auth_env
+    assert create(client, "alice").status_code == 201
+    response = set_alias(client, "Blu3")
+    assert response.status_code == 200 and response.json() == {"login_alias": "blu3"}
+    for name in ("Blu3", "blu3", "unsloth"):
+        session = login(client, name, "owner-password")
+        assert session.status_code == 200, name
+        assert session.json()["account_id"] == "owner"
+    assert login(client, "blu3", "wrong-password").status_code == 401
+    owner = next(
+        a
+        for a in client.get("/api/accounts", headers = headers()).json()["accounts"]
+        if a["role"] == "owner"
+    )
+    assert owner["username"] == "unsloth" and owner["login_alias"] == "blu3"
+    assert set_alias(client, "unsloth").json() == {"login_alias": None}
+    assert login(client, "blu3", "owner-password").status_code == 401
+
+
+@pytest.mark.parametrize(
+    "alias,status",
+    [("ab", 400), ("admin", 400), ("has space", 400), ("alice", 409), ("", 200), (None, 200)],
+)
+def test_owner_sign_in_name_is_validated_like_a_username(auth_env, alias, status):
+    client, _, _ = auth_env
+    create(client, "alice")
+    response = set_alias(client, alias)
+    assert response.status_code == status
+    assert storage.list_accounts()[0]["login_alias"] is None
+
+
+def test_owner_sign_in_name_cannot_be_taken_by_a_new_account(auth_env):
+    client, _, _ = auth_env
+    assert set_alias(client, "blu3").status_code == 200
+    assert create(client, "BLU3").status_code == 409
+    assert storage.count_active_accounts() == 1
+
+
+def test_only_the_owner_sets_the_sign_in_name(matrix):
+    client, _, _ = matrix
+    assert set_alias(client, "mallory", actor = "alice").status_code == 403
+    assert storage.list_accounts()[0]["login_alias"] is None
+
+
+def test_owner_sign_in_name_shares_the_owner_rate_limit_bucket(auth_env):
+    client, auth, _ = auth_env
+    create(client, "alice")
+    set_alias(client, "blu3")
+    for _ in range(auth._LOGIN_MAX_FAILS):
+        assert login(client, "blu3", "wrong").status_code == 401
+    assert login(client, "unsloth", "owner-password").status_code == 429
+
+
+def test_account_list_shows_each_profile_name_and_avatar_without_creating_databases(auth_env):
+    client, _, _ = auth_env
+    from utils.account_context import AccountContext
+    from utils.personalization_settings import set_personalization
+
+    alice_id = create(client, "alice").json()["account"]["account_id"]
+    create(client, "bob")
+    avatar = "data:image/png;base64,AAAA"
+    run_as(
+        OWNER, set_personalization, {"profile": {"displayName": " Blu3 ", "avatarDataUrl": avatar}}
+    )
+    alice = AccountContext(alice_id, "alice", "user")
+    run_as(alice, set_personalization, {"profile": {"displayName": "Alice A."}})
+    bob = storage.get_account("bob")
+    bob_db = run_as(bob, storage_roots.studio_db_path)
+    rows = {
+        a["username"]: a for a in client.get("/api/accounts", headers = headers()).json()["accounts"]
+    }
+    assert (rows["unsloth"]["display_name"], rows["unsloth"]["avatar_url"]) == ("Blu3", avatar)
+    assert (rows["alice"]["display_name"], rows["alice"]["avatar_url"]) == ("Alice A.", None)
+    assert (rows["bob"]["display_name"], rows["bob"]["avatar_url"]) == (None, None)
+    assert not bob_db.exists()

@@ -791,6 +791,7 @@ export const ja = {
       guidedTour: "ガイドツアー",
       help: "ヘルプ",
       logOut: "ログアウト",
+      logOutNeedsPassword: "ログアウトする前に、設定 > リモートアクセスでパスワードを設定してください。再びサインインするために必要です。",
       shutdown: "シャットダウン",
     },
     commandPalette: {
@@ -940,6 +941,11 @@ export const ja = {
   },
   settings: {
     accounts: {
+      signsInAs: "{username} としてサインイン",
+      signsInAsOwner: "{alias} または {username} としてサインイン",
+      signInName: "サインイン名",
+      signInNameDescription: "このインストールに複数のアカウントがあるときにサインインで入力する名前です。unsloth も常に使えます。空欄にすると unsloth のみになります。",
+      signInNameSave: "名前を保存",
       title: "アカウント",
       description: "個別の Unsloth アカウントを作成します。新しいユーザーは一度きりのセットアップコードでサインインし、パスワードを設定します。",
       username: "ユーザー名",

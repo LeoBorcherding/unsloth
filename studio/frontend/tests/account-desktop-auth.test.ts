@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
 
@@ -9,6 +10,9 @@ type AutoAuth = {
   tauriAutoAuth(options?: { force?: boolean }): Promise<boolean>;
   isTauriLoginRequired(): boolean;
   getTauriAuthFailure(): string | null;
+  markDesktopSignedOut(): void;
+  isDesktopSignedOut(): boolean;
+  continueAsDesktopOwner(): Promise<boolean>;
 };
 
 type Guards = {
@@ -17,12 +21,23 @@ type Guards = {
   requirePasswordChangeFlow(): Promise<void>;
 };
 
-function fixture(t: { after(fn: () => void): void }, tauri = true) {
+function fixture(
+  t: { after(fn: () => void): void },
+  tauri = true,
+  stored = new Map<string, string>(),
+) {
   const originalWindow = globalThis.window;
   const originalFetch = globalThis.fetch;
   const events: string[] = [];
   Object.assign(globalThis, {
-    window: { dispatchEvent: (event: Event) => events.push(event.type) },
+    window: {
+      dispatchEvent: (event: Event) => events.push(event.type),
+      localStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
+        removeItem: (key: string) => stored.delete(key),
+      },
+    },
   });
   t.after(() => {
     Object.assign(globalThis, { window: originalWindow, fetch: originalFetch });
@@ -116,7 +131,7 @@ function fixture(t: { after(fn: () => void): void }, tauri = true) {
     return new Response(JSON.stringify(status), { status: 200 });
   };
   return {
-    auth, guards, session, events, navigations, loginModes, transitions,
+    auth, guards, session, events, navigations, loginModes, transitions, stored,
     setResponse: (value: unknown) => { response = value; },
     setStatus: (value: typeof status) => { status = value; },
     setRefreshSucceeds: (value: boolean) => { refreshSucceeds = value; },
@@ -335,4 +350,71 @@ test("browser mode never invokes the desktop shell", async (t) => {
   const f = fixture(t, false);
   assert.equal(await f.auth.tauriAutoAuth({ force: true }), false);
   assert.equal(f.invokeCalls, 0);
+});
+
+const SINGLE_SEEDED = { initialized: true, requires_password_change: true, login_mode: "single" };
+
+test("an explicit desktop logout keeps the shell secret from signing the owner back in", async (t) => {
+  const f = fixture(t);
+  // A desktop owner who never set a password: the server still reports the seeded one.
+  f.setStatus(SINGLE_SEEDED);
+  f.auth.markDesktopSignedOut();
+  assert.equal(f.auth.isTauriLoginRequired(), true);
+  assert.equal(await f.auth.tauriAutoAuth({ force: true }), true);
+  assert.equal(await f.auth.tauriAutoAuth(), false);
+  assert.equal(f.invokeCalls, 0);
+  assert.equal(f.access, null);
+  assert.deepEqual(f.navigations, [
+    { to: "/login", replace: true },
+    { to: "/login", replace: true },
+  ]);
+  assert.equal(f.auth.getTauriAuthFailure(), null);
+  // The seeded-password setup page is no way back in for the desktop, so the guards keep login.
+  await f.guards.requireGuest();
+  await assert.rejects(f.guards.requireAuth(), { to: "/login" });
+  await assert.rejects(f.guards.requirePasswordChangeFlow(), { to: "/login" });
+});
+
+test("the desktop sign-out survives a restart of the window", async (t) => {
+  const first = fixture(t);
+  first.auth.markDesktopSignedOut();
+  const restarted = fixture(t, true, first.stored);
+  assert.equal(await restarted.auth.tauriAutoAuth({ force: true }), true);
+  assert.equal(restarted.invokeCalls, 0);
+  assert.equal(restarted.auth.isTauriLoginRequired(), true);
+});
+
+test("Continue as owner clears the sign-out and signs a single-account owner in", async (t) => {
+  const f = fixture(t);
+  f.setStatus(SINGLE_SEEDED);
+  f.auth.markDesktopSignedOut();
+  await f.auth.tauriAutoAuth({ force: true });
+  assert.equal(await f.auth.continueAsDesktopOwner(), true);
+  assert.equal(f.auth.isDesktopSignedOut(), false);
+  assert.equal(f.invokeCalls, 1);
+  assert.equal(f.access, "owner-access");
+  assert.equal(f.auth.isTauriLoginRequired(), false);
+  assert.deepEqual(f.transitions, [{ account: "unsloth", route: "/chat" }]);
+});
+
+test("Continue as owner on a multi-account install leaves the login form up", async (t) => {
+  const f = fixture(t);
+  f.setResponse(multi);
+  f.auth.markDesktopSignedOut();
+  assert.equal(await f.auth.continueAsDesktopOwner(), false);
+  assert.equal(f.access, null);
+  assert.equal(f.auth.isTauriLoginRequired(), true);
+});
+
+test("the sidebar offers Log out on the desktop and suppresses auto-auth before revoking", () => {
+  const sidebar = readFileSync(
+    new URL("../src/components/app-sidebar.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(sidebar, /Desktop signs out through the OS account menu/);
+  assert.doesNotMatch(sidebar, /\{!isTauri && \(\s*<DropdownMenuItem\s+onSelect=\{async/);
+  const signOut = sidebar.slice(sidebar.indexOf("async function signOut()"));
+  assert.ok(signOut.indexOf("markDesktopSignedOut()") < signOut.indexOf("await logout()"));
+  // A multi-account owner still on the seeded password could not sign back in.
+  assert.match(signOut, /login_mode === "multi" && status\.requires_password_change/);
 });

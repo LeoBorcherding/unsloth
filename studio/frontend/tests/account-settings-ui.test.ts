@@ -178,6 +178,12 @@ function tab(
         calls.push(`delete:${accountId}`);
         accounts.splice(1);
       },
+      setOwnerLoginAlias: async (alias: string | null) => {
+        calls.push(`alias:${alias}`);
+        const stored = alias?.trim().toLowerCase() || null;
+        accounts[0].login_alias = stored;
+        return stored;
+      },
       setAccountModelAllowlist: async (
         accountId: string,
         allowlist: string[] | null,
@@ -526,4 +532,64 @@ test("model access edits one account's allowlist and an empty list restores ever
     ],
   );
   assert.ok(!content(view.render()).includes(en.settings.accounts.modelAccessLimited));
+});
+
+test("rows show each profile name and avatar with the name to sign in with", async () => {
+  const ui = tab(true, null, {
+    accounts: [
+      {
+        account_id: "owner",
+        username: "unsloth",
+        role: "owner",
+        is_active: true,
+        created_at: "2026-09-01T12:00:00Z",
+        login_alias: "blu3",
+        display_name: "Blu3",
+        avatar_url: "data:image/png;base64,AAAA",
+      },
+      {
+        account_id: "alice-id",
+        username: "alice",
+        role: "user",
+        is_active: true,
+        created_at: "2026-09-01T12:00:00Z",
+      },
+    ],
+  });
+  const tree = await ui.initialize();
+  const ownerRow = nodes(tree).find((node) => node.props["data-testid"] === "account-unsloth");
+  const avatar = nodes(ownerRow).find((node) => node.type === "UserAvatar");
+  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Blu3", "data:image/png;base64,AAAA"]);
+  assert.match(content(ownerRow), /Blu3/);
+  assert.match(content(ownerRow), /Signs in as blu3 or unsloth/);
+  const aliceRow = nodes(tree).find((node) => node.props["data-testid"] === "account-alice");
+  const aliceAvatar = nodes(aliceRow).find((node) => node.type === "UserAvatar");
+  assert.deepEqual([aliceAvatar?.props.name, aliceAvatar?.props.imageUrl], ["alice", null]);
+  assert.match(content(aliceRow), /Signs in as alice/);
+  const input = nodes(tree).find((node) => node.props.id === "owner-sign-in-name");
+  assert.equal(input?.props.value, "blu3");
+});
+
+test("the owner sets a sign-in name and an empty one falls back to unsloth", async () => {
+  const ui = tab();
+  let tree = await ui.initialize();
+  assert.match(content(tree), /Signs in as unsloth/);
+  const type = (value: string) => {
+    const input = nodes(tree).find((node) => node.props.id === "owner-sign-in-name");
+    (input?.props.onChange as (event: unknown) => void)({ target: { value } });
+    tree = ui.render();
+  };
+  const submit = async () => {
+    await click(tree, "Save name");
+    tree = ui.render();
+  };
+  type("Blu3");
+  await submit();
+  assert.ok(ui.calls.includes("alias:Blu3"));
+  assert.match(content(tree), /Signs in as blu3 or unsloth/);
+  type("");
+  await submit();
+  assert.ok(ui.calls.includes("alias:"));
+  assert.match(content(tree), /Signs in as unsloth/);
+  assert.doesNotMatch(content(tree), /blu3 or unsloth/);
 });

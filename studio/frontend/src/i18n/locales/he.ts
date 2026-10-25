@@ -870,6 +870,7 @@ export const he = {
       guidedTour: "סיור מודרך",
       help: "עזרה",
       logOut: "התנתקות",
+      logOutNeedsPassword: "לפני ההתנתקות, הגדירו סיסמה בהגדרות > גישה מרחוק כדי שתוכלו להתחבר שוב.",
       shutdown: "כיבוי",
     },
     commandPalette: {
@@ -1014,6 +1015,11 @@ export const he = {
   },
   settings: {
     accounts: {
+      signsInAs: "מתחבר בתור {username}",
+      signsInAsOwner: "מתחבר בתור {alias} או {username}",
+      signInName: "שם ההתחברות שלך",
+      signInNameDescription: "השם שמקלידים כדי להתחבר כשבהתקנה הזו יש יותר מחשבון אחד. גם unsloth תמיד עובד. השאירו ריק כדי להשתמש רק ב-unsloth.",
+      signInNameSave: "שמירת השם",
       title: "חשבונות",
       description:
         "צור חשבונות Unsloth פרטיים. משתמשים חדשים יתחברו באמצעות קוד הגדרה חד-פעמי ויבחרו סיסמה.",

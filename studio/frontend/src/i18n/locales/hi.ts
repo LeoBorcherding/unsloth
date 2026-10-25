@@ -793,6 +793,7 @@ export const hi = {
       guidedTour: "गाइडेड टूर",
       help: "सहायता",
       logOut: "लॉग आउट",
+      logOutNeedsPassword: "लॉग आउट करने से पहले सेटिंग्स > रिमोट एक्सेस में पासवर्ड सेट करें, ताकि आप फिर से साइन इन कर सकें।",
       shutdown: "शटडाउन",
     },
     commandPalette: {
@@ -942,6 +943,11 @@ export const hi = {
   },
   settings: {
     accounts: {
+      signsInAs: "{username} के रूप में साइन इन करता है",
+      signsInAsOwner: "{alias} या {username} के रूप में साइन इन करता है",
+      signInName: "आपका साइन-इन नाम",
+      signInNameDescription: "जब इस इंस्टॉलेशन में एक से ज़्यादा अकाउंट हों, तब साइन इन के लिए टाइप किया जाने वाला नाम। unsloth भी हमेशा काम करता है। सिर्फ़ unsloth इस्तेमाल करने के लिए खाली छोड़ें।",
+      signInNameSave: "नाम सेव करें",
       title: "खाते",
       description: "निजी Unsloth खाते बनाएँ। नए उपयोगकर्ता एक बार इस्तेमाल होने वाले सेटअप कोड से साइन इन करते हैं और पासवर्ड चुनते हैं।",
       username: "उपयोगकर्ता नाम",
