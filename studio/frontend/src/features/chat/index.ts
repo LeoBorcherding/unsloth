@@ -657,6 +657,7 @@ export {
 export type { ChatModelSummary, ChatLoraSummary } from "./types/runtime";
 export { startLlamaCppAutoReload } from "./llama-cpp-auto-reload";
 export { chatLocalModelOptions } from "./local-model-options";
+export { isChattableCachedRepo } from "./lib/chattable-cached-repo";
 export { readLastLocalModelLoad } from "./utils/last-local-model-load";
 export { decideAutoRead } from "./utils/auto-read-aloud";
 export { wantsDownloadManagerStaging } from "./utils/model-download-staging";

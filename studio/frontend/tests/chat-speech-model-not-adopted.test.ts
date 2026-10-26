@@ -167,9 +167,10 @@ test("a queued local thread does not adopt a speech model either", () => {
 
 test("the auto-load sweep skips every task chat cannot answer", () => {
   const adapter = readText("../src/features/chat/api/chat-adapter.ts");
-  const set = adapter.slice(
-    adapter.indexOf("const NON_CHAT_TASKS"),
-    adapter.indexOf("]);", adapter.indexOf("const NON_CHAT_TASKS")),
+  const predicate = readText("../src/features/chat/lib/chattable-cached-repo.ts");
+  const set = predicate.slice(
+    predicate.indexOf("const NON_CHAT_TASKS"),
+    predicate.indexOf("]);", predicate.indexOf("const NON_CHAT_TASKS")),
   );
   for (const task of [
     "text-to-image",
@@ -182,5 +183,6 @@ test("the auto-load sweep skips every task chat cannot answer", () => {
   ]) {
     assert.ok(set.includes(`"${task}"`), task);
   }
-  assert.equal(adapter.match(/NON_CHAT_TASKS\.has\(/g)?.length, 2);
+  assert.equal(predicate.match(/NON_CHAT_TASKS\.has\(/g)?.length, 1);
+  assert.equal(adapter.match(/NON_CHAT_TASKS\.has\(/g)?.length, 1);
 });

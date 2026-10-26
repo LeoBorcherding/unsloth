@@ -357,7 +357,7 @@ test("Hub selections preserve download completeness and continuation state", () 
 test("listing a partial never makes it auto-loadable", () => {
   // This guard is what makes listing partials safe.
   assert.match(
-    CHAT_ADAPTER,
+    read("../src/features/chat/lib/chattable-cached-repo.ts"),
     /function isChattableCachedRepo\([\s\S]*?repo\.partial !== true/,
   );
   assert.ok(
