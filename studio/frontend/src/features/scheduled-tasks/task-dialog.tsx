@@ -32,11 +32,11 @@ import {
   type ExternalProviderConfig,
   externalReasoningTakesEffort,
   getExternalReasoningCapabilities,
-  isChattableCachedRepo,
   useChatProjects,
   useChatRuntimeStore,
   useExternalProvidersStore,
 } from "@/features/chat";
+import { isChattableCachedRepo } from "@/features/chat/api/chat-adapter";
 import { useDeviceInventorySources } from "@/features/hub";
 import { type TranslationKey, useLocale, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
