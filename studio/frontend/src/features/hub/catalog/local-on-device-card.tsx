@@ -52,6 +52,7 @@ import {
 } from "../lib/gguf-filename";
 import {
   ggufVariantDisplayLabel,
+  localGgufMemoryBarVariant,
   resolveLocalGgufVariant,
   sortLocalGgufVariants,
 } from "../lib/gguf-variant-sort";
@@ -72,6 +73,7 @@ import { PathInfoButton } from "./path-info-button";
 import { TransportConflictDialog } from "./transport-conflict-dialog";
 import { useCardDelete } from "./use-card-delete";
 import { useGgufVariantFetchState } from "./use-gguf-variant-fetch-state";
+import { ggufVariantLookupTableBytes } from "@/lib/gguf-fit";
 
 interface LocalOnDeviceCardProps {
   modelId: string;
@@ -350,6 +352,10 @@ export function LocalOnDeviceCard({
         ...variant,
         download_size_bytes:
           remoteVariant.download_size_bytes || variant.download_size_bytes,
+        // An update's reading wins, even 0: the local header is the old revision.
+        lookup_table_bytes: remoteVariant.update_available
+          ? (remoteVariant.lookup_table_bytes ?? 0)
+          : variant.lookup_table_bytes || remoteVariant.lookup_table_bytes,
         // Both sides measure the same cache; prefer local, fall back to remote.
         download_remaining_bytes:
           variant.download_remaining_bytes ??
@@ -401,6 +407,10 @@ export function LocalOnDeviceCard({
     defaultVariant: currentVariantState.defaultVariant,
   });
   const selectedQuant = selectedVariant?.quant ?? null;
+  const memoryBarVariant = localGgufMemoryBarVariant(
+    selectedVariant,
+    currentVariantState.variants,
+  );
   const updateJobActive = useDownloadManagerStore((s) =>
     repoId
       ? Boolean(
@@ -653,7 +663,12 @@ export function LocalOnDeviceCard({
             repoId={repoId || localGgufPath}
             loadId={localGgufPath}
             quant={selectedQuant ?? ""}
-            sizeBytes={selectedVariant?.size_bytes}
+            sizeBytes={memoryBarVariant?.size_bytes}
+            lookupTableBytes={
+              memoryBarVariant
+                ? ggufVariantLookupTableBytes(memoryBarVariant)
+                : 0
+            }
             gpuGb={gpuGb}
             className="px-3 pb-2"
           />
