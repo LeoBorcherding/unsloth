@@ -14,10 +14,13 @@ import type {
   ToolProfileConfig,
   ValidatorConfig,
 } from "../../types";
+import { parseBenchmarkSettings } from "../benchmark";
+import { parseLoopCardConfig } from "../loop-card";
 import { buildEdges } from "./edges";
 import { isRecord, parseJson, readString } from "./helpers";
 import { parseColumn, parseModelConfig, parseModelProvider } from "./parsers";
 import { parseSeedConfig } from "./parsers/seed-config-parser";
+import { buildTrainConfigFromUi, parseUiTrainNodes } from "./train-node";
 import { buildNodes, parseUi } from "./ui";
 import type { ImportResult } from "./types";
 
@@ -39,6 +42,7 @@ type UiInput = {
   seed_drop_columns?: unknown;
   seed_preview_rows?: unknown;
   seed_total_rows?: unknown;
+  seed_loop_feedback?: unknown;
   local_file_name?: unknown;
   unstructured_upload_uid?: unknown;
   unstructured_file_ids?: unknown;
@@ -464,6 +468,25 @@ export function importRecipePayload(
   );
   const uiMarkdownNotes = parseUiMarkdownNoteNodes(ui?.nodes);
   const uiToolProfilesByName = parseUiToolProfileNodes(ui?.nodes);
+  const uiTrainNodes = parseUiTrainNodes(ui?.nodes);
+
+  for (const node of Array.isArray(ui?.nodes) ? ui.nodes : []) {
+    if (!isRecord(node) || readString(node.node_type) !== "benchmark") {
+      continue;
+    }
+    const name = (readString(node.name) ?? readString(node.id))?.trim();
+    if (!name) {
+      continue;
+    }
+    if (nameToId.has(name)) {
+      errors.push(`Duplicate column name: ${name}.`);
+      continue;
+    }
+    const id = `n${nextId}`;
+    nextId += 1;
+    nameToId.set(name, id);
+    configs.push(parseBenchmarkSettings(id, name, node.benchmark));
+  }
 
   for (const note of uiMarkdownNotes) {
     const id = `n${nextId}`;
@@ -476,6 +499,35 @@ export function importRecipePayload(
       note_color: note.note_color ?? "#FDE68A",
       note_opacity: note.note_opacity ?? "35",
     };
+    if (nameToId.has(config.name)) {
+      errors.push(`Duplicate column name: ${config.name}.`);
+      continue;
+    }
+    nameToId.set(config.name, config.id);
+    configs.push(config);
+  }
+
+  for (const node of Array.isArray(ui?.nodes) ? ui.nodes : []) {
+    if (!isRecord(node) || readString(node.node_type) !== "loop") {
+      continue;
+    }
+    const name = (readString(node.name) ?? readString(node.id))?.trim();
+    if (!name) {
+      continue;
+    }
+    if (nameToId.has(name)) {
+      errors.push(`Duplicate column name: ${name}.`);
+      continue;
+    }
+    const id = `n${nextId}`;
+    nextId += 1;
+    nameToId.set(name, id);
+    configs.push(parseLoopCardConfig(id, name, node.loop));
+  }
+
+  for (const trainNode of uiTrainNodes) {
+    const config = buildTrainConfigFromUi(trainNode, `n${nextId}`, configs);
+    nextId += 1;
     if (nameToId.has(config.name)) {
       errors.push(`Duplicate column name: ${config.name}.`);
       continue;
@@ -514,6 +566,9 @@ export function importRecipePayload(
       preserveUnstructuredUploads,
     });
     if (seedConfig) {
+      if (ui?.seed_loop_feedback === true) {
+        seedConfig.loop_feedback = true;
+      }
       applyAdvancedOpen(seedConfig, uiAdvancedOpenByNode);
       if (nameToId.has(seedConfig.name)) {
         errors.push(`Duplicate column name: ${seedConfig.name}.`);

@@ -117,6 +117,7 @@ import {
   DashboardSquareEditIcon,
   Delete02Icon,
   Download01Icon,
+  DashboardSpeed01Icon,
   Edit03Icon,
   FolderExportIcon,
   Folder01Icon,
@@ -3534,6 +3535,18 @@ export function AppSidebar() {
           </span>
         </button>
       ),
+    },
+    benchmarks: {
+      icon: DashboardSpeed01Icon,
+      label: t("shell.navigation.benchmarks"),
+      active: pathname === "/benchmarks",
+      onClick: () => {
+        navigate({ to: "/benchmarks" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/benchmarks" }));
+      },
     },
   };
   const navRowPinned = (item: SidebarNavItemPref) =>

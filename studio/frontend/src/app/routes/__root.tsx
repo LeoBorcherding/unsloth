@@ -60,6 +60,7 @@ import { LlmCompressorConsentDialog } from "@/features/export/components/llm-com
 import { useNativePathLeasesSupported } from "@/features/native-intents";
 import { useRagAvailabilityStore } from "@/features/rag";
 import { useIsMobileShell } from "@/hooks/use-mobile";
+import { useBenchmarkRuntimeLifecycle } from "@/features/benchmark";
 import { useSidebarPin } from "@/hooks/use-sidebar-pin";
 import { useTypeToActivate } from "@/hooks/use-type-to-activate";
 import { type TranslationKey, useT } from "@/i18n";
@@ -279,6 +280,8 @@ const CHAT_ONLY_ALLOWED = new Set([
   "/export",
   // Must stay reachable on chat-only hosts: the overlay "Expand" and Settings API card link here.
   "/api-monitor",
+  // Inference only: a sweep reloads the chat model, which chat-only hosts run like any other.
+  "/benchmarks",
 ]);
 
 // Paths that render their own "still checking" state and self-gate once the verdict lands.
@@ -425,6 +428,8 @@ function RootLayout() {
   useTrainingUnloadGuard();
   useTypeToActivate();
   useExportRuntimeLifecycle();
+  // Global benchmark driver: same pattern for benchmark runs.
+  useBenchmarkRuntimeLifecycle();
 
   const matchedTitle = useMatches({
     select: (matches) => {

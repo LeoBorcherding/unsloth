@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import {
+  Analytics01Icon,
   BalanceScaleIcon,
   Clock01Icon,
   CodeIcon,
@@ -17,6 +18,8 @@ import {
   Parabola02Icon,
   PencilEdit02Icon,
   Plant01Icon,
+  RepeatIcon,
+  Rocket01Icon,
   Shield02Icon,
   Tag01Icon,
   TagsIcon,
@@ -29,14 +32,17 @@ import type {
   SeedSourceType,
 } from "../types";
 import {
+  makeBenchmarkConfig,
   makeExpressionConfig,
   makeLlmConfig,
+  makeLoopConfig,
   makeMarkdownNoteConfig,
   makeModelConfig,
   makeModelProviderConfig,
   makeToolProfileConfig,
   makeSamplerConfig,
   makeSeedConfig,
+  makeTrainConfig,
   makeValidatorConfig,
 } from "../utils";
 
@@ -46,7 +52,10 @@ export type BlockKind =
   | "validator"
   | "expression"
   | "seed"
-  | "note";
+  | "note"
+  | "train"
+  | "benchmark"
+  | "loop";
 export type ValidatorBlockType =
   | "validator_python"
   | "validator_sql"
@@ -60,11 +69,14 @@ export type BlockType =
   | ValidatorBlockType
   | "expression"
   | "markdown_note"
+  | "benchmark"
   | "seed"
   | "seed_hf"
   | "seed_local"
   | "seed_unstructured"
   | "seed_github"
+  | "train"
+  | "loop"
   | "model_provider"
   | "model_config"
   | "tool_config";
@@ -101,7 +113,10 @@ export type BlockDialogKey =
   | "model_provider"
   | "model_config"
   | "tool_config"
-  | "expression";
+  | "train"
+  | "expression"
+  | "benchmark"
+  | "loop";
 
 export type BlockDefinition = {
   kind: BlockKind;
@@ -145,10 +160,28 @@ export const BLOCK_GROUPS: BlockGroup[] = [
     icon: FunctionIcon,
   },
   {
+    kind: "benchmark",
+    title: "Benchmark",
+    description: "Score a model on a held-out slice of this recipe's data.",
+    icon: Analytics01Icon,
+  },
+  {
     kind: "note",
     title: "Notes",
     description: "Add markdown notes to document your flow.",
     icon: PencilEdit02Icon,
+  },
+  {
+    kind: "train",
+    title: "Train",
+    description: "Fine-tune a model on the dataset this recipe generates.",
+    icon: Rocket01Icon,
+  },
+  {
+    kind: "loop",
+    title: "Loop",
+    description: "Generate, train and benchmark in rounds, feeding failures back.",
+    icon: RepeatIcon,
   },
 ];
 
@@ -401,6 +434,36 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     dialogKey: "markdown_note",
     createConfig: (id, existing) => makeMarkdownNoteConfig(id, existing),
   },
+  {
+    kind: "train",
+    type: "train",
+    title: "Train on this dataset",
+    description:
+      "Start a LoRA training run on the recipe's latest full run, holding out a share of rows.",
+    icon: Rocket01Icon,
+    dialogKey: "train",
+    createConfig: (id, existing) => makeTrainConfig(id, existing),
+  },
+  {
+    kind: "benchmark",
+    type: "benchmark",
+    title: "Benchmark",
+    description:
+      "Score a model on held-out rows from the last run, with a check or an LLM judge.",
+    icon: Analytics01Icon,
+    dialogKey: "benchmark",
+    createConfig: (id, existing) => makeBenchmarkConfig(id, existing),
+  },
+  {
+    kind: "loop",
+    type: "loop",
+    title: "Loop",
+    description:
+      "Rounds of generate, train and benchmark: failed examples steer the next round's rows.",
+    icon: RepeatIcon,
+    dialogKey: "loop",
+    createConfig: (id, existing) => makeLoopConfig(id, existing),
+  },
 ];
 
 export function getBlocksForKind(kind: BlockKind): BlockDefinition[] {
@@ -467,6 +530,15 @@ export function getBlockDefinitionForConfig(
   }
   if (config.kind === "markdown_note") {
     return getBlockDefinition("note", "markdown_note");
+  }
+  if (config.kind === "train") {
+    return getBlockDefinition("train", "train");
+  }
+  if (config.kind === "benchmark") {
+    return getBlockDefinition("benchmark", "benchmark");
+  }
+  if (config.kind === "loop") {
+    return getBlockDefinition("loop", "loop");
   }
   return getBlockDefinition("expression", "expression");
 }

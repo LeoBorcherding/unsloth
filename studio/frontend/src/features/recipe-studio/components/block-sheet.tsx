@@ -58,6 +58,9 @@ type SheetView =
   | "validator"
   | "expression"
   | "note"
+  | "train"
+  | "benchmark"
+  | "loop"
   | "processor";
 type SheetKind =
   | "sampler"
@@ -65,7 +68,10 @@ type SheetKind =
   | "llm"
   | "validator"
   | "expression"
-  | "note";
+  | "note"
+  | "train"
+  | "benchmark"
+  | "loop";
 type RootSheetView = Exclude<SheetView, "root">;
 type RootGroup = {
   kind: RootSheetView;
@@ -91,6 +97,9 @@ type BlockSheetProps = {
     type: ValidatorBlockType,
   ) => void;
   onAddMarkdownNote: () => void;
+  onAddTrain: () => void;
+  onAddBenchmark: () => void;
+  onAddLoop: () => void;
   onOpenProcessors: () => void;
   copied: boolean;
   onCopy: () => void;
@@ -122,6 +131,15 @@ function getSheetTitle(sheetView: SheetView): string {
   if (sheetView === "note") {
     return "Notes";
   }
+  if (sheetView === "train") {
+    return "Train";
+  }
+  if (sheetView === "benchmark") {
+    return "Benchmark";
+  }
+  if (sheetView === "loop") {
+    return "Loop";
+  }
   if (sheetView === "processor") {
     return "Processor blocks";
   }
@@ -140,6 +158,9 @@ const VIEW_KIND: Record<SheetView, SheetKind | null> = {
   validator: "validator",
   expression: "expression",
   note: "note",
+  train: "train",
+  benchmark: "benchmark",
+  loop: "loop",
   processor: null,
 };
 
@@ -163,6 +184,9 @@ const SEARCHABLE_KINDS: SheetKind[] = [
   "validator",
   "expression",
   "note",
+  "train",
+  "benchmark",
+  "loop",
 ];
 const PROCESSOR_TITLE = "Final dataset shape";
 const PROCESSOR_DESCRIPTION = "Rename, reorder, or reshape the final dataset.";
@@ -262,6 +286,9 @@ export function BlockSheet({
   onAddExpression,
   onAddValidator,
   onAddMarkdownNote,
+  onAddTrain,
+  onAddBenchmark,
+  onAddLoop,
   onOpenProcessors,
   copied,
   onCopy,
@@ -273,6 +300,7 @@ export function BlockSheet({
   const expressionBlocks = useMemo(() => getBlocksForKind("expression"), []);
   const noteBlocks = useMemo(() => getBlocksForKind("note"), []);
   const seedBlocks = useMemo(() => getBlocksForKind("seed"), []);
+  const trainBlocks = useMemo(() => getBlocksForKind("train"), []);
   const isControlled = typeof open === "boolean";
   const sheetOpen = isControlled ? (open as boolean) : uncontrolledOpen;
   const normalizedSearch = search.trim().toLowerCase();
@@ -411,6 +439,18 @@ export function BlockSheet({
       onAddExpression();
       return;
     }
+    if (kind === "train") {
+      onAddTrain();
+      return;
+    }
+    if (kind === "benchmark") {
+      onAddBenchmark();
+      return;
+    }
+    if (kind === "loop") {
+      onAddLoop();
+      return;
+    }
     onAddMarkdownNote();
   };
 
@@ -534,16 +574,32 @@ export function BlockSheet({
                     icon={item.icon}
                     title={item.title}
                     description={item.description}
-                    draggable={item.kind === "expression" || item.kind === "note"}
+                    draggable={
+                      item.kind === "expression" ||
+                      item.kind === "note" ||
+                      item.kind === "train" ||
+                      item.kind === "benchmark" ||
+                      item.kind === "loop"
+                    }
                     onDragStart={
                       item.kind === "expression" && expressionBlocks[0]
                         ? buildDragStart("expression", expressionBlocks[0].type)
                         : item.kind === "note" && noteBlocks[0]
                           ? buildDragStart("note", noteBlocks[0].type)
-                          : undefined
+                          : item.kind === "train" && trainBlocks[0]
+                            ? buildDragStart("train", trainBlocks[0].type)
+                          : item.kind === "benchmark"
+                            ? buildDragStart("benchmark", "benchmark")
+                          : item.kind === "loop"
+                            ? buildDragStart("loop", "loop")
+                            : undefined
                     }
                     trailing={
-                      item.kind === "expression" || item.kind === "note"
+                      item.kind === "expression" ||
+                      item.kind === "note" ||
+                      item.kind === "train" ||
+                      item.kind === "benchmark" ||
+                      item.kind === "loop"
                         ? "drag"
                         : "chevron"
                     }
@@ -561,6 +617,21 @@ export function BlockSheet({
                       if (item.kind === "note" && noteBlocks.length === 1) {
                         setSheetOpen(false);
                         onAddMarkdownNote();
+                        return;
+                      }
+                      if (item.kind === "train" && trainBlocks.length === 1) {
+                        setSheetOpen(false);
+                        onAddTrain();
+                        return;
+                      }
+                      if (item.kind === "benchmark") {
+                        setSheetOpen(false);
+                        onAddBenchmark();
+                        return;
+                      }
+                      if (item.kind === "loop") {
+                        setSheetOpen(false);
+                        onAddLoop();
                         return;
                       }
                       onViewChange(item.kind);

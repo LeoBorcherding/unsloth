@@ -2,9 +2,11 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type {
+  BenchmarkConfig,
   ExpressionConfig,
   LlmConfig,
   LlmType,
+  LoopCardConfig,
   MarkdownNoteConfig,
   ModelConfig,
   ModelProviderConfig,
@@ -14,6 +16,7 @@ import type {
   SamplerConfig,
   SamplerType,
   ToolProfileConfig,
+  TrainCardConfig,
   ValidatorCodeLang,
   ValidatorType,
   ValidatorConfig,
@@ -392,6 +395,74 @@ export function makeMarkdownNoteConfig(
     markdown: "## Note\n\nAdd markdown here.",
     note_color: "#FDE68A",
     note_opacity: "35",
+  };
+}
+
+export function makeTrainConfig(
+  id: string,
+  existing: NodeConfig[],
+): TrainCardConfig {
+  const name = nextName(existing, "train");
+  return {
+    id,
+    kind: "train",
+    name,
+    baseModel: "",
+    method: "qlora",
+    promptColumn: "",
+    responseColumn: "",
+    maxSteps: "60",
+    learningRate: "2e-4",
+    loraRank: "16",
+    loraAlpha: "16",
+    batchSize: "2",
+    contextLength: "2048",
+    holdoutPercent: "10",
+    seed: "3407",
+    outputName: name,
+    lastRun: null,
+  };
+}
+
+export function makeBenchmarkConfig(
+  id: string,
+  existing: NodeConfig[],
+): BenchmarkConfig {
+  const firstModel = existing.find((config) => config.kind === "model_config");
+  return {
+    id,
+    kind: "benchmark",
+    name: nextName(existing, "benchmark"),
+    task: "recipe_heldout",
+    limit: "50",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    model_alias: firstModel?.name ?? "",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    baseline_mode: "adapter_off",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    prompt_column: "",
+    scorer: "reference",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    holdout_percent: "20",
+    // biome-ignore lint/style/useNamingConvention: ui schema
+    max_rows: "20",
+  };
+}
+
+export function makeLoopConfig(
+  id: string,
+  existing: NodeConfig[],
+): LoopCardConfig {
+  return {
+    id,
+    kind: "loop",
+    name: nextName(existing, "loop"),
+    targetScore: "80",
+    maxRounds: "3",
+    stopOnPlateau: true,
+    plateauRounds: "2",
+    rowsPerRound: "80",
+    failureShare: "50",
   };
 }
 

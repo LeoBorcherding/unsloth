@@ -4,8 +4,10 @@
 import type { ReactElement } from "react";
 import type { NodeConfig, SamplerConfig } from "../types";
 import { getBlockDefinitionForConfig } from "./definitions";
+import { BenchmarkDialog } from "../dialogs/benchmark/benchmark-dialog";
 import { ExpressionDialog } from "../dialogs/expression/expression-dialog";
 import { LlmDialog } from "../dialogs/llm/llm-dialog";
+import { LoopDialog } from "../dialogs/loop/loop-dialog";
 import { ModelConfigDialog } from "../dialogs/models/model-config-dialog";
 import { ModelProviderDialog } from "../dialogs/models/model-provider-dialog";
 import { SeedDialog } from "../dialogs/seed/seed-dialog";
@@ -20,6 +22,7 @@ import { UniformDialog } from "../dialogs/samplers/uniform-dialog";
 import { UuidDialog } from "../dialogs/samplers/uuid-dialog";
 import { MarkdownNoteDialog } from "../dialogs/markdown-note/markdown-note-dialog";
 import { ToolProfileDialog } from "../dialogs/tool-profile/tool-profile-dialog";
+import { TrainDialog } from "../dialogs/train/train-dialog";
 import { ValidatorDialog } from "../dialogs/validators/validator-dialog";
 
 export function renderBlockDialog(
@@ -129,6 +132,22 @@ export function renderBlockDialog(
     case "markdown_note":
       return config.kind === "markdown_note" ? (
         <MarkdownNoteDialog config={config} onUpdate={update} />
+      ) : null;
+    case "train":
+      return config.kind === "train" ? (
+        <TrainDialog config={config} onUpdate={update} />
+      ) : null;
+    case "benchmark":
+      return config.kind === "benchmark" ? (
+        <BenchmarkDialog
+          config={config}
+          modelConfigAliases={modelConfigAliases}
+          onUpdate={update}
+        />
+      ) : null;
+    case "loop":
+      return config.kind === "loop" ? (
+        <LoopDialog config={config} onUpdate={update} />
       ) : null;
   }
 }

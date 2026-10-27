@@ -583,6 +583,11 @@ type UseRecipeExecutionsResult = {
   } | null;
   runPreview: () => Promise<boolean>;
   runFull: () => Promise<boolean>;
+  runFullForLoop: (
+    rows: number,
+    runName: string,
+    payload: RecipePayload,
+  ) => Promise<RecipeExecutionRecord | null>;
   cancelExecution: (id: string) => Promise<void>;
   loadExecutionDatasetPage: (id: string, page: number) => Promise<void>;
 };
@@ -775,6 +780,7 @@ export function useRecipeExecutions({
       settings: RecipeRunSettings;
       runName: string | null;
       restorePrevious?: (() => Promise<void>) | null;
+      onCreated?: (executionId: string) => void;
     }): Promise<boolean> => {
       const { kind, payload, rows, settings, runName, restorePrevious } = input;
       const setLoading =
@@ -791,6 +797,7 @@ export function useRecipeExecutions({
       });
 
       upsertAndPersist(baseExecution);
+      input.onCreated?.(baseExecution.id);
       onExecutionStart?.();
       setRunDialogOpen(false);
 
@@ -906,6 +913,11 @@ export function useRecipeExecutions({
       kind: RecipeExecutionKind,
       rows: number,
       runName: string | null,
+      onCreated?: (executionId: string) => void,
+      // The loop frees the GPU for training next, so it skips reloading the model it displaced.
+      keepModel = false,
+      // The loop edits the seed and runs in the same tick, before this hook's payload re-renders.
+      payloadOverride: RecipePayload | null = null,
     ): Promise<boolean> => {
       const trimmedRunName = typeof runName === "string" ? runName.trim() : "";
       if (kind === "full" && !trimmedRunName) {
@@ -915,7 +927,7 @@ export function useRecipeExecutions({
         return false;
       }
 
-      const payload = readExecutablePayload();
+      const payload = payloadOverride ?? readExecutablePayload();
       if (!payload) {
         return false;
       }
@@ -949,7 +961,8 @@ export function useRecipeExecutions({
         rows: normalizedRows,
         settings: runSettings,
         runName,
-        restorePrevious,
+        restorePrevious: keepModel ? null : restorePrevious,
+        onCreated,
       });
     },
     [
@@ -970,6 +983,33 @@ export function useRecipeExecutions({
   const runFull = useCallback((): Promise<boolean> => {
     return runWithValidation("full", fullRows, fullRunName);
   }, [fullRows, fullRunName, runWithValidation]);
+
+  const runFullForLoop = useCallback(
+    async (
+      rows: number,
+      runName: string,
+      payload: RecipePayload,
+    ): Promise<RecipeExecutionRecord | null> => {
+      const created: { id: string | null } = { id: null };
+      const ok = await runWithValidation(
+        "full",
+        rows,
+        runName,
+        (id) => {
+          created.id = id;
+        },
+        true,
+        payload,
+      );
+      if (!(ok && created.id)) return null;
+      return (
+        useRecipeExecutionsStore
+          .getState()
+          .executions.find((record) => record.id === created.id) ?? null
+      );
+    },
+    [runWithValidation],
+  );
 
   const runFromDialog = useCallback((): Promise<boolean> => {
     setValidateResult(null);
@@ -1174,6 +1214,7 @@ export function useRecipeExecutions({
     validateResult,
     runPreview,
     runFull,
+    runFullForLoop,
     cancelExecution,
     loadExecutionDatasetPage,
   };

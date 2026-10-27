@@ -26,6 +26,7 @@ import type {
   RecipeNode,
   RecipeProcessorConfig,
   SamplerType,
+  SeedConfig,
   SeedSourceType,
 } from "../types";
 import { applyRecipeConnection, isValidRecipeConnection } from "../utils/graph";
@@ -38,6 +39,7 @@ import {
 import type { RecipeSnapshot } from "../utils/import";
 import { getLayoutedElements } from "../utils/layout";
 import { makeUnstructuredUploadUid } from "../utils/config-factories";
+import { findLoopParts, makeFeedbackSeedConfig } from "../utils/loop-card";
 import {
   centerModelInfraNodes,
   optimizeModelInfraEdgeHandles,
@@ -61,9 +63,12 @@ type SheetView =
   | "validator"
   | "expression"
   | "note"
+  | "train"
+  | "benchmark"
+  | "loop"
   | "processor";
 
-type RecipeStudioState = {
+export type RecipeStudioState = {
   nodes: RecipeNode[];
   edges: Edge[];
   auxNodePositions: Record<string, XYPosition>;
@@ -118,6 +123,11 @@ type RecipeStudioState = {
     openDialog?: boolean,
   ) => void;
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addTrainNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addLoopNode: (position?: XYPosition, openDialog?: boolean) => void;
+  /** The Loop card's failures seed, wired from the Benchmark card so the feedback edge shows. */
+  addLoopFeedbackSeed: (source: Partial<SeedConfig>) => void;
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   setAuxNodePosition: (id: string, position: XYPosition) => void;
@@ -717,6 +727,67 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         position,
         openDialog,
       );
+    }),
+  addTrainNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(state, "train", "train", position, openDialog);
+    }),
+  addBenchmarkNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(
+        state,
+        "benchmark",
+        "benchmark",
+        position,
+        openDialog,
+      );
+    }),
+  addLoopNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(state, "loop", "loop", position, openDialog);
+    }),
+  addLoopFeedbackSeed: (source) =>
+    set((state) => {
+      const parts = findLoopParts(state.configs);
+      if (state.executionLocked || parts.feedback || parts.otherSeed) {
+        return state;
+      }
+      const config: SeedConfig = {
+        ...makeFeedbackSeedConfig(`n${state.nextId}`, Object.values(state.configs)),
+        ...source,
+      };
+      const left = Math.min(0, ...state.nodes.map((node) => node.position.x));
+      const update = buildNodeUpdate(
+        state,
+        config,
+        state.layoutDirection,
+        { x: left - 420, y: state.nodes[0]?.position.y ?? 0 },
+        false,
+      );
+      if (!parts.benchmark) {
+        return update;
+      }
+      const wired = applyRecipeConnection(
+        {
+          source: parts.benchmark.id,
+          sourceHandle: HANDLE_IDS.benchmarkOut,
+          target: config.id,
+          targetHandle: HANDLE_IDS.dataInBottom,
+        },
+        update.configs,
+        state.edges,
+        state.layoutDirection,
+      );
+      return { ...update, edges: wired.edges };
     }),
   loadRecipe: (snapshot) =>
     set((state) => ({

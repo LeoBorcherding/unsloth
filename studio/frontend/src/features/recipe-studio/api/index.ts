@@ -8,6 +8,7 @@ import {
   readFastApiError,
 } from "@/lib/format-fastapi-error";
 import { openStreamResponse } from "@/lib/open-stream-response";
+import type { LoadedModelStatus } from "../utils/benchmark";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -31,6 +32,34 @@ export type PublishRecipeJobResponse = {
   success: boolean;
   url: string;
   message: string;
+};
+
+export type TrainingSplitRequest = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  artifact_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_percent: number;
+  seed: number;
+};
+
+export type TrainingSplitResponse = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_path: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_row_ids: number[];
+};
+
+export type HoldoutRowsResponse = {
+  rows: Record<string, unknown>[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  row_ids: number[];
+  total: number;
 };
 
 export type SourceProgressResponse = {
@@ -366,6 +395,26 @@ export async function publishRecipeJob(
   return postJson<PublishRecipeJobResponse>(`/jobs/${jobId}/publish`, payload);
 }
 
+export async function createRecipeTrainingSplit(
+  jobId: string,
+  payload: TrainingSplitRequest,
+): Promise<TrainingSplitResponse> {
+  return postJson<TrainingSplitResponse>(
+    `/jobs/${jobId}/training-split`,
+    payload,
+  );
+}
+
+export async function getRecipeHoldoutRows(
+  jobId: string,
+  payload: TrainingSplitRequest & { offset?: number; limit?: number },
+): Promise<HoldoutRowsResponse> {
+  return postJson<HoldoutRowsResponse>(
+    `/jobs/${jobId}/training-split/holdout-rows`,
+    payload,
+  );
+}
+
 export async function inspectSeedDataset(
   payload: SeedInspectRequest,
 ): Promise<SeedInspectResponse> {
@@ -532,5 +581,15 @@ export async function removeUnstructuredBlock(blockId: string): Promise<void> {
   );
   if (!res.ok && res.status !== 404) {
     throw new Error("Failed to remove uploaded files");
+  }
+}
+
+/** What Chat has loaded, for the Benchmark card's GGUF gate on lm-eval tasks. */
+export async function fetchLoadedModelStatus(): Promise<LoadedModelStatus | null> {
+  try {
+    const response = await authFetch("/api/inference/status");
+    return response.ok ? ((await response.json()) as LoadedModelStatus) : null;
+  } catch {
+    return null;
   }
 }

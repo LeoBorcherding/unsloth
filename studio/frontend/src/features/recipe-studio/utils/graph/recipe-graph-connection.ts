@@ -20,6 +20,8 @@ import {
   VALIDATOR_OXC_CODE_LANGS,
   VALIDATOR_SQL_CODE_LANGS,
 } from "../validators/code-lang";
+import { isFeedbackSeed } from "../loop-card";
+import { TRAINED_MODEL_CONSUMER_KINDS } from "../train-card";
 import {
   isSemanticRelation,
   isTextFormatValidator,
@@ -107,7 +109,10 @@ function getSingleRefRelation(
   if (source.kind === "model_provider" && target.kind === "model_config") {
     return "provider";
   }
-  if (source.kind === "model_config" && target.kind === "llm") {
+  if (
+    source.kind === "model_config" &&
+    (target.kind === "llm" || target.kind === "benchmark")
+  ) {
     return "model_alias";
   }
   if (source.kind === "tool_config" && target.kind === "llm") {
@@ -333,6 +338,18 @@ export function isValidRecipeConnection(
   if (!(source && target)) {
     return false;
   }
+  // A Train card's output is an adapter, not a column: it only feeds cards that take one.
+  if (source.kind === "train") {
+    return (
+      TRAINED_MODEL_CONSUMER_KINDS.has(target.kind) && isDataLane(connection)
+    );
+  }
+  // A Benchmark card's score and failed examples only feed the Loop card and its failures seed.
+  if (source.kind === "benchmark" && !isSemanticRelation(source, target)) {
+    return (
+      (target.kind === "loop" || isFeedbackSeed(target)) && isDataLane(connection)
+    );
+  }
   const semanticRelation = isSemanticRelation(source, target);
   if (semanticRelation) {
     return isSemanticLane(connection);
@@ -431,7 +448,10 @@ export function applyRecipeConnection(
     };
     return { edges: nextEdges, configs: { ...configs, [target.id]: next } };
   }
-  if (source.kind === "model_config" && target.kind === "llm") {
+  if (
+    source.kind === "model_config" &&
+    (target.kind === "llm" || target.kind === "benchmark")
+  ) {
     const next = { ...target, model_alias: source.name };
     return { edges: nextEdges, configs: { ...configs, [target.id]: next } };
   }

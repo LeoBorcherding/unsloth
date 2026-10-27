@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import {
+  Analytics01Icon,
   BalanceScaleIcon,
   Clock01Icon,
   CodeIcon,
@@ -51,6 +52,7 @@ import {
   RECIPE_STUDIO_NODE_TONES,
   RECIPE_STUDIO_USER_NODE_TONE,
 } from "../utils/ui-tones";
+import { BenchmarkCardBody } from "./benchmark/benchmark-card-body";
 import { InlineCategoryBadges } from "./inline/inline-category-badges";
 import { InlineExpression } from "./inline/inline-expression";
 import { InlineLlm } from "./inline/inline-llm";
@@ -58,6 +60,9 @@ import { InlineModel } from "./inline/inline-model";
 import { isInlineConfig } from "./inline/inline-policy";
 import { InlineSampler } from "./inline/inline-sampler";
 import { InlineSeed } from "./inline/inline-seed";
+import { FeedbackSeedBody } from "./loop/feedback-seed-body";
+import { RecipeLoopNode } from "./loop/recipe-loop-node";
+import { RecipeTrainNode } from "./recipe-train-node";
 import {
   BaseNode,
   BaseNodeContent,
@@ -105,8 +110,17 @@ const NODE_META = {
   note: {
     tone: RECIPE_STUDIO_NODE_TONES.note,
   },
+  benchmark: {
+    tone: RECIPE_STUDIO_NODE_TONES.benchmark,
+  },
   seed: {
     tone: RECIPE_STUDIO_NODE_TONES.seed,
+  },
+  train: {
+    tone: RECIPE_STUDIO_NODE_TONES.train,
+  },
+  loop: {
+    tone: RECIPE_STUDIO_NODE_TONES.loop,
   },
   model_provider: {
     tone: RECIPE_STUDIO_NODE_TONES.model_provider,
@@ -156,6 +170,9 @@ function resolveNodeIcon(
   }
   if (kind === "note") {
     return PencilEdit02Icon;
+  }
+  if (kind === "benchmark") {
+    return Analytics01Icon;
   }
   if (kind === "model_provider") {
     return Shield02Icon;
@@ -289,9 +306,16 @@ function renderNodeBody(
   summary: string,
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void,
   localProviderNames: Set<string>,
+  executionLocked: boolean,
 ): ReactElement {
   if (config?.kind === "markdown_note") {
     return <MarkdownPreview markdown={config.markdown} />;
+  }
+  if (config?.kind === "benchmark") {
+    return <BenchmarkCardBody config={config} disabled={executionLocked} />;
+  }
+  if (config?.kind === "seed" && config.loop_feedback) {
+    return <FeedbackSeedBody config={config} />;
   }
 
   if (config && isInlineConfig(config)) {
@@ -422,6 +446,13 @@ function RecipeGraphNodeBase({
     );
   }
 
+  if (config?.kind === "train") {
+    return <RecipeTrainNode id={id} data={data} selected={selected} />;
+  }
+  if (config?.kind === "loop") {
+    return <RecipeLoopNode id={id} data={data} selected={selected} />;
+  }
+
   const showDataHandles =
     data.kind === "llm" ||
     data.kind === "validator" ||
@@ -429,7 +460,9 @@ function RecipeGraphNodeBase({
     data.kind === "sampler" ||
     data.kind === "seed";
   const showSemanticIn =
-    data.kind === "model_config" || data.kind === "validator";
+    data.kind === "model_config" ||
+    data.kind === "validator" ||
+    data.kind === "benchmark";
   const showSemanticOut =
     data.kind === "model_config" ||
     data.kind === "model_provider" ||
@@ -441,6 +474,7 @@ function RecipeGraphNodeBase({
     summary,
     updateConfig,
     localProviderNames,
+    executionLocked,
   );
   const canShowLlmAux =
     config?.kind === "llm" &&
@@ -631,25 +665,53 @@ function RecipeGraphNodeBase({
 
       {showSemanticIn && (
         <>
-          <LabeledHandle
-            id={HANDLE_IDS.semanticIn}
-            title="Semantic input"
-            type="target"
-            position={Position.Left}
-            className="absolute inset-0 pointer-events-none"
-            labelClassName="sr-only"
-            handleClassName={NODE_HANDLE_CLASS}
-          />
-          <LabeledHandle
-            id={HANDLE_IDS.semanticInTop}
-            title="Semantic input"
-            type="target"
-            position={Position.Top}
-            className="absolute inset-0 pointer-events-none"
-            labelClassName="sr-only"
-            handleClassName={NODE_HANDLE_CLASS}
-          />
+          {(data.kind !== "benchmark" || layoutDirection !== "TB") && (
+            <LabeledHandle
+              id={HANDLE_IDS.semanticIn}
+              title="Semantic input"
+              type="target"
+              position={Position.Left}
+              className="absolute inset-0 pointer-events-none"
+              labelClassName="sr-only"
+              handleClassName={NODE_HANDLE_CLASS}
+            />
+          )}
+          {(data.kind !== "benchmark" || layoutDirection === "TB") && (
+            <LabeledHandle
+              id={HANDLE_IDS.semanticInTop}
+              title="Semantic input"
+              type="target"
+              position={Position.Top}
+              className="absolute inset-0 pointer-events-none"
+              labelClassName="sr-only"
+              handleClassName={NODE_HANDLE_CLASS}
+            />
+          )}
         </>
+      )}
+
+      {data.kind === "benchmark" && (
+        // The Train card's adapter comes in on a data lane, on the side the model edge doesn't use.
+        <LabeledHandle
+          id={layoutDirection === "TB" ? HANDLE_IDS.dataIn : HANDLE_IDS.dataInTop}
+          title="Trained model"
+          type="target"
+          position={layoutDirection === "TB" ? Position.Left : Position.Top}
+          className="absolute inset-0 pointer-events-none"
+          labelClassName="sr-only"
+          handleClassName={NODE_HANDLE_CLASS}
+        />
+      )}
+      {data.kind === "benchmark" && (
+        <LabeledHandle
+          id={HANDLE_IDS.benchmarkOut}
+          title="Score and failed examples"
+          type="source"
+          position={Position.Right}
+          className="absolute inset-0 pointer-events-none"
+          labelClassName="sr-only"
+          handleClassName={NODE_HANDLE_CLASS}
+        />
       )}
 
       {showSemanticOut && (

@@ -27,6 +27,8 @@ export const HANDLE_IDS = {
   llmInputOutRight: "llm-input-out-right",
   llmInputOutTop: "llm-input-out-top",
   llmInputOutBottom: "llm-input-out-bottom",
+  // benchmark card: score + failed examples for a downstream card
+  benchmarkOut: "benchmark-out",
 } as const;
 
 export type RecipeHandleId = (typeof HANDLE_IDS)[keyof typeof HANDLE_IDS];
@@ -44,6 +46,7 @@ const DATA_TARGET_HANDLES = new Set<string>([
 ]);
 
 const DATA_SOURCE_HANDLES = new Set<string>([
+  HANDLE_IDS.benchmarkOut,
   HANDLE_IDS.dataOut,
   HANDLE_IDS.dataOutLeft,
   HANDLE_IDS.dataOutTop,

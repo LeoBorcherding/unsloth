@@ -23,6 +23,7 @@ import {
   isSemanticTargetHandle,
   normalizeRecipeHandleId,
 } from "../handles";
+import { serializeBenchmarkSettings } from "../benchmark";
 import { readNodeWidth } from "../rf-node-dimensions";
 import {
   buildExpressionColumn,
@@ -196,7 +197,7 @@ export function buildRecipePayload(
       // seed-dataset columns are added by DataDesigner.
       continue;
     }
-    if (config.kind === "markdown_note") {
+    if (config.kind === "markdown_note" || config.kind === "train" || config.kind === "benchmark" || config.kind === "loop") {
       continue;
     }
     if (config.kind === "model_provider") {
@@ -272,6 +273,47 @@ export function buildRecipePayload(
           markdown: config.markdown,
           note_color: config.note_color,
           note_opacity: config.note_opacity,
+        },
+      ];
+    }
+    if (config.kind === "train") {
+      const { id: _id, kind: _kind, name: _name, ...train } = config;
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "train" as const,
+          name: config.name,
+          train,
+        },
+      ];
+    }
+    if (config.kind === "benchmark") {
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "benchmark" as const,
+          name: config.name,
+          benchmark: serializeBenchmarkSettings(config),
+        },
+      ];
+    }
+    if (config.kind === "loop") {
+      const { id: _id, kind: _kind, name: _name, ...loop } = config;
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "loop" as const,
+          name: config.name,
+          loop,
         },
       ];
     }
@@ -429,6 +471,10 @@ export function buildRecipePayload(
         }),
         ...(firstSeed && {
           seed_preview_rows: firstSeed.seed_preview_rows ?? [],
+        }),
+        ...(firstSeed?.loop_feedback && {
+          // biome-ignore lint/style/useNamingConvention: ui schema
+          seed_loop_feedback: true,
         }),
         ...(firstSeed?.seed_total_rows !== undefined && {
           seed_total_rows: firstSeed.seed_total_rows,
