@@ -2812,8 +2812,11 @@ def _setup_mlx_tracking(trainer, config, output_dir, send):
                 )
                 return None
             try:
-                tb_dir = config.get("tensorboard_dir") or f"{output_dir}/runs"
-                return SummaryWriter(log_dir = tb_dir)
+                from utils.paths import ensure_dir, resolve_tensorboard_dir
+
+                # As on the torch path: a relative "runs" must not resolve against the worker's cwd.
+                tb_dir = ensure_dir(resolve_tensorboard_dir(config.get("tensorboard_dir")))
+                return SummaryWriter(log_dir = str(tb_dir))
             except Exception as e:
                 send("status", status_message = f"tensorboard init failed: {e}")
                 return None

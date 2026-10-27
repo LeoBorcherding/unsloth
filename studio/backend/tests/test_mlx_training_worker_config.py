@@ -614,3 +614,29 @@ def test_mlx_single_process_finalization_keeps_prior_contract():
     events = _finalize(trainer, stop = (True, True), checkpoint_ok = False)
     assert trainer.saved == ["/out"]
     assert events[-1][0] == "error" and events[-1][1]["resume_blocked"] is True
+
+
+def test_mlx_tensorboard_logs_resolve_under_the_tensorboard_root(monkeypatch, tmp_path):
+    from utils.paths import resolve_tensorboard_dir
+
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path / "home"))
+    log_dirs = []
+    tensorboardx = types.ModuleType("tensorboardX")
+    tensorboardx.SummaryWriter = lambda log_dir: log_dirs.append(log_dir) or log_dir
+    monkeypatch.setitem(sys.modules, "tensorboardX", tensorboardx)
+    monkeypatch.chdir(tmp_path)
+    sent = []
+
+    _wandb_run, tb_writer = _worker._setup_mlx_tracking(
+        types.SimpleNamespace(distributed_world_size = 1),
+        {"enable_tensorboard": True, "tensorboard_dir": "runs"},
+        str(tmp_path / "out"),
+        lambda *args, **kwargs: sent.append(kwargs),
+    )
+
+    expected = resolve_tensorboard_dir("runs")
+    assert expected.is_relative_to(tmp_path / "home")
+    assert sent == []
+    assert log_dirs == [str(expected)] and tb_writer == str(expected)
+    assert Path(tb_writer).is_absolute() and Path(tb_writer).is_dir()
+    assert not (tmp_path / "runs").exists()
