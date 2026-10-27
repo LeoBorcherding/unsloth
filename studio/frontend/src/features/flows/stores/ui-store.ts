@@ -26,6 +26,9 @@ export interface RecipeEditorTarget {
   seed?: boolean;
   add?: { kind: string; type: string };
   processors?: boolean;
+  runSettings?: boolean;
+  /** Recipe Studio's GitHub crawler form, for a GitHub-seeded recipe */
+  easy?: boolean;
 }
 
 /** A recipe group's runs, in Recipe Studio's executions view: the newest one only, or all of them. */

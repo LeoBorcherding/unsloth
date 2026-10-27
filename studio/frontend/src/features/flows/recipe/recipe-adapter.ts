@@ -36,25 +36,6 @@ const LAYOUT_UI = new Set([
   "aux_nodes",
   "advanced_open_by_node",
 ]);
-// Flows keep no tool servers (backend `declarative_recipe`).
-const DROPPED_KEYS = new Set(["mcp_providers", "tool_configs"]);
-
-// Flows keep no credentials (backend `flow_from_recipe`); a run already drops provider keys.
-function dropSecrets(config: Record<string, unknown>): void {
-  if (Array.isArray(config.model_providers)) {
-    config.model_providers = config.model_providers.map((provider) => {
-      if (!provider || typeof provider !== "object") return provider;
-      const { api_key: _key, extra_headers: _headers, ...rest } =
-        provider as Record<string, unknown>;
-      return rest;
-    });
-  }
-  const seed = config.seed_config as { source?: unknown } | undefined;
-  if (seed?.source && typeof seed.source === "object") {
-    const { token: _token, ...source } = seed.source as Record<string, unknown>;
-    config.seed_config = { ...seed, source };
-  }
-}
 
 export interface StudioView {
   configs: Record<string, NodeConfig>;
@@ -203,14 +184,19 @@ export function commitStudioEdit(
   >;
   const config: Record<string, unknown> = { ...(group.config ?? {}) };
   for (const [key, value] of Object.entries(recipe)) {
-    if (value === undefined || DROPPED_KEYS.has(key)) delete config[key];
+    if (value === undefined) delete config[key];
     else config[key] = value;
   }
-  dropSecrets(config);
   const ui: Record<string, unknown> = { ...(group.ui ?? {}) };
   for (const [key, value] of Object.entries(built.payload.ui)) {
     if (!LAYOUT_UI.has(key)) ui[key] = value;
   }
+  // A tool profile's fetched tool list lives on its Recipe Studio canvas node.
+  const toolNodes = (built.payload.ui.nodes ?? []).filter(
+    (node) => (node as { node_type?: string }).node_type === "tool_config",
+  );
+  if (toolNodes.length > 0) ui.nodes = toolNodes;
+  else delete ui.nodes;
   return { nodes, group: { ...group, config, ui } };
 }
 

@@ -18,6 +18,8 @@ from typing import Any, Optional
 import jinja2
 from jinja2 import meta, nodes
 
+from core.flows.recipe_share import stdio_names
+
 RECIPE_GRAPH_VERSION = 1
 COLUMN_TYPE = "recipe.column"
 GENERATE_TYPE = "recipe.generate"
@@ -178,6 +180,14 @@ def import_recipe(payload: Any, *, group_id: str = "recipe") -> dict:
         )
     ]
     hints = {k: copy.deepcopy(v) for k, v in ui.items() if k not in _LAYOUT_UI}
+    # Tool profiles keep the tool list Recipe Studio fetched on their canvas node.
+    tool_nodes = [
+        copy.deepcopy(n)
+        for n in ui.get("nodes") or []
+        if isinstance(n, dict) and n.get("node_type") == "tool_config"
+    ]
+    if tool_nodes:
+        hints["nodes"] = tool_nodes
     group = {
         "id": group_id,
         "kind": "recipe",
@@ -199,12 +209,6 @@ def import_recipe(payload: Any, *, group_id: str = "recipe") -> dict:
     }
 
 
-# Flows never carry tool servers or credentials (see `nodes/data.declarative_recipe`).
-_TOOL_KEYS = ("mcp_providers", "tool_configs", "tool_profiles", "tools", "mcp")
-_COLUMN_TOOL_KEYS = ("tool_alias", "tool_config", "mcp_tools", "tools")
-_SECRET_KEYS = ("api_key", "extra_headers")
-
-
 def flow_from_recipe(
     payload: Any,
     *,
@@ -213,35 +217,14 @@ def flow_from_recipe(
     flow_id: str = "recipe",
 ) -> tuple[dict, list[str]]:
     """A new pipeline flow holding the recipe as one Recipe group wired to a preview, and notices
-    about anything a flow cannot keep (tool servers, provider secrets)."""
+    about what behaves differently in a flow. Tool profiles and provider keys come along; exporting
+    or sharing the flow drops them (`recipe_share`)."""
     recipe, run, ui = _recipe_parts(payload)
     recipe = copy.deepcopy(recipe)
-    notices: list[str] = []
-    if any(recipe.get(key) for key in _TOOL_KEYS) or any(
-        isinstance(c, dict) and any(c.get(key) for key in _COLUMN_TOOL_KEYS)
-        for c in recipe["columns"]
-    ):
-        notices.append(
-            "Tool servers stay on the Data Recipes page; columns that used them run without tools."
-        )
-    for key in _TOOL_KEYS:
-        recipe.pop(key, None)
-    for column in recipe["columns"]:
-        if isinstance(column, dict):
-            for key in _COLUMN_TOOL_KEYS:
-                column.pop(key, None)
-    for provider in recipe.get("model_providers") or []:
-        if isinstance(provider, dict) and any(provider.get(k) for k in _SECRET_KEYS):
-            notices.append(
-                f"Provider {provider.get('name')}: its API key was left out, flows do not keep keys."
-            )
-        for key in _SECRET_KEYS:
-            if isinstance(provider, dict):
-                provider.pop(key, None)
-    seed = recipe.get("seed_config")
-    seed_source = seed.get("source") if isinstance(seed, dict) else None
-    if isinstance(seed_source, dict) and seed_source.pop("token", None):
-        notices.append("Seed data: its access token was left out, flows do not keep tokens.")
+    notices = [
+        f"Tool server {server}: local (stdio) servers only run from the Data Recipes page."
+        for server in stdio_names(recipe)
+    ]
     graph = import_recipe({"recipe": recipe, "run": run, "ui": ui}, group_id = "recipe")
     graph["group"]["label"] = name[:200] or "Data Recipe"
     generate = graph["nodes"][-1]

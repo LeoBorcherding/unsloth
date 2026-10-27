@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from auth.authentication import get_current_subject
+from auth.authentication import authenticated_via_api_key, get_current_subject
 from core.flows import compiler, package
 from core.flows.compiler import RECIPE_PARAM, CompileError, compile_flow, parse_document
 from core.flows.nodes import data
@@ -87,7 +87,7 @@ def test_the_generate_step_runs_the_group_as_edited():
     assert "sql-validator" not in names
     assert next(c for c in recipe["columns"] if c["name"] == "sql")["prompt"].startswith("Write SQL")
     assert recipe["model_configs"] == SQL["recipe"]["model_configs"]
-    assert "mcp_providers" not in recipe and "tool_configs" not in recipe
+    assert recipe["mcp_providers"] == [] and recipe["tool_configs"] == []
 
 
 def test_column_wires_stay_inside_their_recipe():
@@ -165,14 +165,15 @@ def test_a_loop_or_a_lost_group_fails_on_the_generate_step():
         compile_flow(doc)
 
 
-def test_seed_tokens_stay_out_and_local_seed_paths_stay_on_this_machine():
+def test_seed_tokens_and_local_seed_paths_stay_on_this_machine():
     payload = copy.deepcopy(SQL)
     payload["recipe"]["seed_config"] = {
         "source": {"seed_type": "github_repo", "repos": ["a/b"], "token": "ghp_live"}
     }
-    doc, notices = flow_from_recipe(payload, name = "SQL")
-    assert "ghp_live" not in json.dumps(doc)
-    assert any("token" in n for n in notices)
+    doc, _ = flow_from_recipe(payload, name = "SQL")
+    assert "ghp_live" in json.dumps(doc)
+    out, _, _ = asyncio.run(package.export_flow(doc, "json", None))
+    assert b"ghp_live" not in out
 
     payload = copy.deepcopy(SQL)
     payload["recipe"]["seed_config"] = {
@@ -200,24 +201,15 @@ def test_seed_tokens_stay_out_and_local_seed_paths_stay_on_this_machine():
     assert b"private row" not in out and b"me/private" in out
 
 
-def test_importing_strips_tool_servers_and_keys_and_says_so():
+def test_importing_keeps_tool_profiles_and_keys_and_flags_stdio():
     payload = copy.deepcopy(SQL)
     payload["recipe"]["mcp_providers"] = [{"name": "fs", "provider_type": "stdio", "command": "x"}]
     payload["recipe"]["model_providers"][0]["api_key"] = "sk-live"
     payload["recipe"]["columns"][4]["tool_alias"] = "fs-tools"
     doc, notices = flow_from_recipe(payload, name = "SQL")
-    assert len(notices) == 2
+    assert len(notices) == 1 and "fs" in notices[0]
     text = json.dumps(doc)
-    assert "sk-live" not in text and "stdio" not in text and "fs-tools" not in text
-    payload = copy.deepcopy(SQL)
-    payload["recipe"].update(tool_profiles = [{"name": "tp"}], tools = ["t"], mcp = {"x": 1})
-    payload["recipe"]["columns"][4].update(tool_config = "tc", mcp_tools = ["m"], tools = ["t"])
-    doc, notices = flow_from_recipe(payload, name = "SQL")
-    recipe = doc["groups"][0]["config"]
-    columns = [n["params"]["column"] for n in doc["nodes"] if n["type"] == COLUMN_TYPE]
-    assert not set(recipe) & set(data._REFUSED_KEYS)
-    assert not any(set(c) & {"tool_alias", "tool_config", "mcp_tools", "tools"} for c in columns)
-    assert len(notices) == 1
+    assert "sk-live" in text and "stdio" in text and "fs-tools" in text
 
 
 def _routes(job_ids, *, valid = True):
@@ -380,6 +372,7 @@ def client():
     app = FastAPI()
     app.include_router(flows_routes.router, prefix = "/api/flows")
     app.dependency_overrides[get_current_subject] = lambda: "tester"
+    app.dependency_overrides[authenticated_via_api_key] = lambda: False
     with TestClient(app) as test_client:
         yield test_client
 

@@ -121,10 +121,10 @@ test("a recipe-level edit lands on the group config, not on the columns", () => 
   >[];
   assert.equal(providers[0].endpoint, "http://127.0.0.1:8000/v1");
   assert.equal("columns" in (edit.group?.config ?? {}), false);
-  assert.equal("mcp_providers" in (edit.group?.config ?? {}), false);
+  assert.deepEqual(edit.group?.config?.mcp_providers, []);
 });
 
-test("a key or token typed into a Flows-side dialog is not saved with the flow", () => {
+test("a key typed into a Flows-side dialog stays on this machine's flow (export drops it)", () => {
   const { group, nodes } = sqlGroup();
   const view = studioView(group, nodes);
   const provider = Object.values(view.configs).find(
@@ -137,7 +137,7 @@ test("a key or token typed into a Flows-side dialog is not saved with the flow",
   } as never);
   const edit = commitStudioEdit(group, nodes, view, configs);
   const saved = JSON.stringify(edit.group?.config);
-  assert.ok(edit.group && !saved.includes("sk-live") && !saved.includes("Bearer x"));
+  assert.ok(edit.group && saved.includes("sk-live"));
 });
 
 test("reference wires follow the prompts, like the backend import", () => {
