@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { ChevronRightStandardIcon } from "@/lib/chevron-icons";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import {
   CheckmarkCircle02Icon,
-  Copy01Icon,
   Key01Icon,
 } from "@hugeicons/core-free-icons";
-import {
-  ChevronRightIcon,
-} from "lucide-react";
+import { Copy01Icon } from "@/lib/copy-icon";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@/components/ui/button";
 import {
@@ -192,7 +190,7 @@ export function PublishExecutionDialog({
                 </DialogDescription>
               </div>
             </div>
-            <div className="rounded-2xl border border-border/60 bg-card/55 p-3 text-xs">
+            <div className="rounded-lg border border-border/60 bg-card/55 p-3 text-xs">
               <p className="mb-1 text-muted-foreground">Dataset URL</p>
               <p className="break-all font-medium text-foreground">{publishedUrl}</p>
             </div>
@@ -204,7 +202,7 @@ export function PublishExecutionDialog({
               <Button asChild={true}>
                 <a href={publishedUrl} target="_blank" rel="noreferrer">
                   Open repo
-                  <ChevronRightIcon className="ml-2 size-4" />
+                  <HugeiconsIcon icon={ChevronRightStandardIcon} className="size-4" />
                 </a>
               </Button>
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
@@ -223,7 +221,7 @@ export function PublishExecutionDialog({
             </DialogHeader>
 
             <div className="space-y-4">
-              <div className="rounded-2xl border border-border/60 bg-card/55 p-3 text-xs">
+              <div className="rounded-lg border border-border/60 bg-card/55 p-3 text-xs">
                 <p className="font-medium text-foreground">From this run</p>
                 <div className="mt-2 grid gap-1.5 text-muted-foreground sm:grid-cols-2">
                   <p>
@@ -310,7 +308,7 @@ export function PublishExecutionDialog({
                 </p>
               </div>
 
-              <div className="corner-squircle flex items-start gap-3 rounded-2xl border border-border/60 bg-card/35 p-3">
+              <div className="corner-squircle flex items-start gap-3 rounded-lg border border-border/60 bg-card/35 p-3">
                 <Switch
                   id="publish-private"
                   size="sm"
@@ -332,7 +330,7 @@ export function PublishExecutionDialog({
               </div>
 
               {publishError ? (
-                <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
                   {publishError}
                 </div>
               ) : null}
@@ -346,7 +344,7 @@ export function PublishExecutionDialog({
               >
                 Cancel
               </Button>
-              <Button onClick={() => void handlePublish()} disabled={!canSubmit}>
+              <Button variant="dark" onClick={() => void handlePublish()} disabled={!canSubmit}>
                 {publishing ? "Publishing..." : "Publish to Hugging Face"}
               </Button>
             </DialogFooter>
