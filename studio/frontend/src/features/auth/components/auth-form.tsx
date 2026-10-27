@@ -315,8 +315,9 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
         token = (await response.json()) as TokenResponse;
       }
 
+      // Signed in with a credential, so the shell may sign this owner in again; a failed clear only shows login next launch.
+      if (isTauri) await clearDesktopSignedOut().catch(() => undefined);
       const finishSession = () => {
-        if (isTauri) clearDesktopSignedOut();
         setLoginMode(loginMode);
         if (!isLoginMode) setRequiresPasswordChange(false);
         setMustChangePassword(isLoginMode && token.must_change_password);

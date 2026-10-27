@@ -63,7 +63,10 @@ import {
   type StudioAccount,
 } from "../api/accounts";
 import { ManagedProviderUrlsSection } from "../components/managed-provider-urls-section";
-import { AccountPasswordDialog } from "../components/change-password-dialog";
+import {
+  ChangePasswordDialog,
+  useOwnPasswordPending,
+} from "../components/change-password-dialog";
 
 export function AccountsTab() {
   const owner = useIsAccountOwner();
@@ -90,6 +93,8 @@ function OwnerAccountsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
+  const [ownerPasswordOpen, setOwnerPasswordOpen] = useState(false);
+  const [ownerPasswordPending, ownerPasswordSet] = useOwnPasswordPending();
   // The owner's row matches the sidebar footer, which reads this store before the server copy syncs.
   const ownDisplayName = useUserProfileStore((s) => s.displayName).trim();
   const ownAvatar = useUserProfileStore((s) => s.avatarDataUrl);
@@ -373,7 +378,45 @@ function OwnerAccountsTab() {
                     </span>
                   </td>
                   <td className="rounded-r-md py-3 pr-3 text-right">
-                    {account.role === "owner" && <AccountPasswordDialog />}
+                    {/* A menu like the managed rows', so a long label cannot push the row out of the dialog. */}
+                    {account.role === "owner" && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="max-sm:size-9"
+                            disabled={busy}
+                            aria-label={t("settings.accounts.actionsFor", {
+                              username: shownName(account),
+                            })}
+                          >
+                            <HugeiconsIcon
+                              icon={MoreHorizontalIcon}
+                              className="size-4"
+                              aria-hidden="true"
+                            />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          align="end"
+                          className="w-max max-w-[calc(100vw-2rem)]"
+                        >
+                          <DropdownMenuItem onSelect={() => setOwnerPasswordOpen(true)}>
+                            <HugeiconsIcon
+                              icon={Key01Icon}
+                              className="size-4"
+                              aria-hidden="true"
+                            />
+                            {t(
+                              ownerPasswordPending
+                                ? "settings.general.passwordDialog.setSubmit"
+                                : "settings.general.passwordDialog.trigger",
+                            )}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                     {account.role !== "owner" && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -531,6 +574,13 @@ function OwnerAccountsTab() {
       </section>
 
       <ManagedProviderUrlsSection />
+
+      <ChangePasswordDialog
+        initial={ownerPasswordPending}
+        open={ownerPasswordOpen}
+        onOpenChange={setOwnerPasswordOpen}
+        onDone={ownerPasswordSet}
+      />
 
       <Dialog
         open={editorOpen}

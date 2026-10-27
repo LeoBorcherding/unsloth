@@ -11,8 +11,7 @@ type AutoAuth = {
   tauriAutoAuth(options?: { force?: boolean }): Promise<boolean>;
   isTauriLoginRequired(): boolean;
   getTauriAuthFailure(): string | null;
-  markDesktopSignedOut(): void;
-  isDesktopSignedOut(): boolean;
+  markDesktopSignedOut(): Promise<void>;
   continueAsDesktopOwner(): Promise<boolean>;
   resetDesktopOwnerPassword(newPassword: string): Promise<boolean>;
 };
@@ -26,7 +25,8 @@ type Guards = {
 function fixture(
   t: { after(fn: () => void): void },
   tauri = true,
-  stored = new Map<string, string>(),
+  // The Rust shell's sign-out marker file, shared by every window and every launch.
+  shell = { signedOut: false },
 ) {
   const originalWindow = globalThis.window;
   const originalFetch = globalThis.fetch;
@@ -35,9 +35,9 @@ function fixture(
     window: {
       dispatchEvent: (event: Event) => events.push(event.type),
       localStorage: {
-        getItem: (key: string) => stored.get(key) ?? null,
-        setItem: (key: string, value: string) => stored.set(key, value),
-        removeItem: (key: string) => stored.delete(key),
+        getItem: () => null,
+        setItem: () => undefined,
+        removeItem: () => undefined,
       },
     },
   });
@@ -111,8 +111,16 @@ function fixture(
     "@tauri-apps/api/core": {
       invoke: async (command: string, args?: unknown) => {
         invokes.push([command, args]);
-        if (command !== "desktop_auth") return response instanceof Error ? Promise.reject(response) : response;
+        if (command === "desktop_mark_signed_out") return void (shell.signedOut = true);
+        if (command === "desktop_clear_signed_out") return void (shell.signedOut = false);
+        if (command === "desktop_reset_password") {
+          if (response instanceof Error) throw response;
+          shell.signedOut = false;
+          return response;
+        }
+        assert.equal(command, "desktop_auth");
         invokeCalls++;
+        if (shell.signedOut) return { signed_out: true };
         if (response instanceof Error) throw response;
         return response;
       },
@@ -135,7 +143,7 @@ function fixture(
     return new Response(JSON.stringify(status), { status: 200 });
   };
   return {
-    auth, guards, session, events, navigations, loginModes, transitions, stored,
+    auth, guards, session, events, navigations, loginModes, transitions, shell,
     setResponse: (value: unknown) => { response = value; },
     setStatus: (value: typeof status) => { status = value; },
     setRefreshSucceeds: (value: boolean) => { refreshSucceeds = value; },
@@ -363,11 +371,11 @@ test("an explicit desktop logout keeps the shell secret from signing the owner b
   const f = fixture(t);
   // A desktop owner who never set a password: the server still reports the seeded one.
   f.setStatus(SINGLE_SEEDED);
-  f.auth.markDesktopSignedOut();
+  await f.auth.markDesktopSignedOut();
+  assert.equal(f.shell.signedOut, true);
   assert.equal(f.auth.isTauriLoginRequired(), true);
   assert.equal(await f.auth.tauriAutoAuth({ force: true }), true);
   assert.equal(await f.auth.tauriAutoAuth(), false);
-  assert.equal(f.invokeCalls, 0);
   assert.equal(f.access, null);
   assert.deepEqual(f.navigations, [
     { to: "/login", replace: true },
@@ -380,23 +388,27 @@ test("an explicit desktop logout keeps the shell secret from signing the owner b
   await assert.rejects(f.guards.requirePasswordChangeFlow(), { to: "/login" });
 });
 
-test("the desktop sign-out survives a restart of the window", async (t) => {
+test("a quit right after Log out cannot restore a session the webview never finished removing", async (t) => {
   const first = fixture(t);
-  first.auth.markDesktopSignedOut();
-  const restarted = fixture(t, true, first.stored);
-  assert.equal(await restarted.auth.tauriAutoAuth({ force: true }), true);
-  assert.equal(restarted.invokeCalls, 0);
-  assert.equal(restarted.auth.isTauriLoginRequired(), true);
+  await first.auth.markDesktopSignedOut();
+  // WebView2 lost the token removal: the relaunch still holds the old session, but the shell holds the marker.
+  const relaunched = fixture(t, true, first.shell);
+  relaunched.session.storeAuthTokens("stale-owner", "stale-refresh");
+  relaunched.setRefreshSucceeds(true);
+  assert.equal(await relaunched.auth.tauriAutoAuth({ force: true }), true);
+  assert.equal(relaunched.access, null);
+  assert.equal(relaunched.refreshCalls, 0);
+  assert.equal(relaunched.auth.isTauriLoginRequired(), true);
+  assert.deepEqual(relaunched.navigations, [{ to: "/login", replace: true }]);
 });
 
 test("Continue as owner clears the sign-out and signs a single-account owner in", async (t) => {
   const f = fixture(t);
   f.setStatus(SINGLE_SEEDED);
-  f.auth.markDesktopSignedOut();
+  await f.auth.markDesktopSignedOut();
   await f.auth.tauriAutoAuth({ force: true });
   assert.equal(await f.auth.continueAsDesktopOwner(), true);
-  assert.equal(f.auth.isDesktopSignedOut(), false);
-  assert.equal(f.invokeCalls, 1);
+  assert.equal(f.shell.signedOut, false);
   assert.equal(f.access, "owner-access");
   assert.equal(f.auth.isTauriLoginRequired(), false);
   assert.deepEqual(f.transitions, [{ account: "unsloth", route: "/chat" }]);
@@ -405,7 +417,7 @@ test("Continue as owner clears the sign-out and signs a single-account owner in"
 test("Continue as owner on a multi-account install leaves the login form up", async (t) => {
   const f = fixture(t);
   f.setResponse(multi);
-  f.auth.markDesktopSignedOut();
+  await f.auth.markDesktopSignedOut();
   assert.equal(await f.auth.continueAsDesktopOwner(), false);
   assert.equal(f.access, null);
   assert.equal(f.auth.isTauriLoginRequired(), true);
@@ -444,7 +456,9 @@ async function runSignOut({ tauri, owner, status, offline }: SignOutCase): Promi
     toast: { error: () => events.push("toast") },
     t: (key: string) => key,
     useSettingsDialogStore: { getState: () => ({ openDialog: (tab: string) => events.push(`open:${tab}`) }) },
-    markDesktopSignedOut: () => events.push("signed-out"),
+    markDesktopSignedOut: async () => {
+      events.push("signed-out");
+    },
     logout: async () => {
       events.push("logout");
       if (offline) throw new TypeError("Failed to fetch");
@@ -479,30 +493,29 @@ test("a multi-account desktop owner on the seeded password sets one before Log o
 
 test("a second desktop window cannot auto-sign in after another window logs out", async (t) => {
   const first = fixture(t);
-  first.auth.markDesktopSignedOut();
-  const second = fixture(t, true, first.stored);
+  await first.auth.markDesktopSignedOut();
+  const second = fixture(t, true, first.shell);
   // API recovery in the other window, after its tokens were cleared under it.
   assert.equal(await second.auth.tauriAutoAuth(), false);
-  assert.equal(second.invokeCalls, 0);
   assert.equal(second.access, null);
 });
 
 test("Forgot password on the desktop signs the owner in with the reset session", async (t) => {
   const f = fixture(t);
   f.setResponse({ access_token: "reset-access", refresh_token: "reset-refresh" });
-  f.auth.markDesktopSignedOut();
+  await f.auth.markDesktopSignedOut();
   assert.equal(await f.auth.resetDesktopOwnerPassword("fresh-password"), false);
   assert.deepEqual(f.invokes.at(-1), ["desktop_reset_password", { newPassword: "fresh-password" }]);
   assert.equal(f.access, "reset-access");
-  assert.equal(f.auth.isDesktopSignedOut(), false);
+  assert.equal(f.shell.signedOut, false);
   assert.deepEqual(f.transitions, [{ account: "unsloth", route: "/chat" }]);
 });
 
 test("a refused desktop reset keeps the sign-out and surfaces the backend's reason", async (t) => {
   const f = fixture(t);
-  f.auth.markDesktopSignedOut();
+  await f.auth.markDesktopSignedOut();
   f.setResponse(new Error("Too many failed login attempts. Try again in 60 seconds."));
   await assert.rejects(f.auth.resetDesktopOwnerPassword("fresh-password"), /Too many failed login attempts/);
   assert.equal(f.access, null);
-  assert.equal(f.auth.isDesktopSignedOut(), true);
+  assert.equal(f.shell.signedOut, true);
 });

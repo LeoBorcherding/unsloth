@@ -97,7 +97,9 @@ function mountForm(
     "@/lib/api-base": desktop ? { ...base, isTauri: true } : base,
     "./desktop-owner-reset": { DesktopOwnerReset: "DesktopOwnerReset" },
     "../tauri-auto-auth": {
-      clearDesktopSignedOut: () => desktop?.calls.push("clear"),
+      clearDesktopSignedOut: async () => {
+        desktop?.calls.push("clear");
+      },
       continueAsDesktopOwner: async () => {
         desktop?.calls.push("continue");
         return desktop?.continued ?? false;

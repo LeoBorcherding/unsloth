@@ -47,6 +47,7 @@ type TabOptions = {
   accounts?: Record<string, unknown>[];
   // What the sidebar footer shows: the local profile store.
   localProfile?: { displayName: string; avatarDataUrl: string | null };
+  ownerPasswordPending?: boolean;
 };
 function tab(
   owner = true,
@@ -104,7 +105,10 @@ function tab(
       useUserProfileStore: (select: (state: unknown) => unknown) =>
         select(options.localProfile ?? { displayName: "", avatarDataUrl: null }),
     },
-    "../components/change-password-dialog": { AccountPasswordDialog: "AccountPasswordDialog" },
+    "../components/change-password-dialog": {
+      ChangePasswordDialog: "ChangePasswordDialog",
+      useOwnPasswordPending: () => [options.ownerPasswordPending ?? false, () => {}],
+    },
     "@hugeicons/core-free-icons": {},
     "@hugeicons/react": { HugeiconsIcon: "Icon" },
     "@/lib/tick-icon": {},
@@ -248,11 +252,29 @@ test("owner lists accounts without administrative actions on the owner row", asy
     (node) => node.props["data-testid"] === "account-unsloth",
   );
   assert.ok(ownerRow);
-  assert.equal(
-    nodes(ownerRow).filter((node) => node.type === "Button").length,
-    0,
+  // Only its own password, in an icon menu like the managed rows so no label can overflow the row.
+  const trigger = nodes(ownerRow).filter((node) => node.type === "Button");
+  assert.equal(trigger.length, 1);
+  assert.equal(content(trigger[0]).trim(), "");
+  assert.deepEqual(
+    nodes(ownerRow)
+      .filter((node) => node.type === "DropdownMenuItem")
+      .map((node) => content(node).trim()),
+    ["Change password"],
   );
   assert.match(content(tree), /Installation owner/);
+});
+
+test("the owner row's password item opens the dialog, as Set password while the seeded one stands", async () => {
+  for (const pending of [false, true]) {
+    const ui = tab(true, null, { ownerPasswordPending: pending });
+    const tree = await ui.initialize();
+    const dialog = () => nodes(ui.render()).find((node) => node.type === "ChangePasswordDialog");
+    assert.equal(dialog()?.props.open, false);
+    assert.equal(dialog()?.props.initial, pending);
+    await click(tree, pending ? "Set password" : "Change password");
+    assert.equal(dialog()?.props.open, true);
+  }
 });
 
 test("create shows a copyable expiring setup code once and regeneration replaces it", async () => {
@@ -612,9 +634,8 @@ test("the owner row matches the sidebar's local profile before the server copy a
   assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Blu3", "data:image/png;base64,LOCAL"]);
   assert.match(content(ownerRow), /Blu3/);
   assert.match(content(ownerRow), /Installation owner/);
-  assert.ok(nodes(ownerRow).some((node) => node.type === "AccountPasswordDialog"));
   const aliceRow = nodes(tree).find((node) => node.props["data-testid"] === "account-alice");
-  assert.ok(!nodes(aliceRow).some((node) => node.type === "AccountPasswordDialog"));
+  assert.ok(!content(aliceRow).includes("Change password"));
   // A managed account's row never borrows the owner's local profile.
   assert.equal(nodes(aliceRow).find((node) => node.type === "UserAvatar")?.props.imageUrl, null);
 });

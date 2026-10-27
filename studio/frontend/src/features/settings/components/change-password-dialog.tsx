@@ -196,12 +196,20 @@ async function requestPasswordChange(
 export function ChangePasswordDialog({
   initial = false,
   onDone,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   initial?: boolean;
   onDone?: () => void;
+  // Controlled from a menu item, which renders no trigger of its own.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  const [ownOpen, setOwnOpen] = useState(false);
+  const controlled = controlledOpen !== undefined;
+  const open = controlled ? controlledOpen : ownOpen;
+  const setOpen = (next: boolean) => (controlled ? onOpenChange?.(next) : setOwnOpen(next));
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -273,11 +281,13 @@ export function ChangePasswordDialog({
         }
       }}
     >
-      <DialogTrigger asChild={true}>
-        <Button variant="outline" size="sm" >
-          {copy.trigger}
-        </Button>
-      </DialogTrigger>
+      {controlled ? null : (
+        <DialogTrigger asChild={true}>
+          <Button variant="outline" size="sm" >
+            {copy.trigger}
+          </Button>
+        </DialogTrigger>
+      )}
       <DialogContent
         className="sm:max-w-sm"
         showCloseButton={!submitting}
@@ -377,8 +387,8 @@ export function ChangePasswordDialog({
   );
 }
 
-/** The signed-in account's own password. A Desktop owner still on the seeded password has none to give, so sets a first one. */
-export function AccountPasswordDialog() {
+/** A Desktop owner still on the seeded password has none to give, so sets a first one instead. */
+export function useOwnPasswordPending(): [boolean, () => void] {
   const owner = useIsAccountOwner();
   const [initial, setInitial] = useState(false);
   useEffect(() => {
@@ -393,5 +403,11 @@ export function AccountPasswordDialog() {
       live = false;
     };
   }, [owner]);
-  return <ChangePasswordDialog initial={initial} onDone={() => setInitial(false)} />;
+  return [initial, () => setInitial(false)];
+}
+
+/** The signed-in account's own password. */
+export function AccountPasswordDialog() {
+  const [initial, settled] = useOwnPasswordPending();
+  return <ChangePasswordDialog initial={initial} onDone={settled} />;
 }

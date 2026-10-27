@@ -19,7 +19,8 @@ import {
 
 type DesktopAuthResponse =
   | { access_token: string; refresh_token: string }
-  | { login_required: true; login_mode: "multi" };
+  | { login_required: true; login_mode: "multi" }
+  | { signed_out: true };
 
 type TauriAutoAuthOptions = {
   force?: boolean;
@@ -34,33 +35,17 @@ export function isTauriLoginRequired(): boolean {
   return tauriLoginRequired;
 }
 
-// Set by an explicit Desktop log out so the shell secret does not sign the owner straight back in.
-// "unsloth"-prefixed, so an account switch's localStorage purge also clears it.
-export const DESKTOP_SIGNED_OUT_KEY = "unsloth.desktop-signed-out.v1";
-
-export function isDesktopSignedOut(): boolean {
-  try {
-    return window.localStorage.getItem(DESKTOP_SIGNED_OUT_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function markDesktopSignedOut(): void {
+// An explicit Log out: the shell keeps a marker file and answers signed_out until a sign-in clears it. Not
+// localStorage, which WebView2 writes lazily, so a quit soon after Log out signed the owner straight back in.
+export async function markDesktopSignedOut(): Promise<void> {
   tauriLoginRequired = true;
-  try {
-    window.localStorage.setItem(DESKTOP_SIGNED_OUT_KEY, "1");
-  } catch {
-    // Without storage the in-memory flag still holds for this window.
-  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("desktop_mark_signed_out");
 }
 
-export function clearDesktopSignedOut(): void {
-  try {
-    window.localStorage.removeItem(DESKTOP_SIGNED_OUT_KEY);
-  } catch {
-    // Nothing stored to clear.
-  }
+export async function clearDesktopSignedOut(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("desktop_clear_signed_out");
 }
 
 const TAURI_AUTH_FAILURE_FALLBACK =
@@ -107,17 +92,18 @@ async function doTauriAutoAuth(options: TauriAutoAuthOptions): Promise<boolean> 
     }
   }
 
-  if (isDesktopSignedOut()) {
-    tauriLoginRequired = true;
-    clearTauriAuthFailure();
-    const { router } = await import("@/app/router");
-    await router.navigate({ to: "/login", replace: true });
-    return options.force === true;
-  }
-
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const tokens = await invoke<DesktopAuthResponse>("desktop_auth");
+    if ("signed_out" in tokens) {
+      // Even a stale session this webview failed to persist the removal of stays signed out.
+      tauriLoginRequired = true;
+      clearAuthTokens();
+      clearTauriAuthFailure();
+      const { router } = await import("@/app/router");
+      await router.navigate({ to: "/login", replace: true });
+      return options.force === true;
+    }
     if ("login_required" in tokens) {
       tauriLoginRequired = true;
       // A managed account signs in in the document; do not discard the session it holds.
@@ -184,7 +170,7 @@ export function tauriAutoAuth(
 
 /** "Continue as owner" on the Desktop login page: the shell secret signs the owner in, single mode only. */
 export async function continueAsDesktopOwner(): Promise<boolean> {
-  clearDesktopSignedOut();
+  await clearDesktopSignedOut();
   await tauriAutoAuth({ force: true });
   return !tauriLoginRequired && hasAuthToken();
 }
@@ -199,8 +185,8 @@ export async function resetDesktopOwnerPassword(newPassword: string): Promise<bo
   } catch (error) {
     throw new Error(authFailureMessage(error));
   }
-  if ("login_required" in tokens) throw new Error(TAURI_AUTH_FAILURE_FALLBACK);
-  clearDesktopSignedOut();
+  if (!("access_token" in tokens)) throw new Error(TAURI_AUTH_FAILURE_FALLBACK);
+  // The shell already cleared its sign-out marker.
   return transitionBrowserAccount(OWNER_BROWSER_ACCOUNT, "/chat", () => {
     storeAuthTokens(tokens.access_token, tokens.refresh_token);
     setMustChangePassword(false);

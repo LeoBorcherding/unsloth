@@ -2333,6 +2333,8 @@ fn main() {
             long_paths::enable_windows_long_paths,
             desktop_auth::desktop_auth,
             desktop_auth::desktop_reset_password,
+            desktop_auth::desktop_mark_signed_out,
+            desktop_auth::desktop_clear_signed_out,
             desktop_update_policy::check_desktop_manual_update,
             desktop_update_policy::desktop_update_policy,
             desktop_updater::check_desktop_update,

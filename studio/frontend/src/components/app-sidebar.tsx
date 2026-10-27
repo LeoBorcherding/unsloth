@@ -4321,7 +4321,7 @@ export function AppSidebar() {
     }
     if (!window.dispatchEvent(new Event(AUTH_SESSION_ENDING_EVENT, { cancelable: true }))) return;
     // Before the revoke, so a request failing on the cleared session cannot auto-sign in again.
-    if (isTauri) markDesktopSignedOut();
+    if (isTauri) await markDesktopSignedOut().catch(() => undefined);
     // Best-effort revocation; ignore network errors so the local clear still runs.
     try {
       await logout();
