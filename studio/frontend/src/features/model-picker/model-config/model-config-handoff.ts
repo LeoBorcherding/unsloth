@@ -16,6 +16,7 @@ import {
   residentModelIdMatches,
 } from "./model-identity";
 import { adoptLegacyConfigKey } from "./per-model-config";
+import { adoptLegacyRunSettings } from "./saved-run-settings";
 
 export interface ModelConfigHandoffRequest {
   requestId: string;
@@ -113,6 +114,11 @@ export function residentModelConfigTarget({
   const leaf = leafName(modelId);
   // An API auto-switch reports a GGUF by its snapshot path too; presets and settings key the repo id.
   const repoId = cachedRepoConfigId(modelId, null);
+  if (repoId && settingsGgufVariant) {
+    // Older builds keyed this quant by the path.
+    adoptLegacyConfigKey(repoId, modelId, settingsGgufVariant);
+    adoptLegacyRunSettings(repoId, modelId);
+  }
   return {
     id: modelId,
     displayName: ggufVariant ? `${leaf} · ${ggufVariant}` : leaf,
@@ -221,6 +227,7 @@ export function requestModelConfigHandoff(
       request.meta.loadId,
       request.meta.ggufVariant,
     );
+    adoptLegacyRunSettings(request.id, request.meta.loadId);
   }
   useModelConfigHandoffStore.getState().submit(request);
 }

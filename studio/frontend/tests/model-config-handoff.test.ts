@@ -329,6 +329,39 @@ test("the resident settings key a cached repo by its repo id, GGUF quants includ
   );
 });
 
+test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", async () => {
+  store.clear();
+  const {
+    getSelectedRunSettings,
+    listSavedRunSettings,
+    saveRunSettings,
+    setSelectedRunSettings,
+  } = await import("../src/features/model-picker/model-config/saved-run-settings.ts");
+  const snapshot = "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc";
+  const repo = "unsloth/Qwen3-1.7B-GGUF";
+  const small = { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 4096 };
+  // What the sidebar saved before it keyed the quant by repo id.
+  savePerModelConfig(snapshot, "Q4_K_M", small);
+  assert.ok(saveRunSettings(snapshot, "small", small));
+  assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "small"));
+  saveRunSettings(repo, "ctx8k", { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 8192 });
+
+  residentModelConfigTarget({
+    modelId: snapshot,
+    ggufVariant: "Q4_K_M",
+    isGguf: true,
+    isLora: false,
+    contextLength: null,
+  });
+
+  assert.deepEqual(listSavedRunSettings(repo).map((set) => set.name), ["ctx8k", "small"]);
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "small");
+  assert.equal(listSavedRunSettings(snapshot).length, 0);
+  const resolved = resolveInitialConfig(repo, "Q4_K_M");
+  assert.equal(resolved.remembered, true);
+  assert.equal(resolved.config.maxSeqLength, 4096);
+});
+
 test("submitting a cached handoff adopts legacy path-keyed settings", () => {
   store.clear();
   const id = "unsloth/Llama-GGUF";

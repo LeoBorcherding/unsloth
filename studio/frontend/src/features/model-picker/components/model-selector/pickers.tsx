@@ -6152,7 +6152,7 @@ export function HubModelPicker({
     };
     // As residentModelConfigTarget: a cached HF snapshot keys settings by its repo id (still loading
     // the snapshot), a standalone .gguf by the bare path, its quant only a label from the filename.
-    const snapshotRepoId = cachedRepoConfigId(checkpoint, quant);
+    const snapshotRepoId = cachedRepoConfigId(checkpoint, null);
     const configureArgs: [string, ModelSelectorChangeMeta] = snapshotRepoId
       ? [snapshotRepoId, { ...selectMeta, source: "hub", loadId: checkpoint }]
       : [
