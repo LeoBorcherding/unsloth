@@ -2454,18 +2454,36 @@ class ExportBackend:
         env = os.environ.copy()
         apply_token_to_child_env(env, normalize_token(hf_token))
         logger.info(f"Converting adapter at '{save_directory}' to GGUF -> '{out_gguf}'")
-        result = subprocess.run(
-            cmd,
-            env = env,
-            capture_output = True,
-            text = True,
-            encoding = "utf-8",
-            errors = "replace",
+        from utils.process_lifetime import (
+            adopt_pid,
+            child_popen_kwargs,
+            forget_pid,
+            spawn_on_lifetime_thread,
         )
-        if result.returncode != 0:
+        from utils.subprocess_compat import windows_hidden_subprocess_kwargs
+
+        # Dies with its parent, as in q4nx: a cancelled export must not leave it holding a model.
+        process = spawn_on_lifetime_thread(
+            lambda: subprocess.Popen(
+                cmd,
+                env = env,
+                stdout = subprocess.PIPE,
+                stderr = subprocess.PIPE,
+                text = True,
+                encoding = "utf-8",
+                errors = "replace",
+                **windows_hidden_subprocess_kwargs(),
+                **child_popen_kwargs(),
+            )
+        )
+        # macOS has no parent-death signal: the record lets the startup sweep reap an orphan.
+        adopt_pid(process.pid)
+        stdout, stderr = process.communicate()
+        forget_pid(process.pid)
+        if process.returncode != 0:
             raise RuntimeError(
-                f"LoRA -> GGUF conversion failed (exit {result.returncode}): "
-                + (result.stderr or result.stdout or "").strip()[-2000:]
+                f"LoRA -> GGUF conversion failed (exit {process.returncode}): "
+                + (stderr or stdout or "").strip()[-2000:]
             )
 
     def export_lora_adapter(
