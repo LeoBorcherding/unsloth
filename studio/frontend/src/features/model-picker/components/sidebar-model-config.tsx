@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { memo, useMemo } from "react";
+import { memo, useLayoutEffect, useMemo, useState } from "react";
 import { modelConfigInstanceKey } from "../model-config/config-signature";
-import { residentModelConfigTarget } from "../model-config/model-config-handoff";
+import {
+  adoptResidentSnapshotSettings,
+  residentModelConfigTarget,
+} from "../model-config/model-config-handoff";
 import type { PerModelConfig } from "../model-config/per-model-config";
 import { ModelConfigPage } from "./model-config-page";
 
@@ -42,6 +45,15 @@ export const SidebarModelConfig = memo(function SidebarModelConfig({
       }),
     [modelId, ggufVariant, isGguf, isLora, nativeContextLength],
   );
+  // After commit, before paint: the page reads settings once on mount, so it waits for the move.
+  const adoptKey = `${modelId}\n${target.ggufVariant ?? ""}`;
+  const [adopted, setAdopted] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    if (adopted === adoptKey) return;
+    adoptResidentSnapshotSettings(modelId, target.ggufVariant);
+    setAdopted(adoptKey);
+  }, [adoptKey, adopted, modelId, target.ggufVariant]);
+  if (adopted !== adoptKey) return null;
 
   return (
     <ModelConfigPage

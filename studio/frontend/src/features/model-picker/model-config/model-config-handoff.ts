@@ -94,6 +94,17 @@ function leafName(id: string): string {
   return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
 }
 
+/** Moves what older builds saved under a GGUF snapshot path to its repo id. Not for render: it fires storage events. */
+export function adoptResidentSnapshotSettings(
+  modelId: string,
+  ggufVariant: string | null | undefined,
+): void {
+  const repoId = cachedRepoConfigId(modelId, null);
+  if (!repoId || !ggufVariant) return;
+  adoptLegacyConfigKey(repoId, modelId, ggufVariant);
+  adoptLegacyRunSettings(repoId, modelId);
+}
+
 export function residentModelConfigTarget({
   modelId,
   ggufVariant,
@@ -114,11 +125,6 @@ export function residentModelConfigTarget({
   const leaf = leafName(modelId);
   // An API auto-switch reports a GGUF by its snapshot path too; presets and settings key the repo id.
   const repoId = cachedRepoConfigId(modelId, null);
-  if (repoId && settingsGgufVariant) {
-    // Older builds keyed this quant by the path.
-    adoptLegacyConfigKey(repoId, modelId, settingsGgufVariant);
-    adoptLegacyRunSettings(repoId, modelId);
-  }
   return {
     id: modelId,
     displayName: ggufVariant ? `${leaf} · ${ggufVariant}` : leaf,

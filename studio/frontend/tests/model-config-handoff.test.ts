@@ -7,6 +7,7 @@ import test from "node:test";
 import type { ModelConfigHandoffRequest } from "../src/features/model-picker/model-config/model-config-handoff.ts";
 import {
   installLocalStorageFake,
+  readSrc,
   registerBundlerResolver,
 } from "./helpers/kit.ts";
 
@@ -22,6 +23,7 @@ const {
   modelConfigTargetMatchesSelection,
   requestModelConfigHandoff,
   residentModelConfigTarget,
+  adoptResidentSnapshotSettings,
   useModelConfigHandoffStore,
 } = await import(
   "../src/features/model-picker/model-config/model-config-handoff.ts"
@@ -349,13 +351,7 @@ test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", 
   noteRunSettingsLoadedOnce(snapshot, "Q4_K_M", { name: null, sent: small });
   saveRunSettings(repo, "ctx8k", { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 8192 });
 
-  residentModelConfigTarget({
-    modelId: snapshot,
-    ggufVariant: "Q4_K_M",
-    isGguf: true,
-    isLora: false,
-    contextLength: null,
-  });
+  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
 
   assert.deepEqual(listSavedRunSettings(repo).map((set) => set.name), ["ctx8k", "small"]);
   assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "small");
@@ -365,6 +361,15 @@ test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", 
   const resolved = resolveInitialConfig(repo, "Q4_K_M");
   assert.equal(resolved.remembered, true);
   assert.equal(resolved.config.maxSeqLength, 4096);
+});
+
+test("the sidebar moves path-keyed settings after commit, not while rendering the target", () => {
+  const sidebar = readSrc("features/model-picker/components/sidebar-model-config.tsx");
+  assert.match(
+    sidebar,
+    /useLayoutEffect\(\(\) => \{[\s\S]*?adoptResidentSnapshotSettings\(modelId, target\.ggufVariant\);[\s\S]*?setAdopted\(adoptKey\);/,
+  );
+  assert.match(sidebar, /if \(adopted !== adoptKey\) return null;/);
 });
 
 test("a path-keyed selection is not carried over to a set the cap left behind", async () => {
@@ -387,13 +392,7 @@ test("a path-keyed selection is not carried over to a set the cap left behind", 
   assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "overflow"));
   assert.ok(setPinnedRunSettings(snapshot, "Q4_K_M", "overflow"));
 
-  residentModelConfigTarget({
-    modelId: snapshot,
-    ggufVariant: "Q4_K_M",
-    isGguf: true,
-    isLora: false,
-    contextLength: null,
-  });
+  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
 
   assert.equal(listSavedRunSettings(repo).length, SAVED_RUN_SETTINGS_PER_MODEL_MAX);
   assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), undefined);
