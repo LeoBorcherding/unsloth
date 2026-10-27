@@ -17104,6 +17104,13 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
         if sent.intersection(group):
             for key in group:
                 kwargs.pop(key, None)
+    # A saved vLLM/SGLang engine implies load_in_4bit=False; it goes with the engine the caller replaced.
+    if (
+        "engine" not in kwargs
+        and override.get("engine") in ("vllm", "sglang")
+        and override.get("load_in_4bit") is not False
+    ):
+        kwargs.pop("load_in_4bit", None)
     if kwargs.get("gpu_ids") and not await _override_gpu_ids_still_resolve(
         kwargs["gpu_ids"], stored_gpu_index_kind(override)
     ):
@@ -17113,7 +17120,8 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     for key, value in kwargs.items():
         if key not in sent:
             setattr(request, key, value)
-    if extras and "llama_extra_args" not in sent:
+    # A saved [] is a clear, not a gap: it stops the load inheriting the last same-model flags.
+    if extras is not None and "llama_extra_args" not in sent:
         request.llama_extra_args = _strip_preset_extras(request, extras)
 
 

@@ -1551,6 +1551,29 @@ def test_explicit_load_drops_preset_flags_that_shadow_sent_fields(monkeypatch):
     assert "--no-mmap" in saved.llama_extra_args
 
 
+def test_explicit_load_keeps_a_saved_empty_extra_args_clear(monkeypatch):
+    # A quant-level [] clear (kept by the store) must not fall back to inherited flags.
+    monkeypatch.setattr(
+        settings,
+        "resolve_override_for_load",
+        lambda *args, **kwargs: (f"{_QWEN_SMALL}:UD-Q4_K_XL", {"llama_extra_args": []}),
+    )
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    assert _explicit_load(monkeypatch, body).llama_extra_args == []
+
+
+def test_explicit_load_drops_the_engine_implied_4bit_with_the_engine(monkeypatch):
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "local_target_is_gguf", lambda *args, **kwargs: False)
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    body = {"model_path": "unsloth/Qwen3-1.7B"}
+    saved = _explicit_load(monkeypatch, body)
+    assert (saved.engine, saved.load_in_4bit) == ("vllm", False)
+    auto = _explicit_load(monkeypatch, {**body, "engine": "auto"})
+    assert auto.engine == "auto"
+    assert "load_in_4bit" not in auto.model_fields_set
+
+
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
     _mock_override_store(monkeypatch)
     body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
