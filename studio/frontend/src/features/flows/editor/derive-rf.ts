@@ -4,7 +4,8 @@
 import type { Edge, Node } from "@xyflow/react";
 import { type DocGraph, GROUP_KEY, NOTE_KEY } from "../stores/doc-store";
 import type { FlowEdge, FlowGroup, FlowNode, FlowNote } from "../types";
-import { edgeHandles } from "./connection-rules";
+import { columnTargetPort } from "../recipe/recipe-look";
+import { edgeHandles, inHandle } from "./connection-rules";
 
 export type FlowNodeData = { nodeId: string };
 export type FlowEdgeData = { kind: "data" | "flow"; portType: string };
@@ -56,7 +57,13 @@ export class RfDeriver {
   >();
   private edgeCache = new Map<
     string,
-    { source: FlowEdge; selected: boolean; portType: string; rf: RfEdge }
+    {
+      source: FlowEdge;
+      from: FlowNode | undefined;
+      selected: boolean;
+      portType: string;
+      rf: RfEdge;
+    }
   >();
   private lastNodes: RfNode[] = [];
   private lastEdges: RfEdge[] = [];
@@ -224,14 +231,26 @@ export class RfDeriver {
       const edge = graph.edges[id];
       const isSelected = selected.has(id);
       const cached = this.edgeCache.get(id);
-      if (cached && cached.source === edge && cached.selected === isSelected) {
+      // A recipe column's value type (its wire colour) follows its params.
+      const from = graph.nodes[edge.source];
+      if (
+        cached &&
+        cached.source === edge &&
+        cached.selected === isSelected &&
+        (cached.from === from || cached.portType === portTypeOf(edge))
+      ) {
+        cached.from = from;
         next.push(cached.rf);
         continue;
       }
       changed = true;
       const portType =
-        cached && cached.source === edge ? cached.portType : portTypeOf(edge);
+        cached && cached.source === edge && cached.from === from
+          ? cached.portType
+          : portTypeOf(edge);
       const handles = edgeHandles(edge);
+      if (edge.kind === "data")
+        handles.targetHandle = inHandle(columnTargetPort(edge, graph));
       const rf: RfEdge = {
         id,
         source: edge.source,
@@ -244,6 +263,7 @@ export class RfDeriver {
       };
       this.edgeCache.set(id, {
         source: edge,
+        from,
         selected: isSelected,
         portType,
         rf,
