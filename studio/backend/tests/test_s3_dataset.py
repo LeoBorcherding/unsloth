@@ -183,6 +183,74 @@ def test_basename_collision_skips_existing_generated_suffix(monkeypatch, tmp_pat
     )
 
 
+def _use_client(monkeypatch, keys):
+    client = _FakeS3Client(keys)
+    monkeypatch.setattr(s3_dataset, "boto3_available", lambda: True)
+    monkeypatch.setattr(s3_dataset, "_build_s3_client", lambda cfg: client)
+    return client
+
+
+def test_split_folders_train_on_train_only(monkeypatch, tmp_path):
+    client = _use_client(
+        monkeypatch,
+        [
+            "datasets/train/data-00000.parquet",
+            "datasets/test/data-00000.parquet",
+            "datasets/validation/data-00000.parquet",
+            "datasets/Eval/data-00000.parquet",
+        ],
+    )
+
+    files = s3_dataset.download_s3_dataset(_cfg(), dest_dir = str(tmp_path))
+
+    assert [os.path.basename(f) for f in files] == ["data-00000.parquet"]
+    assert [key for _, key, _ in client.downloaded] == ["datasets/train/data-00000.parquet"]
+
+
+def test_split_folders_keep_audio_outside_the_held_out_splits(monkeypatch, tmp_path):
+    client = _use_client(
+        monkeypatch,
+        [
+            "datasets/train/manifest.csv",
+            "datasets/test/manifest.csv",
+            "datasets/audio/a.wav",
+            "datasets/test/b.wav",
+        ],
+    )
+
+    s3_dataset.download_s3_dataset(_cfg(), dest_dir = str(tmp_path))
+
+    assert sorted(key for _, key, _ in client.downloaded) == [
+        "datasets/audio/a.wav",
+        "datasets/train/manifest.csv",
+    ]
+
+
+def test_held_out_splits_without_train_are_refused(monkeypatch, tmp_path):
+    _use_client(
+        monkeypatch,
+        ["datasets/test/data.parquet", "datasets/validation/data.parquet"],
+    )
+
+    with pytest.raises(ValueError, match = "no train/ folder"):
+        s3_dataset.download_s3_dataset(_cfg(), dest_dir = str(tmp_path))
+
+
+def test_split_prefix_and_non_split_folders_are_untouched(monkeypatch, tmp_path):
+    _use_client(
+        monkeypatch,
+        ["datasets/test/a.parquet", "datasets/test/b.parquet"],
+    )
+    files = s3_dataset.download_s3_dataset(
+        _cfg(prefix = "datasets/test/"), dest_dir = str(tmp_path)
+    )
+    assert len(files) == 2
+
+    _use_client(monkeypatch, ["datasets/a/x.parquet", "datasets/testing/y.parquet"])
+    files = s3_dataset.download_s3_dataset(_cfg(), dest_dir = str(tmp_path / "other"))
+    assert len(files) == 2
+
+
 def test_download_handle_cleans_owned_temp_dir(monkeypatch, tmp_path):
     target_dir = tmp_path / "owned-download"
     client = _FakeS3Client(["datasets/train.parquet"])

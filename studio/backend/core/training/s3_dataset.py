@@ -49,6 +49,7 @@ _IGNORED_METADATA_FILENAMES = {
     "state.json",
 }
 _REWRITABLE_MANIFEST_EXTENSIONS = (".json", ".jsonl", ".csv")
+_HELD_OUT_SPLIT_DIRS = {"test", "validation", "valid", "val", "eval", "dev"}
 
 
 class S3DownloadCancelled(RuntimeError):
@@ -116,6 +117,29 @@ def _list_dataset_keys(client, bucket: str, prefix: Optional[str]) -> list[str]:
                 keys.append(key)
     # Drop an AppleDouble key only when the object it describes is in the same listing.
     return drop_shadowed_appledouble_names(keys)
+
+
+def _keep_train_split(keys: list[str], prefix: Optional[str], where: str) -> list[str]:
+    """Under a train/test/validation folder layout, keep train/ only so held-out rows never train."""
+    split_of = {}
+    for key in keys:
+        head, sep, _ = _key_relative_to_prefix(key, prefix).partition("/")
+        if sep and (head.lower() == "train" or head.lower() in _HELD_OUT_SPLIT_DIRS):
+            split_of[key] = head.lower()
+    held_out = sorted({split for split in split_of.values() if split != "train"})
+    if not held_out:
+        return keys
+    if "train" not in split_of.values():
+        if len(held_out) == 1:
+            return keys
+        raise ValueError(
+            f"{where} holds the splits {', '.join(held_out)} and no train/ folder. "
+            "Point the prefix at the one split to train on."
+        )
+    logger.info(
+        "S3 prefix %s has split folders; training on train/ only, skipping %s", where, held_out
+    )
+    return [key for key in keys if split_of.get(key, "train") == "train"]
 
 
 def _is_audio_key(key: str) -> bool:
@@ -339,11 +363,11 @@ def prepare_s3_dataset_download(
         ensure_boto3()
     client = _build_s3_client(s3_config)
 
-    listed = _list_dataset_keys(client, bucket, prefix)
+    where = f"s3://{bucket}/{prefix}" if prefix else f"s3://{bucket}"
+    listed = _keep_train_split(_list_dataset_keys(client, bucket, prefix), prefix, where)
     keys = [key for key in listed if not _is_audio_key(key)]
     audio_keys = [key for key in listed if _is_audio_key(key)]
     _raise_if_cancelled(cancel_callback)
-    where = f"s3://{bucket}/{prefix}" if prefix else f"s3://{bucket}"
     if not keys:
         if audio_keys:
             raise ValueError(
