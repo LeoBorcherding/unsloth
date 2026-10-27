@@ -86,17 +86,9 @@ const EDGE_TYPES: EdgeTypes = {
 };
 const COMPLETE_ISLAND_VISIBLE_MS = 7_000;
 const TAB_SWITCH_FIT_DELAY_MS = 110;
-/**
- * Max RAF iterations to wait for React Flow's ResizeObserver to populate
- * `node.measured` before calling fitView. ~20 frames ≈ 333 ms at 60 fps,
- * ample for the render → layout → ResizeObserver cycle.
- */
+/** Max RAF frames (~333 ms) to wait for ResizeObserver to fill `node.measured` before fitView. */
 const MAX_FIT_VIEW_RETRIES = 20;
-/**
- * Extra stable frames to wait after target nodes appear measured before
- * firing fitView, absorbing `updateNodeInternals` calls from InternalsSync
- * and node mount effects that can transiently reset measurements.
- */
+/** Stable frames after measurement, since updateNodeInternals can transiently reset sizes. */
 const FIT_VIEW_STABLE_FRAMES = 3;
 
 export type PersistRecipeInput = {
@@ -241,9 +233,7 @@ export function RecipeStudioPage({
     },
     [viewModeStorageKey],
   );
-  // Easy mode has no canvas overlay/progress island, so a started run would leave the Run button
-  // stuck on "Running..." with nothing else changing. Flip to the Runs pane where progress is
-  // rendered. Advanced (editor) keeps its island and stays put.
+  // Easy mode has no progress island, so show the Runs pane instead of a stuck Run button.
   const handleExecutionStart = useCallback(() => {
     setActiveView((currentView) =>
       currentView === "easy" ? "executions" : currentView,
@@ -429,7 +419,7 @@ export function RecipeStudioPage({
   const tourSteps = useMemo(
     () =>
       buildRecipeEditorTourSteps({
-        // A placeholder stands in until the recipe loads, so the canvas steps would hit nothing.
+        // The canvas steps need the loaded recipe, not the placeholder.
         isGraphView: activeView === "editor" && initialRecipeReady,
         supportsEasyMode,
       }),
@@ -445,9 +435,7 @@ export function RecipeStudioPage({
   const runBusy = previewLoading || fullLoading || executionLocked;
   const islandExecution = activeExecution ?? recentCompletedExecution;
 
-  // Easy mode uses runFull (artifact persisted, tracked in Runs pane), which
-  // requires a non-empty fullRunName. The Easy form has no run-name input, so
-  // seed a default once Easy is active; user can rename from Advanced/Runs.
+  // runFull needs a non-empty fullRunName and Easy mode has no input for it, so seed a default.
   useEffect(() => {
     if (!supportsEasyMode) return;
     if (activeView !== "easy") return;
@@ -548,14 +536,12 @@ export function RecipeStudioPage({
       let frameId = 0;
       let cancelled = false;
 
-      /** Check whether every primary workflow node has been measured. */
       const allTargetsMeasured = (targets: Node[]): boolean =>
         targets.length > 0 &&
         targets.every(
           (n) => n.measured?.width != null && n.measured?.height != null,
         );
 
-      /** Execute fitView on the current primary workflow nodes. */
       const doFit = () => {
         const targets = getFitViewTargetNodes(reactFlowInstance.getNodes());
         if (targets.length === 0) {
@@ -577,21 +563,17 @@ export function RecipeStudioPage({
           return;
         }
         if (retries >= MAX_FIT_VIEW_RETRIES) {
-          // Timed out: fit with whatever we have (graceful fallback).
           doFit();
           return;
         }
         const targets = getFitViewTargetNodes(reactFlowInstance.getNodes());
         if (allTargetsMeasured(targets)) {
           stableCount++;
-          // Extra frames after measurements appear let updateNodeInternals
-          // (InternalsSync, node mount effects) settle.
           if (stableCount >= FIT_VIEW_STABLE_FRAMES) {
             doFit();
             return;
           }
         } else {
-          // Measurements reset (e.g. by updateNodeInternals): restart counter.
           stableCount = 0;
         }
         retries++;
@@ -622,11 +604,8 @@ export function RecipeStudioPage({
   );
 
   const toggleMaximize = useCallback(() => {
-    // The maximized surface is a fixed z-50 overlay that already covers the app sidebar
-    // (z-10/z-20), so we don't touch the sidebar's own state — that state is persisted in pin mode
-    // and mutating it here would leak the temporary collapse into the next page/session.
+    // The z-50 overlay already covers the sidebar; its pinned state is persisted, so do not touch it.
     setMaximized((prev) => !prev);
-    // Container size changes; refit once the layout settles.
     scheduleFitView({ delayMs: TAB_SWITCH_FIT_DELAY_MS });
   }, [scheduleFitView]);
 
@@ -648,8 +627,7 @@ export function RecipeStudioPage({
     }
   }, [activeView, reactFlowInstance]);
 
-  // The "Exit full view" control lives inside the editor canvas, which unmounts on other tabs. Drop
-  // full-view mode when leaving the editor so Easy/Runs aren't left under the fixed overlay.
+  // The exit control lives in the editor canvas, so leaving the editor must drop full view.
   useEffect(() => {
     if (activeView !== "editor" && maximized) {
       setMaximized(false);
@@ -754,6 +732,7 @@ export function RecipeStudioPage({
               </div>
               <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
                 <Button
+                  variant="dark"
                   type="button"
                   className="corner-squircle"
                   onClick={openSourceBlockSheet}
@@ -859,8 +838,7 @@ export function RecipeStudioPage({
       style={
         maximized
           ? {
-              // Start below the custom/mac window titlebar so the header and
-              // its controls aren't hidden under (or click-blocked by) it.
+              // Start below the custom/mac titlebar so the header is not hidden or click-blocked.
               top: "var(--studio-non-chat-content-top-inset, var(--studio-content-top-inset, 0px))",
             }
           : undefined
@@ -899,9 +877,6 @@ export function RecipeStudioPage({
                 setRows={setFullRows}
                 updateConfig={updateConfig}
                 onRun={() => {
-                  // Easy mode is a full run (artifact persisted, tracked in Runs) capped at the
-                  // user's row count. runFull requires a non-empty fullRunName; the effect above
-                  // populates one on mount so runFull's closure is current by click time.
                   void runFull();
                 }}
                 runLoading={fullLoading || executionLocked}
