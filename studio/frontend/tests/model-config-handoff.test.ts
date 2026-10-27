@@ -282,7 +282,7 @@ test("non-GGUF weights mirror their settings, a LoRA adapter does not", () => {
   );
 });
 
-test("the resident settings key a cached non-GGUF repo by its repo id", () => {
+test("the resident settings key a cached repo by its repo id, GGUF quants included", () => {
   const snapshot =
     "/hf/models--mlx-community--Qwen3.5-9B-MLX-8bit/snapshots/abc";
   const resident = (overrides: {
@@ -304,8 +304,14 @@ test("the resident settings key a cached non-GGUF repo by its repo id", () => {
   assert.equal(mlx.id, snapshot);
   assert.equal(mlx.configId, "mlx-community/Qwen3.5-9B-MLX-8bit");
   assert.equal(mlx.apiLoadable, true);
-  const gguf = resident({ isGguf: true, ggufVariant: "Q4_K_M" });
-  assert.equal(gguf.configId, undefined);
+  const gguf = resident({
+    modelId: "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc",
+    isGguf: true,
+    ggufVariant: "Q4_K_M",
+  });
+  // The auto-switch loads a quant by snapshot path; its saved run settings sit under the repo id.
+  assert.equal(gguf.configId, "unsloth/Qwen3-1.7B-GGUF");
+  assert.equal(gguf.ggufVariant, "Q4_K_M");
   assert.equal(gguf.apiLoadable, true);
   const file = resident({
     modelId: `${snapshot}/model-Q4_K_M.gguf`,

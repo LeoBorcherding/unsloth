@@ -111,7 +111,8 @@ export function residentModelConfigTarget({
     ? null
     : ggufVariant;
   const leaf = leafName(modelId);
-  const repoId = cachedRepoConfigId(modelId, settingsGgufVariant);
+  // An API auto-switch reports a GGUF by its snapshot path too; presets and settings key the repo id.
+  const repoId = cachedRepoConfigId(modelId, null);
   return {
     id: modelId,
     displayName: ggufVariant ? `${leaf} · ${ggufVariant}` : leaf,
