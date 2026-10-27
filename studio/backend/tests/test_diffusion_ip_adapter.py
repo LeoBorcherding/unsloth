@@ -228,7 +228,6 @@ def _png_b64():
         ({"speed_optims": ("compiled",)}, "txt2img", "Speed off"),
         ({"transformer_quant": "fp8"}, "txt2img", "Speed off"),
         ({"offload_policy": "group"}, "txt2img", "fully on the GPU"),
-        ({"calibrated_placement": True}, "txt2img", "fully on the GPU"),
     ],
 )
 def test_prepare_refuses_before_any_download(overrides, workflow, message):
@@ -242,6 +241,19 @@ def test_prepare_refuses_before_any_download(overrides, workflow, message):
             state, workflow, (_png_b64(), 0.6), threading.Event()
         )
     assert state.pipe.loads == []
+
+
+def test_prepare_accepts_a_calibrated_resident_placement(monkeypatch):
+    # SDXL on a 15-16 GB card plans resident from its measured activations (calibrated, offload none).
+    from core.inference import diffusion
+    from core.inference.diffusion import DiffusionBackend
+
+    monkeypatch.setattr(diffusion, "_free_device_mib", lambda device: 8192)
+    state = _prepare_state(calibrated_placement = True)
+    entry, image = DiffusionBackend()._ip_adapter_prepare(
+        state, "txt2img", (_png_b64(), 0.6), threading.Event()
+    )
+    assert entry is SDXL and image.size == (32, 32) and len(state.pipe.loads) == 1
 
 
 def test_prepare_refuses_a_bad_image_before_loading():

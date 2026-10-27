@@ -12535,11 +12535,9 @@ class DiffusionBackend:
                 "Image prompts are not available on this load: it is GGUF, torchao-quantised, or compiled "
                 "(Speed default / max). Load the full model at Speed off to use one."
             )
-        if (
-            getattr(state, "offload_policy", None) not in (None, OFFLOAD_NONE)
-            or getattr(state, "calibrated_placement", False)
-            or is_split(state.pipe)
-        ):
+        # A calibrated placement can still be fully resident (SDXL on a 15-16 GB card); the free-memory check below
+        # covers the adapter's weights there.
+        if getattr(state, "offload_policy", None) not in (None, OFFLOAD_NONE) or is_split(state.pipe):
             raise ValueError(
                 "Image prompts need the model fully on the GPU, and this load streams it from system "
                 "memory. Reload it with a memory mode that keeps it resident, or generate without the "
@@ -14881,8 +14879,7 @@ class DiffusionBackend:
                 transformer_quant = state.transformer_quant,
                 compiled = compiled,
             )
-            and getattr(state, "offload_policy", None) in (None, OFFLOAD_NONE)
-            and not getattr(state, "calibrated_placement", False),
+            and getattr(state, "offload_policy", None) in (None, OFFLOAD_NONE),
         }
 
 
