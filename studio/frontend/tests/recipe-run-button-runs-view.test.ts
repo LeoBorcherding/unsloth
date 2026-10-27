@@ -347,6 +347,8 @@ test("Center view and Auto layout keep the island's clearance while it shows", (
     },
     "@/components/ui/button": { Button: "Button" },
     "lucide-react": new Proxy({}, { get: (_t, key) => String(key) }),
+    "@hugeicons/core-free-icons": { PlusSignIcon: "PlusSignIcon" },
+    "@hugeicons/react": { HugeiconsIcon: "HugeiconsIcon" },
     "../../utils/graph/fit-view": fitView,
     "../recipe-floating-icon-button-class": {
       // biome-ignore lint/style/useNamingConvention: constant name
