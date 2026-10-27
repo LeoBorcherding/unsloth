@@ -22,12 +22,13 @@ from fastapi import HTTPException
 from loggers import get_logger
 import multiprocessing as mp
 import queue
+import shutil
 import threading
 import time
 from pathlib import Path
 from hub.utils.hf_tokens import HfTokenArg
 from typing import Any, Deque, Dict, List, Optional, Tuple
-from utils.paths import outputs_root
+from utils.paths import outputs_root, resolve_export_write_dir
 
 logger = get_logger(__name__)
 
@@ -45,6 +46,27 @@ OP_CANCELLED = "Export cancelled"
 
 # Capped outright: teardown chatter would otherwise renew an inactivity timer forever.
 _CLEANUP_TIMEOUT = 30.0
+
+# export_gguf merges into <save dir>/_tmp_model_*; only its own finally removes that.
+_GGUF_TMP_PREFIX = "_tmp_model_"
+
+
+def _gguf_tmp_snapshot(save_directory) -> Optional[Tuple[Path, frozenset]]:
+    if not save_directory:
+        return None
+    try:
+        root = Path(os.path.abspath(resolve_export_write_dir(save_directory)))
+        return root, frozenset(p.name for p in root.glob(f"{_GGUF_TMP_PREFIX}*"))
+    except Exception:
+        return None
+
+
+def _remove_new_gguf_tmp_dirs(root: Path, existing: frozenset) -> None:
+    for path in root.glob(f"{_GGUF_TMP_PREFIX}*"):
+        if path.name in existing or path.is_symlink() or not path.is_dir():
+            continue
+        logger.info("Removing the temp checkpoint of a GGUF export whose worker died: %s", path)
+        shutil.rmtree(path, ignore_errors = True)
 
 
 def _sweep_reap_staging_of(pid: Optional[int]) -> None:
@@ -776,6 +798,9 @@ class ExportOrchestrator:
             self._active_op_kind = f"export_{export_type}"
             self._export_active = True
             op_success, op_message, op_output_path = False, "", None
+            gguf_tmp = (
+                _gguf_tmp_snapshot(params.get("save_directory")) if export_type == "gguf" else None
+            )
             try:
                 # Recheck before sending, else an install blocks in cleanup_memory behind a long export op.
                 from utils.transformers_version import sidecar_swap_in_progress
@@ -805,6 +830,9 @@ class ExportOrchestrator:
                     op_success, op_message = False, str(exc)
                     return False, str(exc), None
             finally:
+                # A cancel terminates the worker, so its own cleanup never ran.
+                if gguf_tmp is not None and not self.is_worker_alive():
+                    _remove_new_gguf_tmp_dirs(*gguf_tmp)
                 self._record_op_finished(op_success, op_message, op_output_path)
                 self._end_op()
                 self._active_op_kind = None
