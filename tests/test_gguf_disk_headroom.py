@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -30,26 +31,78 @@ def save_mod():
     return save
 
 
+# NTFS allocates what `truncate` extends a file by, so a 63GB + 60GB layout wrote 123GB there.
+# The helpers only read sizes: each file is one byte on disk and `os.stat` reports the rest.
+_FAKE_SIZES = {}
+
+
+def _key(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _sized(path, nbytes):
+    Path(path).write_bytes(b"0")
+    _FAKE_SIZES[_key(path)] = int(nbytes)
+
+
+@pytest.fixture(autouse = True)
+def _fake_sizes(monkeypatch):
+    _FAKE_SIZES.clear()
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        st = real_stat(path, *args, **kwargs)
+        size = _FAKE_SIZES.get(_key(path)) if isinstance(path, (str, os.PathLike)) else None
+        if size is None:
+            return st
+        fields = list(st[:10])
+        fields[6] = size
+        return os.stat_result(tuple(fields))
+
+    monkeypatch.setattr(os, "stat", stat)
+    yield
+    _FAKE_SIZES.clear()
+
+
 def _layout(tmp_path, merge_gb, base_gb):
     merge = tmp_path / "model"
     gguf = tmp_path / "model_gguf"
     merge.mkdir()
     gguf.mkdir()
-    # Sparse files: only sizes are read. Names follow the `-NNNNN-of-NNNNN` set save_pretrained writes.
+    # Names follow the `-NNNNN-of-NNNNN` set save_pretrained writes.
     merge_shards = list(_split(merge_gb))
     for i, gb in enumerate(merge_shards):
         name = f"model-{i + 1:05d}-of-{len(merge_shards):05d}.safetensors"
-        with open(merge / name, "wb") as fh:
-            fh.truncate(int(gb * GB))
+        _sized(merge / name, gb * GB)
     (merge / "config.json").write_text("{}")
     (merge / "tokenizer.json").write_text("{}")
     bases = []
     for i, gb in enumerate(_split(base_gb)):
         path = gguf / f"model.BF16-0000{i + 1}-of-00002.gguf"
-        with open(path, "wb") as fh:
-            fh.truncate(int(gb * GB))
+        _sized(path, gb * GB)
         bases.append(str(path))
     return str(merge), str(gguf), bases
+
+
+def test_the_fake_layout_takes_no_disk(tmp_path):
+    """The layouts must stay a few bytes on disk: on Windows a real one filled the drive."""
+    merge, gguf, bases = _layout(tmp_path, merge_gb = 63, base_gb = 60)
+    paths = [os.path.join(merge, name) for name in os.listdir(merge)] + bases
+    on_disk = 0
+    for path in paths:
+        with open(path, "rb") as fh:
+            on_disk += os.fstat(fh.fileno()).st_size
+    assert on_disk < 1024**2
+    assert sum(os.path.getsize(path) for path in paths) >= 123 * GB
+    tree = ast.parse(Path(__file__).read_text(encoding = "utf-8"))
+    truncates = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "truncate"
+    ]
+    assert not truncates, f"lines {truncates}: use _sized(), NTFS allocates what truncate() extends"
 
 
 def _split(total_gb, per = 30):
@@ -178,8 +231,7 @@ def test_a_complete_stale_shard_set_is_not_inherited(tmp_path, monkeypatch, save
     merge, gguf, bases = _layout(tmp_path, merge_gb = 63, base_gb = 60)
     stale = ["archive-00001-of-00002.safetensors", "archive-00002-of-00002.safetensors"]
     for name in stale:
-        with open(os.path.join(merge, name), "wb") as fh:
-            fh.truncate(GB)
+        _sized(os.path.join(merge, name), GB)
     index = {"weight_map": {f"layer.{i}": name for i, name in enumerate(stale)}}
     with open(os.path.join(merge, "model.safetensors.index.json"), "w", encoding = "utf-8") as fh:
         json.dump(index, fh)
@@ -195,8 +247,7 @@ def test_a_complete_stale_shard_set_is_not_inherited(tmp_path, monkeypatch, save
 def test_a_consolidated_file_the_merge_did_not_write_is_kept(tmp_path, monkeypatch, save_mod):
     """Keeps a consolidated.safetensors the merge did not write; ownership is recorded, not guessed."""
     merge, gguf, bases = _layout(tmp_path, merge_gb = 63, base_gb = 60)
-    with open(os.path.join(merge, "consolidated.safetensors"), "wb") as fh:
-        fh.truncate(GB)
+    _sized(os.path.join(merge, "consolidated.safetensors"), GB)
     _with_free(monkeypatch, save_mod, 20)
     _reclaim(
         save_mod,
@@ -247,8 +298,7 @@ def test_the_bytes_already_written_are_not_charged_twice(tmp_path, save_mod):
     import types as _types
 
     output = tmp_path / "model.Q4_K_M.gguf"
-    with open(output, "wb") as f:
-        f.truncate(5 * GB)
+    _sized(output, 5 * GB)
 
     original = save_mod.shutil.disk_usage
     try:
@@ -527,8 +577,7 @@ def test_the_shards_the_index_names_are_the_ones_reclaimed(tmp_path, monkeypatch
     merge, gguf, bases = _layout(tmp_path, merge_gb = 30, base_gb = 60)
     odd = [Path(merge) / f"weights-part-0000{i}-of-00002.safetensors" for i in (1, 2)]
     for shard in odd:
-        with open(shard, "wb") as fh:
-            fh.truncate(int(10 * GB))
+        _sized(shard, int(10 * GB))
     (Path(merge) / "model.safetensors.index.json").write_text(
         json.dumps({"weight_map": {f"w{i}": s.name for i, s in enumerate(odd)}})
     )
@@ -666,8 +715,7 @@ def test_the_vlm_projector_is_not_charged_to_every_quant(tmp_path, monkeypatch, 
     tight that has the room."""
     merge, gguf, bases = _layout(tmp_path, merge_gb = 63, base_gb = 30)
     mmproj = Path(gguf) / "model.BF16-mmproj.gguf"
-    with open(mmproj, "wb") as fh:
-        fh.truncate(int(200 * GB))
+    _sized(mmproj, int(200 * GB))
     _with_free(monkeypatch, save_mod, 20)
     assert _reclaim(save_mod, merge, gguf, bases + [str(mmproj)]) == 0
     assert [f for f in os.listdir(merge) if _is_merge_shard(f)]
@@ -719,8 +767,7 @@ def test_the_index_is_reclaimed_with_the_shards_it_named(tmp_path, monkeypatch, 
 
     def _write_merge():
         for name in shards:
-            with open(os.path.join(merge, name), "wb") as fh:
-                fh.truncate(int(30 * GB))
+            _sized(os.path.join(merge, name), int(30 * GB))
         index = {"weight_map": {f"layer.{i}": name for i, name in enumerate(shards)}}
         with open(os.path.join(merge, "model.safetensors.index.json"), "w", encoding = "utf-8") as fh:
             json.dump(index, fh)
