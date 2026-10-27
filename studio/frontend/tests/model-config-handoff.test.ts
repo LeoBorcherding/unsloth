@@ -367,6 +367,39 @@ test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", 
   assert.equal(resolved.config.maxSeqLength, 4096);
 });
 
+test("a path-keyed selection is not carried over to a set the cap left behind", async () => {
+  store.clear();
+  const {
+    SAVED_RUN_SETTINGS_PER_MODEL_MAX,
+    getPinnedRunSettings,
+    getSelectedRunSettings,
+    listSavedRunSettings,
+    saveRunSettings,
+    setPinnedRunSettings,
+    setSelectedRunSettings,
+  } = await import("../src/features/model-picker/model-config/saved-run-settings.ts");
+  const snapshot = "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc";
+  const repo = "unsloth/Qwen3-1.7B-GGUF";
+  for (let i = 0; i < SAVED_RUN_SETTINGS_PER_MODEL_MAX; i++) {
+    assert.ok(saveRunSettings(repo, `set ${i}`, DEFAULT_PER_MODEL_CONFIG));
+  }
+  assert.ok(saveRunSettings(snapshot, "overflow", DEFAULT_PER_MODEL_CONFIG));
+  assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "overflow"));
+  assert.ok(setPinnedRunSettings(snapshot, "Q4_K_M", "overflow"));
+
+  residentModelConfigTarget({
+    modelId: snapshot,
+    ggufVariant: "Q4_K_M",
+    isGguf: true,
+    isLora: false,
+    contextLength: null,
+  });
+
+  assert.equal(listSavedRunSettings(repo).length, SAVED_RUN_SETTINGS_PER_MODEL_MAX);
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), undefined);
+  assert.equal(getPinnedRunSettings(repo, "Q4_K_M"), null);
+});
+
 test("submitting a cached handoff adopts legacy path-keyed settings", () => {
   store.clear();
   const id = "unsloth/Llama-GGUF";

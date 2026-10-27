@@ -500,12 +500,15 @@ export function adoptLegacyRunSettings(
   }
   let changed = false;
   const map = readMap();
-  const legacy = entriesFor(map, from);
   if (from in map) {
     const kept = entriesFor(map, to);
     const room = SAVED_RUN_SETTINGS_PER_MODEL_MAX - kept.length;
-    const moved = legacy
-      .filter((entry) => typeof entry?.name === "string" && !kept.some((own) => named(own, entry.name)))
+    const moved = entriesFor(map, from)
+      .filter(
+        (entry) =>
+          typeof entry?.name === "string" &&
+          !kept.some((own) => named(own, entry.name)),
+      )
       .slice(0, Math.max(0, room));
     if (moved.length > 0) {
       map[to] = [...kept, ...moved];
@@ -513,23 +516,39 @@ export function adoptLegacyRunSettings(
     delete map[from];
     changed = writeMap(map) || changed;
   }
+  // A set past the cap was not moved; a reference to it would name nothing.
+  const survivors = entriesFor(map, to);
+  const listed = (name: unknown) =>
+    name === null ||
+    (typeof name === "string" && survivors.some((entry) => named(entry, name)));
   const prefix = selectionPrefix(legacyModelId);
-  const rekey = (key: string) => `${selectionPrefix(modelId)}${key.slice(prefix.length)}`;
-  const move = <T>(read: () => Record<string, T>, storageKey: string) => {
+  const rekey = (key: string) =>
+    `${selectionPrefix(modelId)}${key.slice(prefix.length)}`;
+  const move = <T>(
+    read: () => Record<string, T>,
+    storageKey: string,
+    keep: (value: T) => boolean = () => true,
+  ) => {
     const entries = read();
     let touched = false;
     for (const key of Object.keys(entries)) {
       if (!key.startsWith(prefix)) continue;
-      if (!(rekey(key) in entries)) entries[rekey(key)] = entries[key];
+      if (!(rekey(key) in entries) && keep(entries[key])) {
+        entries[rekey(key)] = entries[key];
+      }
       delete entries[key];
       touched = true;
     }
     if (touched) changed = writeJson(storageKey, entries) || changed;
   };
-  move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY);
+  move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY, listed);
   move(readSelectedVariants, SELECTED_VARIANTS_STORAGE_KEY);
-  move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY);
-  move(() => readJson<LoadedOnceMap>(LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY), LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY);
+  move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY, listed);
+  move(
+    () => readJson<LoadedOnceMap>(LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY),
+    LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY,
+    (entry) => listed(entry?.name),
+  );
   return changed;
 }
 
