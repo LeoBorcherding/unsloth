@@ -1138,13 +1138,18 @@ def _decode_audio_bounded(audio: bytes, cancel_event = None):
     max_samples = _MAX_AUDIO_SECONDS * _TARGET_SAMPLE_RATE
     sample_count = 0
     raw_buffer = io.BytesIO()
-    resampler = av.audio.resampler.AudioResampler(
-        format = "s16",
-        layout = "mono",
-        rate = _TARGET_SAMPLE_RATE,
-    )
+
+    def new_resampler():
+        return av.audio.resampler.AudioResampler(
+            format = "s16",
+            layout = "mono",
+            rate = _TARGET_SAMPLE_RATE,
+        )
+
+    resampler = new_resampler()
     # group frames before resampling so short clips need one resampler call rather than one per codec frame
     fifo = av.audio.fifo.AudioFifo()
+    fifo_shape = None
 
     def write_frame(frame) -> None:
         nonlocal sample_count
@@ -1155,6 +1160,13 @@ def _decode_audio_bounded(audio: bytes, cancel_event = None):
             unit = "minute" if max_minutes == 1 else "minutes"
             raise SttAudioTooLongError(f"Audio must be {max_minutes} {unit} or shorter.")
         raw_buffer.write(array)
+
+    def flush() -> None:
+        if fifo.samples > 0:
+            for resampled in resampler.resample(fifo.read()):
+                write_frame(resampled)
+        for resampled in resampler.resample(None):
+            write_frame(resampled)
 
     try:
         with _av_open(av, io.BytesIO(audio), options = NO_PROTOCOLS) as container:
@@ -1169,6 +1181,14 @@ def _decode_audio_bounded(audio: bytes, cancel_event = None):
                     except InvalidDataError:
                         continue
                     for frame in frames:
+                        # The FIFO and resampler lock to their first frame's format, so a mid-stream
+                        # rate or layout change (joined clips, a damaged header) gets fresh ones.
+                        shape = (frame.format.name, frame.layout.name, frame.sample_rate)
+                        if shape != fifo_shape:
+                            if fifo_shape is not None:
+                                flush()
+                                fifo, resampler = av.audio.fifo.AudioFifo(), new_resampler()
+                            fifo_shape = shape
                         frame.pts = None
                         fifo.write(frame)
                         if fifo.samples >= 500000:
@@ -1180,11 +1200,7 @@ def _decode_audio_bounded(audio: bytes, cancel_event = None):
                 if not (sample_count or fifo.samples):
                     raise
                 logger.info("STT decode stopped early: %s", exc)
-            if fifo.samples > 0:
-                for resampled in resampler.resample(fifo.read()):
-                    write_frame(resampled)
-            for resampled in resampler.resample(None):
-                write_frame(resampled)
+            flush()
     except (SttAudioDecodeError, SttAudioTooLongError, SttTranscriptionCancelledError):
         raise
     except (FFmpegError, ValueError, RuntimeError) as exc:

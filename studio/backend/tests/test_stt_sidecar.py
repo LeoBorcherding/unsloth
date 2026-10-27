@@ -1612,6 +1612,38 @@ def test_a_stream_that_cannot_continue_keeps_the_audio_before_it():
     assert len(decoded) / 16000 > 9.5
 
 
+def test_a_sample_rate_change_mid_stream_decodes_both_halves():
+    av = pytest.importorskip("av")
+
+    decoded = _REAL_DECODE_AUDIO_BOUNDED(_mp3(av, 44100, 10) + _mp3(av, 22050, 10))
+
+    assert len(decoded) / 16000 > 19.5
+
+
+def test_a_damaged_mp2_frame_does_not_drop_the_rest_of_the_audio():
+    av = pytest.importorskip("av")
+    # This tone and damage make the decoder emit a frame at another rate or layout mid-stream.
+    tone = (0.3 * np.sin(2 * np.pi * 440 * np.arange(44100 * 20) / 44100) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with av.open(buf, mode = "w", format = "mp2") as out:
+        stream = out.add_stream("mp2", rate = 44100, layout = "mono")
+        for start in range(0, tone.size, 1152):
+            chunk = np.ascontiguousarray(tone[None, start : start + 1152])
+            frame = av.AudioFrame.from_ndarray(chunk, format = "s16", layout = "mono")
+            frame.sample_rate = 44100
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    audio = bytearray(buf.getvalue())
+    start = int(len(audio) * 0.3)
+    audio[start : start + 4000] = bytes(4000)
+
+    decoded = _REAL_DECODE_AUDIO_BOUNDED(bytes(audio))
+
+    assert len(decoded) / 16000 > 19
+
+
 def test_bounded_decoder_rejects_container_without_audio_stream(monkeypatch):
     class FakeFFmpegError(Exception):
         pass
