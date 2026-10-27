@@ -3,7 +3,11 @@
 
 import { useAppShellReadySignal } from "@/components/app-readiness";
 import { Button } from "@/components/ui/button";
-import { RecipeStudioPage, type RecipePayload } from "@/features/recipe-studio";
+import {
+  type PersistRecipeInput,
+  RecipeStudioPage,
+} from "@/features/recipe-studio";
+import { toastError } from "@/shared/toast";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -102,7 +106,11 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
   }, [loadedRecord]);
 
   const handlePersist = useCallback(
-    async (input: { id: string | null; name: string; payload: RecipePayload }) => {
+    async (input: PersistRecipeInput) => {
+      if (input.overwrite) {
+        // The user chose to keep this copy: build on whatever the server has now.
+        editedVersion.current = (await getRecipe(input.id ?? recipeId))?.updatedAt;
+      }
       const record = await saveRecipe({
         id: input.id ?? recipeId,
         name: input.name,
@@ -115,6 +123,23 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
     },
     [recipeId],
   );
+
+  const handleReload = useCallback(() => {
+    getRecipe(recipeId)
+      .then((record) => {
+        if (!record) {
+          setLoadState({ status: "missing" });
+          return;
+        }
+        primeRecipeCache(record);
+        setLoadState({ status: "ready", record });
+      })
+      .catch((error) => {
+        // biome-ignore lint/suspicious/noConsole: the toast below is what the user sees
+        console.error("Reload recipe failed:", error);
+        toastError("Reload failed", "Could not load the saved recipe.");
+      });
+  }, [recipeId]);
 
   if (loadState.status === "loading") {
     return (
@@ -144,6 +169,7 @@ export function EditRecipePage({ recipeId }: EditRecipePageProps): ReactElement 
       initialPayload={loadState.record.payload}
       initialSavedAt={loadState.record.updatedAt}
       onPersistRecipe={handlePersist}
+      onReloadRecipe={handleReload}
     />
   );
 }

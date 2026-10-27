@@ -89,6 +89,8 @@ export type PersistRecipeInput = {
   id: string | null;
   name: string;
   payload: RecipePayload;
+  // Save over a copy another window saved since this one was loaded.
+  overwrite?: boolean;
 };
 
 export type PersistRecipeResult = {
@@ -102,6 +104,7 @@ export type RecipeStudioPageProps = {
   initialPayload: RecipePayload;
   initialSavedAt: number;
   onPersistRecipe: (input: PersistRecipeInput) => Promise<PersistRecipeResult>;
+  onReloadRecipe?: () => void;
 };
 
 export function RecipeStudioPage({
@@ -110,6 +113,7 @@ export function RecipeStudioPage({
   initialPayload,
   initialSavedAt,
   onPersistRecipe,
+  onReloadRecipe,
 }: RecipeStudioPageProps): ReactElement {
   const {
     nodes,
@@ -363,6 +367,7 @@ export function RecipeStudioPage({
     initialSavedAt,
     payloadResult,
     onPersistRecipe,
+    onReloadRecipe,
     resetRecipe,
     loadRecipe,
     getCurrentPayloadFromStore,

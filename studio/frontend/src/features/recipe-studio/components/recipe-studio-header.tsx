@@ -17,7 +17,8 @@ import {
   AlertCircleIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { type KeyboardEvent, type ReactElement, useState } from "react";
+import { normalizeNonEmptyName } from "@/utils";
+import { type KeyboardEvent, type ReactElement, useRef, useState } from "react";
 import type { RecipeStudioView } from "../execution-types";
 import type { GraphWarning } from "../utils/graph-warnings";
 import {
@@ -40,6 +41,9 @@ type RecipeStudioHeaderProps = {
   onSaveRecipe: () => void;
 };
 
+// The library route's cap; a longer name fails every later save with a 422.
+const RECIPE_NAME_MAX_LENGTH = 10_000;
+
 const STATUS_MESSAGE_CLASS: Record<StatusTone, string> = {
   success: "Saved",
   error: "Needs saving",
@@ -57,7 +61,10 @@ export function RecipeStudioHeader({
   onViewChange,
   onSaveRecipe,
 }: RecipeStudioHeaderProps): ReactElement {
-  const [editingWorkflowName, setEditingWorkflowName] = useState(false);
+  // Each keystroke still reaches the recipe, so leaving without a blur saves it; Esc restores
+  // the name from before the edit, and Enter or blur settles an empty one on Unnamed.
+  const [draftName, setDraftName] = useState<string | null>(null);
+  const nameBeforeEdit = useRef<string | null>(null);
 
   function handleViewValueChange(value: string): void {
     if (value === "easy" || value === "editor" || value === "executions") {
@@ -65,11 +72,26 @@ export function RecipeStudioHeader({
     }
   }
 
+  function openWorkflowNameEditor(): void {
+    nameBeforeEdit.current = workflowName;
+    setDraftName(workflowName);
+  }
+
+  function changeDraftName(value: string): void {
+    setDraftName(value);
+    onWorkflowNameChange(value);
+  }
+
   function closeWorkflowNameEditor(): void {
-    if (workflowName.trim().length === 0) {
-      onWorkflowNameChange("Untitled recipe");
+    if (draftName === null || nameBeforeEdit.current === null) {
+      return;
     }
-    setEditingWorkflowName(false);
+    nameBeforeEdit.current = null;
+    const nextName = normalizeNonEmptyName(draftName, "Unnamed");
+    if (nextName !== workflowName) {
+      onWorkflowNameChange(nextName);
+    }
+    setDraftName(null);
   }
 
   function handleWorkflowNameKeyDown(
@@ -80,7 +102,12 @@ export function RecipeStudioHeader({
       return;
     }
     if (event.key === "Escape") {
-      setEditingWorkflowName(false);
+      const previous = nameBeforeEdit.current;
+      nameBeforeEdit.current = null;
+      if (previous !== null && previous !== workflowName) {
+        onWorkflowNameChange(previous);
+      }
+      setDraftName(null);
     }
   }
 
@@ -97,12 +124,13 @@ export function RecipeStudioHeader({
           />
         </div>
         <div className="flex min-w-0 items-center gap-2">
-          {editingWorkflowName ? (
+          {draftName !== null ? (
             <Input
-              value={workflowName}
-              onChange={(event) => onWorkflowNameChange(event.target.value)}
+              value={draftName}
+              onChange={(event) => changeDraftName(event.target.value)}
               onBlur={closeWorkflowNameEditor}
               onKeyDown={handleWorkflowNameKeyDown}
+              maxLength={RECIPE_NAME_MAX_LENGTH}
               autoFocus={true}
               className="h-7 w-full max-w-[min(22rem,50vw)]"
               aria-label="Recipe name"
@@ -110,7 +138,7 @@ export function RecipeStudioHeader({
           ) : (
             <button
               type="button"
-              onClick={() => setEditingWorkflowName(true)}
+              onClick={openWorkflowNameEditor}
               className="max-w-[min(22rem,50vw)] truncate text-sm font-semibold text-foreground hover:text-primary"
               title={workflowName}
               aria-label={`Edit recipe name: ${workflowName}`}

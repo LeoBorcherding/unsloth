@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
+import { toast } from "@/lib/toast";
 import { toastError, toastSuccess } from "@/shared/toast";
 import { normalizeNonEmptyName } from "@/utils";
 import { removeUnstructuredBlock } from "../api";
@@ -20,6 +21,7 @@ type PersistRecipeFn = (input: {
   id: string | null;
   name: string;
   payload: RecipePayloadResult["payload"];
+  overwrite?: boolean;
 }) => Promise<{
   id: string;
   updatedAt: number;
@@ -32,6 +34,7 @@ type UseRecipePersistenceParams = {
   initialSavedAt: number;
   payloadResult: RecipePayloadResult;
   onPersistRecipe: PersistRecipeFn;
+  onReloadRecipe?: () => void;
   resetRecipe: () => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   getCurrentPayloadFromStore: () => RecipePayloadResult["payload"];
@@ -215,6 +218,10 @@ function drainQueuedUploadCleanups(
   }
 }
 
+function isSaveConflict(error: unknown): boolean {
+  return (error as { status?: unknown } | null)?.status === 409;
+}
+
 export function useRecipePersistence({
   recipeId,
   initialRecipeName,
@@ -222,6 +229,7 @@ export function useRecipePersistence({
   initialSavedAt,
   payloadResult,
   onPersistRecipe,
+  onReloadRecipe,
   resetRecipe,
   loadRecipe,
   getCurrentPayloadFromStore,
@@ -232,7 +240,10 @@ export function useRecipePersistence({
   const [savedSignature, setSavedSignature] = useState("");
   // Do not retry the exact content that just failed (e.g. a 409 from another window).
   const [failedSignature, setFailedSignature] = useState<string | null>(null);
+  // Another window saved first: autosave waits until the user reloads or keeps their copy.
+  const [conflicted, setConflicted] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const pendingSave = useRef<Promise<unknown>>(Promise.resolve());
   const [copied, setCopied] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -257,6 +268,8 @@ export function useRecipePersistence({
     resetRecipe();
     setWorkflowName(nextName);
     setLastSavedAt(initialSavedAt);
+    setFailedSignature(null);
+    setConflicted(false);
     setCopied(false);
 
     const parsed = importRecipePayload(JSON.stringify(initialPayload), {
@@ -281,47 +294,142 @@ export function useRecipePersistence({
     resetRecipe,
   ]);
 
-  const persistRecipe = useCallback(async (): Promise<void> => {
-    if (saveLoading) {
-      return;
-    }
-    const nextName = normalizeNonEmptyName(workflowName, "Unnamed");
-    if (nextName !== workflowName) {
-      setWorkflowName(nextName);
-    }
+  const conflictToastId = `recipe-save-conflict-${recipeId}`;
+  // Read by the conflict toast's buttons and the unmount flush, which outlive a render.
+  const latest = useRef<{
+    saveRecipe: (overwrite: boolean) => Promise<void>;
+    onReloadRecipe?: () => void;
+    flush: (() => void) | null;
+  }>({ saveRecipe: async () => undefined, flush: null });
+  const saveRecipe = useCallback(
+    async (overwrite: boolean): Promise<void> => {
+      if (saveLoading) {
+        return;
+      }
+      const nextName = normalizeNonEmptyName(workflowName, "Unnamed");
+      if (nextName !== workflowName) {
+        setWorkflowName(nextName);
+      }
 
-    setSaveLoading(true);
-    try {
-      const result = await onPersistRecipe({
+      setSaveLoading(true);
+      const save = onPersistRecipe({
         id: recipeId,
         name: nextName,
         payload: currentPayload,
+        overwrite,
       });
-      setLastSavedAt(result.updatedAt);
-      setFailedSignature(null);
-      setSavedSignature(buildSignature(nextName, currentPayload));
-      drainQueuedUploadCleanups(currentPayload);
-    } catch (error) {
-      console.error("Save recipe failed:", error);
-      setFailedSignature(buildSignature(nextName, currentPayload));
-      toastError(
-        "Save failed",
-        error instanceof Error ? error.message : "Could not save recipe.",
-      );
-    } finally {
-      setSaveLoading(false);
-    }
-  }, [currentPayload, onPersistRecipe, recipeId, saveLoading, workflowName]);
+      pendingSave.current = save.catch(() => undefined);
+      try {
+        const result = await save;
+        setLastSavedAt(result.updatedAt);
+        setFailedSignature(null);
+        setConflicted(false);
+        toast.dismiss(conflictToastId);
+        setSavedSignature(buildSignature(nextName, currentPayload));
+        drainQueuedUploadCleanups(currentPayload);
+      } catch (error) {
+        console.error("Save recipe failed:", error);
+        setFailedSignature(buildSignature(nextName, currentPayload));
+        if (isSaveConflict(error)) {
+          setConflicted(true);
+          toast.error("This recipe was changed in another window", {
+            id: conflictToastId,
+            description:
+              "Autosave is paused. Reload their version, or keep yours and overwrite it.",
+            duration: Number.POSITIVE_INFINITY,
+            action: {
+              label: "Keep mine",
+              onClick: () => void latest.current.saveRecipe(true),
+            },
+            cancel: {
+              label: "Reload theirs",
+              onClick: () => latest.current.onReloadRecipe?.(),
+            },
+          });
+        } else {
+          toastError(
+            "Save failed",
+            error instanceof Error ? error.message : "Could not save recipe.",
+          );
+        }
+      } finally {
+        setSaveLoading(false);
+      }
+    },
+    [
+      conflictToastId,
+      currentPayload,
+      onPersistRecipe,
+      recipeId,
+      saveLoading,
+      workflowName,
+    ],
+  );
+  const persistRecipe = useCallback(() => saveRecipe(false), [saveRecipe]);
 
   useEffect(() => {
-    if (!isDirty || saveLoading || failedSignature === currentSignature) {
+    latest.current.saveRecipe = saveRecipe;
+    latest.current.onReloadRecipe = onReloadRecipe;
+    // Leaving inside the autosave debounce would drop the last edit: save it on unmount.
+    latest.current.flush =
+      isDirty && !conflicted && failedSignature !== currentSignature
+        ? () => {
+            void pendingSave.current
+              .then(() =>
+                onPersistRecipe({
+                  id: recipeId,
+                  name: normalizedWorkflowName,
+                  payload: currentPayload,
+                }),
+              )
+              .catch((error) => {
+                console.error("Save recipe on leave failed:", error);
+              });
+          }
+        : null;
+  });
+  useEffect(
+    () => () => {
+      toast.dismiss(conflictToastId);
+      latest.current.flush?.();
+    },
+    [conflictToastId],
+  );
+
+  const unsaved = isDirty || saveLoading;
+  useEffect(() => {
+    if (!unsaved) {
+      return;
+    }
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+
+  useEffect(() => {
+    if (
+      !isDirty ||
+      saveLoading ||
+      conflicted ||
+      failedSignature === currentSignature
+    ) {
       return;
     }
     const timeoutId = window.setTimeout(() => {
       void persistRecipe();
     }, 800);
     return () => window.clearTimeout(timeoutId);
-  }, [currentSignature, failedSignature, isDirty, persistRecipe, saveLoading]);
+  }, [
+    conflicted,
+    currentSignature,
+    failedSignature,
+    isDirty,
+    persistRecipe,
+    saveLoading,
+  ]);
 
   // Drain even when not dirty: a net-zero edit inside the debounce would otherwise leak the upload
   // dir. Drain skips uids the saved recipe still references.
