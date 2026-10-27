@@ -10,7 +10,6 @@ import {
   nearestPresetCanvas,
 } from "../src/features/video/keyframe-canvas.ts";
 
-// What /video/status reports for MiniMax-H3: the released checkpoint's canvas rule.
 const h3: VideoGenerationDefaults = {
   steps: 30,
   guidance: 1,
@@ -26,7 +25,7 @@ const h3: VideoGenerationDefaults = {
 };
 
 test("previews the same canvas the backend derives from a keyframe", () => {
-  // The pairs the backend's own test pins, so a divergence in either direction is caught.
+  // The pairs the backend's own test pins.
   assert.deepEqual(matchedCanvas(1920, 1080, h3), [1344, 768]);
   assert.deepEqual(matchedCanvas(1080, 1920, h3), [768, 1344]);
   assert.deepEqual(matchedCanvas(1000, 1000, h3), [768, 768]);
@@ -38,11 +37,10 @@ test("reads the ratio only, so the source's own scale never matters", () => {
 });
 
 test("previews nothing where the backend would refuse or has no rule", () => {
-  // Outside the trained 1:4 - 4:1 band the backend raises, so offering a size would be a lie.
+  // Outside the trained 1:4 - 4:1 band the backend raises.
   assert.equal(matchedCanvas(2000, 400, h3), null);
   assert.equal(matchedCanvas(400, 2000, h3), null);
   assert.equal(matchedCanvas(0, 100, h3), null);
-  // A family that declares no canvas rule takes no keyframes either.
   assert.equal(
     matchedCanvas(1920, 1080, { ...h3, canvas_short_edge: null, canvas_max_pixels: null }),
     null,
@@ -111,4 +109,32 @@ test("keyframe support: per-frame fields win, the legacy flag covers old backend
     { first: false, last: false },
   );
   assert.deepEqual(keyframeSupport(null), { first: false, last: false });
+});
+
+// LTX-2.5's rule: 704 px short edge, 1280x704 cap, 64 px units.
+const ltx25: VideoGenerationDefaults = {
+  ...h3,
+  resolution_multiple: 64,
+  resolution_presets: [[1280, 704]],
+  canvas_short_edge: 704,
+  canvas_max_pixels: 1280 * 704,
+};
+
+test("snapping never leaves the pixel cap, and matches the backend at its edges", () => {
+  // Rounding both sides up used to give 576x1664 here, 6% past LTX-2.5's cap.
+  assert.deepEqual(matchedCanvas(0.32841, 1, ltx25), [512, 1664]);
+  assert.deepEqual(matchedCanvas(0.32841, 1, h3), [576, 1760]);
+  assert.deepEqual(matchedCanvas(0.25, 1, ltx25), [448, 1920]);
+  assert.deepEqual(matchedCanvas(3.045, 1, ltx25), [1664, 512]);
+  for (const defaults of [ltx25, h3]) {
+    const multiple = defaults.resolution_multiple ?? 1;
+    for (let i = 2500; i <= 40000; i += 7) {
+      const canvas = matchedCanvas(i / 10000, 1, defaults);
+      assert.ok(canvas);
+      const [width, height] = canvas;
+      assert.ok(width * height <= (defaults.canvas_max_pixels ?? 0), `${i}: ${width}x${height}`);
+      assert.equal(width % multiple, 0);
+      assert.equal(height % multiple, 0);
+    }
+  }
 });

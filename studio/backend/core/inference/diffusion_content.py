@@ -43,18 +43,14 @@ SAME_ARCH_VARIANTS: dict[str, frozenset[str]] = {
     "wan2.2-t2v-a14b": frozenset({"wan2.2-t2v-a14b", "wan2.1-t2v-14b"}),
 }
 
-_VIDEO_FAMILIES = frozenset(
-    {
-        "ltx-2",
-        "wan2.2-ti2v-5b",
-        "wan2.2-t2v-a14b",
-        "wan2.1-t2v-1.3b",
-        "wan2.1-t2v-14b",
-        "hunyuanvideo-1.5",
-        "hunyuanvideo-1.5-720p",
-        "minimax-h3",
-    }
-)
+
+def _video_family_names() -> frozenset[str]:
+    from .video_families import _FAMILIES
+    return frozenset(fam.name for fam in _FAMILIES)
+
+
+# Every video registry name; the registries are torch-free.
+_VIDEO_FAMILIES = _video_family_names()
 
 _MAX_SAFETENSORS_HEADER = 128 * 1024 * 1024
 _MAX_GGUF_TENSORS = 1 << 20
@@ -332,13 +328,12 @@ def _match_dit(s: dict[str, list[int]]) -> Optional[CheckpointInfo]:
         or "audio_caption_projection" in tops
     ):
         if is_ltx25_dit_keys(keys):
-            # No family: the ltx-2 name must not revive it.
+            # Its own family: the LTX-2 assembly cannot build this DiT (no FFN bias), so the name never routes it there.
             return CheckpointInfo(
                 ROLE_DIT,
-                None,
-                None,
-                "an LTX-2.5 audio-video diffusion transformer, which Studio does not support yet "
-                "(use LTX-2.3 for now)",
+                LTX25_VARIANT,
+                family_page(LTX25_VARIANT),
+                "an LTX-2.5 audio-video diffusion transformer",
                 "diffusers" if "proj_in" in tops else "comfy",
                 LTX25_VARIANT,
             )
@@ -658,7 +653,7 @@ def refusal_for(path: str, page: str) -> Optional[str]:
             f"(diffusion_models/, unet/ or checkpoints/) instead."
         )
     if info.role == ROLE_DIT and not info.family:
-        return f"'{name}' is {info.what}, which Studio cannot load."
+        return f"'{name}' is {info.what}, which Unsloth cannot load."
     if info.role == ROLE_DIT and info.family and info.page and info.page != page:
         other = "Video" if info.page == PAGE_VIDEO else "Image"
         return f"'{name}' is {info.what} ({info.family}); load it from the {other} page."

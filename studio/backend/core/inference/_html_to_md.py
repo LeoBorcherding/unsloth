@@ -44,10 +44,7 @@ _SKIP_TAGS = frozenset(
         "datalist",
     }
 )
-# <aside> is NOT skipped: docs use it for admonition callouts (real content); page-furniture asides are excluded by the
-# main-content scoping pass instead.
-
-# void elements never produce an end tag, so they must not join the open-element stack used to bound hidden subtrees
+# The aside element is not skipped (docs use it for callouts); the main-content scoping pass excludes page-furniture asides instead
 _VOID_TAGS = frozenset(
     {
         "area",
@@ -69,10 +66,7 @@ _VOID_TAGS = frozenset(
 
 
 def _style_hides_element(style: str) -> bool:
-    """True when an inline ``style`` sets ``display:none`` / ``visibility:hidden``.
-
-    Parsed per property so an unrelated value that merely contains ``none`` is
-    not misread as hidden."""
+    """Checks display:none and visibility:hidden per declaration, so a value that merely contains none is not read as hidden"""
     lowered = style.lower()
     if "none" not in lowered and "hidden" not in lowered:
         return False
@@ -91,10 +85,7 @@ def _style_hides_element(style: str) -> bool:
 
 
 def _is_hidden_element(attr_dict: dict) -> bool:
-    """True when the element is not rendered: ``hidden`` attribute,
-    ``aria-hidden="true"``, or an inline ``style`` hiding it. Such JS-only
-    placeholders ship in the HTML but must not reach the output. ``hidden`` is
-    enumerated: any present value (even ``hidden="false"``) means not rendered."""
+    """Any present hidden attribute counts, even hidden=false, since presence means not rendered; aria-hidden=true and inline hiding styles count too"""
     if "hidden" in attr_dict:
         return True
     if (attr_dict.get("aria-hidden") or "").strip().lower() == "true":
@@ -111,26 +102,25 @@ def _span_attr(attr_dict: dict, name: str) -> int:
 
 
 def _is_aria_heading(attr_dict: dict) -> bool:
-    """True for ``role="heading"``, which titles a page just as ``h1``-``h6`` does.
-
-    ``role`` is a token list authors use for fallbacks (``role="future-role
-    heading"``), so any token counts. WAI-ARIA takes the first token naming a
-    real role, which would need the whole role table; matching anywhere is the
-    safe direction, since keeping a stray title beats dropping a real one."""
+    """Any role token counts: WAI-ARIA's first-token rule needs the full role table, so match loosely."""
     return "heading" in (attr_dict.get("role") or "").lower().split()
 
 
-# HTML5 optional end tags: a listed start tag implicitly closes an open element of the key type (as browsers do), else
-# an unclosed ``<p hidden>``/``<li hidden>`` swallows every following sibling. Keys: closable elements; values: closers.
+# HTML5 optional end tags: a listed start tag implicitly closes an open element of the key type, else an unclosed p hidden swallows later siblings
 _P_CLOSING_TAGS = frozenset(
     {
         "address",
         "article",
         "aside",
         "blockquote",
+        "center",
+        "dd",
         "details",
+        "dialog",
+        "dir",
         "div",
         "dl",
+        "dt",
         "fieldset",
         "figcaption",
         "figure",
@@ -145,13 +135,17 @@ _P_CLOSING_TAGS = frozenset(
         "header",
         "hgroup",
         "hr",
+        "li",
+        "listing",
         "main",
         "menu",
         "nav",
         "ol",
         "p",
         "pre",
+        "search",
         "section",
+        "summary",
         "table",
         "ul",
     }
@@ -169,9 +163,7 @@ _IMPLICIT_CLOSERS: dict = {
 }
 
 
-# Item tag -> container tags that re-scope it: a nested container makes an inner item a descendant, not an
-# optional-close sibling, so recovery must stop there rather than close (and un-hide) the outer item and leak its
-# nested content.
+# A nested container makes an inner item a descendant, so recovery must stop there.
 _CLOSE_BARRIERS: dict = {
     "li": frozenset({"ul", "ol", "menu"}),
     "dt": frozenset({"dl"}),
@@ -202,16 +194,158 @@ _BLOCK_TAGS = frozenset(
     }
 )
 _HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
-# half the 16K fetch result: repeated span cells must leave room for the source text after the table
+
+# end tags pop through descendants only when their target is in the matching HTML parser scope
+_SKIP_RECOVERY_END_TAGS = (
+    frozenset(
+        {
+            "address",
+            "applet",
+            "article",
+            "aside",
+            "blockquote",
+            "button",
+            "caption",
+            "center",
+            "dd",
+            "details",
+            "dialog",
+            "dir",
+            "div",
+            "dl",
+            "dt",
+            "fieldset",
+            "figcaption",
+            "figure",
+            "footer",
+            "header",
+            "hgroup",
+            "li",
+            "listing",
+            "main",
+            "marquee",
+            "menu",
+            "nav",
+            "object",
+            "ol",
+            "p",
+            "pre",
+            "search",
+            "section",
+            "select",
+            "summary",
+            "table",
+            "tbody",
+            "td",
+            "tfoot",
+            "th",
+            "thead",
+            "tr",
+            "ul",
+        }
+    )
+    | _HEADING_TAGS
+)
+_GENERIC_END_SKIP_TAGS = frozenset({"datalist"})
+_SPECIAL_HTML_TAGS = _SKIP_RECOVERY_END_TAGS | frozenset(
+    {
+        "body",
+        "colgroup",
+        "form",
+        "frameset",
+        "head",
+        "html",
+        "iframe",
+        "noembed",
+        "noframes",
+        "noscript",
+        "plaintext",
+        "script",
+        "style",
+        "template",
+        "title",
+        "xmp",
+    }
+)
+_SCOPE_BARRIERS = frozenset(
+    {"applet", "caption", "html", "marquee", "object", "select", "table", "td", "template", "th"}
+)
+_SVG_SCOPE_BARRIERS = frozenset({"foreignobject", "desc", "title"})
+_MATHML_SCOPE_BARRIERS = frozenset({"mi", "mo", "mn", "ms", "mtext", "annotation-xml"})
+_MATHML_TEXT_INTEGRATION_POINTS = frozenset({"mi", "mo", "mn", "ms", "mtext"})
+_FOREIGN_HTML_BREAKOUT_START_TAGS = frozenset(
+    {
+        "b",
+        "big",
+        "blockquote",
+        "body",
+        "br",
+        "center",
+        "code",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "embed",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "hr",
+        "i",
+        "img",
+        "li",
+        "listing",
+        "menu",
+        "meta",
+        "nobr",
+        "ol",
+        "p",
+        "pre",
+        "ruby",
+        "s",
+        "small",
+        "span",
+        "strike",
+        "strong",
+        "sub",
+        "sup",
+        "table",
+        "tt",
+        "u",
+        "ul",
+        "var",
+    }
+)
+_LIST_ITEM_SCOPE_BARRIERS = _SCOPE_BARRIERS | {"ol", "ul"}
+_BUTTON_SCOPE_BARRIERS = _SCOPE_BARRIERS | {"button"}
+_IMPLICIT_CLOSE_BARRIERS = {
+    tag: _CLOSE_BARRIERS.get(tag, frozenset())
+    | (_BUTTON_SCOPE_BARRIERS if tag in _P_CLOSING_TAGS else frozenset())
+    for tag in _CLOSE_BARRIERS.keys() | _P_CLOSING_TAGS
+}
+_TABLE_SCOPE_BARRIERS = frozenset({"html", "table", "template"})
+_TABLE_END_TAGS = frozenset({"caption", "table", "tbody", "td", "tfoot", "th", "thead", "tr"})
+_TABLE_CONTEXT_END_TAGS = _TABLE_END_TAGS - {"table"}
+_TABLE_ONLY_START_TAGS = _TABLE_CONTEXT_END_TAGS | {"col", "colgroup"}
+_TABLE_CELL_TAGS = frozenset({"td", "th"})
+_TABLE_NESTING_TAGS = _TABLE_CELL_TAGS | {"caption"}
+_TABLE_SECTION_TAGS = frozenset({"tbody", "tfoot", "thead"})
+_TABLE_SECTION_START_TAGS = _TABLE_SECTION_TAGS | {"caption", "col", "colgroup"}
+_INDEXED_OPEN_TAGS = _SKIP_RECOVERY_END_TAGS | _SCOPE_BARRIERS
+# repeated span cells use half the 16k fetch limit to leave room for text after the table
 _MAX_SPAN_CHARS = 8_000
-# a long rowspan cell is usually page layout, so only its first row keeps the text
+# long rowspan cells usually encode layout, so only their first row keeps the text
 _MAX_REPEATED_CELL_CHARS = 200
-# floor per scope candidate once the page-wide total is spent, so an earlier decoy cannot starve a later article
+# each scope keeps 256 characters after the page-wide budget is spent, preventing decoy starvation
 _MIN_SCOPE_SPAN_CHARS = 256
 _INLINE_EMPHASIS = {"strong": "**", "b": "**", "em": "*", "i": "*"}
 
-# after a word, digits joined by commas / en dashes are citations (claim<sup>1,3–5</sup>); one separator per
-# step keeps the match linear. Hyphen / minus stay exponents (10<sup>-3</sup>), and so do thousands (1,000)
+# citation lists after words use commas or en dashes; hyphens, minuses, and thousands stay exponents
 _CITATION_LIST = re.compile(r"\d+(?:\s*[–,]\s*\d+)+")
 _THOUSANDS = re.compile(r"\d{1,3}(?:,\d{3})+")
 _PLAIN_SUFFIXES = frozenset(
@@ -383,8 +517,7 @@ class _HeaderFrame:
         # Tallied on emit; re-cleaning each parent's buffer would be quadratic.
         self.rendered_chars: int = 0
         self.heading_chars: int = 0
-        # Buffers open now enclose the frame, later ones nest. Link/cell sequence numbers, not flags: an inner one
-        # replaces the outer in the renderer's single slot.
+        # Store link/cell sequence numbers, not flags, since an inner one replaces the outer in one slot
         self.outer_list_depth = list_depth
         self.outer_link_seq = link_seq
         self.outer_cell_seq = cell_seq
@@ -401,10 +534,7 @@ class _HeaderFrame:
         closed_by_own_tag: bool,
         strip: bool | None = None,
     ) -> str:
-        """The buffer, or only its headings when the header is link furniture.
-
-        Without a matching ``</header>`` the header may have adopted the page
-        body, so keep it whole."""
+        """Returns the buffer, or only its headings when the header is link furniture; without a closing header tag, keep it whole"""
         self.stripped = False
         if not closed_by_own_tag:
             return "".join(self.parts)
@@ -528,6 +658,8 @@ class _TitleButtonScan:
     def __init__(self) -> None:
         self.keep: set[tuple[int, int]] = set()  # HTMLParser.getpos() of each kept <button>
         self._open: list[str] = []
+        self._namespaces: list[str] = []
+        self._html_integration: list[bool] = []
         self._closable_open = (
             0  # open tags with an optional end tag, as _MarkdownRenderer counts them
         )
@@ -540,11 +672,15 @@ class _TitleButtonScan:
         self._headings: list[list] = []
 
     def starttag(self, tag: str, attrs: list[tuple[str, str | None]], pos: tuple[int, int]) -> None:
+        attr_dict = dict(attrs)
+        self._prepare_foreign_html_start(tag, attr_dict)
         self._close_implicit(tag)
         if tag in _VOID_TAGS:
             return
-        attr_dict = dict(attrs)
+        namespace = self._next_namespace(tag)
         self._open.append(tag)
+        self._namespaces.append(namespace)
+        self._html_integration.append(self._is_html_integration_point(tag, namespace, attr_dict))
         if tag in _IMPLICIT_CLOSERS:
             self._closable_open += 1
         index = len(self._open) - 1
@@ -577,11 +713,44 @@ class _TitleButtonScan:
         # a page cut inside a heading (the fetch cap) still keeps its title
         self._close_headings(0)
 
+    def _next_namespace(self, tag: str) -> str:
+        if not self._namespaces or self._namespaces[-1] == "html":
+            return "svg" if tag == "svg" else "math" if tag == "math" else "html"
+        if self._html_integration[-1] and not (
+            self._namespaces[-1] == "math" and tag in {"mglyph", "malignmark"}
+        ):
+            return "svg" if tag == "svg" else "math" if tag == "math" else "html"
+        return self._namespaces[-1]
+
+    @staticmethod
+    def _is_html_integration_point(tag: str, namespace: str, attrs: dict) -> bool:
+        if namespace == "svg":
+            return tag in _SVG_SCOPE_BARRIERS
+        if namespace != "math":
+            return False
+        if tag in _MATHML_TEXT_INTEGRATION_POINTS:
+            return True
+        encoding = (attrs.get("encoding") or "").strip().lower()
+        return tag == "annotation-xml" and encoding in {"text/html", "application/xhtml+xml"}
+
+    def _prepare_foreign_html_start(self, tag: str, attrs: dict) -> None:
+        if not self._open or self._namespaces[-1] == "html":
+            return
+        if tag not in _FOREIGN_HTML_BREAKOUT_START_TAGS and not (
+            tag == "font" and any(name in attrs for name in {"color", "face", "size"})
+        ):
+            return
+        for i in range(len(self._open) - 1, -1, -1):
+            if self._namespaces[i] == "html" or self._html_integration[i]:
+                self._pop_to(i + 1)
+                return
+        self._pop_to(0)
+
     def _close_implicit(self, tag: str) -> None:
         """The renderer's optional-end-tag recovery (``_MarkdownRenderer._close_implicit``), so both see one tree."""
         if not self._closable_open:
             return
-        barriers = _CLOSE_BARRIERS.get(tag, ())
+        barriers = _IMPLICIT_CLOSE_BARRIERS.get(tag, frozenset())
         while True:
             close_at = None
             for i in range(len(self._open) - 1, -1, -1):
@@ -607,6 +776,8 @@ class _TitleButtonScan:
         self._close_headings(i)
         self._closable_open -= sum(1 for name in self._open[i:] if name in _IMPLICIT_CLOSERS)
         del self._open[i:]
+        del self._namespaces[i:]
+        del self._html_integration[i:]
 
     def _close_headings(self, i: int) -> None:
         while self._headings and self._headings[-1][0] >= i:
@@ -638,14 +809,20 @@ class _MarkdownRenderer(HTMLParser):
         page_span_limit: int | None = None,
     ):
         super().__init__(convert_charrefs = False)
-        # getpos() of buttons that carry their heading's title, found by _TitleButtonScan
+        # parser positions of buttons that carry their heading title, found by _TitleButtonScan
         self.title_buttons: frozenset[tuple[int, int]] = frozenset()
         self._title_scan: _TitleButtonScan | None = None
         self._site_links = site_links
         self._out: list[str] = []
-        self._skip_depth: int = 0
+        self._skip_tags: list[str] = []
+        # tag indices in _skip_tags avoid rescanning the stack for end tags
+        self._skip_at: dict[str, list[int]] = {}
+        self._skip_ns_at: dict[tuple[str, str], list[int]] = {}
+        self._skip_namespaces: list[str] = []
+        self._skip_html_at: list[int] = []
+        self._skip_html_integration: list[bool] = []
+        self._form_pointer: bool = False
 
-        # Main-content scoping: emit only while inside a scope tag.
         self._scope_tags = scope_tags
         self._scope_depth: int = 0
 
@@ -655,21 +832,22 @@ class _MarkdownRenderer(HTMLParser):
 
         # open non-void tags plus hidden-start indices, so an omitted </p>/</li> cannot leave the renderer stuck hidden
         self._open_tags: list[str] = []
-        # Open tags that can be closed implicitly; zero lets _close_implicit skip the scan.
+        # tag indices in _open_tags keep scoped end-tag recovery at constant time
+        self._open_at: dict[str, list[int]] = {}
+        # zero avoids scanning when no tags can close implicitly
         self._closable_open: int = 0
         self._hidden_marks: list[int] = []
 
-        # Open <header> buffers, innermost last. Empty unless strip_header.
+        # innermost <header> buffers; empty unless strip_header
         self._strip_header = strip_header
         self._header_stack: list[_HeaderFrame] = []
         self.header_decisions: list[bool] = []
         self._header_decisions = header_decisions
-        # Furniture chars removed, so a candidate is sized as the page wrote it.
+        # furniture chars removed, so a candidate is sized as the page wrote it
         self._dropped_chars: int = 0
         self._seg_dropped_start: int = 0
         self.scope_dropped: list[int] = []
-        # Heading text per segment: role="heading", hgroup and linked h1 render as prose, so ATX reparsing alone
-        # cannot keep them out of the gate.
+        # Track heading text per segment: role="heading", hgroup and linked h1 render as prose ATX misses
         self._seg_heading_texts: list[str] = []
         self.scope_heading_prose: list[int] = []
         # Open-tag indices of headings, unwound with _hidden_marks.
@@ -727,11 +905,7 @@ class _MarkdownRenderer(HTMLParser):
         ] = []
 
     def _nested_buffer_open(self, frame: _HeaderFrame) -> bool:
-        """True when a side buffer opened *inside* *frame* still holds content.
-
-        Such a buffer emits into the frame when it closes; an enclosing one
-        (already open at ``<header>``) must not capture it."""
-        # Only the buffer _emit would pick matters, in its order; OR-ing them calls an enclosing one nested.
+        """An enclosing buffer opened before the header must not capture the frame's content."""
         if self._in_link:
             return self._link_seq != frame.outer_link_seq
         if self._in_cell:
@@ -746,8 +920,7 @@ class _MarkdownRenderer(HTMLParser):
         if text:
             self._li_marker_pending = False
         frame = self._header_stack[-1] if self._header_stack else None
-        # Tee wherever the text routes, so a heading in a nested buffer is captured. A link opened inside the frame
-        # delivers twice, so tee only the formatted form; an enclosing link, once.
+        # Tee wherever text routes; a link inside the frame arrives twice, so tee only its formatted form
         in_nested_link = (
             self._in_link and self._link_seq != frame.outer_link_seq if frame else False
         )
@@ -1080,31 +1253,26 @@ class _MarkdownRenderer(HTMLParser):
             frame = self._header_stack[-1]
             frame.heading_parts.append(heading_text + "\n\n")
             frame.heading_chars += len(heading_text)
-            # Preserved by hand, so tell the gate too or a title-only card reads as body prose.
+            # preserve this in the gate so a title-only card is not counted as body prose
             self._seg_heading_texts.append(heading_text)
 
-    # Tag handlers. Structural bookkeeping shared by every start tag (skip/hidden/scope).
     def _truncate_open_tags(self, index: int) -> None:
-        """Drop the open-tag stack above *index*, keeping the closable count."""
+        """drop open tags above *index* while maintaining the closable count."""
         for name in self._open_tags[index:]:
+            if positions := self._open_at.get(name):
+                positions.pop()
             if name in _IMPLICIT_CLOSERS:
                 self._closable_open -= 1
         del self._open_tags[index:]
-        # a <sup> an ancestor closed (<p>x<sup>2</p>) is gone; a kept frame would fill the depth cap
+        # discard <sup> frames whose ancestor closed to avoid filling the depth cap
         while self._sup_starts and self._sup_starts[-1][0] >= index:
             self._sup_starts.pop()
 
     def _close_implicit(self, tag: str) -> None:
-        """HTML5 optional-end-tag recovery for a start tag about to open.
-
-        Pops each implicitly-closed ancestor (and its hidden marks), scanning the
-        whole stack so an open ``<p>``/``<li>`` still closes under an unclosed inline
-        ``<span>``. Stops at a ``_CLOSE_BARRIERS`` container so recovery never crosses
-        a nested list/table/dl and leaks the outer item's hidden content. Runs even
-        for skipped ``<nav>``/``<footer>``, which also close ``<p>``."""
+        """Recovery stops at _CLOSE_BARRIERS containers so an outer item hidden content cannot leak; runs even for skipped nav and footer, which also close p"""
         if not self._closable_open:
             return
-        barriers = _CLOSE_BARRIERS.get(tag, ())
+        barriers = _IMPLICIT_CLOSE_BARRIERS.get(tag, frozenset())
         while True:
             close_at = None
             for i in range(len(self._open_tags) - 1, -1, -1):
@@ -1154,10 +1322,7 @@ class _MarkdownRenderer(HTMLParser):
             closed_by_own_tag = False
 
     def _finalize_nested_buffers(self, frame: _HeaderFrame) -> None:
-        """Close side buffers opened inside *frame* whose end tags the page omitted.
-
-        Their content is the header's, so it has to land in the frame before the
-        strip is judged; otherwise it is emitted afterwards and escapes."""
+        """Closes side buffers opened in the frame whose end tags were omitted; their content must reach the frame before the strip is judged"""
         if self._in_link and self._link_seq != frame.outer_link_seq:
             # the header boundary proves this anchor did not adopt the body: its text is furniture
             frame.link_chars += self._link_header_chars
@@ -1193,20 +1358,69 @@ class _MarkdownRenderer(HTMLParser):
         frame = self._header_stack[-1]
         chars = len(text.strip())
         frame.text_chars += chars
-        # An anchor with no usable href renders as prose, not as a link.
+        # anchors without usable hrefs render as prose
         if not (self._in_link and self._link_href):
             return
         if self._link_seq == frame.outer_link_seq:
-            # An enclosing anchor closes after the header, too late to credit.
+            # enclosing anchors close after the header, too late to credit
             frame.link_chars += chars
         else:
             self._link_header_chars += chars
 
+    @staticmethod
+    def _html_start_namespace(tag: str) -> str:
+        if tag == "svg":
+            return "svg"
+        if tag == "math":
+            return "math"
+        return "html"
+
+    def _skipped_tag_namespace(self, tag: str) -> str:
+        if not self._skip_namespaces:
+            return self._html_start_namespace(tag)
+        parent_namespace = self._skip_namespaces[-1]
+        if parent_namespace == "html":
+            return self._html_start_namespace(tag)
+        if self._skip_html_integration[-1] and not (
+            parent_namespace == "math" and tag in {"mglyph", "malignmark"}
+        ):
+            return self._html_start_namespace(tag)
+        return parent_namespace
+
+    @staticmethod
+    def _is_html_integration_point(tag: str, namespace: str, attrs: dict) -> bool:
+        if namespace == "svg":
+            return tag in _SVG_SCOPE_BARRIERS
+        if namespace != "math":
+            return False
+        if tag in _MATHML_TEXT_INTEGRATION_POINTS:
+            return True
+        encoding = (attrs.get("encoding") or "").strip().lower()
+        return tag == "annotation-xml" and encoding in {"text/html", "application/xhtml+xml"}
+
+    def _truncate_skip_tags(self, index: int) -> None:
+        for position, name in enumerate(self._skip_tags[index:], start = index):
+            self._skip_at[name].pop()
+            self._skip_ns_at[(self._skip_namespaces[position], name)].pop()
+        while self._skip_html_at and self._skip_html_at[-1] >= index:
+            self._skip_html_at.pop()
+        del self._skip_tags[index:]
+        del self._skip_namespaces[index:]
+        del self._skip_html_integration[index:]
+
+    def _clear_skip_tags(self) -> None:
+        self._skip_tags.clear()
+        self._skip_at.clear()
+        self._skip_ns_at.clear()
+        self._skip_namespaces.clear()
+        self._skip_html_at.clear()
+        self._skip_html_integration.clear()
+
     def _enter_tag(self, tag: str, attr_dict: dict) -> bool:
-        """Track open/hidden/scope state; return True when the tag's content
-        should be rendered (False = suppressed). Caller runs ``_close_implicit``
-        first so recovery also fires for skipped tags."""
+        """track tag state; run ``_close_implicit`` first so skipped tags trigger recovery."""
         if tag not in _VOID_TAGS:
+            if tag in _INDEXED_OPEN_TAGS:
+                self._open_at.setdefault(tag, []).append(len(self._open_tags))
             self._open_tags.append(tag)
             if tag in _IMPLICIT_CLOSERS:
                 self._closable_open += 1
@@ -1256,16 +1470,13 @@ class _MarkdownRenderer(HTMLParser):
         return True
 
     def _exit_tag(self, tag: str) -> bool:
-        """Pop to the matching open tag; return True when the end tag should
-        be rendered (False = it closed inside a hidden / out-of-scope region)."""
-        # Recover an <a> left open before the segment is recorded, or its text is stranded.
+        """Recovers an open a element before the segment is recorded, or its text is stranded"""
         if self._in_link and self._scope_tags is not None and tag in self._scope_tags:
             self._finish_link()
         suppressed = bool(self._hidden_marks) or (
             self._scope_tags is not None and self._scope_depth == 0
         )
-        # An element that IS the heading emits when its buffer closes, after the mark pops; flush it here while the tee
-        # still recognises it.
+        # Flush the heading here while the tee still recognises it; it emits only after its mark pops
         if self._in_link and tag == "a" and self._heading_marks:
             self._finish_link()
         if tag not in _VOID_TAGS:
@@ -1287,6 +1498,84 @@ class _MarkdownRenderer(HTMLParser):
                 self._scope_seg_start = None
         return not suppressed
 
+    def _latest_indexed_open_tag(
+        self,
+        names: frozenset[str],
+        after: int = -1,
+    ) -> tuple[int, str] | None:
+        candidates = (
+            (positions[-1], name)
+            for name in names
+            if (positions := self._open_at.get(name)) and positions[-1] > after
+        )
+        return max(candidates, default = None)
+
+    def _close_open_target(self, target: int) -> None:
+        names = self._open_tags[target:]
+        for name in reversed(names):
+            self._close_rendered_tag(name)
+
+    def _prepare_heading_start(self, tag: str) -> None:
+        if tag not in _HEADING_TAGS or not self._open_tags:
+            return
+        if self._open_tags[-1] not in _HEADING_TAGS:
+            return
+        self._close_open_target(len(self._open_tags) - 1)
+
+    def _prepare_sibling_table_start(self) -> bool:
+        if not self._in_table:
+            return False
+        if self._skip_tags and self._skipped_tag_namespace("table") != "html":
+            return False
+        tables = self._open_at.get("table")
+        target = tables[-1] if tables else -1
+        if target < 0:
+            return True
+        if self._latest_indexed_open_tag(_TABLE_NESTING_TAGS, target):
+            return False
+        if not self._open_target_in_scope("table", target):
+            return True
+        self._clear_skip_tags()
+        self._close_open_target(target)
+        return False
+
+    def _prepare_foreign_html_start(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if not self._skip_tags or self._skip_namespaces[-1] == "html":
+            return
+        if tag not in _FOREIGN_HTML_BREAKOUT_START_TAGS and not (
+            tag == "font" and any(name in {"color", "face", "size"} for name, _ in attrs)
+        ):
+            return
+        for i in range(len(self._skip_tags) - 1, -1, -1):
+            if self._skip_namespaces[i] == "html" or self._skip_html_integration[i]:
+                self._truncate_skip_tags(i + 1)
+                return
+        self._clear_skip_tags()
+
+    def _prepare_table_start(self, tag: str) -> None:
+        if not self._in_table or tag not in _TABLE_ONLY_START_TAGS:
+            return
+        tables = self._open_at.get("table")
+        table = tables[-1] if tables else -1
+        if caption := self._latest_indexed_open_tag(frozenset({"caption"}), table):
+            self._clear_skip_tags()
+            self._close_rendered_tag(caption[1])
+        if self._in_cell:
+            cell = self._latest_indexed_open_tag(_TABLE_CELL_TAGS, table)
+            if cell:
+                self._clear_skip_tags()
+                self._close_rendered_tag(cell[1])
+        if self._in_row and tag not in _TABLE_CELL_TAGS:
+            row = self._latest_indexed_open_tag(frozenset({"tr"}), table)
+            if row:
+                self._clear_skip_tags()
+                self._close_rendered_tag(row[1])
+        if tag in _TABLE_SECTION_START_TAGS:
+            section = self._latest_indexed_open_tag(_TABLE_SECTION_TAGS, table)
+            if section:
+                self._clear_skip_tags()
+                self._close_rendered_tag(section[1])
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         if self._title_scan is not None:
@@ -1294,21 +1583,66 @@ class _MarkdownRenderer(HTMLParser):
         title_button = (
             tag == "button" and bool(self.title_buttons) and self.getpos() in self.title_buttons
         )
+        if self._skip_tags and tag == "button" and self._skipped_tag_namespace(tag) == "html":
+            button = self._last_skip_position("button", "html")
+            if button >= 0 and self._skip_target_in_scope(tag, button):
+                self._truncate_skip_tags(button)
+        self._prepare_foreign_html_start(tag, attrs)
+        if tag in _TABLE_ONLY_START_TAGS and not self._in_table:
+            return
+        if tag == "table" and self._prepare_sibling_table_start():
+            return
+        if (
+            self._skip_tags
+            and tag in _TABLE_ONLY_START_TAGS
+            and self._last_skip_position("table", "html") < 0
+        ):
+            self._prepare_table_start(tag)
 
-        if self._skip_depth:
-            if tag in _SKIP_TAGS:
-                self._skip_depth += 1
+        if self._skip_tags:
+            if tag not in _VOID_TAGS:
+                attr_dict = dict(attrs)
+                namespace = self._skipped_tag_namespace(tag)
+                template = self._last_skip_position("template", "html")
+                if tag == "form" and namespace == "html" and template < 0:
+                    if self._form_pointer:
+                        return
+                    self._form_pointer = True
+                position = len(self._skip_tags)
+                self._skip_at.setdefault(tag, []).append(position)
+                self._skip_ns_at.setdefault((namespace, tag), []).append(position)
+                self._skip_tags.append(tag)
+                self._skip_namespaces.append(namespace)
+                if namespace == "html":
+                    self._skip_html_at.append(position)
+                self._skip_html_integration.append(
+                    self._is_html_integration_point(tag, namespace, attr_dict)
+                )
             return
 
-        # Recover optional end tags before the skip decision: a skipped <nav>/<footer> still implicitly closes an open
-        # <p>, releasing its hidden mark so following siblings render.
+        if tag == "form" and self._form_pointer:
+            return
+
+        # close optional tags before skipping so skipped <nav>/<footer> releases an open <p> marker
         self._close_implicit(tag)
+        self._prepare_heading_start(tag)
+        self._prepare_table_start(tag)
 
         if tag in _SKIP_TAGS and not (title_button and self._heading_marks):
-            self._skip_depth += 1
+            self._skip_tags.append(tag)
+            self._skip_at = {tag: [0]}
+            namespace = self._html_start_namespace(tag)
+            self._skip_ns_at = {(namespace, tag): [0]}
+            self._skip_namespaces = [namespace]
+            self._skip_html_at = [0] if namespace == "html" else []
+            self._skip_html_integration = [
+                self._is_html_integration_point(tag, namespace, dict(attrs))
+            ]
             return
 
         attr_dict = dict(attrs)
+        if tag == "form":
+            self._form_pointer = True
         if not self._enter_tag(tag, attr_dict):
             return
 
@@ -1425,7 +1759,7 @@ class _MarkdownRenderer(HTMLParser):
             self._next_cell_seq += 1
             self._cell_seq = self._next_cell_seq
             self._cell_colspan = min(max(1, _span_attr(attr_dict, "colspan")), 1000)
-            # rowspan="0" runs to the end of the row group
+            # rowspan="0" spans the remaining row group
             self._cell_rowspan = _span_attr(attr_dict, "rowspan") or 65534
             if tag == "th":
                 self._row_has_th = True
@@ -1438,15 +1772,64 @@ class _MarkdownRenderer(HTMLParser):
         if self._title_scan is not None:
             self._title_scan.endtag(tag)
 
-        # a kept title button closes through _exit_tag; skipped ones always raised _skip_depth
-        if tag in _SKIP_TAGS and (self._skip_depth or tag != "button"):
-            self._skip_depth = max(0, self._skip_depth - 1)
-            return
-        if self._skip_depth:
+        recovered_target = -1
+        if self._skip_tags:
+            at = self._skip_at.get(tag)
+            template = self._last_skip_position("template", "html")
+            if tag == "form" and template < 0:
+                if at and self._skip_namespaces[at[-1]] == "html":
+                    self._form_pointer = False
+                elif not (
+                    at
+                    and self._skip_namespaces[at[-1]] != "html"
+                    and (not self._skip_html_at or self._skip_html_at[-1] <= at[-1])
+                ):
+                    self._form_pointer = False
+                    return
+            # template is a scope boundary, so end tags outside it are ignored
+            if at and (template < 0 or at[-1] >= template):
+                i = at[-1]
+                if not self._skip_target_in_scope(tag, i):
+                    return
+                if tag in _GENERIC_END_SKIP_TAGS and self._skip_barrier_after(
+                    _SPECIAL_HTML_TAGS, "html", i
+                ):
+                    return
+                self._truncate_skip_tags(i)
+                return
+            # only scoped structural end tags pop skipped elements; form and inline end tags do not
+            if tag not in _SKIP_RECOVERY_END_TAGS:
+                return
+            if tag in _HEADING_TAGS:
+                heading = self._latest_indexed_open_tag(_HEADING_TAGS)
+                target = heading[0] if heading else -1
+            else:
+                positions = self._open_at.get(tag)
+                target = positions[-1] if positions else -1
+            if target < 0 or not self._open_target_in_scope(tag, target):
+                return
+            self._clear_skip_tags()
+            recovered_target = target
+        # kept title buttons close through _exit_tag
+        elif tag in _SKIP_TAGS and tag != "button":
             return
 
+        if tag == "form":
+            self._form_pointer = False
+
+        if recovered_target >= 0:
+            self._close_open_target(recovered_target)
+            return
+        if tag in _HEADING_TAGS:
+            heading = self._latest_indexed_open_tag(_HEADING_TAGS)
+            if heading and self._open_target_in_scope(tag, heading[0]):
+                self._close_open_target(heading[0])
+            return
+        self._close_rendered_tag(tag)
+
+    def _close_rendered_tag(self, tag: str) -> None:
         closing_sup = None
-        # O(1): only a <sup> that is still the innermost open tag converts; malformed nesting drops on unwind
+        # only the innermost open <sup> converts in O(1); malformed nesting drops on unwind
         if (
             tag == "sup"
             and self._sup_starts
@@ -1518,8 +1901,59 @@ class _MarkdownRenderer(HTMLParser):
         elif tag == "table":
             self._finish_table()
 
+    @staticmethod
+    def _scope_barriers(tag: str) -> frozenset[str]:
+        if tag == "li":
+            return _LIST_ITEM_SCOPE_BARRIERS
+        if tag == "p":
+            return _BUTTON_SCOPE_BARRIERS
+        if tag in _TABLE_END_TAGS:
+            return _TABLE_SCOPE_BARRIERS
+        return _SCOPE_BARRIERS
+
+    def _last_skip_position(self, tag: str, namespace: str) -> int:
+        positions = self._skip_ns_at.get((namespace, tag))
+        return positions[-1] if positions else -1
+
+    def _skip_barrier_after(self, names: frozenset[str], namespace: str, target: int) -> bool:
+        return any(self._last_skip_position(name, namespace) > target for name in names)
+
+    def _foreign_skip_barrier_after(self, target: int) -> bool:
+        return self._skip_barrier_after(
+            _SVG_SCOPE_BARRIERS, "svg", target
+        ) or self._skip_barrier_after(_MATHML_SCOPE_BARRIERS, "math", target)
+
+    def _skip_target_in_scope(self, tag: str, target: int) -> bool:
+        # nothing above the innermost element can be a barrier
+        if target == len(self._skip_tags) - 1:
+            return True
+        barriers = self._scope_barriers(tag)
+        if self._skip_barrier_after(barriers, "html", target):
+            return False
+        target_namespace = self._skip_namespaces[target]
+        if target_namespace != "html" and (
+            not self._skip_html_at or self._skip_html_at[-1] <= target
+        ):
+            return True
+        return not self._foreign_skip_barrier_after(target)
+
+    def _open_skip_barrier(self, barriers: frozenset[str]) -> bool:
+        return self._skip_barrier_after(barriers, "html", -1) or self._foreign_skip_barrier_after(
+            -1
+        )
+
+    def _open_target_in_scope(self, tag: str, target: int) -> bool:
+        barriers = self._scope_barriers(tag)
+        if self._open_skip_barrier(barriers):
+            return False
+        return not any(
+            positions and positions[-1] > target
+            for name in barriers
+            if (positions := self._open_at.get(name))
+        )
+
     def _text_suppressed(self) -> bool:
-        if self._skip_depth or self._hidden_marks:
+        if self._skip_tags or self._hidden_marks:
             return True
         return self._scope_tags is not None and self._scope_depth == 0
 
@@ -1539,8 +1973,7 @@ class _MarkdownRenderer(HTMLParser):
             return
         # Collapse all whitespace (including newlines) per HTML rules.
         text = re.sub(r"\s+", " ", data)
-        # Sized after collapsing, as the reader sees it: raw spaces in a link cleared the floor at ~100% density and
-        # dropped the byline.
+        # Count after collapsing: raw spaces in a link inflated it past the floor.
         self._count_header_text(text)
         # Suppress whitespace-only nodes between table elements (source indentation).
         if self._in_table and not self._in_cell and not text.strip():
@@ -1570,8 +2003,7 @@ class _MarkdownRenderer(HTMLParser):
 
     def flush_pending(self) -> None:
         """Flush open side-buffers into ``_out`` after close(), recovering truncated HTML."""
-        # Headers first: a frame finalizes its inner buffers, then emits into the enclosing link or cell, which must
-        # still be open here; it is finalized below.
+        # Headers first: a frame emits into the enclosing link or cell, which must still be open.
         self._flush_header_frames()
 
         if self._in_link:
@@ -1599,9 +2031,7 @@ class _MarkdownRenderer(HTMLParser):
             else:
                 self._out.append("\n\n" + prefixed + "\n\n")
 
-        # A scope left open by truncated HTML never reached _exit_tag, so its output never joined scope_segments and
-        # would score 0. Flush the still-open segment here (after the side-buffers) so a truncated main-content page is
-        # scored.
+        # Flushes a scope left open by truncated HTML after the side-buffers, else the page scores 0
         if self._scope_seg_start is not None:
             self.scope_segments.append("".join(self._out[self._scope_seg_start :]))
             self.scope_dropped.append(self._dropped_chars - self._seg_dropped_start)
@@ -1642,8 +2072,7 @@ def _cleanup(text: str) -> str:
     return "\n".join(out).strip()
 
 
-# Known boilerplate fragments stripped from main-content conversions, matched only against short lines. Sources:
-# GitHub page furniture / client-side error placeholders, skip-links, cookie banners.
+# Boilerplate removed from main content; matched only on short lines (GitHub, skip-links, cookies)
 _BOILERPLATE_FRAGMENTS = (
     "skip to content",
     "skip to main content",
@@ -1673,11 +2102,7 @@ _BOILERPLATE_NORMALIZED = frozenset(
 
 
 def _line_is_boilerplate(line: str) -> bool:
-    """True only when a whole line is composed of known furniture phrases.
-
-    Splits on sentence terminators and requires every segment to be furniture, so a
-    line stacking several phrases is dropped while prose that merely quotes one is
-    kept (its other words leave a non-furniture segment)."""
+    """Every sentence segment must be furniture, so prose that merely quotes one phrase is kept."""
     normalized = re.sub(r"\s+", " ", line).strip().casefold()
     if not normalized:
         return False
@@ -1699,10 +2124,7 @@ def _fence_state(line: str, fence: int) -> int:
 
 
 def _strip_boilerplate_lines(text: str, site_links: SiteLinks | None = None) -> str:
-    """Drop short lines that consist entirely of known page-furniture phrases.
-
-    Fenced code blocks are preserved verbatim: boilerplate never renders
-    inside ``<pre>``, while READMEs legitimately quote error strings."""
+    """Fenced code is kept verbatim: boilerplate never renders in pre, and READMEs quote error strings."""
     out: list[str] = []
     fence = 0
     for line in text.split("\n"):
@@ -1899,8 +2321,7 @@ def _visible_len(line: str) -> int:
     return total
 
 
-# A scoped conversion below this size is judged not to be the page's main content (e.g. an empty <article> stub) and the
-# next candidate is tried.
+# Scoped conversions shorter than this are rejected as main content, e.g. an empty article stub
 _MIN_MAIN_CONTENT_CHARS = 200
 
 

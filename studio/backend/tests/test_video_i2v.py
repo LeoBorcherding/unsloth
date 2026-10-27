@@ -61,10 +61,10 @@ def test_text_only_families_take_no_frame(name):
 
 def test_i2v_class_is_never_the_t2v_class():
     # A family naming its own t2v class as the i2v one would "swap" to the same class and pass the image to a
-    # __call__ that ignores it.
+    # __call__ that ignores it, unless that class takes the frame itself (Cosmos3OmniPipeline's image=).
     for fam in _FAMILIES:
         if fam.i2v_pipeline_class:
-            assert fam.i2v_pipeline_class != fam.pipeline_class
+            assert fam.i2v_pipeline_class != fam.pipeline_class or not fam.i2v_fits_first_frame
             assert fam.i2v_pipeline_class.endswith("Pipeline")
 
 
@@ -525,3 +525,33 @@ def test_model_offload_sends_the_vae_back_when_the_first_frame_encode_raises():
             pipe.vae.encode(torch.zeros(1))
     assert offloaded == [pipe.vae]
     assert pipe.vae.__dict__["encode"] is _boom
+
+
+def test_availability_follows_the_module_not_a_reused_id(monkeypatch):
+    """i2v_pipeline_available cached by id(diffusers). Once a replaced module is collected, its id can
+    be handed to the next one, and the next module then inherits the first one's answer: a fake
+    diffusers without WanImageToVideoPipeline made a later fake that has it read as unavailable,
+    an order-dependent "needs diffusers' WanImageToVideoPipeline" in test_video_backend. Forcing the
+    ids to collide reproduces that deterministically."""
+    import builtins
+    import sys
+    import types
+
+    from core.inference import video_i2v as vi
+
+    monkeypatch.setattr(vi, "_AVAILABLE", {})
+    # Every module gets the same id, as two short-lived fakes can in a real run.
+    monkeypatch.setattr(builtins, "id", lambda obj: 1)
+    name = "WanImageToVideoPipeline"
+
+    without = types.ModuleType("diffusers")
+    monkeypatch.setitem(sys.modules, "diffusers", without)
+    assert vi.i2v_pipeline_available(name) is False
+
+    with_class = types.ModuleType("diffusers")
+    setattr(with_class, name, type(name, (), {}))
+    monkeypatch.setitem(sys.modules, "diffusers", with_class)
+    assert vi.i2v_pipeline_available(name) is True
+    # And the answer for the module that is current is still cached, not recomputed each call.
+    monkeypatch.delattr(with_class, name)
+    assert vi.i2v_pipeline_available(name) is True

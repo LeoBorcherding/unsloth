@@ -30,10 +30,14 @@ const TUNNEL_PREF = readSrc(
 
 const LOCALES = { ar, de, en, es, fr, he, hi, it, ja, ko, ptBR, ru, sv, zhCN };
 
-test("only the owner sees it, after the Decision API section, and settings search finds it", () => {
+test("only the owner sees it, in the access group, and settings search finds it", () => {
   assert.match(
     API_TAB,
-    /\{isOwner \? <DecisionApiSection \/> : null\}\s*\{isOwner \? <McpAccessSection apiKey=\{revealed\} \/> : null\}/,
+    /\{isOwner \? <McpAccessSection apiKey=\{revealed\} \/> : null\}/,
+  );
+  assert.match(
+    API_TAB,
+    /\{isOwner \? <KeylessApiAccessLink \/> : null\}/,
   );
   assert.doesNotMatch(SECTION, /useIsAccountOwner/);
   assert.match(
@@ -101,7 +105,7 @@ test("the setup snippet shows only while on, targets the usage examples' address
   assert.match(SECTION, /buildMcpSnippet\(agent, settings\.url, os, apiKey\)/);
   assert.match(
     SECTION,
-    /useTunnel && cloudflareUrl\s*\?\s*cloudflareUrl\s*:\s*\(serverUrl \?\? origin\)/,
+    /useTunnel && cloudflareUrl\s*\?\s*cloudflareUrl\s*:\s*isTauri\s*\?\s*\(serverUrl \?\? origin\)\s*:\s*origin/,
   );
   // tunnel preference changes must notify this section immediately.
   assert.match(
@@ -122,7 +126,7 @@ test("the setup snippet shows only while on, targets the usage examples' address
   );
   assert.equal(
     en.settings.apiKeys.mcp.exportKeyHint,
-    "Set {name} to an access token from this page before you start the agent.",
+    "Set {name} to an Unsloth API key from this page before you start the agent.",
   );
 });
 
@@ -141,7 +145,11 @@ test("the agent picker keeps the pill trigger and shared list, CLI agents get th
   );
   assert.ok(trigger.length > 0);
   assert.doesNotMatch(trigger, /rounded-/);
-  assert.match(SECTION, /SUPPORTED_AGENTS\.map\(/);
+  assert.match(
+    SECTION,
+    /const MCP_AGENTS = SUPPORTED_AGENTS\.filter\(\(agent\) => hasMcpSnippet\(agent\.id\)\);/,
+  );
+  assert.match(SECTION, /MCP_AGENTS\.map\(/);
   assert.match(SECTION, /from "\.\/coding-agent-list";/);
   assert.match(SECTION, /from "\.\/agent-command-block";/);
   assert.match(SECTION, /MCP_SHELL_AGENT_IDS\.has\(agent\) \? \(\s*<fieldset/);

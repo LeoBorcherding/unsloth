@@ -46,19 +46,22 @@ def i2v_pipeline_available(name: Optional[str]) -> bool:
         import diffusers
     except Exception:  # noqa: BLE001
         return False
-    key = (id(diffusers), name)
-    cached = _AVAILABLE.get(key)
-    if cached is None:
-        try:
-            resolve_i2v_pipeline_class(name)
-            cached = True
-        except Exception:  # noqa: BLE001 -- an absent or unimportable class is simply unavailable
-            cached = False
-        _AVAILABLE[key] = cached
-    return cached
+    # Keyed by name and checked by identity, not by id(diffusers): once a replaced module is collected
+    # its id can be handed to the next one, and a stale answer for a module that lacked the class
+    # would then hide one that has it.
+    entry = _AVAILABLE.get(name)
+    if entry is not None and entry[0] is diffusers:
+        return entry[1]
+    try:
+        resolve_i2v_pipeline_class(name)
+        available = True
+    except Exception:  # noqa: BLE001 -- an absent or unimportable class is simply unavailable
+        available = False
+    _AVAILABLE[name] = (diffusers, available)
+    return available
 
 
-_AVAILABLE: dict[tuple[int, str], bool] = {}
+_AVAILABLE: dict[str, tuple[Any, bool]] = {}
 
 
 def _init_kwargs(pipe: Any, cls: type, config_overrides: dict[str, Any]) -> dict[str, Any]:
@@ -121,7 +124,7 @@ def first_frame_pipeline(
             _restore(pipe, saved)
             raise
         try:
-            with _offload_vae_after_encode(pipe):
+            with offload_vae_after_encode(pipe):
                 yield pipe
         finally:
             pipe.__class__ = original_cls
@@ -130,7 +133,7 @@ def first_frame_pipeline(
 
 
 @contextlib.contextmanager
-def _offload_vae_after_encode(pipe: Any) -> Iterator[None]:
+def offload_vae_after_encode(pipe: Any) -> Iterator[None]:
     """Model offload chains vae after the transformer (the t2v order), so the first-frame encode would leave the VAE
     resident through denoising; send it back once the encode returns."""
     vae = getattr(pipe, "vae", None)

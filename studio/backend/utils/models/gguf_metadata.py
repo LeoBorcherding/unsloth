@@ -68,6 +68,8 @@ _N_EMBD_CACHE: Dict[_CacheKey, Optional[int]] = {}
 # Cache the embedded speculative-head count separately for discovery, launch, and sizing.
 _NEXTN_CACHE: Dict[_CacheKey, Optional[int]] = {}
 
+_MROPE_SECTIONS_CACHE: Dict[_CacheKey, Optional[bool]] = {}
+
 
 def _cache_key(path: str) -> Optional[_CacheKey]:
     try:
@@ -484,11 +486,7 @@ def _gguf_has_classifier_head(path: str) -> Optional[bool]:
 
 
 def _parse_gguf_has_named_tensor(path: str, wanted_name: str) -> Optional[bool]:
-    """Whether the GGUF tensor table lists exactly ``wanted_name``.
-
-    Same stream and bounds as ``_parse_gguf_has_classifier_head``, which matches a
-    prefix; this matches a full name, without mapping the tensor data in.
-    """
+    """Exact full-name match against the GGUF tensor table, without mapping the tensor data in."""
     try:
         with open(path, "rb") as f:
             head = f.read(24)
@@ -562,21 +560,7 @@ def _gguf_shard_has_named_tensor(path: str, wanted_name: str) -> Optional[bool]:
 
 
 def mtp_drafter_loads_standalone(path: str) -> bool:
-    """Can llama-server open *path* as a ``--model-draft``?
-
-    A draft head is opened as a complete model unless it can borrow the target's
-    embeddings, so one carrying neither its own ``token_embd.weight`` nor
-    ``<arch>.nextn_shared_target_tensors`` ends the launch with
-    ``check_tensor_dims: tensor 'token_embd.weight' not found``. Measured against the
-    shipped llama.cpp: the metadata flag is what admits a head into
-    ``borrow_shared_tensor``. Only that one tensor decides, since the rest of the
-    borrowable set is per-architecture (``qwen4exp`` creates no ``output_norm``), so a
-    stricter refusal would reject heads that work.
-
-    Split-aware like ``_gguf_has_classifier_head``: llama-server opens sibling shards
-    implicitly, so a tensor absent from shard 1 may live in shard 2. Fails open on
-    anything it cannot see, leaving the verdict to llama-server.
-    """
+    """False for a head lacking both token_embd.weight and nextn_shared_target_tensors, checked across shards; it would fail at launch; fails open if unseen."""
     from utils.models.model_config import colocated_split_shards
 
     try:
@@ -673,6 +657,82 @@ def _read_gguf_bool(path: str, wanted_key: str) -> Optional[bool]:
             except StopIteration:
                 break
         _BOOL_CACHE[ckey] = result
+    return result
+
+
+def _parse_gguf_has_mrope_sections(path: str) -> Optional[bool]:
+    arch: Optional[str] = None
+    nonzero: Dict[str, bool] = {}
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+            if len(head) < 24:
+                return None
+            magic, _version, _tcount, kv_count = struct.unpack("<IIQQ", head)
+            if magic != _GGUF_MAGIC:
+                return None
+            for _ in range(kv_count):
+                klen_bytes = f.read(8)
+                if len(klen_bytes) < 8:
+                    return None
+                klen = struct.unpack("<Q", klen_bytes)[0]
+                if klen > 1 << 20:
+                    return None
+                kbytes = f.read(klen)
+                vt_bytes = f.read(4)
+                if len(kbytes) < klen or len(vt_bytes) < 4:
+                    return None
+                key = kbytes.decode("utf-8", "replace")
+                vtype = struct.unpack("<I", vt_bytes)[0]
+                if vtype == 8 and key == "general.architecture":
+                    slen_bytes = f.read(8)
+                    if len(slen_bytes) < 8:
+                        return None
+                    slen = struct.unpack("<Q", slen_bytes)[0]
+                    if slen > 1 << 22:
+                        return None
+                    arch = f.read(slen).decode("utf-8", "replace")
+                elif vtype == 9 and key.endswith(".rope.dimension_sections"):
+                    ahead = f.read(12)
+                    if len(ahead) < 12:
+                        return None
+                    atype, alen = struct.unpack("<IQ", ahead)
+                    # llama.cpp reads these as int32 (get_key_or_arr, at most 4).
+                    if atype not in (4, 5) or alen > 16:
+                        return None
+                    data = f.read(4 * alen)
+                    if len(data) < 4 * alen:
+                        return None
+                    values = struct.unpack(f"<{alen}{'I' if atype == 4 else 'i'}", data)
+                    nonzero[key] = any(values)
+                elif not _skip_gguf_value(f, vtype):
+                    return None
+    except (OSError, struct.error, UnicodeDecodeError) as e:
+        logger.debug(f"_parse_gguf_has_mrope_sections: cannot read {path}: {e}")
+        return None
+    if arch is None:
+        return None
+    return nonzero.get(f"{arch}.rope.dimension_sections", False)
+
+
+def gguf_has_mrope_sections(path: str) -> Optional[bool]:
+    """Whether the selected architecture declares a nonzero ``rope.dimension_sections``.
+
+    llama.cpp makes a DFlash drafter M-RoPE exactly when this holds (``llama_model_rope_type``), and an M-RoPE target is what pins an image to one position. ``False`` is a readable header without the key (or all zeros); ``None`` is unreadable, so callers can fail open."""
+    fkey = _cache_key(path)
+    if fkey is None:
+        return None
+    with _CACHE_LOCK:
+        if fkey in _MROPE_SECTIONS_CACHE:
+            return _MROPE_SECTIONS_CACHE[fkey]
+    result = _parse_gguf_has_mrope_sections(path)
+    with _CACHE_LOCK:
+        while len(_MROPE_SECTIONS_CACHE) >= _CACHE_MAX_ENTRIES:
+            try:
+                _MROPE_SECTIONS_CACHE.pop(next(iter(_MROPE_SECTIONS_CACHE)))
+            except StopIteration:
+                break
+        _MROPE_SECTIONS_CACHE[fkey] = result
     return result
 
 
@@ -926,11 +986,7 @@ def mmproj_accepts_image(path: str) -> bool:
 
 
 def is_mmproj_by_metadata(meta: Optional[Dict[str, str]]) -> Optional[bool]:
-    """True/False from ``general.type``; None means fall back to filename.
-
-    ``general.architecture == "clip"`` is llama.cpp's projector arch and wins: older
-    converters wrote ``general.type`` values like ``clip-vision`` (#9286).
-    """
+    """True/False from general.type, None to fall back to filename; architecture clip wins, as older converters wrote general.type as clip-vision."""
     if not meta:
         return None
     if (meta.get("general.architecture") or "").lower() == "clip":

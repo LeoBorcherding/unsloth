@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from auth import policy, storage
-from auth.authentication import get_current_subject
+from auth.authentication import authenticated_via_api_key, get_current_subject
 from models.auth import (
     AccountActiveRequest,
     AccountListResponse,
@@ -26,7 +26,19 @@ from utils.account_context import AccountContext, run_as
 from utils.paths import storage_roots
 
 
-router = APIRouter(dependencies = [Depends(get_current_subject), Depends(policy.require_owner)])
+def _require_ui_session(via_api_key: bool = Depends(authenticated_via_api_key)) -> None:
+    # A setup code signs in as the account, so an API key or keyless caller must not mint one.
+    if via_api_key:
+        raise HTTPException(status_code = 403, detail = "Account management requires a UI session.")
+
+
+router = APIRouter(
+    dependencies = [
+        Depends(get_current_subject),
+        Depends(policy.require_owner),
+        Depends(_require_ui_session),
+    ]
+)
 
 
 @contextmanager
@@ -51,8 +63,7 @@ def retire_account_roots(account: AccountContext):
     account_access.retire_resident_shares(account.account_id)
     from core.inference.external_provider import retire_account_clients
 
-    # Its provider clients hold a cookie jar and idle sockets, and the cache they sit in is
-    # keyed by account, so nothing else would ever drop them.
+    # Cache is keyed by account, so nothing else would drop these clients.
     retire_account_clients(account.account_id)
     from core.inference.mcp_client import close_mcp_sessions, invalidate_tool_cache
     from core.training.account_jobs import retire_account_jobs
@@ -83,6 +94,9 @@ def retire_account_roots(account: AccountContext):
     from storage.studio_db import close_wal_keeper_for
 
     close_wal_keeper_for(run_as(account, storage_roots.workspace_root) / "studio.db")
+    from core.inference import file_history
+
+    file_history.close_store(run_as(account, storage_roots.account_path, "file_history"))
     roots = {root.absolute() for root in run_as(account, storage_roots.managed_account_roots)}
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     moved: list[tuple[Path, Path]] = []
@@ -154,11 +168,14 @@ def set_account_active(account_id: str, payload: AccountActiveRequest):
             restore_account_clients(account_id)
             active_generations.lift_fence(account_id)
         else:
+            from core.scheduled_tasks.scheduler import cancel_account_runs
             from routes.inference import retire_account_loads
 
             # Fence first, so a request registering after the sweep is cancelled too.
             active_generations.fence(account_id)
             active_generations.cancel_all(account_id)
+            # A scheduled run still waiting for the model gate has not registered yet.
+            cancel_account_runs(account_id)
             retire_account_loads(account_id)
             account_access.retire_resident_shares(account_id)
         return result

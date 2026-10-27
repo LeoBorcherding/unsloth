@@ -8,19 +8,22 @@ import { Switch } from "@/components/ui/switch";
 import {
   DEFAULT_AGENT_RULE,
   type HistoryAccess,
+  type ScriptAccess,
   type SiteRule,
   normalizeSitePattern,
   useBrowserAgentStore,
 } from "@/features/browser";
 import { useT } from "@/i18n";
 import { CursorInWindowIcon } from "@/lib/browser-use-icon";
-import { Add01Icon, Cancel01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Cancel01Icon, PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 
 type Column = keyof SiteRule;
+
+export const BROWSER_USE_DOCS_URL = "https://unsloth.ai/docs/basics/browser-use";
 
 function RuleSelect({
   column,
@@ -43,7 +46,7 @@ function RuleSelect({
           ["ask", t(isDefault ? "browser.agentSettings.askNewSites" : "browser.agentSettings.requiresApproval")],
           ["block", t("browser.agentSettings.blocked")],
         ]
-      : column === "actions"
+      : column === "actions" || column === "unlabelled"
         ? [
             ["ask", t("browser.agentSettings.requiresApproval")],
             ["allow", t("browser.agentSettings.alwaysAllow")],
@@ -69,8 +72,8 @@ function RuleSelect({
   );
 }
 
-// Each choice carries its own heading and wraps to the next line rather than cutting its label, at any text size.
-const CHOICES = "grid grid-cols-[repeat(auto-fit,minmax(calc(11.5rem*var(--ui-space-scale,1)),1fr))] gap-x-2 gap-y-2";
+// 2x2, not auto-fit: auto-fit left the fourth choice alone on its own row.
+const CHOICES = "grid grid-cols-1 gap-x-4 gap-y-3 @[30rem]/perms:grid-cols-2";
 
 function PermissionsTable() {
   const t = useT();
@@ -83,6 +86,7 @@ function PermissionsTable() {
     ["browsing", t("browser.agentSettings.browsing")],
     ["actions", t("browser.agentSettings.actions")],
     ["downloads", t("browser.agentSettings.downloads")],
+    ["unlabelled", t("browser.agentSettings.unlabelled")],
   ];
 
   const add = () => {
@@ -98,7 +102,7 @@ function PermissionsTable() {
   };
 
   const row = (name: string, rule: SiteRule, site: string | null) => (
-    <div key={site ?? "default"} className="flex flex-col gap-1.5 border-b border-border/60 py-2.5 last:border-b-0">
+    <div key={site ?? "default"} className="flex flex-col gap-2.5 border-b border-border/60 py-4 first:pt-3 last:border-b-0 last:pb-5">
       <div className="flex min-h-8 items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={name}>
           {name}
@@ -117,8 +121,8 @@ function PermissionsTable() {
       </div>
       <div className={CHOICES}>
         {columns.map(([column, title]) => (
-          <div key={column} className="flex min-w-0 flex-col gap-1">
-            <span className="text-xs text-muted-foreground">{title}</span>
+          <div key={column} className="flex min-w-0 flex-col gap-1.5">
+            <span className="px-1 text-xs text-muted-foreground">{title}</span>
             <RuleSelect
               column={column}
               value={rule[column]}
@@ -147,7 +151,7 @@ function PermissionsTable() {
         </Button>
       }
     >
-      <div className="mt-2 flex flex-col rounded-lg border border-border/80 px-3 py-1">
+      <div className="@container/perms mt-2 flex flex-col rounded-2xl border border-border/80 px-4">
         {row(t("browser.agentSettings.default"), permissions.defaults, null)}
         {sites.map((site) => row(site, permissions.sites[site] ?? DEFAULT_AGENT_RULE, site))}
         {draft !== null ? (
@@ -173,7 +177,8 @@ function PermissionsTable() {
               }}
               className="h-8 flex-1"
             />
-            <Button type="submit" size="sm">
+            <Button variant="secondary" type="submit" size="sm">
+              <HugeiconsIcon icon={PlusSignIcon} data-icon="inline-start" />
               {t("browser.agentSettings.add")}
             </Button>
             <Button type="button" variant="ghost" size="sm" onClick={() => setDraft(null)}>
@@ -189,17 +194,21 @@ function PermissionsTable() {
   );
 }
 
-/** Settings > Browser: browser use on or off, history access, and the agent's site permissions. */
+/** Settings > Browser: browser use on or off, history and script access, and the agent's site permissions. */
 export function BrowserAgentSettings() {
   const t = useT();
   const enabled = useBrowserAgentStore((state) => state.enabled);
   const historyAccess = useBrowserAgentStore((state) => state.historyAccess);
-  const { setEnabled, setHistoryAccess } = useBrowserAgentStore.getState();
+  const scriptAccess = useBrowserAgentStore((state) => state.scriptAccess);
+  const showCursor = useBrowserAgentStore((state) => state.showCursor);
+  const { setEnabled, setHistoryAccess, setScriptAccess, setShowCursor } = useBrowserAgentStore.getState();
   return (
     <>
-      <SettingsSection title={t("browser.agentSettings.title")}>
+      <SettingsSection
+        title={t("browser.agentSettings.title")}
+      >
         <SettingsRow
-          icon={<HugeiconsIcon icon={CursorInWindowIcon} strokeWidth={1.75} className="size-6" />}
+          icon={<HugeiconsIcon icon={CursorInWindowIcon} strokeWidth={1.75} className="me-1.5 size-7" />}
           label={t("browser.agentSettings.enable")}
           description={t("browser.agentSettings.enableDescription")}
         >
@@ -219,6 +228,20 @@ export function BrowserAgentSettings() {
               <SelectItem value="never">{t("browser.agentSettings.never")}</SelectItem>
             </SelectContent>
           </Select>
+        </SettingsRow>
+        <SettingsRow label={t("browser.agentSettings.scripts")} description={t("browser.agentSettings.scriptsDescription")}>
+          <Select value={scriptAccess} onValueChange={(value) => setScriptAccess(value as ScriptAccess)}>
+            <SelectTrigger className="w-40" aria-label={t("browser.agentSettings.scripts")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ask">{t("browser.agentSettings.askEveryTime")}</SelectItem>
+              <SelectItem value="never">{t("browser.agentSettings.never")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </SettingsRow>
+        <SettingsRow label={t("browser.agentSettings.cursor")} description={t("browser.agentSettings.cursorDescription")}>
+          <Switch aria-label={t("browser.agentSettings.cursor")} checked={showCursor} onCheckedChange={setShowCursor} />
         </SettingsRow>
       </SettingsSection>
       <PermissionsTable />
