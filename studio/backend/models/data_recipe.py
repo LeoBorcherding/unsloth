@@ -116,6 +116,7 @@ class SeedInspectResponse(BaseModel):
     subset: str | None = None
     resolved_paths: list[str] | None = None
     dropped_columns: list[str] = Field(default_factory = list)
+    total_rows: int | None = None
 
 
 class UnstructuredFileUploadResponse(BaseModel):
