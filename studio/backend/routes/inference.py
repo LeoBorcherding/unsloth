@@ -17077,6 +17077,45 @@ async def _run_tracked_load_model_impl(
             _finish_load_attempt(attempt)
 
 
+async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
+    """The model's saved Run settings, as /models/load applies them, for fields the caller left out."""
+    from core.inference.local_model_resolver import local_target_is_gguf
+    from utils.openai_auto_switch_settings import (
+        model_override_load_kwargs,
+        resolve_override_for_load,
+        stored_gpu_index_kind,
+    )
+
+    alias = named if named != request.model_path else None
+    _, override = resolve_override_for_load(request.model_path, alias, request.gguf_variant)
+    if not override:
+        return
+    is_gguf = bool(request.gguf_variant) or await asyncio.to_thread(
+        local_target_is_gguf, request.model_path, alias or request.model_path
+    )
+    kwargs = model_override_load_kwargs(override, is_gguf = is_gguf)
+    # The impl already inherits stored extra args when omitted, with its own same-model checks.
+    kwargs.pop("llama_extra_args", None)
+    sent = request.model_fields_set
+    # Halves of one choice: a caller sending either keeps the saved other half out.
+    for group in (
+        ("gpu_ids", "tensor_split"),
+        ("engine", "engine_parallelism", "engine_precision", "engine_kv_cache_dtype",
+         "engine_seed", "engine_gpu_memory_utilization"),
+    ):
+        if sent.intersection(group):
+            for key in group:
+                kwargs.pop(key, None)
+    if kwargs.get("gpu_ids") and not await _override_gpu_ids_still_resolve(
+        kwargs["gpu_ids"], stored_gpu_index_kind(override)
+    ):
+        kwargs.pop("gpu_ids", None)
+        kwargs.pop("tensor_split", None)
+    for key, value in kwargs.items():
+        if key not in sent:
+            setattr(request, key, value)
+
+
 @router.post("/load", response_model = LoadResponse)
 @account_access.gpu_busy_route
 async def load_model(
@@ -17097,6 +17136,7 @@ async def load_model(
     if _resolve_trained_run_request(request):
         # keeps the job's name as the served id, so chat and /v1/models answer to it
         request._advertised_id = request._advertised_id or named
+    await _fill_saved_load_settings(request, named)
     return await _tunnel_safe_json(
         load_model_gated(request, fastapi_request, current_subject, user_initiated = True),
         label = "Model load",

@@ -1486,6 +1486,54 @@ def test_model_override_roundtrip(monkeypatch):
     assert settings.get_model_overrides() == {}
 
 
+_QWEN_SMALL = "unsloth/Qwen3-1.7B-GGUF"
+
+
+def _explicit_load(monkeypatch, body):
+    """What the /load route (also mounted as /v1/load) hands the gated load for ``body``."""
+    seen = []
+
+    async def _gated(request, *args, **kwargs):
+        seen.append(request)
+        return {"status": "loaded"}
+
+    async def _passthrough(coro, *, label):
+        return await coro
+
+    monkeypatch.setattr(inference_route, "load_model_gated", _gated)
+    monkeypatch.setattr(inference_route, "_tunnel_safe_json", _passthrough)
+    asyncio.run(inference_route.load_model(LoadRequest.model_validate(body), object(), "tester"))
+    return seen[0]
+
+
+def test_explicit_load_uses_the_saved_preset_for_fields_left_out(monkeypatch):
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", custom_context_length = 8192, n_parallel = 2)
+    request = _explicit_load(
+        monkeypatch, {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    )
+    assert request.max_seq_length == 8192
+    assert request.n_parallel == 2
+
+
+def test_explicit_load_fields_the_caller_sent_beat_the_saved_preset(monkeypatch):
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", custom_context_length = 8192, n_parallel = 2)
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    # 0 is Auto, a choice, not an absent field.
+    assert _explicit_load(monkeypatch, {**body, "max_seq_length": 0}).max_seq_length == 0
+    request = _explicit_load(monkeypatch, {**body, "max_seq_length": 4096, "n_parallel": 1})
+    assert (request.max_seq_length, request.n_parallel) == (4096, 1)
+
+
+def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
+    _mock_override_store(monkeypatch)
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    request = _explicit_load(monkeypatch, body)
+    assert request.model_fields_set == set(body)
+    assert request.max_seq_length == 0
+
+
 def test_reasoning_budget_override_route_roundtrip(monkeypatch):
     _mock_override_store(monkeypatch)
 
