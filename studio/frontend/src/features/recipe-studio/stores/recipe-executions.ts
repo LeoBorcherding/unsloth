@@ -44,6 +44,7 @@ type RecipeExecutionsState = {
   fullLoading: boolean;
   executions: RecipeExecutionRecord[];
   selectedExecutionId: string | null;
+  recipeId: string | null;
   setRunDialogOpen: (open: boolean) => void;
   setRunDialogKind: (kind: RecipeExecutionKind) => void;
   setPreviewRows: (rows: number) => void;
@@ -56,7 +57,7 @@ type RecipeExecutionsState = {
   setExecutions: (records: RecipeExecutionRecord[]) => void;
   upsertExecution: (record: RecipeExecutionRecord) => void;
   selectExecution: (id: string | null) => void;
-  resetForRecipe: () => void;
+  resetForRecipe: (recipeId: string) => void;
 };
 
 const INITIAL_STATE = {
@@ -71,6 +72,7 @@ const INITIAL_STATE = {
   fullLoading: false,
   executions: [],
   selectedExecutionId: null,
+  recipeId: null,
 } satisfies Pick<
   RecipeExecutionsState,
   | "runDialogOpen"
@@ -84,6 +86,7 @@ const INITIAL_STATE = {
   | "fullLoading"
   | "executions"
   | "selectedExecutionId"
+  | "recipeId"
 >;
 
 export const useRecipeExecutionsStore = create<RecipeExecutionsState>((set) => ({
@@ -128,6 +131,10 @@ export const useRecipeExecutionsStore = create<RecipeExecutionsState>((set) => (
     }),
   upsertExecution: (record) =>
     set((state) => {
+      // A run still being tracked after its recipe was left must not land in the open one.
+      if (record.recipeId !== state.recipeId) {
+        return {};
+      }
       const normalized = withExecutionDefaults(record);
       const withoutCurrent = state.executions.filter((item) => item.id !== normalized.id);
       return {
@@ -136,5 +143,5 @@ export const useRecipeExecutionsStore = create<RecipeExecutionsState>((set) => (
       };
     }),
   selectExecution: (id) => set({ selectedExecutionId: id }),
-  resetForRecipe: () => set(INITIAL_STATE),
+  resetForRecipe: (recipeId) => set({ ...INITIAL_STATE, recipeId }),
 }));

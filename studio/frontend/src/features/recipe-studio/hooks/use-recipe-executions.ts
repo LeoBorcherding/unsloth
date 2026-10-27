@@ -57,6 +57,9 @@ import type {
 
 const GGUF_MODEL_PATTERN = /gguf/i;
 
+// Jobs a live run is still tracking, so reopening their recipe doesn't start a second tracker.
+const liveRunJobIds = new Set<string>();
+
 function collectUsedLlmModelAliases(payload: RecipePayload): Set<string> {
   const columns = Array.isArray(payload.recipe.columns)
     ? payload.recipe.columns
@@ -690,8 +693,9 @@ export function useRecipeExecutions({
 
   useEffect(() => {
     let cancelled = false;
+    const tracking = new AbortController();
 
-    resetForRecipe();
+    resetForRecipe(recipeId);
 
     // Seed previewRows from the loaded JSON's run.rows; the rebuilt payload hardcodes 5.
     if (
@@ -712,7 +716,7 @@ export function useRecipeExecutions({
 
         setExecutions(records);
         const resumable = findResumableExecution(records);
-        if (!resumable?.jobId) {
+        if (!resumable?.jobId || liveRunJobIds.has(resumable.jobId)) {
           return;
         }
 
@@ -726,6 +730,7 @@ export function useRecipeExecutions({
           onUpsert: upsertAndPersist,
           onSetPreviewErrors: setRunErrors,
           onPreviewSuccess,
+          signal: tracking.signal,
         });
       } catch (error) {
         // biome-ignore lint/suspicious/noConsole: hydration failures are non-blocking diagnostics
@@ -737,6 +742,7 @@ export function useRecipeExecutions({
 
     return () => {
       cancelled = true;
+      tracking.abort();
     };
   }, [
     initialRunRows,
@@ -795,6 +801,7 @@ export function useRecipeExecutions({
       setRunDialogOpen(false);
 
       let jobCreated = false;
+      let jobId: string | null = null;
       let shouldRestorePrevious = false;
       try {
         const jobPayload = buildExecutionPayload({
@@ -806,6 +813,8 @@ export function useRecipeExecutions({
         });
         const createdJob = await createRecipeJob(jobPayload);
         jobCreated = true;
+        jobId = createdJob.job_id;
+        liveRunJobIds.add(jobId);
         const executionWithJob = {
           ...baseExecution,
           jobId: createdJob.job_id,
@@ -840,6 +849,9 @@ export function useRecipeExecutions({
         }
         return false;
       } finally {
+        if (jobId) {
+          liveRunJobIds.delete(jobId);
+        }
         if (shouldRestorePrevious && restorePrevious) {
           await restorePrevious();
         }
