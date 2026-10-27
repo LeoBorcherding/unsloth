@@ -332,8 +332,10 @@ test("the resident settings key a cached repo by its repo id, GGUF quants includ
 test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", async () => {
   store.clear();
   const {
+    getRunSettingsLoadedOnce,
     getSelectedRunSettings,
     listSavedRunSettings,
+    noteRunSettingsLoadedOnce,
     saveRunSettings,
     setSelectedRunSettings,
   } = await import("../src/features/model-picker/model-config/saved-run-settings.ts");
@@ -344,6 +346,7 @@ test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", 
   savePerModelConfig(snapshot, "Q4_K_M", small);
   assert.ok(saveRunSettings(snapshot, "small", small));
   assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "small"));
+  noteRunSettingsLoadedOnce(snapshot, "Q4_K_M", { name: null, sent: small });
   saveRunSettings(repo, "ctx8k", { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 8192 });
 
   residentModelConfigTarget({
@@ -357,6 +360,8 @@ test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", 
   assert.deepEqual(listSavedRunSettings(repo).map((set) => set.name), ["ctx8k", "small"]);
   assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "small");
   assert.equal(listSavedRunSettings(snapshot).length, 0);
+  assert.equal(getRunSettingsLoadedOnce(repo, "Q4_K_M")?.sent.maxSeqLength, 4096);
+  assert.equal(getRunSettingsLoadedOnce(snapshot, "Q4_K_M"), null);
   const resolved = resolveInitialConfig(repo, "Q4_K_M");
   assert.equal(resolved.remembered, true);
   assert.equal(resolved.config.maxSeqLength, 4096);

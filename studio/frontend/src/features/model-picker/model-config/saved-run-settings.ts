@@ -488,7 +488,7 @@ function withSuffix(base: string, suffix: string): string {
   );
 }
 
-/** Moves sets, selections and pins saved under legacyModelId to modelId; what modelId already has wins. */
+/** Moves sets, selections, pins and one-time loads saved under legacyModelId to modelId; what modelId already has wins. */
 export function adoptLegacyRunSettings(
   modelId: string,
   legacyModelId: string,
@@ -529,6 +529,7 @@ export function adoptLegacyRunSettings(
   move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY);
   move(readSelectedVariants, SELECTED_VARIANTS_STORAGE_KEY);
   move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY);
+  move(() => readJson<LoadedOnceMap>(LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY), LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY);
   return changed;
 }
 
