@@ -87,6 +87,19 @@ def _build_dataset_name(*, run_name: str | None, job_id: str, artifact_root: Pat
     return candidate
 
 
+def _apply_run_seed(run: dict[str, Any]) -> None:
+    """Sampler columns draw from numpy's global RandomState, so seeding it makes them repeatable."""
+    seed = run.get("seed")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        return
+    import random
+
+    import numpy as np
+
+    random.seed(seed)
+    np.random.seed(seed)
+
+
 def run_job_process(*, event_queue, recipe: dict[str, Any], run: dict[str, Any]) -> None:
     """Subprocess entrypoint. Sends events to `event_queue`."""
     import os
@@ -157,6 +170,7 @@ def run_job_process(*, event_queue, recipe: dict[str, Any], run: dict[str, Any])
 
         if run_config_raw:
             designer.set_run_config(RunConfig.model_validate(run_config_raw))
+        _apply_run_seed(run)
 
         if execution_type == "preview":
             results = designer.preview(builder, num_records = rows)

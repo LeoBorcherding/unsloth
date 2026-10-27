@@ -63,6 +63,50 @@ export type RecipeExecutionAnalysis = {
   column_profiles?: Record<string, unknown>[] | null;
 } & Record<string, unknown>;
 
+export type RecipeQualityColumn = {
+  name: string;
+  type: string;
+  empty: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  format_failures: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  format_check: "json" | "leaked_tokens";
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  min_chars: number | null;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  median_chars: number | null;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  max_chars: number | null;
+};
+
+export type RecipeQualityValidator = {
+  name: string;
+  checked: number;
+  passed: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  pass_rate: number | null;
+};
+
+export type RecipeExecutionQuality = {
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  rows_checked: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  rows_total: number;
+  truncated: boolean;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  content_columns: string[];
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  exact_duplicates: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  near_duplicates: number;
+  // biome-ignore lint/style/useNamingConvention: backend schema
+  near_duplicates_checked: boolean;
+  columns: RecipeQualityColumn[];
+  validators: RecipeQualityValidator[];
+  warnings: string[];
+  verdict: "ok" | "warn";
+};
+
 export type RecipeExecutionRecord = {
   id: string;
   recipeId: string;
@@ -102,5 +146,12 @@ export type RecipeExecutionRecord = {
   analysis: RecipeExecutionAnalysis | null;
   // biome-ignore lint/style/useNamingConvention: api schema
   processor_artifacts: Record<string, unknown> | null;
+  quality: RecipeExecutionQuality | null;
+  // Per-recipe run number shown as "v{n}"; null on runs saved before versioning.
+  version: number | null;
+  seed: number | null;
+  // The recipe and run settings this execution was started with.
+  // biome-ignore lint/style/useNamingConvention: ui schema
+  config_snapshot: Record<string, unknown> | null;
   error: string | null;
 };

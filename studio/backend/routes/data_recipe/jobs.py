@@ -52,6 +52,7 @@ from core.data_recipe.huggingface import (
     publish_recipe_dataset,
 )
 from core.data_recipe.jobs import get_job_manager
+from core.data_recipe.quality import MAX_ROWS as _QUALITY_MAX_ROWS, compute_quality
 from core.data_recipe.service import (
     recipe_has_stdio_mcp,
     require_ui_session_for_host_env_credentials,
@@ -486,6 +487,16 @@ def _normalize_run_name(value: Any) -> str | None:
     return trimmed[:120]
 
 
+def _normalize_run_seed(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < 2**32:
+        raise HTTPException(
+            status_code = 400, detail = "invalid seed: must be an integer from 0 to 2^32 - 1"
+        )
+    return value
+
+
 def _resolve_seed_endpoint(recipe: dict[str, Any]) -> None:
     """Fill in the HF endpoint for a backend-executed seed fetch, in place.
 
@@ -544,6 +555,7 @@ def create_job(
         )
     run["execution_type"] = execution_type
     run["run_name"] = _normalize_run_name(run.get("run_name"))
+    run["seed"] = _normalize_run_seed(run.get("seed"))
     run_config_raw = run.get("run_config")
     if run_config_raw is not None:
         try:
@@ -653,6 +665,39 @@ def job_analysis(job_id: str):
     if analysis is None:
         raise HTTPException(status_code = 404, detail = "analysis not ready")
     return analysis
+
+
+@router.get("/jobs/{job_id}/quality")
+def job_quality(job_id: str):
+    mgr = get_job_manager()
+    status = mgr.get_status(job_id)
+    if status is None:
+        raise HTTPException(status_code = 404, detail = "job not found")
+    if status.get("status") != "completed":
+        raise HTTPException(status_code = 409, detail = "Only completed runs get a quality pass.")
+    rows: list[dict[str, Any]] = []
+    total: int | None = None
+    offset = 0
+    while offset < _QUALITY_MAX_ROWS:
+        result = mgr.get_dataset(
+            job_id,
+            limit = min(_IN_MEMORY_DOWNLOAD_PAGE_SIZE, _QUALITY_MAX_ROWS - offset),
+            offset = offset,
+        )
+        if result is None:
+            raise HTTPException(status_code = 404, detail = "dataset not ready")
+        if "error" in result:
+            raise HTTPException(status_code = 422, detail = result["error"])
+        page = result.get("dataset")
+        if total is None and isinstance(result.get("total"), int):
+            total = result["total"]
+        if not isinstance(page, list) or not page:
+            break
+        rows.extend(row for row in page if isinstance(row, dict))
+        offset += len(page)
+        if total is not None and offset >= total:
+            break
+    return compute_quality(rows, mgr.get_analysis(job_id), total_rows = total)
 
 
 @router.get("/jobs/{job_id}/dataset")

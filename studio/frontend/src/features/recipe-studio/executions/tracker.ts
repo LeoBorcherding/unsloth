@@ -6,6 +6,7 @@ import { toastError, toastSuccess } from "@/shared/toast";
 import {
   getRecipeJobAnalysis,
   getRecipeJobDataset,
+  getRecipeJobQuality,
   getRecipeJobStatus,
   streamRecipeJobEvents,
 } from "../api";
@@ -21,6 +22,7 @@ import {
   mapJobStatus,
   normalizeAnalysis,
   normalizeDatasetRows,
+  normalizeObject,
   toErrorMessage,
 } from "./execution-helpers";
 import {
@@ -309,7 +311,7 @@ export async function trackRecipeExecution({
       eventAnalysis === null ||
       kind === "full";
 
-    const [analysisResult, datasetResult] = await Promise.allSettled([
+    const [analysisResult, datasetResult, qualityResult] = await Promise.allSettled([
       shouldFetchAnalysis
         ? getRecipeJobAnalysis(jobId)
         : Promise.resolve(eventAnalysis),
@@ -320,6 +322,7 @@ export async function trackRecipeExecution({
             dataset: eventDatasetRows,
             total: eventDatasetRows.length,
           }),
+      getRecipeJobQuality(jobId),
     ]);
 
     const analysis =
@@ -335,6 +338,10 @@ export async function trackRecipeExecution({
       datasetResponse && typeof datasetResponse.total === "number"
         ? datasetResponse.total
         : latestExecution.datasetTotal;
+    const quality =
+      qualityResult.status === "fulfilled" && normalizeObject(qualityResult.value)
+        ? (qualityResult.value as unknown as RecipeExecutionRecord["quality"])
+        : latestExecution.quality;
     const completedProgress = normalizeCompletedProgress({
       latestExecution,
       rows,
@@ -346,6 +353,7 @@ export async function trackRecipeExecution({
       progress: completedProgress.progress,
       column_progress: completedProgress.columnProgress,
       analysis,
+      quality,
       dataset,
       datasetTotal,
       datasetPage: 1,

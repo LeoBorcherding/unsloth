@@ -1,0 +1,272 @@
+{
+  "recipe": {
+    "model_providers": [
+      {
+        "name": "Local Model",
+        "endpoint": "",
+        "provider_type": "openai",
+        "extra_headers": {},
+        "extra_body": {},
+        "is_local": true
+      }
+    ],
+    "mcp_providers": [],
+    "model_configs": [
+      {
+        "alias": "problem-writer",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
+        "provider": "Local Model",
+        "inference_parameters": {
+          "temperature": 0.9,
+          "max_tokens": 250
+        }
+      },
+      {
+        "alias": "solver",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
+        "provider": "Local Model",
+        "inference_parameters": {
+          "temperature": 0.3,
+          "max_tokens": 700
+        }
+      }
+    ],
+    "tool_configs": [],
+    "columns": [
+      {
+        "column_type": "sampler",
+        "name": "subject",
+        "drop": false,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "arithmetic word problem",
+            "unit conversion",
+            "logic puzzle",
+            "probability",
+            "percentages and discounts",
+            "time and scheduling"
+          ]
+        }
+      },
+      {
+        "column_type": "sampler",
+        "name": "difficulty",
+        "drop": false,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "easy",
+            "medium"
+          ]
+        }
+      },
+      {
+        "column_type": "sampler",
+        "name": "setting",
+        "drop": true,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "a bakery",
+            "a train station",
+            "a school trip",
+            "a community garden",
+            "a sports league",
+            "a small online shop",
+            "a library",
+            "a road trip"
+          ]
+        }
+      },
+      {
+        "column_type": "llm-text",
+        "name": "problem",
+        "drop": false,
+        "model_alias": "problem-writer",
+        "prompt": "Write one {{ difficulty }} {{ subject }} set in {{ setting }}.\nRules:\n- It must have exactly one short final answer (a number, name or yes/no).\n- Include every fact needed to solve it.\n- 1 to 3 sentences.\n- Do not include the answer or any hints.\n- Output only the problem.",
+        "system_prompt": "You write clear, self-contained practice problems.",
+        "with_trace": "none",
+        "extract_reasoning_content": false
+      },
+      {
+        "column_type": "llm-structured",
+        "name": "solution",
+        "drop": false,
+        "model_alias": "solver",
+        "prompt": "Solve this problem. Think step by step in `reasoning`, showing each calculation, then give only the final answer in `final_answer`.\n\nProblem: {{ problem }}",
+        "system_prompt": "You are a careful tutor who checks each step before answering.",
+        "with_trace": "none",
+        "extract_reasoning_content": false,
+        "output_format": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reasoning",
+            "final_answer"
+          ],
+          "properties": {
+            "reasoning": {
+              "type": "string",
+              "description": "Step-by-step working"
+            },
+            "final_answer": {
+              "type": "string",
+              "description": "Short final answer only"
+            }
+          }
+        }
+      },
+      {
+        "column_type": "expression",
+        "name": "assistant",
+        "drop": false,
+        "expr": "<think>\n{{ solution.reasoning }}\n</think>\n\n{{ solution.final_answer }}",
+        "dtype": "str"
+      }
+    ],
+    "processors": []
+  },
+  "run": {
+    "rows": 10,
+    "preview": true,
+    "output_formats": [
+      "jsonl"
+    ]
+  },
+  "ui": {
+    "nodes": [
+      {
+        "id": "note_1",
+        "x": 0,
+        "y": 0,
+        "width": 400,
+        "node_type": "markdown_note",
+        "name": "note_1",
+        "markdown": "##### Reasoning traces\n\n1. Samplers pick a **subject**, **difficulty** and **setting**, so problems don't repeat.\n2. `problem` writes a problem with one short answer.\n3. `solution` is structured output: step-by-step `reasoning` plus a `final_answer`.\n4. `assistant` formats it as `<think>...</think>` followed by the answer, the shape most reasoning fine-tunes train on. Pair it with `problem` as the user turn.\n\nCheck the run's **Quality pass** for duplicate problems before training.",
+        "note_color": "#DBEAFE",
+        "note_opacity": "35"
+      },
+      {
+        "id": "Local Model",
+        "x": 720,
+        "y": 0,
+        "width": 400
+      },
+      {
+        "id": "problem-writer",
+        "x": 480,
+        "y": 140,
+        "width": 400
+      },
+      {
+        "id": "solver",
+        "x": 960,
+        "y": 140,
+        "width": 400
+      },
+      {
+        "id": "subject",
+        "x": 0,
+        "y": 380,
+        "width": 400
+      },
+      {
+        "id": "difficulty",
+        "x": 0,
+        "y": 500,
+        "width": 400
+      },
+      {
+        "id": "setting",
+        "x": 0,
+        "y": 620,
+        "width": 400
+      },
+      {
+        "id": "problem",
+        "x": 480,
+        "y": 380,
+        "width": 400
+      },
+      {
+        "id": "solution",
+        "x": 960,
+        "y": 446,
+        "width": 400
+      },
+      {
+        "id": "assistant",
+        "x": 1440,
+        "y": 392,
+        "width": 400
+      }
+    ],
+    "edges": [
+      {
+        "from": "subject",
+        "to": "problem",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "difficulty",
+        "to": "problem",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "setting",
+        "to": "problem",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "problem",
+        "to": "solution",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "solution",
+        "to": "assistant",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "Local Model",
+        "to": "problem-writer",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "semantic-in-top"
+      },
+      {
+        "from": "Local Model",
+        "to": "solver",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "semantic-in-top"
+      },
+      {
+        "from": "problem-writer",
+        "to": "problem",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "data-in-top"
+      },
+      {
+        "from": "solver",
+        "to": "solution",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "data-in-top"
+      }
+    ],
+    "layout_direction": "LR"
+  }
+}

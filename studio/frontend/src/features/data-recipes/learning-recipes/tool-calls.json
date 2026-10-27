@@ -1,0 +1,280 @@
+{
+  "recipe": {
+    "model_providers": [
+      {
+        "name": "Local Model",
+        "endpoint": "",
+        "provider_type": "openai",
+        "extra_headers": {},
+        "extra_body": {},
+        "is_local": true
+      }
+    ],
+    "mcp_providers": [],
+    "model_configs": [
+      {
+        "alias": "tool-writer",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
+        "provider": "Local Model",
+        "inference_parameters": {
+          "temperature": 0.9,
+          "max_tokens": 300
+        }
+      },
+      {
+        "alias": "tool-caller",
+        "model": "unsloth/gemma-4-E2B-it-GGUF",
+        "provider": "Local Model",
+        "inference_parameters": {
+          "temperature": 0.2,
+          "max_tokens": 300
+        }
+      }
+    ],
+    "tool_configs": [],
+    "columns": [
+      {
+        "column_type": "sampler",
+        "name": "tool_name",
+        "drop": false,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "get_weather",
+            "search_flights",
+            "convert_currency",
+            "create_calendar_event"
+          ]
+        }
+      },
+      {
+        "column_type": "sampler",
+        "name": "city",
+        "drop": true,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "Tokyo",
+            "Lagos",
+            "Berlin",
+            "Sao Paulo",
+            "Toronto",
+            "Mumbai",
+            "Sydney",
+            "Mexico City"
+          ]
+        }
+      },
+      {
+        "column_type": "sampler",
+        "name": "user_style",
+        "drop": true,
+        "sampler_type": "category",
+        "params": {
+          "values": [
+            "casual and short",
+            "polite and detailed",
+            "terse, like a chat message",
+            "written by a non-native English speaker"
+          ]
+        }
+      },
+      {
+        "column_type": "expression",
+        "name": "tools",
+        "drop": false,
+        "expr": "[{\"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"description\": \"Get the current weather or a short forecast for a city.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}, \"unit\": {\"type\": \"string\", \"enum\": [\"celsius\", \"fahrenheit\"]}, \"days\": {\"type\": \"integer\", \"description\": \"Forecast days, 0 for now\"}}, \"required\": [\"city\"]}}}, {\"type\": \"function\", \"function\": {\"name\": \"search_flights\", \"description\": \"Search one-way flights between two cities on a date.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"origin\": {\"type\": \"string\"}, \"destination\": {\"type\": \"string\"}, \"date\": {\"type\": \"string\", \"description\": \"YYYY-MM-DD\"}, \"passengers\": {\"type\": \"integer\"}}, \"required\": [\"origin\", \"destination\", \"date\"]}}}, {\"type\": \"function\", \"function\": {\"name\": \"convert_currency\", \"description\": \"Convert an amount from one currency to another.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"amount\": {\"type\": \"number\"}, \"from_currency\": {\"type\": \"string\", \"description\": \"ISO code, e.g. USD\"}, \"to_currency\": {\"type\": \"string\", \"description\": \"ISO code, e.g. EUR\"}}, \"required\": [\"amount\", \"from_currency\", \"to_currency\"]}}}, {\"type\": \"function\", \"function\": {\"name\": \"create_calendar_event\", \"description\": \"Add an event to the user's calendar.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"title\": {\"type\": \"string\"}, \"start\": {\"type\": \"string\", \"description\": \"ISO 8601 date-time\"}, \"duration_minutes\": {\"type\": \"integer\"}, \"attendees\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"title\", \"start\"]}}}]",
+        "dtype": "str"
+      },
+      {
+        "column_type": "llm-text",
+        "name": "user_message",
+        "drop": false,
+        "model_alias": "tool-writer",
+        "prompt": "Write one message a user sends to an AI assistant. Answering it needs the `{{ tool_name }}` tool from this list:\n{{ tools }}\n\nRules:\n- The user is in or asking about {{ city }}.\n- Style: {{ user_style }}.\n- Give concrete values for every required argument of {{ tool_name }} (dates, amounts, names).\n- Do not mention tools, functions or JSON.\n- Output only the user's message.",
+        "system_prompt": "You write realistic, varied user requests for assistant training data.",
+        "with_trace": "none",
+        "extract_reasoning_content": false
+      },
+      {
+        "column_type": "llm-text",
+        "name": "arguments",
+        "drop": false,
+        "model_alias": "tool-caller",
+        "prompt": "Available tools:\n{{ tools }}\n\nUser message:\n{{ user_message }}\n\nCall the `{{ tool_name }}` tool for this message. Return only the JSON object of its arguments, using the parameter names from its schema. No code fences, no explanation.",
+        "system_prompt": "You are a function-calling assistant. You reply with a single raw JSON object and nothing else.",
+        "with_trace": "none",
+        "extract_reasoning_content": false
+      },
+      {
+        "column_type": "validation",
+        "name": "arguments_valid",
+        "drop": false,
+        "target_columns": [
+          "arguments"
+        ],
+        "validator_type": "local_callable",
+        "validator_params": {
+          "validation_function": "unsloth_json_validator"
+        },
+        "batch_size": 10
+      }
+    ],
+    "processors": []
+  },
+  "run": {
+    "rows": 10,
+    "preview": true,
+    "output_formats": [
+      "jsonl"
+    ]
+  },
+  "ui": {
+    "nodes": [
+      {
+        "id": "note_1",
+        "x": 0,
+        "y": 0,
+        "width": 400,
+        "node_type": "markdown_note",
+        "name": "note_1",
+        "markdown": "##### Tool-call data in four steps\n\n1. Samplers pick the **tool**, a **city** and a **writing style** for each row.\n2. `tools` is the list of function schemas the assistant can call. Edit it to match your own tools.\n3. `user_message` writes a request that needs the sampled tool.\n4. `arguments` is the assistant's call, as the JSON string OpenAI-style `tool_calls` expect.\n\n`arguments_valid` checks every call is valid JSON. Its pass rate shows up in the run's **Quality pass**, so filter on it before training.",
+        "note_color": "#DBEAFE",
+        "note_opacity": "35"
+      },
+      {
+        "id": "Local Model",
+        "x": 720,
+        "y": 0,
+        "width": 400
+      },
+      {
+        "id": "tool-writer",
+        "x": 480,
+        "y": 140,
+        "width": 400
+      },
+      {
+        "id": "tool-caller",
+        "x": 960,
+        "y": 140,
+        "width": 400
+      },
+      {
+        "id": "tool_name",
+        "x": 0,
+        "y": 380,
+        "width": 400
+      },
+      {
+        "id": "city",
+        "x": 0,
+        "y": 500,
+        "width": 400
+      },
+      {
+        "id": "user_style",
+        "x": 0,
+        "y": 620,
+        "width": 400
+      },
+      {
+        "id": "tools",
+        "x": 0,
+        "y": 740,
+        "width": 400
+      },
+      {
+        "id": "user_message",
+        "x": 480,
+        "y": 380,
+        "width": 400
+      },
+      {
+        "id": "arguments",
+        "x": 960,
+        "y": 380,
+        "width": 400
+      },
+      {
+        "id": "arguments_valid",
+        "x": 1440,
+        "y": 446,
+        "width": 400
+      }
+    ],
+    "edges": [
+      {
+        "from": "tool_name",
+        "to": "user_message",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "tools",
+        "to": "user_message",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "city",
+        "to": "user_message",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "user_style",
+        "to": "user_message",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "user_message",
+        "to": "arguments",
+        "type": "canvas",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      },
+      {
+        "from": "Local Model",
+        "to": "tool-writer",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "semantic-in-top"
+      },
+      {
+        "from": "Local Model",
+        "to": "tool-caller",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "semantic-in-top"
+      },
+      {
+        "from": "tool-writer",
+        "to": "user_message",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "data-in-top"
+      },
+      {
+        "from": "tool-caller",
+        "to": "arguments",
+        "type": "semantic",
+        "source_handle": "semantic-out-bottom",
+        "target_handle": "data-in-top"
+      },
+      {
+        "from": "arguments",
+        "to": "arguments_valid",
+        "type": "semantic",
+        "source_handle": "data-out",
+        "target_handle": "data-in"
+      }
+    ],
+    "layout_direction": "LR"
+  }
+}

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { RecipeExecutionRecord } from "../../execution-types";
 import {
   executionLabel,
+  formatVersionLabel,
   isExecutionInProgress,
   normalizeRunName,
 } from "../../executions/execution-helpers";
@@ -47,6 +48,7 @@ export function ExecutionSidebar({
                 ? (normalizeRunName(execution.run_name) ??
                   executionLabel(execution.kind))
                 : executionLabel(execution.kind);
+            const version = formatVersionLabel(execution);
             return (
               <button
                 key={execution.id}
@@ -61,8 +63,13 @@ export function ExecutionSidebar({
                 )}
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-medium">
-                    {title}
+                  <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+                    {version && (
+                      <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                        {version}
+                      </span>
+                    )}
+                    <span className="truncate">{title}</span>
                   </p>
                   <Badge
                     variant="outline"
@@ -71,7 +78,18 @@ export function ExecutionSidebar({
                     {formatStatus(execution.status)}
                   </Badge>
                 </div>
-                <p className="text-xs text-muted-foreground">{execution.rows} rows</p>
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>{execution.rows} rows</span>
+                  {execution.status === "completed" &&
+                    execution.quality?.verdict === "warn" && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/30 text-ui-11 text-amber-700 dark:text-amber-300"
+                      >
+                        Quality warning
+                      </Badge>
+                    )}
+                </p>
                 {isExecutionInProgress(execution.status) &&
                   typeof execution.batch?.total === "number" &&
                   execution.batch.total > 1 && (
