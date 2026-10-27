@@ -60,10 +60,8 @@ function parseCategoryConditionalParams(
   return Object.keys(conditional).length > 0 ? conditional : undefined;
 }
 
-// buildSamplerParams spreads a uuid format over the three fields data_designer defines, so rebuild
-// the single UI string from those rather than from a `format` key nothing writes. A prefix that would
-// read back as something else comes back in the builder's `prefix:` escaped form, so re-saving
-// writes the prefix again instead of turning it into a flag.
+// Rebuild the UI string from the three uuid fields buildSamplerParams writes; a prefix that would
+// read back as something else comes back in its `prefix:` escaped form so re-saving keeps it a prefix.
 function readUuidFormat(params: Record<string, unknown>): string {
   const parts: string[] = [];
   if (params.short_form === true) {
