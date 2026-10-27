@@ -31,6 +31,7 @@ from models.auth import (
     CreateApiKeyResponse,
     DesktopInitialPasswordRequest,
     DesktopLoginRequest,
+    DesktopResetPasswordRequest,
     RefreshTokenRequest,
 )
 from models.users import Token
@@ -563,6 +564,67 @@ def desktop_login(payload: DesktopLoginRequest, request: Request) -> Token | Res
     return Token(
         access_token = create_access_token(subject = username, desktop = True, secret = jwt_secret),
         refresh_token = create_refresh_token(subject = username, desktop = True, secret = jwt_secret),
+        token_type = "bearer",
+        must_change_password = False,
+        account_id = _account_id_of(username),
+    )
+
+
+# Sync def, as desktop-login is: the same KDF and transaction.
+@router.post("/desktop-reset-password", response_model = Token)
+def desktop_reset_password(payload: DesktopResetPasswordRequest, request: Request) -> Token:
+    """Reset a forgotten owner password from the desktop app. The local secret desktop-login takes sits beside
+    auth.db, so this reaches no further than `unsloth studio reset-password` on the same host. Direct loopback only:
+    a LAN, proxy or tunnel request is refused even with the secret. Managed accounts reset through a setup code."""
+    from utils.client_ip import is_direct_local_request
+
+    if not is_direct_local_request(request) or not storage.desktop_secret_is_well_formed(
+        payload.secret
+    ):
+        raise HTTPException(
+            status_code = status.HTTP_401_UNAUTHORIZED,
+            detail = "Desktop authentication failed",
+        )
+    if any(ch.isspace() for ch in payload.new_password):
+        raise HTTPException(
+            status_code = status.HTTP_400_BAD_REQUEST,
+            detail = "New password cannot contain spaces",
+        )
+    # Shares desktop-login's bucket, so the two routes together get one guessing budget.
+    key = _desktop_login_key(request)
+    blocked_for = _login_blocked(key)
+    if blocked_for > 0:
+        raise HTTPException(
+            status_code = status.HTTP_429_TOO_MANY_REQUESTS,
+            detail = (f"Too many failed login attempts. " f"Try again in {blocked_for} seconds."),
+            headers = {"Retry-After": str(blocked_for)},
+        )
+    verified = storage.validate_desktop_secret_with_credential(payload.secret)
+    if verified is None:
+        _record_login_failure(key)
+        raise HTTPException(
+            status_code = status.HTTP_401_UNAUTHORIZED,
+            detail = "Desktop authentication failed",
+        )
+    username = verified[0]
+    _clear_login_bucket(key)
+    # Every session and API key goes, as with the CLI reset; the shell keeps its secret.
+    new_secret = storage.update_password(
+        username,
+        payload.new_password,
+        revoke_refresh_tokens = True,
+        preserve_desktop_secret = True,
+        revoke_api_keys = True,
+    )
+    if new_secret is None:
+        raise HTTPException(
+            status_code = status.HTTP_409_CONFLICT,
+            detail = "The password changed while this request was in flight. Try again.",
+        )
+    request.app.state.bootstrap_password = None
+    return Token(
+        access_token = create_access_token(subject = username, desktop = True, secret = new_secret),
+        refresh_token = create_refresh_token(subject = username, desktop = True, secret = new_secret),
         token_type = "bearer",
         must_change_password = False,
         account_id = _account_id_of(username),

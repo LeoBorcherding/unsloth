@@ -1024,3 +1024,165 @@ def test_account_list_shows_each_profile_name_and_avatar_without_creating_databa
     assert (rows["alice"]["display_name"], rows["alice"]["avatar_url"]) == ("Alice A.", None)
     assert (rows["bob"]["display_name"], rows["bob"]["avatar_url"]) == (None, None)
     assert not bob_db.exists()
+
+
+@pytest.mark.parametrize("alias,stored", [("  Blu3  ", "blu3"), ("   ", None), ("UNSLOTH", None)])
+def test_owner_sign_in_name_trims_and_unsloth_or_blank_clears_it(auth_env, alias, stored):
+    client, _, _ = auth_env
+    set_alias(client, "before")
+    assert set_alias(client, alias).json() == {"login_alias": stored}
+
+
+def test_owner_sign_in_name_and_usernames_collide_after_case_folding_either_way(auth_env):
+    client, _, _ = auth_env
+    # validate_account_username casefolds before its ASCII check: "ſ" folds to "s", "K" (Kelvin) to "k".
+    assert create(client, "sam").status_code == 201
+    assert set_alias(client, "ſam").status_code == 409
+    assert set_alias(client, "Kai").json() == {"login_alias": "kai"}
+    assert create(client, "Kai").status_code == 409
+    assert set_alias(client, "blü3").status_code == 400
+    assert {a["username"] for a in storage.list_accounts()} == {"unsloth", "sam"}
+
+
+def test_alias_signs_in_as_the_owner_identity_and_survives_alias_changes(auth_env):
+    client, _, _ = auth_env
+    create(client, "alice")
+    set_alias(client, "blu3")
+    session = login(client, "Blu3", "owner-password").json()
+    assert (
+        authentication.jwt.decode(session["access_token"], options = {"verify_signature": False})[
+            "sub"
+        ]
+        == "unsloth"
+    )
+    # Renaming or clearing the sign-in name is not a credential change.
+    set_alias(client, "other")
+    set_alias(client, None)
+    me = {"Authorization": "Bearer " + session["access_token"]}
+    assert client.get("/api/accounts", headers = me).status_code == 200
+    refreshed = client.post("/api/auth/refresh", json = {"refresh_token": session["refresh_token"]})
+    assert refreshed.status_code == 200 and refreshed.json()["account_id"] == "owner"
+
+
+def test_account_routes_cannot_reach_the_owner_through_its_sign_in_name(auth_env):
+    client, _, _ = auth_env
+    create(client, "alice")
+    set_alias(client, "blu3")
+    before = db_rows("auth_user")
+    assert (
+        client.patch("/api/accounts/blu3", headers = headers(), json = {"is_active": False}).status_code
+        == 404
+    )
+    assert client.delete("/api/accounts/blu3", headers = headers()).status_code == 404
+    assert client.post("/api/accounts/blu3/setup-code", headers = headers()).status_code == 404
+    assert db_rows("auth_user") == before
+
+
+def test_single_mode_login_ignores_the_owner_sign_in_name(auth_env):
+    client, _, _ = auth_env
+    set_alias(client, "blu3")
+    assert policy.login_mode() == "single"
+    assert login(client, "blu3", "owner-password").status_code == 401
+    assert login(client, "unsloth", "owner-password").status_code == 200
+
+
+def test_cli_reset_resolves_the_owner_sign_in_name(matrix, reset_cli):
+    client, _, _ = matrix
+    set_alias(client, "blu3")
+    result = reset_cli.invoke(studio_cli.studio_app, ["reset-password", "--username", "Blu3"])
+    assert result.exit_code == 0, result.output
+    assert "New password for 'unsloth' (also signs in as 'blu3'): reset-password" in result.output
+    assert login(client, "blu3", "reset-password").json()["account_id"] == "owner"
+    assert login(client, "alice", "alice-password").status_code == 200
+    result = reset_cli.invoke(studio_cli.studio_app, ["reset-password", "--username", "nobody"])
+    assert result.exit_code == 1 and "account not found" in result.output
+
+
+def local_client(client, **kwargs):
+    return TestClient(
+        client.app, base_url = "http://127.0.0.1:8888", client = ("127.0.0.1", 50000), **kwargs
+    )
+
+
+def reset_body(secret, password = "fresh-password"):
+    return {"secret": secret, "new_password": password}
+
+
+def test_desktop_reset_password_resets_only_the_owner_and_revokes_like_the_cli(auth_env):
+    client, _, _ = auth_env
+    create(client, "alice")
+    set_alias(client, "blu3")
+    alice = storage.get_user_record("alice")
+    refresh = authentication.create_refresh_token("unsloth")
+    key = storage.create_api_key("unsloth", "test")[0]
+    secret = storage.create_desktop_secret()
+    with local_client(client) as local:
+        response = local.post("/api/auth/desktop-reset-password", json = reset_body(secret))
+    assert response.status_code == 200, response.text
+    tokens = response.json()
+    assert tokens["account_id"] == "owner" and tokens["must_change_password"] is False
+    assert (
+        client.get(
+            "/api/accounts", headers = {"Authorization": "Bearer " + tokens["access_token"]}
+        ).status_code
+        == 200
+    )
+    assert storage.verify_refresh_token(refresh) is None
+    assert storage.validate_api_key(key) is None
+    assert login(client, "unsloth", "owner-password").status_code == 401
+    assert login(client, "blu3", "fresh-password").status_code == 200
+    assert storage.get_user_record("alice") == alice
+    # The shell keeps signing in with the same secret.
+    assert storage.validate_desktop_secret(secret) == "unsloth"
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["remote peer", "forwarded", "tunnel", "rebound host"],
+)
+def test_desktop_reset_password_needs_a_direct_loopback_request(auth_env, where):
+    client, _, _ = auth_env
+    secret = storage.create_desktop_secret()
+    extra = {
+        "remote peer": {},
+        "forwarded": {"X-Forwarded-For": "203.0.113.9"},
+        "tunnel": {"CF-Connecting-IP": "203.0.113.9"},
+        "rebound host": {"Host": "evil.example"},
+    }[where]
+    caller = client if where == "remote peer" else local_client(client)
+    response = caller.post(
+        "/api/auth/desktop-reset-password", json = reset_body(secret), headers = extra
+    )
+    assert response.status_code == 401
+    assert login(client, "unsloth", "owner-password").status_code == 200
+
+
+def test_desktop_reset_password_without_the_secret_is_throttled_with_desktop_login(auth_env):
+    client, auth, _ = auth_env
+    secret = storage.create_desktop_secret()
+    with local_client(client) as local:
+        assert (
+            local.post(
+                "/api/auth/desktop-reset-password", json = reset_body("x" * len(secret))
+            ).status_code
+            == 401
+        )
+        for _ in range(auth._LOGIN_MAX_FAILS):
+            wrong = secret[:-1] + ("B" if secret.endswith("A") else "A")
+            local.post("/api/auth/desktop-reset-password", json = reset_body(wrong))
+        assert (
+            local.post("/api/auth/desktop-reset-password", json = reset_body(secret)).status_code
+            == 429
+        )
+        assert local.post("/api/auth/desktop-login", json = {"secret": secret}).status_code == 429
+    assert login(client, "unsloth", "owner-password").status_code == 200
+
+
+@pytest.mark.parametrize("password,status", [("short", 422), ("has a space", 400)])
+def test_desktop_reset_password_requires_a_valid_new_password(auth_env, password, status):
+    client, _, _ = auth_env
+    secret = storage.create_desktop_secret()
+    with local_client(client) as local:
+        response = local.post("/api/auth/desktop-reset-password", json = reset_body(secret, password))
+    assert response.status_code == status
+    assert login(client, "unsloth", "owner-password").status_code == 200

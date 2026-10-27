@@ -188,3 +188,21 @@ export async function continueAsDesktopOwner(): Promise<boolean> {
   await tauriAutoAuth({ force: true });
   return !tauriLoginRequired && hasAuthToken();
 }
+
+/** "Forgot password?" on the Desktop login page: the shell proves the owner with its local secret, which the
+ *  backend accepts only over direct loopback. Signs the owner in with the new password's session. */
+export async function resetDesktopOwnerPassword(newPassword: string): Promise<boolean> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  let tokens: DesktopAuthResponse;
+  try {
+    tokens = await invoke<DesktopAuthResponse>("desktop_reset_password", { newPassword });
+  } catch (error) {
+    throw new Error(authFailureMessage(error));
+  }
+  if ("login_required" in tokens) throw new Error(TAURI_AUTH_FAILURE_FALLBACK);
+  clearDesktopSignedOut();
+  return transitionBrowserAccount(OWNER_BROWSER_ACCOUNT, "/chat", () => {
+    storeAuthTokens(tokens.access_token, tokens.refresh_token);
+    setMustChangePassword(false);
+  });
+}

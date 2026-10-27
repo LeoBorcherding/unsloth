@@ -78,6 +78,12 @@ class DesktopInitialPasswordRequest(BaseModel):
     )
 
 
+class DesktopResetPasswordRequest(DesktopInitialPasswordRequest):
+    """Reset a forgotten owner password from the desktop app, proven by its local secret."""
+
+    secret: str = Field(..., description = "Desktop local auth secret")
+
+
 class ChangePasswordRequest(BaseModel):
     """Change the current user's password, typically on first login."""
 

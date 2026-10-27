@@ -3,6 +3,7 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import ts from "@typescript/typescript6";
 import test from "node:test";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
 
@@ -13,6 +14,7 @@ type AutoAuth = {
   markDesktopSignedOut(): void;
   isDesktopSignedOut(): boolean;
   continueAsDesktopOwner(): Promise<boolean>;
+  resetDesktopOwnerPassword(newPassword: string): Promise<boolean>;
 };
 
 type Guards = {
@@ -47,6 +49,7 @@ function fixture(
   let passwordChange = false;
   let response: unknown = { access_token: "owner-access", refresh_token: "owner-refresh" };
   let invokeCalls = 0;
+  const invokes: unknown[][] = [];
   let refreshCalls = 0;
   let refreshSucceeds = false;
   let refreshOutcome: "ok" | "rejected" | "unavailable" | null = null;
@@ -106,8 +109,9 @@ function fixture(
       },
     },
     "@tauri-apps/api/core": {
-      invoke: async (command: string) => {
-        assert.equal(command, "desktop_auth");
+      invoke: async (command: string, args?: unknown) => {
+        invokes.push([command, args]);
+        if (command !== "desktop_auth") return response instanceof Error ? Promise.reject(response) : response;
         invokeCalls++;
         if (response instanceof Error) throw response;
         return response;
@@ -141,6 +145,7 @@ function fixture(
     get access() { return access; },
     get refresh() { return refresh; },
     get invokeCalls() { return invokeCalls; },
+    invokes,
     get refreshCalls() { return refreshCalls; },
     get statusCalls() { return statusCalls; },
   };
@@ -406,15 +411,98 @@ test("Continue as owner on a multi-account install leaves the login form up", as
   assert.equal(f.auth.isTauriLoginRequired(), true);
 });
 
-test("the sidebar offers Log out on the desktop and suppresses auto-auth before revoking", () => {
-  const sidebar = readFileSync(
-    new URL("../src/components/app-sidebar.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(sidebar, /Desktop signs out through the OS account menu/);
-  assert.doesNotMatch(sidebar, /\{!isTauri && \(\s*<DropdownMenuItem\s+onSelect=\{async/);
-  const signOut = sidebar.slice(sidebar.indexOf("async function signOut()"));
-  assert.ok(signOut.indexOf("markDesktopSignedOut()") < signOut.indexOf("await logout()"));
-  // A multi-account owner still on the seeded password could not sign back in.
-  assert.match(signOut, /login_mode === "multi" && status\.requires_password_change/);
+function sidebarSignOut(scope: Record<string, unknown>): () => Promise<void> {
+  const source = readFileSync(new URL("../src/components/app-sidebar.tsx", import.meta.url), "utf8");
+  const tree = ts.createSourceFile("app-sidebar.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let handler = "";
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "signOut") handler = node.getText(tree);
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  assert.ok(handler);
+  const { outputText } = ts.transpileModule(`return (${handler});`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  });
+  return new Function(...Object.keys(scope), outputText)(...Object.values(scope));
+}
+
+type SignOutCase = { tauri: boolean; owner: boolean; status?: unknown; offline?: boolean };
+async function runSignOut({ tauri, owner, status, offline }: SignOutCase): Promise<string[]> {
+  const events: string[] = [];
+  await sidebarSignOut({
+    isTauri: tauri,
+    isOwner: owner,
+    window: { dispatchEvent: () => true },
+    Event,
+    AUTH_SESSION_ENDING_EVENT: "ending",
+    fetchAuthStatus: async () => {
+      events.push("status");
+      if (status === undefined) throw new Error("offline");
+      return status;
+    },
+    toast: { error: () => events.push("toast") },
+    t: (key: string) => key,
+    useSettingsDialogStore: { getState: () => ({ openDialog: (tab: string) => events.push(`open:${tab}`) }) },
+    markDesktopSignedOut: () => events.push("signed-out"),
+    logout: async () => {
+      events.push("logout");
+      if (offline) throw new TypeError("Failed to fetch");
+    },
+    clearAuthTokens: () => events.push("clear"),
+    navigate: ({ to }: { to: string }) => events.push(`navigate:${to}`),
+  })();
+  return events;
+}
+
+test("desktop Log out suppresses auto-auth before revoking, and still clears the session offline", async () => {
+  const seeded = { login_mode: "single", requires_password_change: true };
+  assert.deepEqual(await runSignOut({ tauri: true, owner: true, status: seeded }), [
+    "status", "signed-out", "logout", "navigate:/login",
+  ]);
+  assert.deepEqual(await runSignOut({ tauri: true, owner: true, offline: true }), [
+    "status", "signed-out", "logout", "clear", "navigate:/login",
+  ]);
+  // A managed account has no seeded password to worry about; the web build has no shell secret to hold back.
+  assert.deepEqual(await runSignOut({ tauri: true, owner: false }), ["signed-out", "logout", "navigate:/login"]);
+  assert.deepEqual(await runSignOut({ tauri: false, owner: true }), ["logout", "navigate:/login"]);
+});
+
+test("a multi-account desktop owner on the seeded password sets one before Log out", async () => {
+  const events = await runSignOut({
+    tauri: true,
+    owner: true,
+    status: { login_mode: "multi", requires_password_change: true },
+  });
+  assert.deepEqual(events, ["status", "toast", "open:remote-lan"]);
+});
+
+test("a second desktop window cannot auto-sign in after another window logs out", async (t) => {
+  const first = fixture(t);
+  first.auth.markDesktopSignedOut();
+  const second = fixture(t, true, first.stored);
+  // API recovery in the other window, after its tokens were cleared under it.
+  assert.equal(await second.auth.tauriAutoAuth(), false);
+  assert.equal(second.invokeCalls, 0);
+  assert.equal(second.access, null);
+});
+
+test("Forgot password on the desktop signs the owner in with the reset session", async (t) => {
+  const f = fixture(t);
+  f.setResponse({ access_token: "reset-access", refresh_token: "reset-refresh" });
+  f.auth.markDesktopSignedOut();
+  assert.equal(await f.auth.resetDesktopOwnerPassword("fresh-password"), false);
+  assert.deepEqual(f.invokes.at(-1), ["desktop_reset_password", { newPassword: "fresh-password" }]);
+  assert.equal(f.access, "reset-access");
+  assert.equal(f.auth.isDesktopSignedOut(), false);
+  assert.deepEqual(f.transitions, [{ account: "unsloth", route: "/chat" }]);
+});
+
+test("a refused desktop reset keeps the sign-out and surfaces the backend's reason", async (t) => {
+  const f = fixture(t);
+  f.auth.markDesktopSignedOut();
+  f.setResponse(new Error("Too many failed login attempts. Try again in 60 seconds."));
+  await assert.rejects(f.auth.resetDesktopOwnerPassword("fresh-password"), /Too many failed login attempts/);
+  assert.equal(f.access, null);
+  assert.equal(f.auth.isDesktopSignedOut(), true);
 });

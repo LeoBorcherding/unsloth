@@ -829,9 +829,11 @@ def resolve_login_username(username: str) -> str:
         return username
     conn = get_connection()
     try:
+        # A real username always wins, should one ever collide with the alias.
         row = conn.execute(
-            "SELECT username FROM auth_user WHERE login_alias = ? AND role = 'owner'",
-            (username,),
+            "SELECT username FROM auth_user WHERE login_alias = ? AND role = 'owner' "
+            "AND NOT EXISTS (SELECT 1 FROM auth_user WHERE username = ?)",
+            (username, username),
         ).fetchone()
     finally:
         conn.close()
@@ -1451,6 +1453,7 @@ def update_password(
     revoke_refresh_tokens: bool = False,
     expect_password_hash: Optional[str] = None,
     preserve_desktop_secret: bool = False,
+    revoke_api_keys: bool = False,
 ) -> Optional[str]:
     """Mint with the returned JWT secret; revoke refresh tokens in the same transaction as the update."""
     from .hashing import hash_password
@@ -1484,8 +1487,13 @@ def update_password(
             )
         if revoke_refresh_tokens and cursor.rowcount > 0:
             conn.execute("DELETE FROM refresh_tokens WHERE username = ?", (username,))
+        if revoke_api_keys and cursor.rowcount > 0:
+            # As `unsloth studio reset-password` does.
+            conn.execute("DELETE FROM api_keys WHERE username = ?", (username,))
         conn.commit()
         if cursor.rowcount > 0:
+            if revoke_api_keys:
+                _reset_api_key_hash_cache()
             clear_bootstrap_password()
             if not preserve_desktop_secret:
                 clear_desktop_secret()

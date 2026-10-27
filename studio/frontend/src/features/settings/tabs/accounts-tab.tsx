@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useIsAccountOwner } from "@/features/auth";
-import { UserAvatar } from "@/features/profile";
+import { UserAvatar, useUserProfileStore } from "@/features/profile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,6 +63,7 @@ import {
   type StudioAccount,
 } from "../api/accounts";
 import { ManagedProviderUrlsSection } from "../components/managed-provider-urls-section";
+import { AccountPasswordDialog } from "../components/change-password-dialog";
 
 export function AccountsTab() {
   const owner = useIsAccountOwner();
@@ -89,6 +90,9 @@ function OwnerAccountsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
+  // The owner's row matches the sidebar footer, which reads this store before the server copy syncs.
+  const ownDisplayName = useUserProfileStore((s) => s.displayName).trim();
+  const ownAvatar = useUserProfileStore((s) => s.avatarDataUrl);
 
   useEffect(() => {
     let canceled = false;
@@ -162,7 +166,7 @@ function OwnerAccountsTab() {
   const confirming = resetting ?? retiring;
   const editorOpen = creating || setup !== null;
   const filteredAccounts = accounts.filter((account) =>
-    [account.username, account.display_name ?? ""].some((name) =>
+    [account.username, shownName(account)].some((name) =>
       name
         .toLocaleLowerCase(locale)
         .includes(query.trim().toLocaleLowerCase(locale)),
@@ -173,6 +177,9 @@ function OwnerAccountsTab() {
     month: "short",
     day: "numeric",
   });
+  function shownName(account: StudioAccount) {
+    return (account.role === "owner" && ownDisplayName) || account.display_name || account.username;
+  }
   function createdDate(account: StudioAccount) {
     // `new Date(null)` is the epoch, so check null created_at (possible after upgrade) explicitly.
     const raw = account.created_at;
@@ -301,14 +308,14 @@ function OwnerAccountsTab() {
                   <td className="rounded-l-md py-3 pl-3 pr-3">
                     <div className="flex items-center gap-2.5">
                       <UserAvatar
-                        name={account.display_name || account.username}
-                        imageUrl={account.avatar_url ?? null}
+                        name={shownName(account)}
+                        imageUrl={(account.role === "owner" && ownAvatar) || account.avatar_url || null}
                         size="sm"
                         className="size-8"
                       />
                       <div className="min-w-0 space-y-0.5">
                         <p className="break-all text-sm font-medium">
-                          {account.display_name || account.username}
+                          {shownName(account)}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {account.role === "owner"
@@ -366,6 +373,7 @@ function OwnerAccountsTab() {
                     </span>
                   </td>
                   <td className="rounded-r-md py-3 pr-3 text-right">
+                    {account.role === "owner" && <AccountPasswordDialog />}
                     {account.role !== "owner" && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>

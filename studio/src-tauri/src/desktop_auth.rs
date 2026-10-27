@@ -56,6 +56,12 @@ struct DesktopAuthRequest {
     secret: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopResetPasswordRequest {
+    secret: String,
+    new_password: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PortSource {
     Cached,
@@ -401,6 +407,61 @@ async fn desktop_auth_inner(
     )
 }
 
+async fn reset_owner_password(
+    client: &Client,
+    port: u16,
+    secret: String,
+    new_password: String,
+) -> Result<DesktopAuthResponse, String> {
+    let response = client
+        .post(auth_url(port, "desktop-reset-password"))
+        .json(&DesktopResetPasswordRequest {
+            secret,
+            new_password,
+        })
+        .send()
+        .await
+        .map_err(|e| format!("Password reset failed: {}", e))?;
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .json::<DesktopAuthResponse>()
+            .await
+            .map_err(|e| format!("Password reset failed: {}", e));
+    }
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(
+            "Running Unsloth backend is too old for this desktop app. Update that backend and restart."
+                .to_string(),
+        );
+    }
+    let detail = response
+        .json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|body| body.get("detail")?.as_str().map(str::to_string));
+    Err(detail.unwrap_or_else(|| "Password reset failed".to_string()))
+}
+
+/// Forgotten owner password: the backend checks the same local secret `desktop_auth` exchanges, which the
+/// webview never sees.
+#[tauri::command]
+pub async fn desktop_reset_password(
+    state: tauri::State<'_, BackendState>,
+    new_password: String,
+) -> Result<DesktopAuthResponse, String> {
+    let _auth_guard = DESKTOP_AUTH_LOCK.lock().await;
+    let backend = current_backend_port(&state).await?;
+    let Some(secret) = read_secret_if_exists(&desktop_secret_path()?)? else {
+        return Err(
+            "Unsloth Desktop has no local sign-in secret yet. Restart Unsloth and try again."
+                .to_string(),
+        );
+    };
+    let client = desktop_auth_client().map_err(|e| format!("Password reset failed: {}", e))?;
+    reset_owner_password(&client, backend.port, secret, new_password).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,5 +623,35 @@ mod tests {
             error,
             "Running Unsloth backend is too old for this desktop app. Update that backend and restart."
         );
+    }
+
+    #[tokio::test]
+    async fn reset_owner_password_returns_tokens_or_the_backend_detail() {
+        let body = r#"{"access_token":"access","refresh_token":"refresh","token_type":"bearer","must_change_password":false,"account_id":"owner"}"#;
+        let port = login_server_with_body("200 OK", body).await;
+        let response =
+            reset_owner_password(&Client::new(), port, "s".into(), "new-password".into())
+                .await
+                .unwrap();
+        assert!(matches!(response, DesktopAuthResponse::Tokens { .. }));
+
+        let port = login_server_with_body(
+            "429 Too Many Requests",
+            r#"{"detail":"Too many failed login attempts. Try again in 60 seconds."}"#,
+        )
+        .await;
+        let error = reset_owner_password(&Client::new(), port, "s".into(), "new-password".into())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "Too many failed login attempts. Try again in 60 seconds."
+        );
+
+        let port = login_server("404 Not Found").await;
+        let error = reset_owner_password(&Client::new(), port, "s".into(), "new-password".into())
+            .await
+            .unwrap_err();
+        assert!(error.contains("too old"));
     }
 }

@@ -95,6 +95,7 @@ function mountForm(
     },
     "@/components/app-readiness": { useAppShellReadySignal: () => () => {} },
     "@/lib/api-base": desktop ? { ...base, isTauri: true } : base,
+    "./desktop-owner-reset": { DesktopOwnerReset: "DesktopOwnerReset" },
     "../tauri-auto-auth": {
       clearDesktopSignedOut: () => desktop?.calls.push("clear"),
       continueAsDesktopOwner: async () => {
@@ -746,4 +747,22 @@ test("a desktop password sign-in clears the explicit sign-out", async (t) => {
   await tick();
   await tick();
   assert.deepEqual(desktop.calls, ["clear"]);
+});
+
+test("only the desktop login page offers the owner password reset, in both modes", async (t) => {
+  environment(t);
+  for (const mode of ["single", "multi"] as const) {
+    globalThis.fetch = async () =>
+      Response.json({ initialized: true, requires_password_change: false, login_mode: mode });
+    for (const desktop of [null, { continued: false, calls: [] as string[] }]) {
+      const form = mountForm(client(), { access: null, change: false }, false, false, desktop);
+      const tree = await form.initialize();
+      const reset = elements(tree).find((element) => element.type === "DesktopOwnerReset");
+      assert.equal(Boolean(reset), desktop !== null, `${mode} desktop=${desktop !== null}`);
+      if (reset) {
+        (reset.props.onDone as (replaced: boolean) => void)(false);
+        assert.deepEqual(form.routes, ["/chat"]);
+      }
+    }
+  }
 });

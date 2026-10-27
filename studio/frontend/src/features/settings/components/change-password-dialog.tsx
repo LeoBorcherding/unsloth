@@ -14,15 +14,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  fetchAuthStatus,
   getAuthToken,
   refreshSession,
   setMustChangePassword,
   storeAuthTokens,
+  useIsAccountOwner,
 } from "@/features/auth";
 import { useT } from "@/i18n";
-import { apiUrl } from "@/lib/api-base";
+import { apiUrl, isTauri } from "@/lib/api-base";
 import { toast } from "@/lib/toast";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 const MIN_PASSWORD_LENGTH = 8;
 const WRONG_CURRENT_PASSWORD_DETAIL = "Current password is incorrect";
@@ -373,4 +375,23 @@ export function ChangePasswordDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** The signed-in account's own password. A Desktop owner still on the seeded password has none to give, so sets a first one. */
+export function AccountPasswordDialog() {
+  const owner = useIsAccountOwner();
+  const [initial, setInitial] = useState(false);
+  useEffect(() => {
+    if (!(isTauri && owner)) return;
+    let live = true;
+    void fetchAuthStatus()
+      .then((status) => {
+        if (live) setInitial(status.requires_password_change);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [owner]);
+  return <ChangePasswordDialog initial={initial} onDone={() => setInitial(false)} />;
 }

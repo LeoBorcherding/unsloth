@@ -45,6 +45,8 @@ function translate(key: string, values: Record<string, string> = {}) {
 type TabOptions = {
   stallRefresh?: boolean;
   accounts?: Record<string, unknown>[];
+  // What the sidebar footer shows: the local profile store.
+  localProfile?: { displayName: string; avatarDataUrl: string | null };
 };
 function tab(
   owner = true,
@@ -97,7 +99,12 @@ function tab(
       },
     },
     "@/features/auth": { useIsAccountOwner: () => owner },
-    "@/features/profile": { UserAvatar: "UserAvatar" },
+    "@/features/profile": {
+      UserAvatar: "UserAvatar",
+      useUserProfileStore: (select: (state: unknown) => unknown) =>
+        select(options.localProfile ?? { displayName: "", avatarDataUrl: null }),
+    },
+    "../components/change-password-dialog": { AccountPasswordDialog: "AccountPasswordDialog" },
     "@hugeicons/core-free-icons": {},
     "@hugeicons/react": { HugeiconsIcon: "Icon" },
     "@/lib/tick-icon": {},
@@ -593,4 +600,21 @@ test("the owner sets a sign-in name and an empty one falls back to unsloth", asy
   assert.ok(ui.calls.includes("alias:"));
   assert.match(content(tree), /Signs in as unsloth/);
   assert.doesNotMatch(content(tree), /blu3 or unsloth/);
+});
+
+test("the owner row matches the sidebar's local profile before the server copy and offers a password change", async () => {
+  const ui = tab(true, null, {
+    localProfile: { displayName: " Blu3 ", avatarDataUrl: "data:image/png;base64,LOCAL" },
+  });
+  const tree = await ui.initialize();
+  const ownerRow = nodes(tree).find((node) => node.props["data-testid"] === "account-unsloth");
+  const avatar = nodes(ownerRow).find((node) => node.type === "UserAvatar");
+  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Blu3", "data:image/png;base64,LOCAL"]);
+  assert.match(content(ownerRow), /Blu3/);
+  assert.match(content(ownerRow), /Installation owner/);
+  assert.ok(nodes(ownerRow).some((node) => node.type === "AccountPasswordDialog"));
+  const aliceRow = nodes(tree).find((node) => node.props["data-testid"] === "account-alice");
+  assert.ok(!nodes(aliceRow).some((node) => node.type === "AccountPasswordDialog"));
+  // A managed account's row never borrows the owner's local profile.
+  assert.equal(nodes(aliceRow).find((node) => node.type === "UserAvatar")?.props.imageUrl, null);
 });
