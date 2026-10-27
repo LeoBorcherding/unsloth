@@ -521,6 +521,11 @@ def model_load_gate():
     return _unload_gate(lock = _load_lock)
 
 
+def model_load_in_progress() -> bool:
+    # A load stamps activity only once it lands, so a long one is invisible to idle_for() until then.
+    return _load_lock.locked()
+
+
 def note_model_loaded(backend = None) -> None:
     """Stamp activity and synchronously drop any reload stash."""
     _note_activity()

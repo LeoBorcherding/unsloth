@@ -1467,6 +1467,21 @@ def test_someone_using_studio_right_after_launch_still_skips_the_run(monkeypatch
     assert keepwarm.attended_since_launch()
 
 
+def test_a_load_still_running_after_the_launch_wait_skips_the_run(monkeypatch):
+    keepwarm = just_launched(monkeypatch, 0.3)
+    world = SwapWorld(monkeypatch, idle = None)
+    producer = world.producer()
+    # Someone's load holds the gate past the away window; it stamps activity only once it lands.
+    assert keepwarm._load_lock.acquire(blocking = False)
+    try:
+        with pytest.raises(RunFailed) as failure:
+            world.run(monkeypatch, {"id": "run-1", "source": "schedule"}, producer)
+    finally:
+        keepwarm._load_lock.release()
+    assert failure.value.code == "model_busy"
+    assert producer.payload is None and world.loaded == SwapWorld.EARLIER
+
+
 def test_studios_own_runs_do_not_end_the_launch_wait(monkeypatch):
     keepwarm = just_launched(monkeypatch, 30)
     with keepwarm.unattended_activity():

@@ -337,17 +337,25 @@ def _model_fields(model: Optional[str], may_load: bool) -> tuple[dict, Optional[
 
 async def _wait_out_launch(cancel_event: Optional[threading.Event]) -> None:
     """Hold a run until Studio has been up and unused for the away window, or someone uses it."""
-    from core.inference.llama_keepwarm import attended_since_launch, idle_for
+    from core.inference.llama_keepwarm import (
+        attended_since_launch,
+        idle_for,
+        model_load_in_progress,
+    )
 
     deadline = asyncio.get_running_loop().time() + _AWAY_SECONDS
     while (
         not idle_for(_AWAY_SECONDS)
         and not attended_since_launch()
+        and not model_load_in_progress()
         and asyncio.get_running_loop().time() < deadline
     ):
         if cancel_event is not None and cancel_event.is_set():
             raise RunFailed("cancelled")
         await asyncio.sleep(_YIELD_POLL_SECONDS)
+    # Someone's load still running counts as using Studio.
+    if model_load_in_progress():
+        raise RunFailed("model_busy")
 
 
 async def _plan_swap(
