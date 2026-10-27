@@ -1,0 +1,11 @@
+# AFTER: studio/sdcpp-image-vram-budget @ c9b61037f, Colab L4 (NVIDIA L4, 23034 MiB), VRAM Budget set to 0.60 via PUT /api/settings/vram-budget
+# Z-Image-Turbo GGUF (z-image-turbo-Q4_K_M.gguf), engine=sd_cpp, mode=server
+# sd-server process command line (/proc/<pid>/cmdline):
+/root/.unsloth/stable-diffusion.cpp/sd-master-982-0518b34-ud331c66-bin-Linux-Ubuntu-22.04-x86_64-cuda13/sd-server --diffusion-model /root/.cache/huggingface/hub/models--unsloth--Z-Image-Turbo-GGUF/snapshots/6c80814333b7b6a70a2e5b469a7c6437ce65de0f/z-image-turbo-Q4_K_M.gguf --vae /root/.cache/huggingface/hub/models--unsloth--FLUX.1-schnell/snapshots/9df3faa7ae3b6ddf0b2b69bb78616372897cc65c/ae.safetensors --llm /root/.cache/huggingface/hub/models--unsloth--Qwen3-4B-GGUF/snapshots/22c9fc8a8c7700b76a1789366280a6a5a1ad1120/Qwen3-4B-BF16.gguf --listen-ip 127.0.0.1 --listen-port 49197 --lora-model-dir /tmp/sdcpp_dirs_2iox3b2_ --hires-upscalers-dir /tmp/sdcpp_dirs_2iox3b2_ --embd-dir /tmp/sdcpp_dirs_2iox3b2_ --threads 6 --max-vram 11.49 -v
+
+# serve.log:
+{"timestamp": "2026-10-27T19:29:17.952729Z", "level": "info", "event": "sd_cpp.vram_budget: --max-vram 11.49 (budget 0.600, free 14490020085, total 24148453621)"}
+{"timestamp": "2026-10-27T19:29:28.451326Z", "level": "info", "event": "sd_cpp.loaded: repo=unsloth/Z-Image-Turbo-GGUF gguf=z-image-turbo-Q4_K_M.gguf device=cuda mode=server speed=off offload_flags=none vram_budget=--max-vram 11.49"}
+
+# one 1024x1024, 8-step generation (seed 42): HTTP 200 in 21.1 s; nvidia-smi peak 8474 MiB (194 MiB idle after load)
+# note: "free" is already net of the 40% user reserve (24.15 GB * 0.6 = 14.49 GB); graph_cut_budget_gib then takes its 2 GiB reserve, so 13.49 GiB -> 11.49 GiB

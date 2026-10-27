@@ -1,0 +1,9 @@
+# BEFORE: base/main-b6fc821 (b6fc821e7), Colab L4 (NVIDIA L4, 23034 MiB), VRAM Budget set to 0.60 via PUT /api/settings/vram-budget
+# Z-Image-Turbo GGUF (z-image-turbo-Q4_K_M.gguf), engine=sd_cpp, mode=server
+# sd-server process command line (/proc/<pid>/cmdline):
+
+
+# serve.log:
+{"timestamp": "2026-10-27T19:03:56.393868Z", "level": "info", "event": "sd_cpp.loaded: repo=unsloth/Z-Image-Turbo-GGUF gguf=z-image-turbo-Q4_K_M.gguf device=cuda mode=server speed=off offload_flags=none"}
+
+# one 1024x1024, 8-step generation (seed 42): HTTP 200 in 19.6 s; nvidia-smi peak 15948 MiB (194 MiB idle after load)
