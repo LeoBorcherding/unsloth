@@ -53,8 +53,13 @@ export type RecipePayload = {
       type?: string;
       source_handle?: string;
       target_handle?: string;
+      // ui-only: reroute ids the wire passes through, in order
+      via?: string[];
     }[];
+    // ui-only: graph orientation, always LR now; older recipes may say TB
     layout_direction?: "LR" | "TB";
+    // ui-only: reroute waypoints; the recipe itself never refers to them
+    reroutes?: Array<{ id: string; x: number; y: number }>;
     seed_source_type?: "hf" | "local" | "unstructured" | "github_repo";
     aux_nodes?: Array<{
       llm: string;
