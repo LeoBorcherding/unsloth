@@ -87,7 +87,8 @@ class TPEnvLayout:
             torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
         if not dist.is_initialized():
             # What the Trainer's accelerate state would create; it reuses an existing group.
-            dist.init_process_group("nccl" if cuda else "gloo")
+            # Windows CUDA / ROCm torch ships no NCCL, as in fsdp2_native.
+            dist.init_process_group("nccl" if cuda and dist.is_nccl_available() else "gloo")
         if dist.get_world_size() != self.world:
             raise RuntimeError(
                 f"Unsloth: UNSLOTH_TP_SIZE={self.tp} read WORLD_SIZE={self.world}, but the process group has "
