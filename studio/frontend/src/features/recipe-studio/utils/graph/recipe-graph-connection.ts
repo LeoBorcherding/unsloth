@@ -20,6 +20,7 @@ import {
   VALIDATOR_OXC_CODE_LANGS,
   VALIDATOR_SQL_CODE_LANGS,
 } from "../validators/code-lang";
+import { TRAINED_MODEL_CONSUMER_KINDS } from "../train-card";
 import {
   isSemanticRelation,
   isTextFormatValidator,
@@ -332,6 +333,12 @@ export function isValidRecipeConnection(
   const target = configs[connection.target];
   if (!(source && target)) {
     return false;
+  }
+  // A Train card's output is an adapter, not a column: it only feeds cards that take one.
+  if (source.kind === "train") {
+    return (
+      TRAINED_MODEL_CONSUMER_KINDS.has(target.kind) && isDataLane(connection)
+    );
   }
   const semanticRelation = isSemanticRelation(source, target);
   if (semanticRelation) {

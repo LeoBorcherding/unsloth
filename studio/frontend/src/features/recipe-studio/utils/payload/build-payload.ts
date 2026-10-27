@@ -196,7 +196,7 @@ export function buildRecipePayload(
       // seed-dataset columns are added by DataDesigner.
       continue;
     }
-    if (config.kind === "markdown_note") {
+    if (config.kind === "markdown_note" || config.kind === "train") {
       continue;
     }
     if (config.kind === "model_provider") {
@@ -272,6 +272,20 @@ export function buildRecipePayload(
           markdown: config.markdown,
           note_color: config.note_color,
           note_opacity: config.note_opacity,
+        },
+      ];
+    }
+    if (config.kind === "train") {
+      const { id: _id, kind: _kind, name: _name, ...train } = config;
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "train" as const,
+          name: config.name,
+          train,
         },
       ];
     }

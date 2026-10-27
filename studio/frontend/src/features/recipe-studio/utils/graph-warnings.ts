@@ -120,7 +120,7 @@ function checkDisconnectedNodes(
 
   const warnings: GraphWarning[] = [];
   for (const config of allConfigs) {
-    if (config.kind === "markdown_note") {
+    if (config.kind === "markdown_note" || config.kind === "train") {
       continue;
     }
     if (connectedIds.has(config.id)) {
