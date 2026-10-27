@@ -1959,6 +1959,25 @@ def _with_vram_budget_hint(config: dict, message: str) -> str:
     )
 
 
+_OOM_MSG = (
+    "GPU ran out of VRAM during training.\n"
+    "To fix: reduce max_seq_length (e.g. 2048–4096), enable "
+    "gradient_checkpointing=True, lower per_device_train_batch_size, "
+    "or use a smaller model / higher quantization."
+)
+
+
+def _oom_error(config: dict, text: str | None) -> str | None:
+    """The guided OOM message when an error text is a GPU OOM. The trainer and load_model turn
+    exceptions into ``progress.error`` text, so most OOMs never reach the worker's except."""
+    lower = (text or "").lower()
+    # A host-RAM "out of memory" keeps its own text; only an accelerator OOM gets VRAM advice.
+    accel = any(k in lower for k in ("cuda", "hip", "xpu", "mps", "gpu"))
+    if ("out of memory" in lower and accel) or "outofmemoryerror" in lower:
+        return _with_vram_budget_hint(config, _OOM_MSG)
+    return None
+
+
 def _allocator_divides_by_props_total(torch_version: str | None) -> bool:
     """Torch 2.10+ caps at props.total_memory, older torch at hipMemGetInfo; unparsable says True."""
     release = str(torch_version or "").split("+", 1)[0].split(".")
@@ -4874,7 +4893,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 event_queue.put(
                     {
                         "type": "error",
-                        "error": trainer.training_progress.error or "Failed to load dataset",
+                        "error": _oom_error(config, trainer.training_progress.error)
+                        or trainer.training_progress.error
+                        or "Failed to load dataset",
                         "stack": "",
                         "ts": time.time(),
                     }
@@ -5042,8 +5063,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
             if trainer.should_stop:
                 event_queue.put({"type": "complete", "output_dir": None, "ts": time.time()})
             else:
-                error_msg = _with_vram_budget_hint(
-                    config, trainer.training_progress.error or "Failed to load model"
+                load_error = trainer.training_progress.error or "Failed to load model"
+                error_msg = _oom_error(config, load_error) or _with_vram_budget_hint(
+                    config, load_error
                 )
                 event_queue.put(
                     {
@@ -5139,7 +5161,8 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 event_queue.put(
                     {
                         "type": "error",
-                        "error": _with_vram_budget_hint(
+                        "error": _oom_error(config, trainer.training_progress.error)
+                        or _with_vram_budget_hint(
                             config, trainer.training_progress.error or "Failed to prepare model"
                         ),
                         "stack": "",
@@ -5273,7 +5296,7 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
             event_queue.put(
                 {
                     "type": "error",
-                    "error": progress.error,
+                    "error": _oom_error(config, progress.error) or progress.error,
                     "stack": "",
                     "ts": time.time(),
                 }
@@ -5301,17 +5324,11 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
             or type(exc).__name__ == "OutOfMemoryError"
         )
         if _is_oom:
-            _oom_msg = (
-                "GPU ran out of VRAM during training.\n"
-                "To fix: reduce max_seq_length (e.g. 2048–4096), enable "
-                "gradient_checkpointing=True, lower per_device_train_batch_size, "
-                "or use a smaller model / higher quantization."
-            )
             logger.error("Training stopped: GPU OOM — %s", exc)
             event_queue.put(
                 {
                     "type": "error",
-                    "error": _with_vram_budget_hint(config, _oom_msg),
+                    "error": _with_vram_budget_hint(config, _OOM_MSG),
                     "stack": traceback.format_exc(limit = 20),
                     "ts": time.time(),
                 }

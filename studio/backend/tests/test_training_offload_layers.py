@@ -398,8 +398,9 @@ def test_every_worker_failure_path_carries_the_budget_hint():
     src = (Path(__file__).resolve().parents[1] / "core" / "training" / "worker.py").read_text(
         encoding = "utf-8"
     )
-    # Load, LoRA prepare (offload_layers = "auto" plans in get_peft_model) and training OOM.
-    assert src.count("_with_vram_budget_hint(") == 4
+    # Load, LoRA prepare (offload_layers = "auto" plans in get_peft_model), training OOM, and
+    # _oom_error for an OOM relayed as text.
+    assert src.count("_with_vram_budget_hint(") == 5
 
 
 def test_per_gpu_budgets_get_the_hint_too():
