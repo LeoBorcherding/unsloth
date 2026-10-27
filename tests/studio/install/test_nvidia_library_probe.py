@@ -280,10 +280,18 @@ class TestDetectHostFallsBackToTheLibraries:
         )
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
         host = ILP.detect_host()
-        assert host.has_physical_nvidia and host.has_usable_nvidia
+        assert host.has_physical_nvidia and host.has_usable_nvidia and host.nvidia_gpu_seen
         assert host.driver_cuda_version == (12, 8)
         assert host.compute_caps == ["89", "86"]
         assert host.physical_compute_caps == ["89", "86"]
+
+    def test_nvidia_smi_listing_no_gpu_is_not_an_nvidia_gpu(self, monkeypatch):
+        # The driver leaves nvidia-smi on PATH when the card is gone or unreachable.
+        _hide_the_real_host(monkeypatch, nvidia_smi = "/usr/bin/nvidia-smi")
+        _failing_smi(monkeypatch)
+        monkeypatch.setattr(ILP, "nvidia_library_inventory", lambda: None)
+        host = ILP.detect_host()
+        assert host.nvidia_smi and not host.nvidia_gpu_seen
 
     def test_an_absent_nvidia_smi_is_the_same(self, monkeypatch):
         _hide_the_real_host(monkeypatch, nvidia_smi = None)

@@ -320,9 +320,16 @@ def _nvidia_has_prebuilt_arch() -> Optional[bool]:
 
 
 def _nvidia_gpu_present() -> bool:
-    """An NVIDIA card, also one whose driver reports no CUDA version (wedged, partial)."""
-    if shutil.which("nvidia-smi"):
-        return True
+    """An NVIDIA card, also one whose driver reports no CUDA version (wedged, partial).
+    nvidia-smi on PATH alone is not one: the driver leaves it behind after the card is gone."""
+    exe = shutil.which("nvidia-smi")
+    if exe:
+        try:
+            out = subprocess.run([exe, "-L"], capture_output = True, text = True, timeout = 15)
+            if any(line.startswith("GPU ") for line in (out.stdout or "").splitlines()):
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
     try:
         return sys.platform.startswith("linux") and bool(os.listdir("/proc/driver/nvidia/gpus"))
     except OSError:

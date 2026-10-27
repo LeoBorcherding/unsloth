@@ -176,6 +176,8 @@ def _fake_nvidia_smi(
             if isinstance(caps, Exception):
                 raise caps
             return type("R", (), {"stdout": caps, "returncode": returncode})()
+        if "-L" in cmd:
+            return type("R", (), {"stdout": "GPU 0: NVIDIA (UUID: GPU-0)\n", "returncode": 0})()
         return type("R", (), {"stdout": "CUDA Version: 12.6", "returncode": 0})()
 
     monkeypatch.setattr(M.platform, "system", lambda: "Linux")
@@ -1952,6 +1954,7 @@ def _fake_host(
     *,
     vendors = (),
     smi = False,
+    smi_gpus = True,
     cuda = None,
     proc_nvidia = False,
 ):
@@ -1967,6 +1970,10 @@ def _fake_host(
         lambda pattern: sorted(str(p) for p in (tmp_path / "drm").glob("card*/device/vendor")),
     )
     monkeypatch.setattr(M.shutil, "which", lambda name: "/usr/bin/nvidia-smi" if smi else None)
+    listing = "GPU 0: NVIDIA GeForce RTX 4090 (UUID: GPU-0)\n" if smi_gpus else ""
+    monkeypatch.setattr(
+        M.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": listing, "returncode": 0})()
+    )
     monkeypatch.setattr(M, "nvidia_driver_cuda_version", lambda: cuda)
     monkeypatch.setattr(M, "_nvidia_has_prebuilt_arch", lambda: None)
     real_listdir = M.os.listdir
@@ -1990,6 +1997,8 @@ def _fake_host(
         # An NVIDIA card nvidia-smi or the driver lists without a CUDA version keeps the CPU build.
         (dict(vendors = ("0x1002",), smi = True), "cpu"),
         (dict(vendors = ("0x1002",), proc_nvidia = True), "cpu"),
+        # nvidia-smi left behind with no card (driver kept, GPU removed): still Vulkan.
+        (dict(vendors = ("0x1002",), smi = True, smi_gpus = False), "vulkan"),
     ],
 )
 def test_linux_amd_gpu_is_detected_as_vulkan(monkeypatch, tmp_path, host, expected):
