@@ -13,6 +13,7 @@ import { type CSSProperties, memo, useEffect } from "react";
 import { create } from "zustand";
 import { useCatalogStore } from "../stores/catalog-store";
 import type { RfEdge, RfNode } from "./derive-rf";
+import { portInk } from "./theme-colors";
 import type { RouteRequest, RouteResponse } from "./wire-router.worker";
 import {
   type WireEdgeInput,
@@ -270,13 +271,13 @@ function BusEdgeImpl({
   const flow = data?.kind === "flow";
   const base: CSSProperties = flow
     ? {
-        stroke: selected ? "#ffffff" : "#e4e4e7",
+        stroke: selected ? "var(--foreground)" : "var(--muted-foreground)",
         strokeWidth: selected ? 3 : 2.25,
         strokeDasharray: "8 5",
         opacity: selected ? 1 : 0.8,
       }
     : {
-        stroke: color,
+        stroke: portInk(color),
         strokeWidth: selected ? 3 : 1.75,
         opacity: selected ? 1 : 0.75,
       };

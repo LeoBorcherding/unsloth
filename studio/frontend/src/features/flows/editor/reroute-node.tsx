@@ -12,6 +12,7 @@ import {
   REROUTE_SIZE,
   reroutePort,
 } from "./reroutes";
+import { portInk } from "./theme-colors";
 
 /** A waypoint for steering a wire. It carries whatever type is wired into it. */
 function RerouteNodeImpl({ id, selected }: NodeProps<RfNode>) {
@@ -22,8 +23,8 @@ function RerouteNodeImpl({ id, selected }: NodeProps<RfNode>) {
     useCatalogStore((s) => s.catalog?.port_colors[type]) ?? "#94a3b8";
   return (
     <div
-      className={`relative rounded-full border-2 bg-zinc-900 shadow-sm shadow-black/40 ${selected ? "ring-2 ring-white/60" : ""}`}
-      style={{ ...REROUTE_SIZE, borderColor: color }}
+      className={`relative rounded-full border-2 bg-card shadow-sm ${selected ? "ring-2 ring-ring" : ""}`}
+      style={{ ...REROUTE_SIZE, borderColor: portInk(color) }}
       title="Reroute: drag to steer the wire, drop on a wire to split it"
       data-testid="flows-reroute"
       data-reroute-id={id}

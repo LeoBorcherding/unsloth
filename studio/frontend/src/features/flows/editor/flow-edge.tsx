@@ -12,6 +12,7 @@ import { useCatalogStore } from "../stores/catalog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RfEdge } from "./derive-rf";
 import { BusEdge } from "./wire-routing";
+import { portInk } from "./theme-colors";
 
 function CurvedEdgeImpl({
   id,
@@ -42,7 +43,7 @@ function CurvedEdgeImpl({
         id={id}
         path={path}
         style={{
-          stroke: selected ? "#ffffff" : "#e4e4e7",
+          stroke: selected ? "var(--foreground)" : "var(--muted-foreground)",
           strokeWidth: selected ? 3 : 2.25,
           strokeDasharray: "8 5",
           opacity: selected ? 1 : 0.8,
@@ -63,7 +64,7 @@ function CurvedEdgeImpl({
       id={id}
       path={path}
       style={{
-        stroke: color,
+        stroke: portInk(color),
         strokeWidth: selected ? 3 : 1.75,
         opacity: selected ? 1 : 0.75,
       }}
