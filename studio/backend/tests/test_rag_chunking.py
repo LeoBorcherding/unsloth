@@ -85,3 +85,85 @@ def test_large_document_does_not_retokenize_every_piece_after_cache_eviction():
     assert len(chunks) > 20
     assert all(c.token_count <= 500 for c in chunks)
     assert chunks[-1].page_char_end == len(text)
+
+
+B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _unbreakable(n):
+    return "".join(B64[i % 64] for i in range(n))
+
+
+def test_unbreakable_run_fills_the_token_budget():
+    # Base64 or minified code has no separator; windows must be sized in tokens, not characters.
+    calls = Counter()
+
+    def count(text):
+        calls["n"] += 1
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(20_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 0, count = count)
+    assert len(chunks) == 10
+    assert all(c.token_count <= 512 for c in chunks)
+    assert min(c.token_count for c in chunks[:-1]) == 512
+    assert calls["n"] < 500
+    assert "".join(c.text for c in chunks) == text
+
+
+def test_unbreakable_run_stays_within_budget_on_dense_text():
+    text = _unbreakable(3_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 100, overlap = 0, count = len)
+    assert all(c.token_count <= 100 for c in chunks)
+    assert "".join(c.text for c in chunks) == text
+
+
+def test_unbreakable_run_tokenizes_about_its_own_length():
+    # Each window must not re-tokenize the rest of the run: that is quadratic on a long blob.
+    seen = Counter()
+
+    def count(text):
+        seen["chars"] += len(text)
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(300_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 0, count = count)
+    assert "".join(c.text for c in chunks) == text
+    assert seen["chars"] < 40 * len(text)
+
+
+def test_unbreakable_run_keeps_the_overlap():
+    def count(text):
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(20_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 512, overlap = 64, count = count)
+    assert all(c.token_count <= 512 for c in chunks)
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert prev.page_char_end - nxt.page_char_start == 64 * 4
+    assert chunks[0].page_char_start == 0 and chunks[-1].page_char_end == len(text)
+
+
+def test_unbreakable_run_counts_about_twice_per_window():
+    # llama-server counts over HTTP, one /tokenize per call: a uniform run must not pay a
+    # fresh search for every overlap-sized window.
+    calls = Counter()
+
+    def count(text):
+        calls["n"] += 1
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(300_000)
+    chunk_pages([_page(text)], max_tokens = 512, overlap = 64, count = count)
+    assert calls["n"] < 4_000
+
+
+def test_unbreakable_run_keeps_a_high_overlap():
+    def count(text):
+        return max(1, (len(text) + 3) // 4)
+
+    text = _unbreakable(2_000)
+    chunks = chunk_pages([_page(text)], max_tokens = 100, overlap = 99, count = count)
+    assert all(c.token_count <= 100 for c in chunks)
+    for prev, nxt in zip(chunks, chunks[1:]):
+        assert prev.page_char_end - nxt.page_char_start == 99 * 4
