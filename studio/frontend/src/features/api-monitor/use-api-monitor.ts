@@ -6,10 +6,12 @@ import {
   getApiMonitor,
   getApiMonitorEntry,
 } from "@/features/chat/api/chat-api";
+import { useChatRuntimeStore } from "@/features/chat/stores/chat-runtime-store";
 import type {
   ApiMonitorEntry,
   ApiMonitorResponse,
 } from "@/features/chat/types/api";
+import { requestResidentStatusRefresh } from "@/features/hub/lib/resident-status-refresh";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearMonitor } from "./clear-monitor";
 import {
@@ -18,6 +20,7 @@ import {
   filterEntries,
   mergeMonitorResponse,
 } from "./monitor-snapshot";
+import { createResidentDriftWatch } from "./resident-drift";
 import { type MonitorStats, computeStats } from "./stats";
 
 const POLL_INTERVAL_MS = 1500;
@@ -97,8 +100,12 @@ export function useApiMonitor({
   const listRequestGeneration = useRef(0);
   const manualLoadGeneration = useRef(0);
   const detailRequestGeneration = useRef(0);
+  const residentDrift = useRef(createResidentDriftWatch());
 
   const updateData = useCallback((next: ApiMonitorResponse): void => {
+    if (residentDrift.current(next, useChatRuntimeStore.getState())) {
+      requestResidentStatusRefresh();
+    }
     const ids = new Set(next.entries.map((entry) => entry.id));
     retainedEntryIds.current = ids;
     setData((previous) => mergeMonitorResponse(previous, next));

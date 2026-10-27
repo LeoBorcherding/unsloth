@@ -14,6 +14,13 @@ function browserTargets(): ResidentStatusRefreshTargets {
   return { window, document };
 }
 
+const requested = new Set<() => void>();
+
+/** Re-read now, as a focus would: the API monitor saw the resident change under a focused tab. */
+export function requestResidentStatusRefresh(): void {
+  for (const refresh of [...requested]) refresh();
+}
+
 export function subscribeResidentStatusRefresh(
   refresh: () => void,
   targets: ResidentStatusRefreshTargets = browserTargets(),
@@ -25,7 +32,9 @@ export function subscribeResidentStatusRefresh(
   };
   targets.window.addEventListener("focus", onFocus);
   targets.document.addEventListener("visibilitychange", onVisibility);
+  requested.add(onFocus);
   return () => {
+    requested.delete(onFocus);
     targets.window.removeEventListener("focus", onFocus);
     targets.document.removeEventListener("visibilitychange", onVisibility);
   };
