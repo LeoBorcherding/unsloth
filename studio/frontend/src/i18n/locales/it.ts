@@ -695,6 +695,7 @@ export const it = {
       help: "Aiuto",
       logOut: "Esci",
       logOutNeedsPassword: "Imposta una password in Impostazioni > Accesso remoto prima di uscire, così potrai accedere di nuovo.",
+      logOutFailed: "Impossibile uscire in modo sicuro. Riprova tra un momento.",
       shutdown: "Arresta",
     },
     commandPalette: {

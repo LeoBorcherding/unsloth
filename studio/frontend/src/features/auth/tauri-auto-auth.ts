@@ -38,9 +38,9 @@ export function isTauriLoginRequired(): boolean {
 // An explicit Log out: the shell keeps a marker file and answers signed_out until a sign-in clears it. Not
 // localStorage, which WebView2 writes lazily, so a quit soon after Log out signed the owner straight back in.
 export async function markDesktopSignedOut(): Promise<void> {
-  tauriLoginRequired = true;
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("desktop_mark_signed_out");
+  tauriLoginRequired = true;
 }
 
 export async function clearDesktopSignedOut(): Promise<void> {

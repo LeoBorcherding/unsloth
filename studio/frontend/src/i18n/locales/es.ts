@@ -793,6 +793,7 @@ export const es = {
       help: "Ayuda",
       logOut: "Cerrar sesión",
       logOutNeedsPassword: "Define una contraseña en Ajustes > Acceso remoto antes de cerrar sesión para poder volver a entrar.",
+      logOutFailed: "No se pudo cerrar sesión de forma segura. Inténtalo de nuevo en un momento.",
       shutdown: "Apagar",
     },
     commandPalette: {

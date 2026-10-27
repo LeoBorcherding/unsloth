@@ -4312,8 +4312,13 @@ export function AppSidebar() {
   async function signOut() {
     // Multi-account Desktop signs back in with a password, and the seeded one was never shown.
     if (isTauri && isOwner) {
+      // Unknown is not "no password to lose": stay signed in rather than risk a lockout.
       const status = await fetchAuthStatus().catch(() => null);
-      if (status?.login_mode === "multi" && status.requires_password_change) {
+      if (!status) {
+        toast.error(t("shell.navigation.logOutFailed"));
+        return;
+      }
+      if (status.login_mode === "multi" && status.requires_password_change) {
         toast.error(t("shell.navigation.logOutNeedsPassword"));
         useSettingsDialogStore.getState().openDialog("remote-lan");
         return;
@@ -4321,7 +4326,15 @@ export function AppSidebar() {
     }
     if (!window.dispatchEvent(new Event(AUTH_SESSION_ENDING_EVENT, { cancelable: true }))) return;
     // Before the revoke, so a request failing on the cleared session cannot auto-sign in again.
-    if (isTauri) await markDesktopSignedOut().catch(() => undefined);
+    // Without the marker a relaunch would sign straight back in, so a failed write keeps the session.
+    if (isTauri) {
+      try {
+        await markDesktopSignedOut();
+      } catch {
+        toast.error(t("shell.navigation.logOutFailed"));
+        return;
+      }
+    }
     // Best-effort revocation; ignore network errors so the local clear still runs.
     try {
       await logout();

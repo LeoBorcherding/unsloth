@@ -847,6 +847,7 @@ export const en = {
       help: "Help",
       logOut: "Log out",
       logOutNeedsPassword: "Set a password in Settings > Remote access before logging out, so you can sign back in.",
+      logOutFailed: "Couldn't log out safely. Try again in a moment.",
       shutdown: "Shutdown",
     },
     commandPalette: {

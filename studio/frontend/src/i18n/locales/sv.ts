@@ -894,6 +894,7 @@ export const sv = {
       help: "Hjälp",
       logOut: "Logga ut",
       logOutNeedsPassword: "Ange ett lösenord under Inställningar > Fjärråtkomst innan du loggar ut, så att du kan logga in igen.",
+      logOutFailed: "Det gick inte att logga ut säkert. Försök igen om en stund.",
       shutdown: "Stäng av",
     },
     commandPalette: {

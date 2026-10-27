@@ -793,6 +793,7 @@ export const ptBR = {
       help: "Ajuda",
       logOut: "Sair",
       logOutNeedsPassword: "Defina uma senha em Configurações > Acesso remoto antes de sair, para conseguir entrar de novo.",
+      logOutFailed: "Não foi possível sair com segurança. Tente de novo em instantes.",
       shutdown: "Desligar",
     },
     commandPalette: {

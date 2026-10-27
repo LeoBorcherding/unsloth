@@ -876,6 +876,7 @@ export const he = {
       help: "עזרה",
       logOut: "התנתקות",
       logOutNeedsPassword: "לפני ההתנתקות, הגדירו סיסמה בהגדרות > גישה מרחוק כדי שתוכלו להתחבר שוב.",
+      logOutFailed: "לא ניתן היה להתנתק בבטחה. נסו שוב בעוד רגע.",
       shutdown: "כיבוי",
     },
     commandPalette: {

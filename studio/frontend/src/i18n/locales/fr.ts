@@ -794,6 +794,7 @@ export const fr = {
       help: "Aide",
       logOut: "Se déconnecter",
       logOutNeedsPassword: "Définissez un mot de passe dans Paramètres > Accès à distance avant de vous déconnecter, pour pouvoir vous reconnecter.",
+      logOutFailed: "Impossible de se déconnecter en toute sécurité. Réessayez dans un instant.",
       shutdown: "Arrêter",
     },
     commandPalette: {

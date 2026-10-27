@@ -792,6 +792,7 @@ export const ja = {
       help: "ヘルプ",
       logOut: "ログアウト",
       logOutNeedsPassword: "ログアウトする前に、設定 > リモートアクセスでパスワードを設定してください。再びサインインするために必要です。",
+      logOutFailed: "安全にログアウトできませんでした。しばらくしてからもう一度お試しください。",
       shutdown: "シャットダウン",
     },
     commandPalette: {

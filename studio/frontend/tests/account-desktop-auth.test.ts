@@ -433,8 +433,8 @@ function sidebarSignOut(scope: Record<string, unknown>): () => Promise<void> {
   return new Function(...Object.keys(scope), outputText)(...Object.values(scope));
 }
 
-type SignOutCase = { tauri: boolean; owner: boolean; status?: unknown; offline?: boolean };
-async function runSignOut({ tauri, owner, status, offline }: SignOutCase): Promise<string[]> {
+type SignOutCase = { tauri: boolean; owner: boolean; status?: unknown; offline?: boolean; markerFails?: boolean };
+async function runSignOut({ tauri, owner, status, offline, markerFails }: SignOutCase): Promise<string[]> {
   const events: string[] = [];
   await sidebarSignOut({
     isTauri: tauri,
@@ -451,6 +451,7 @@ async function runSignOut({ tauri, owner, status, offline }: SignOutCase): Promi
     t: (key: string) => key,
     useSettingsDialogStore: { getState: () => ({ openDialog: (tab: string) => events.push(`open:${tab}`) }) },
     markDesktopSignedOut: async () => {
+      if (markerFails) throw new Error("permission denied");
       events.push("signed-out");
     },
     logout: async () => {
@@ -468,7 +469,7 @@ test("desktop Log out suppresses auto-auth before revoking, and still clears the
   assert.deepEqual(await runSignOut({ tauri: true, owner: true, status: seeded }), [
     "status", "signed-out", "logout", "navigate:/login",
   ]);
-  assert.deepEqual(await runSignOut({ tauri: true, owner: true, offline: true }), [
+  assert.deepEqual(await runSignOut({ tauri: true, owner: true, status: seeded, offline: true }), [
     "status", "signed-out", "logout", "clear", "navigate:/login",
   ]);
   // A managed account has no seeded password to worry about; the web build has no shell secret to hold back.
@@ -483,6 +484,17 @@ test("a multi-account desktop owner on the seeded password sets one before Log o
     status: { login_mode: "multi", requires_password_change: true },
   });
   assert.deepEqual(events, ["status", "toast", "open:remote-lan"]);
+});
+
+test("desktop Log out keeps the session when the password state or the marker is unknown", async () => {
+  // Status unreachable: a seeded multi-account owner would be locked out.
+  assert.deepEqual(await runSignOut({ tauri: true, owner: true }), ["status", "toast"]);
+  // Marker not written: a relaunch would sign straight back in.
+  const single = { login_mode: "single", requires_password_change: false };
+  assert.deepEqual(await runSignOut({ tauri: true, owner: true, status: single, markerFails: true }), [
+    "status", "toast",
+  ]);
+  assert.deepEqual(await runSignOut({ tauri: true, owner: false, markerFails: true }), ["toast"]);
 });
 
 test("a second desktop window cannot auto-sign in after another window logs out", async (t) => {

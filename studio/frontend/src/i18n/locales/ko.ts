@@ -790,6 +790,7 @@ export const ko = {
       help: "도움말",
       logOut: "로그아웃",
       logOutNeedsPassword: "로그아웃하기 전에 설정 > 원격 액세스에서 비밀번호를 설정하세요. 다시 로그인하려면 필요합니다.",
+      logOutFailed: "안전하게 로그아웃하지 못했습니다. 잠시 후 다시 시도하세요.",
       shutdown: "종료",
     },
     commandPalette: {

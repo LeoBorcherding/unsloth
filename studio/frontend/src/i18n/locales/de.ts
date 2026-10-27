@@ -794,6 +794,7 @@ export const de = {
       help: "Hilfe",
       logOut: "Abmelden",
       logOutNeedsPassword: "Legen Sie vor dem Abmelden unter Einstellungen > Fernzugriff ein Passwort fest, damit Sie sich wieder anmelden können.",
+      logOutFailed: "Abmelden war nicht sicher möglich. Versuchen Sie es gleich noch einmal.",
       shutdown: "Herunterfahren",
     },
     commandPalette: {

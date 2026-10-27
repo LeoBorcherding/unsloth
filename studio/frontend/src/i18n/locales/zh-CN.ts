@@ -788,6 +788,7 @@ export const zhCN = {
       help: "帮助",
       logOut: "退出登录",
       logOutNeedsPassword: "退出登录前，请先在 设置 > 远程访问 中设置密码，以便重新登录。",
+      logOutFailed: "无法安全退出登录，请稍后重试。",
       shutdown: "关闭服务",
     },
     commandPalette: {
