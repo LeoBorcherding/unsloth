@@ -11560,7 +11560,8 @@ def release_chat_gpu_claim() -> bool:
     from core.inference.llama_cpp import chat_load_active
 
     def chat_idle() -> bool:
-        if model_slots.busy():
+        # A stuck slot's server would not stop; only the CHAT eviction retries it strictly.
+        if model_slots.busy() or model_slots.stuck:
             return False
         llama = get_llama_cpp_backend()
         # is_active, not is_loaded: a starting model holds VRAM, and an HF load has no process yet.

@@ -1004,6 +1004,24 @@ def test_a_model_still_loading_alongside_keeps_the_chat_claim(backends, monkeypa
     assert gpu_arbiter.current_owner() != gpu_arbiter.CHAT
 
 
+def test_a_kept_model_that_would_not_unload_keeps_the_chat_claim(backends, monkeypatch):
+    primary, extra = backends
+    _hold_chat_claim(monkeypatch)
+    primary.unload_model()
+    real = extra.llama.unload_model
+    monkeypatch.setattr(
+        extra.llama, "unload_model", lambda: (_ for _ in ()).throw(RuntimeError("stuck"))
+    )
+    # What the idle loop calls before it releases CHAT.
+    model_slots.unload_extra_models(lambda llama: False, True)
+    assert model_slots.stuck == [extra] and not model_slots.busy()
+    assert inf.release_chat_gpu_claim() is False
+    assert gpu_arbiter.current_owner() == gpu_arbiter.CHAT
+    monkeypatch.setattr(extra.llama, "unload_model", real)
+    model_slots.unload_extra_models()
+    assert model_slots.stuck == [] and inf.release_chat_gpu_claim() is True
+
+
 def test_a_llama_update_stops_every_llama_slot_and_only_those(backends, monkeypatch):
     _, extra = backends
     safetensors = model_slots.ExtraSlot(FakeLlama(), FakeOrchestrator("org/C"), "owner")
