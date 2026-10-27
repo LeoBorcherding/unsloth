@@ -99,10 +99,7 @@ def install_prebuilt(
 
 
 def hipcc_gcc_install_dir() -> str | None:
-    """Highest-numbered ``/usr/lib/gcc/x86_64-linux-gnu/<N>`` that has BOTH the gcc runtime dir AND
-    ``/usr/include/c++/<N>`` headers, or None. Ubuntu 24.04 ships gcc-14 runtime but not
-    ``/usr/include/c++/14``; ROCm clang-20 picks the highest runtime dir, finds no ``<cstdlib>``,
-    and the HIP build fails, hence ``--gcc-install-dir``. Mirrors studio/setup.sh (PR #5301)."""
+    """Newest gcc runtime with C++ headers too; ROCm clang takes the highest runtime dir, headers or not."""
     if not sys.platform.startswith("linux") or platform.machine().lower() != "x86_64":
         return None
     for ver in (14, 13, 12, 11):
@@ -427,11 +424,7 @@ _TRITON: dict = {}
 
 
 def _triton_version(run: Callable[..., subprocess.CompletedProcess]) -> tuple[int, int] | None:
-    """The `triton` module's version, as unsloth_zoo reads it. Probed once per runner.
-
-    Asked of the module, not the `triton` distribution: pytorch-triton and other
-    providers ship the same import under another name.
-    """
+    """Read from the triton module, not the distribution, since other providers ship the same import."""
     if run not in _TRITON:
         try:
             result = run(
@@ -614,7 +607,7 @@ def install_kernel(
     if name == "mamba_ssm" and sys.platform == "win32" and not _loads("import triton", run):
         return skip(
             "Unsloth: skipping mamba_ssm, which needs Triton on Windows; "
-            "install triton-windows first (Studio setup does), then re-run."
+            "install triton-windows first (Unsloth Studio setup does), then re-run."
         )
     # UNSLOTH_PYTORCH_MIRROR may carry credentials, and notebook output gets shared.
     shown = redact_url_credentials(url)

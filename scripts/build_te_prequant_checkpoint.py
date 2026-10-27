@@ -65,7 +65,7 @@ def main(argv = None) -> int:
         default = "auto",
         choices = ["auto", "ideogram4"],
         help = "how to load the dense encoder: 'auto' = transformers from_pretrained on the config's "
-        "architecture; 'ideogram4' = Studio's Ideogram 4 loader, which dequantizes the vendor "
+        "architecture; 'ideogram4' = Unsloth's Ideogram 4 loader, which dequantizes the vendor "
         "fp8 + per-channel weight_scale Qwen3-VL encoder to bf16 (from_pretrained cannot read it)",
     )
     args = p.parse_args(argv)
@@ -77,7 +77,6 @@ def main(argv = None) -> int:
     from core.inference.diffusion_precision import _cast_fp8
     from core.inference.diffusion_te_prequant import TE_PREQUANT_FORMAT
 
-    # Family is forensic metadata; detection differs per branch, so resolve best-effort by name.
     family = args.family.strip().lower()
 
     subfolder = args.component if args.config_subfolder is None else args.config_subfolder

@@ -98,6 +98,51 @@ def test_peft_saves_gather_the_frozen_tensors_peft_writes():
     assert arguments["save_embedding_layers"] is False
 
 
+def test_peft_embedding_membership_survives_a_reshard():
+    """The gather reshards before it walks the parameters, and a parameter an eval forward left
+    unsharded is a different object from the DTensor the gather then sees: the embeddings must still be
+    selected (by module, not by parameter identity), or they stay sharded in the saved adapter."""
+    from peft import LoraConfig, get_peft_model
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    cfg = LlamaConfig(
+        hidden_size = 32,
+        intermediate_size = 64,
+        num_hidden_layers = 1,
+        num_attention_heads = 2,
+        num_key_value_heads = 1,
+        vocab_size = 64,
+    )
+    model = get_peft_model(LlamaForCausalLM(cfg), LoraConfig(r = 2, target_modules = ["q_proj"]))
+    include = unsloth_save._fsdp2_peft_saved_frozen(model, {})
+    for getter in ("get_input_embeddings", "get_output_embeddings"):
+        module = getattr(model, getter)()
+        # What FSDPModule.reshard does: the module's parameter becomes a new object.
+        module.weight = torch.nn.Parameter(module.weight.detach().clone(), requires_grad = False)
+    names = {n for n, p in model.named_parameters() if include(n, p)}
+    assert any("embed_tokens" in n for n in names), names
+    assert any("lm_head" in n for n in names), names
+    assert not any("q_proj.base_layer" in n for n in names), names
+
+
+class _QLoraModel(torch.nn.Module):
+    """One LoRA layer over a packed 4-bit base, one over a plain Linear."""
+
+    def __init__(self):
+        super().__init__()
+        for name, quantized in (("q4", True), ("plain", False)):
+            layer = torch.nn.Module()
+            layer.base_layer = torch.nn.Linear(4, 4)
+            if quantized:
+                layer.base_layer.weight.quant_state = object()
+            layer.lora_A = torch.nn.ModuleDict({"default": torch.nn.Linear(4, 2, bias = False)})
+            layer.lora_B = torch.nn.ModuleDict({"default": torch.nn.Linear(2, 4, bias = False)})
+            setattr(self, name, layer)
+
+
+@pytest.mark.parametrize(
+    "entry", ["unsloth_generic_save_pretrained_merged", "unsloth_generic_push_to_hub_merged"]
+)
 @pytest.mark.parametrize(
     "method,offload",
     [
@@ -105,11 +150,11 @@ def test_peft_saves_gather_the_frozen_tensors_peft_writes():
         ("lora", True),
         ("merged_4bit", False),
         ("merged_4bit_forced", False),
+        ("forced_merged_4bit", False),
     ],
 )
-def test_merged_4bit_keeps_gathered_weights_on_their_device(monkeypatch, method, offload):
-    # PEFT's 4-bit merge dequantizes on the packed weights' GPU; LoRA offloaded to the CPU next to
-    # it fails with "Expected all tensors to be on the same device".
+def test_merged_4bit_keeps_gathered_weights_on_their_device(monkeypatch, entry, method, offload):
+    # PEFT's 4-bit merge runs on the packed weight's GPU: CPU-offloaded LoRA fails there (save and Hub).
     import contextlib
 
     seen = {}
@@ -122,13 +167,23 @@ def test_merged_4bit_keeps_gathered_weights_on_their_device(monkeypatch, method,
     monkeypatch.setattr(fsdp2_save, "fsdp2_units", lambda model: [object()])
     monkeypatch.setattr(fsdp2_save, "fsdp2_gather_active", lambda: False)
     monkeypatch.setattr(fsdp2_save, "fsdp2_gathered", _gathered)
-    save = unsloth_save.unsloth_generic_save_pretrained_merged
+    save = getattr(unsloth_save, entry)
+    model = _QLoraModel()
     for call in (dict(save_method = method), {}):
         seen.clear()
         positional = () if call else (method,)
-        assert save(_Model(), "out", None, *positional, **call) is None
+        assert save(model, "out", None, *positional, **call) is None
         got = seen.get("offload_to_cpu", True)
-        assert (got is True) if offload else callable(got)
+        if offload:
+            assert got is True
+            continue
+        assert callable(got)
+        params = dict(model.named_parameters())
+        decide = lambda name: got(name, params[name])
+        assert not decide("q4.lora_A.default.weight")
+        assert not decide("q4.lora_B.default.weight")
+        assert decide("plain.lora_A.default.weight")
+        assert decide("q4.base_layer.bias")
 
 
 def test_merged_4bit_keeps_only_merge_operands_on_the_gpu():

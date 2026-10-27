@@ -135,6 +135,7 @@ function generalTab(initialToken: string) {
       emitTrainingRunsChanged: noop,
       TRAINING_UI_PREFERENCE_KEYS: [],
     },
+    "@/hooks/floating-panel-position": { FLOATING_PANEL_POSITION_KEYS: {} },
     "@/hooks/use-notification-frequency": notificationPrefStub,
     "@/hooks": {
       useHfTokenValidation: () => ({
@@ -155,6 +156,9 @@ function generalTab(initialToken: string) {
       cn: (...values: unknown[]) => values.filter(Boolean).join(" "),
     },
     "lucide-react": componentStub,
+    "@/lib/tick-icon": { Tick02Icon: {} },
+    "@hugeicons/react": { HugeiconsIcon: "HugeiconsIcon" },
+    "@hugeicons/core-free-icons": new Proxy({}, { get: () => ({}) }),
     "../api/helper-precache": {
       loadHelperPrecacheSettings: never,
       updateHelperPrecacheSettings: never,
@@ -187,6 +191,7 @@ function generalTab(initialToken: string) {
       LIBRARY_SETTINGS_STORAGE_KEY: "library-settings",
       LIBRARY_VIEW_STORAGE_KEY: "library-view",
     },
+    "../components/full-install-dialog": componentStub,
     "../components/change-password-dialog": componentStub,
     "../components/desktop-repair-control": componentStub,
     "../components/desktop-update-control": componentStub,
@@ -194,6 +199,7 @@ function generalTab(initialToken: string) {
     "../components/language-select": componentStub,
     "../components/download-transport-row": componentStub,
     "../components/developer-mode-section": componentStub,
+    "../components/engine-versions-section": componentStub,
     "../components/hub-settings-section": componentStub,
     "../components/notification-frequency-select": componentStub,
     "../components/settings-row": componentStub,
