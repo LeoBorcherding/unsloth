@@ -426,8 +426,16 @@ export const BUDGET = {
   // Cosmos3 video families (#14554): +466 B raw / +218 B transfer. Raised by that.
   // Lookup-table pricing (#14465): +1,517 B raw / +470 B transfer on top of the lines above (measured merged with
   // 4db3eaeb55, Node 24, 99 chunks).
-  transferBytes: 2_101_185,
-  rawBytes: 6_973_555,
+  // DPO, ORPO and GRPO in Studio (#12601) add 27,796 B raw / 8,585 B transfer (6,842,532 -> 6,870,328 B raw,
+  // 2,060,384 -> 2,068,969 B transfer against 2c7c841f69 and 3ecf7f8ff, one machine and build, 96 chunks): the
+  // objective, column-role and reward strings join the eager English catalog, the RL settings and role mapping sit
+  // in the eager training store, and its icons in the shared icon chunk. Raised by that growth on top of main's
+  // budget, which keeps main's margin (re-added on top of main at 77949e668). The GRPO prompt preview reading
+  // each row's own system message adds 405 B raw / 154 B transfer (6,906,755 -> 6,907,160 B raw at 528a73372).
+  // Merged with main at b04b740de8 the PR adds 26,852 B raw / 7,917 B transfer (6,958,967 -> 6,985,819 B raw,
+  // 2,094,393 -> 2,102,310 B transfer, Node 26, 106 chunks, one machine and build): main's budget above plus that.
+  transferBytes: 2_109_102,
+  rawBytes: 7_000_407,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.

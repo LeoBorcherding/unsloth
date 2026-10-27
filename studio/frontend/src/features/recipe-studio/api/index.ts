@@ -8,6 +8,7 @@ import {
   readFastApiError,
 } from "@/lib/format-fastapi-error";
 import { openStreamResponse } from "@/lib/open-stream-response";
+import type { TrainCardPairs } from "../utils/train-card";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -31,6 +32,37 @@ export type PublishRecipeJobResponse = {
   success: boolean;
   url: string;
   message: string;
+};
+
+export type TrainingSplitRequest = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  artifact_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_percent: number;
+  seed: number;
+  pairs?: TrainCardPairs | null;
+};
+
+export type TrainingSplitResponse = {
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_path: string;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_path: string | null;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  train_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_rows: number;
+  // biome-ignore lint/style/useNamingConvention: api schema
+  holdout_row_ids: number[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  pairs_dropped?: number;
+};
+
+export type HoldoutRowsResponse = {
+  rows: Record<string, unknown>[];
+  // biome-ignore lint/style/useNamingConvention: api schema
+  row_ids: number[];
+  total: number;
 };
 
 export type SourceProgressResponse = {
@@ -364,6 +396,26 @@ export async function publishRecipeJob(
   payload: PublishRecipeJobRequest,
 ): Promise<PublishRecipeJobResponse> {
   return postJson<PublishRecipeJobResponse>(`/jobs/${jobId}/publish`, payload);
+}
+
+export async function createRecipeTrainingSplit(
+  jobId: string,
+  payload: TrainingSplitRequest,
+): Promise<TrainingSplitResponse> {
+  return postJson<TrainingSplitResponse>(
+    `/jobs/${jobId}/training-split`,
+    payload,
+  );
+}
+
+export async function getRecipeHoldoutRows(
+  jobId: string,
+  payload: TrainingSplitRequest & { offset?: number; limit?: number },
+): Promise<HoldoutRowsResponse> {
+  return postJson<HoldoutRowsResponse>(
+    `/jobs/${jobId}/training-split/holdout-rows`,
+    payload,
+  );
 }
 
 export async function inspectSeedDataset(

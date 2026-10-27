@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -63,6 +63,48 @@ class PublishDatasetResponse(BaseModel):
     success: bool = True
     url: str
     message: str
+
+
+class PreferencePairsSpec(BaseModel):
+    answer_a: str = Field(min_length = 1)
+    answer_b: str = Field(min_length = 1)
+    rule: Literal["a_better", "winner", "scores"] = "a_better"
+    winner_column: str | None = None
+    score_a_column: str | None = None
+    score_b_column: str | None = None
+
+
+class TrainingSplitRequest(BaseModel):
+    artifact_path: str | None = Field(
+        default = None,
+        description = "Execution artifact path captured by the UI for completed runs",
+    )
+    holdout_percent: int = Field(default = 0, ge = 0, le = 50)
+    seed: int = Field(default = 3407, ge = 0, le = 2**31 - 1)
+    pairs: PreferencePairsSpec | None = Field(
+        default = None,
+        description = "Turn two answer columns into chosen/rejected for DPO and ORPO",
+    )
+
+
+class TrainingSplitResponse(BaseModel):
+    train_path: str
+    holdout_path: str | None = None
+    train_rows: int
+    holdout_rows: int
+    holdout_row_ids: list[int] = Field(default_factory = list)
+    pairs_dropped: int = 0
+
+
+class HoldoutRowsRequest(TrainingSplitRequest):
+    offset: int = Field(default = 0, ge = 0)
+    limit: int = Field(default = 20, ge = 1, le = 500)
+
+
+class HoldoutRowsResponse(BaseModel):
+    rows: list[dict[str, Any]]
+    row_ids: list[int]
+    total: int
 
 
 class SeedInspectRequest(BaseModel):

@@ -52,6 +52,14 @@ from core.data_recipe.huggingface import (
     publish_recipe_dataset,
 )
 from core.data_recipe.jobs import get_job_manager
+from core.data_recipe.training_split import (
+    PreferencePairs,
+    RecipeTrainingSplit,
+    RecipeTrainingSplitError,
+    pair_recipe_split,
+    read_holdout_rows,
+    split_recipe_dataset,
+)
 from core.data_recipe.service import (
     recipe_has_stdio_mcp,
     require_ui_session_for_host_env_credentials,
@@ -62,7 +70,11 @@ from models.data_recipe import (
     JobCreateResponse,
     PublishDatasetRequest,
     PublishDatasetResponse,
+    HoldoutRowsRequest,
+    HoldoutRowsResponse,
     RecipePayload,
+    TrainingSplitRequest,
+    TrainingSplitResponse,
 )
 from utils.client_ip import client_ip
 from utils.hf_endpoint import client_reachable_endpoint, get_hf_endpoint
@@ -874,6 +886,112 @@ def download_job_dataset(
         media_type = media_type,
         filename = download_name,
         headers = {"Content-Disposition": _content_disposition_attachment(download_name)},
+    )
+
+
+def _job_artifact_path(job_id: str, payload: TrainingSplitRequest) -> str:
+    artifact_path = (payload.artifact_path or "").strip() or None
+    status = get_job_manager().get_status(job_id)
+    if status is not None:
+        if status.get("status") != "completed":
+            raise HTTPException(status_code = 409, detail = "Only completed runs can be trained on.")
+        status_artifact = status.get("artifact_path")
+        if isinstance(status_artifact, str) and status_artifact.strip():
+            artifact_path = status_artifact.strip()
+    if not artifact_path:
+        raise HTTPException(
+            status_code = 400,
+            detail = "This execution does not have saved dataset files to train on.",
+        )
+    return artifact_path
+
+
+def _job_training_split(job_id: str, payload: TrainingSplitRequest) -> RecipeTrainingSplit:
+    artifact_path = _job_artifact_path(job_id, payload)
+    try:
+        split = split_recipe_dataset(
+            artifact_path = artifact_path,
+            holdout_percent = payload.holdout_percent,
+            seed = payload.seed,
+        )
+    except (RecipeDatasetPublishError, RecipeTrainingSplitError) as exc:
+        raise log_and_http_error(
+            exc,
+            400,
+            safe_curated_detail(exc),
+            event = "data_recipe.jobs.training_split_failed",
+            log = logger,
+        ) from exc
+    except Exception as exc:
+        raise log_and_http_error(
+            exc,
+            500,
+            safe_error_detail(exc),
+            event = "data_recipe.jobs.training_split_error",
+            log = logger,
+        ) from exc
+    return split
+
+
+@router.post("/jobs/{job_id}/training-split", response_model = TrainingSplitResponse)
+def create_job_training_split(job_id: str, payload: TrainingSplitRequest):
+    """Paths a training run reads for this run's dataset, holding out a share of rows when asked,
+    and pairing two answer columns into chosen/rejected for preference training."""
+    split = _job_training_split(job_id, payload)
+    train_path, train_rows, pairs_dropped = split.train_path, split.train_rows, 0
+    if payload.pairs is not None:
+        try:
+            paired = pair_recipe_split(
+                split,
+                artifact_path = _job_artifact_path(job_id, payload),
+                seed = payload.seed,
+                pairs = PreferencePairs(**payload.pairs.model_dump()),
+            )
+        except (RecipeDatasetPublishError, RecipeTrainingSplitError) as exc:
+            raise log_and_http_error(
+                exc,
+                400,
+                safe_curated_detail(exc),
+                event = "data_recipe.jobs.preference_pairs_failed",
+                log = logger,
+            ) from exc
+        except Exception as exc:
+            raise log_and_http_error(
+                exc,
+                500,
+                safe_error_detail(exc),
+                event = "data_recipe.jobs.preference_pairs_error",
+                log = logger,
+            ) from exc
+        train_path, train_rows, pairs_dropped = paired.train_path, paired.kept, paired.dropped
+    return TrainingSplitResponse(
+        train_path = train_path,
+        holdout_path = split.holdout_path,
+        train_rows = train_rows,
+        holdout_rows = split.holdout_rows,
+        holdout_row_ids = list(split.holdout_row_ids),
+        pairs_dropped = pairs_dropped,
+    )
+
+
+@router.post("/jobs/{job_id}/training-split/holdout-rows", response_model = HoldoutRowsResponse)
+def read_job_holdout_rows(job_id: str, payload: HoldoutRowsRequest):
+    """The held-out rows themselves, so a scorer reads exactly what training never saw."""
+    split = _job_training_split(job_id, payload)
+    try:
+        rows = read_holdout_rows(split, offset = payload.offset, limit = payload.limit)
+    except Exception as exc:
+        raise log_and_http_error(
+            exc,
+            500,
+            safe_error_detail(exc),
+            event = "data_recipe.jobs.holdout_rows_error",
+            log = logger,
+        ) from exc
+    return HoldoutRowsResponse(
+        rows = rows,
+        row_ids = list(split.holdout_row_ids[payload.offset : payload.offset + len(rows)]),
+        total = split.holdout_rows,
     )
 
 
