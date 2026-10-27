@@ -37,6 +37,7 @@ import {
   useExternalProvidersStore,
 } from "@/features/chat";
 import { useDeviceInventorySources } from "@/features/hub";
+import { isDiffusionTask } from "@/features/model-picker";
 import { type TranslationKey, useLocale, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
 import { ChevronDownStandardIcon } from "@/lib/chevron-icons";
@@ -169,9 +170,12 @@ function useModelChoices(current: string | null) {
   const providers = useExternalProvidersStore((state) => state.providers);
   const connectionsEnabled = useExternalProvidersStore((state) => state.connectionsEnabled);
   return useMemo(() => {
-    const local = chatLocalModelOptions(inventory.localModels.rows).map(({ id, name }) => ({ id, name }));
+    // A run is a chat turn; image and video models fail to load as one.
+    const chatRows = inventory.localModels.rows.filter((row) => !isDiffusionTask(row.task));
+    const local = chatLocalModelOptions(chatRows).map(({ id, name }) => ({ id, name }));
     // GGUF only: a run switches back afterwards only to a GGUF.
     for (const repo of inventory.cachedGguf.rows) {
+      if (isDiffusionTask(repo.task)) continue;
       if (!local.some((option) => option.id === repo.repo_id)) {
         local.push({ id: repo.repo_id, name: repo.repo_id });
       }

@@ -4,6 +4,7 @@
 export { ModelSelector } from "./components/model-selector";
 export { FolderBrowser } from "./components/model-selector/folder-browser";
 export { invalidateLlamaFlagCatalog } from "./api/llama-flags";
+export { isDiffusionTask } from "./components/model-selector/model-capabilities";
 export { ModelRowMenu } from "./components/model-selector/model-row-menu";
 export { formatFootprintBytes } from "./components/model-selector/pickers";
 export {
