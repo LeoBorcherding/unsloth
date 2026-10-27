@@ -823,8 +823,11 @@ def test_a_venv_that_already_has_pip_does_not_reinstall_it(monkeypatch) -> None:
     monkeypatch.setattr(
         stack.subprocess, "run", lambda cmd, **_k: types.SimpleNamespace(returncode = 0)
     )
-    monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "24.2")
+    monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "26.2.2")
     assert stack._venv_pip_is_usable() is True
+    # Below the trust floor's pip on 3.10+, so the bootstrap runs.
+    monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "24.2")
+    assert stack._venv_pip_is_usable() is (sys.version_info < (3, 10))
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "22.0.4")
     assert stack._venv_pip_is_usable() is False
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: None)
@@ -841,7 +844,7 @@ def test_a_fresh_uv_venv_still_bootstraps(monkeypatch) -> None:
 
 def test_a_pip_that_cannot_run_is_bootstrapped_again(monkeypatch) -> None:
     """Metadata survives a pip whose __main__.py is gone; `python -m pip` does not."""
-    monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "24.2")
+    monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "26.2.2")
     seen: list[list[str]] = []
 
     def broken(cmd, **_k):
@@ -860,14 +863,24 @@ def test_a_pip_that_cannot_run_is_bootstrapped_again(monkeypatch) -> None:
 
 
 def test_the_mlx_stack_is_current_only_when_all_four_hold(monkeypatch) -> None:
-    versions = {"mlx": "0.32.3", "mlx-metal": "0.32.3", "mlx-lm": "0.31.3", "mlx-vlm": "0.5.0"}
+    versions = {"mlx": "0.32.4", "mlx-metal": "0.32.4", "mlx-lm": "0.32.2", "mlx-vlm": "0.5.0"}
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda name: versions.get(name))
     monkeypatch.setattr(stack, "_mlx_closure_unmet", lambda: False)
+    monkeypatch.setattr(stack, "_mlx_lm_spec_for_installed_zoo", lambda: stack._MLX_LM_SPEC)
     assert stack._mlx_stack_is_current() is True
+    for lm in ("0.31.3", "0.32.2"):  # either end of the range, as Python 3.10 and 3.11+ resolve
+        monkeypatch.setattr(
+            stack,
+            "_installed_distribution_version",
+            lambda n, v = {**versions, "mlx-lm": lm}: v.get(n),
+        )
+        assert stack._mlx_stack_is_current() is True, lm
     for name, wrong in (
         ("mlx", "0.32.0"),
         ("mlx-metal", None),
         ("mlx-lm", "0.31.2"),
+        ("mlx-lm", "0.32.3"),
+        ("mlx-lm", None),
         ("mlx-vlm", "0.8.0"),
         ("mlx-vlm", None),
     ):
@@ -880,7 +893,7 @@ def test_the_mlx_stack_is_current_only_when_all_four_hold(monkeypatch) -> None:
 def test_a_satisfied_mlx_pin_with_a_broken_closure_is_not_current(monkeypatch, tmp_path) -> None:
     """This step installs WITH dependencies, so it is what repairs an mlx-vlm whose own
     miniaudio or mlx-audio is gone. Versions alone would skip that repair."""
-    versions = {"mlx": "0.32.3", "mlx-metal": "0.32.3", "mlx-lm": "0.31.3", "mlx-vlm": "0.5.0"}
+    versions = {"mlx": "0.32.4", "mlx-metal": "0.32.4", "mlx-lm": "0.32.2", "mlx-vlm": "0.5.0"}
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda name: versions.get(name))
     monkeypatch.setattr(stack, "_mlx_closure_unmet", lambda: True)
     assert stack._mlx_stack_is_current() is False
@@ -931,7 +944,9 @@ def test_the_mlx_closure_audit_reads_the_pins_and_cleans_up(monkeypatch, tmp_pat
     monkeypatch.setattr(stack.install_manifest, "closure_unmet_requirements", _closure)
     monkeypatch.setattr(stack, "_installed_index", lambda: {})
     assert stack._mlx_closure_unmet() is True
-    assert seen and all(spec in seen[0] for spec in [*stack._MLX_PINS, stack._MLX_VLM_SPEC])
+    assert seen and all(
+        spec in seen[0] for spec in [*stack._MLX_PINS, stack._MLX_LM_SPEC, stack._MLX_VLM_SPEC]
+    )
     assert not list(tmp_path.glob("unsloth-mlx-*.txt"))
     assert written and written[0].parent == tmp_path
     assert not written[0].exists()
@@ -946,7 +961,7 @@ def test_the_mlx_closure_audit_reads_the_pins_and_cleans_up(monkeypatch, tmp_pat
 def test_the_mlx_pins_match_the_runtime_repair() -> None:
     """One stack, two callers. The self-heal at startup reinstalls whatever this
     installed, so a pin that drifts here is a repair loop there."""
-    names = {spec.partition("==")[0] for spec in stack._MLX_PINS} | {"mlx-vlm"}
+    names = {spec.partition("==")[0] for spec in stack._MLX_PINS} | {"mlx-lm", "mlx-vlm"}
     assert set(stack._MLX_NAMES) == names
     assert stack._MLX_VLM_SPEC.startswith("mlx-vlm")
 
@@ -979,12 +994,12 @@ def test_the_pip_fallback_never_names_one_project_twice() -> None:
             "--upgrade-package",
             "mlx-vlm",
             "mlx==0.32.3",
-            "mlx-vlm>=0.4.4,<=0.7.8",
+            "mlx-vlm>=0.4.4,<=0.7.9",
         )
     )
     assert "--upgrade" in cmd and "--upgrade-package" not in cmd
     assert cmd.count("mlx") == 0 and cmd.count("mlx-vlm") == 0
-    assert "mlx==0.32.3" in cmd and "mlx-vlm>=0.4.4,<=0.7.8" in cmd
+    assert "mlx==0.32.3" in cmd and "mlx-vlm>=0.4.4,<=0.7.9" in cmd
 
 
 def test_a_package_named_only_by_the_flag_is_still_passed() -> None:
@@ -1381,13 +1396,16 @@ def test_the_fingerprint_names_everything_a_verdict_depends_on(monkeypatch) -> N
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: "0.4.5")
     fingerprint = stack._mlx_health_fingerprint()
     # The installed zoo narrows the mlx-vlm range, so changing the zoo must invalidate the verdict.
-    assert fingerprint["pins"] == list(stack._MLX_PINS) + [stack._mlx_vlm_spec_for_installed_zoo()]
+    assert fingerprint["pins"] == list(stack._MLX_PINS) + [
+        stack._mlx_lm_spec_for_installed_zoo(),
+        stack._mlx_vlm_spec_for_installed_zoo(),
+    ]
     assert fingerprint["pins"][-1].startswith(stack._MLX_VLM_SPEC)
     assert fingerprint["python"] == stack._installer_python_tag()
     assert fingerprint["imports"] == {n: "0.4.5" for n in stack._MLX_IMPORTED_DEPENDENCIES}
     assert {"transformers", "tokenizers", "numpy", "huggingface-hub"} <= set(fingerprint["imports"])
-    # mlx-vlm floats inside a range: the pin string alone does not identify what is installed.
-    assert fingerprint["mlx_vlm"] == "0.4.5"
+    # mlx-lm and mlx-vlm float inside ranges: the pin strings alone do not identify what is installed.
+    assert fingerprint["mlx_lm"] == fingerprint["mlx_vlm"] == "0.4.5"
     monkeypatch.setattr(stack, "_installed_distribution_version", lambda _n: None)
     assert stack._mlx_health_fingerprint()["mlx_vlm"] == ""
 
