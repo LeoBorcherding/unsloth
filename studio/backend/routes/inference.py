@@ -33492,7 +33492,14 @@ async def produce_openai_chat_completions(
                     )
                 return full_text, prefilled
 
-            content_text, _sf_drain_prefilled = await asyncio.to_thread(_drain_to_text)
+            # Starlette never cancels a non-streaming handler, so a gone client must set the event.
+            disconnect_watcher = asyncio.create_task(
+                _await_disconnect_then_cancel(request, cancel_event)
+            )
+            try:
+                content_text, _sf_drain_prefilled = await asyncio.to_thread(_drain_to_text)
+            finally:
+                await _stop_local_disconnect_cancel_watcher(disconnect_watcher)
             # Split prefilled <think> out of the visible answer (GGUF parity); the monitor gets visible text only.
             _reasoning_text, _visible_text = _extract_responses_reasoning(
                 content_text,
@@ -34136,6 +34143,10 @@ async def produce_openai_chat_completions(
         _cancel_keys = (payload.cancel_id, payload.session_id, completion_id)
         _tracker = _TrackedCancel.for_payload(cancel_event, payload, *_cancel_keys)
         _tracker.__enter__()
+        # One watcher for every choice and nudge retry; see the tool-loop drain above.
+        disconnect_watcher = asyncio.create_task(
+            _await_disconnect_then_cancel(request, cancel_event)
+        )
         try:
             _n = payload.n or 1
             _choices = []
@@ -34430,7 +34441,7 @@ async def produce_openai_chat_completions(
                     # Omitted for n > 1: timings describe only the last choice.
                     timings = _last_stats.get("timings") if len(_choices) <= 1 else None,
                 )
-            api_monitor.finish(monitor_id)
+            api_monitor.finish(monitor_id, "cancelled" if cancel_event.is_set() else "completed")
             return _model_json_response_with_context_truncation(
                 response, _sf_context_truncation_holder["value"]
             )
@@ -34472,6 +34483,7 @@ async def produce_openai_chat_completions(
         finally:
             # Nested under the except arms too: reset_generation_state() can throw, and a leaked entry 409s swaps.
             _tracker.__exit__(None, None, None)
+            await _stop_local_disconnect_cancel_watcher(disconnect_watcher)
 
 
 # =====================================================================
