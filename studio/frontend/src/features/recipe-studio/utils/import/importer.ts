@@ -38,6 +38,7 @@ type UiInput = {
   seed_columns?: unknown;
   seed_drop_columns?: unknown;
   seed_preview_rows?: unknown;
+  seed_total_rows?: unknown;
   local_file_name?: unknown;
   hf_subset?: unknown;
   hf_split?: unknown;
@@ -423,6 +424,10 @@ export function importRecipePayload(
         .filter(Boolean)
     : undefined;
   const payloadSeedDropColumns = parseSeedDropColumns(recipe.processors);
+  const uiSeedTotalRows =
+    typeof ui?.seed_total_rows === "number" && ui.seed_total_rows > 0
+      ? ui.seed_total_rows
+      : undefined;
   const uiSeedPreviewRows = Array.isArray(ui?.seed_preview_rows)
     ? ui.seed_preview_rows
         .filter((row): row is Record<string, unknown> => isRecord(row))
@@ -488,9 +493,7 @@ export function importRecipePayload(
       preferredSourceType: uiSeedSourceType,
       drop:
         payloadSeedSourceIsUnstructured && payloadSeedDropColumns.length > 0,
-      // Payload-only unstructured recipes have no preview metadata, but their
-      // generated rows always expose these fields. Keep the imported drop
-      // processor usable until a real preview replaces this fallback.
+      // Payload-only unstructured recipes lack preview metadata but always produce these fields.
       seed_columns:
         (uiSeedColumns?.length ?? 0) > 0
           ? uiSeedColumns
@@ -502,6 +505,7 @@ export function importRecipePayload(
           ? uiSeedDropColumns
           : payloadSeedDropColumns,
       seed_preview_rows: uiSeedPreviewRows,
+      seed_total_rows: uiSeedTotalRows,
       local_file_name: uiLocalFileName,
       hf_subset: readString(ui?.hf_subset) ?? undefined,
       hf_split: readString(ui?.hf_split) ?? undefined,

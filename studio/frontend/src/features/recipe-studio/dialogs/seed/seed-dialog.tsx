@@ -256,7 +256,7 @@ export function GithubRepoSeedForm({
         />
         <div
           className={cn(
-            "nodrag flex min-h-11 flex-wrap items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 py-1.5",
+            "nodrag flex min-h-11 flex-wrap items-center gap-1.5 rounded-xl border border-border/60 bg-background px-2 py-1.5",
             hasRepoErrors && "border-red-500/70",
           )}
         >
@@ -329,7 +329,7 @@ export function GithubRepoSeedForm({
             hint="Prefer the server GH_TOKEN / GITHUB_TOKEN env var. Use public_repo for public repos or repo for private repos."
           />
           {usingEnvToken && (
-            <span className="shrink-0 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-ui-10 font-medium text-emerald-700 dark:text-emerald-300">
+            <span className="shrink-0 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-ui-10 font-medium text-emerald-700 dark:text-emerald-300">
               Using server env var
             </span>
           )}
@@ -353,7 +353,7 @@ export function GithubRepoSeedForm({
             : "Blank is safest for saved/shared recipes because Unsloth will read the server environment at run time."}
         </p>
         {hasToken && (
-          <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+          <p className="rounded-lg bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
             Personal access tokens are sensitive. Prefer server env vars when
             possible, and avoid sharing recipes that contain a PAT.
           </p>
@@ -616,9 +616,7 @@ export function SeedDialog({
     (state) => state.queueUploadCleanup,
   );
 
-  // config.id collides across recipes (ids reset to n1 on import); use a
-  // stable per-block uid instead. Generate one synchronously so the first
-  // rendered drop zone cannot upload under a legacy node id.
+  // config.id collides across recipes (ids reset on import), so use a stable per-block uid.
   const uploadUid = config.unstructured_upload_uid?.trim() ?? "";
   const unstructuredFileCount = config.unstructured_file_ids?.length ?? 0;
   const generatedUploadUidRef = useRef<string | null>(null);
@@ -710,6 +708,8 @@ export function SeedDialog({
             unstructured_file_ids: okFiles.map((f) => f.id),
             unstructured_file_names: okFiles.map((f) => f.name),
             unstructured_file_sizes: okFiles.map((f) => f.size),
+            // The total is only valid for the files and chunking it was counted with.
+            seed_total_rows: undefined,
           });
         });
         return next;
@@ -769,8 +769,7 @@ export function SeedDialog({
             subset: config.hf_subset?.trim() || undefined,
             preview_size: 10,
           });
-          // Queue the block's upload directory for deletion after the next
-          // save; only uid-namespaced directories qualify (single owner).
+          // Only uid-namespaced upload directories are deleted (single owner).
           if (uploadUid && unstructuredFileCount > 0) {
             queueUploadCleanup(uploadUid);
           }
@@ -812,8 +811,7 @@ export function SeedDialog({
             content_base64: payload,
             preview_size: 10,
           });
-          // Queue the block's upload directory for deletion after the next
-          // save; only uid-namespaced directories qualify (single owner).
+          // Only uid-namespaced upload directories are deleted (single owner).
           if (uploadUid && unstructuredFileCount > 0) {
             queueUploadCleanup(uploadUid);
           }
@@ -867,6 +865,7 @@ export function SeedDialog({
             resolved_paths: response.resolved_paths ?? [],
             seed_columns: response.columns,
             seed_preview_rows: response.preview_rows ?? [],
+            seed_total_rows: response.total_rows ?? undefined,
             unstructured_file_ids: fileIds,
             unstructured_file_names: fileNames,
             unstructured_file_sizes: unstructuredFiles
@@ -1098,7 +1097,7 @@ export function SeedDialog({
           )}
 
           {mode !== "unstructured" && mode !== "github_repo" && (
-            <div className="space-y-2 rounded-xl corner-squircle border border-border/60 p-3">
+            <div className="space-y-2 rounded-lg corner-squircle border border-border/60 p-3">
               <FieldLabel
                 label="Drop specific seed columns"
                 hint="Dropped columns stay usable in prompts/expressions but are omitted from final dataset."
@@ -1224,6 +1223,7 @@ export function SeedDialog({
                       onChange={(event) =>
                         onUpdate({
                           unstructured_chunk_size: event.target.value,
+                          seed_total_rows: undefined,
                         })
                       }
                     />
@@ -1245,6 +1245,7 @@ export function SeedDialog({
                       onChange={(event) =>
                         onUpdate({
                           unstructured_chunk_overlap: event.target.value,
+                          seed_total_rows: undefined,
                         })
                       }
                     />
@@ -1341,6 +1342,9 @@ export function SeedDialog({
             <div className="space-y-2">
               <div className="text-xs text-muted-foreground">
                 Loaded columns: {previewColumns.join(", ") || "None"}
+                {mode === "unstructured" && config.seed_total_rows
+                  ? ` - ${config.seed_total_rows} chunks in total, ${previewRows.length} shown`
+                  : null}
               </div>
               <div className="max-h-[calc(360px*var(--ui-space-scale,1))] overflow-y-auto overflow-x-hidden scroll-rounded rounded-xl corner-squircle border border-border/60">
                 <Table className="corner-squircle min-w-max">
@@ -1359,8 +1363,8 @@ export function SeedDialog({
                         key={`row-${rowIdx}`}
                         className={cn(
                           rowHasExpandableText(row) &&
-                            "cursor-pointer hover:bg-primary/[0.06]",
-                          expandedPreviewRows[rowIdx] && "bg-primary/[0.05]",
+                            "cursor-pointer hover:bg-wash-6",
+                          expandedPreviewRows[rowIdx] && "bg-wash-5",
                         )}
                         onClick={() => {
                           const canExpand = rowHasExpandableText(row);
@@ -1388,7 +1392,7 @@ export function SeedDialog({
                                     src={imagePreview.src}
                                     alt={`${col} preview`}
                                     loading="lazy"
-                                    className="h-20 w-auto max-w-[calc(220px*var(--ui-space-scale,1))] rounded-md border border-border/60 bg-muted/20 object-contain"
+                                    className="h-20 w-auto max-w-[calc(220px*var(--ui-space-scale,1))] rounded-lg border border-border/60 bg-muted/20 object-contain"
                                   />
                                 );
                               }
