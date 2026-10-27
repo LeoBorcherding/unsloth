@@ -70,6 +70,18 @@ test("a drift the refresh did not clear is retried after a while, not every poll
   assert.equal(drifted(monitor, loadedAt(4096)), false);
 });
 
+test("a live value that keeps changing while drifted still waits out the retry gap", () => {
+  let clock = 0;
+  const drifted = createResidentDriftWatch(() => clock);
+  assert.equal(drifted({ active_model: MODEL, context_length: 16384 }, loadedAt(4096)), true);
+  clock = 1_500;
+  assert.equal(drifted({ active_model: MODEL, context_length: 8192 }, loadedAt(4096)), false);
+  clock = 3_000;
+  assert.equal(drifted({ active_model: MODEL, context_length: 16384 }, loadedAt(4096)), false);
+  clock = 15_000;
+  assert.equal(drifted({ active_model: MODEL, context_length: 8192 }, loadedAt(4096)), true);
+});
+
 test("both monitor polls feed the drift watch", () => {
   for (const file of [
     "features/api-monitor/use-api-monitor.ts",

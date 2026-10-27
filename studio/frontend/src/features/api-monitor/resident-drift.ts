@@ -22,7 +22,7 @@ export function createResidentDriftWatch(now: () => number = Date.now): (
   monitor: Pick<ApiMonitorResponse, "active_model" | "context_length">,
   chat: ChatResidentWindow,
 ) => boolean {
-  let flagged: { key: string; at: number } | null = null;
+  let flaggedAt: number | null = null;
   return (monitor, chat) => {
     const live = monitor.context_length ?? null;
     if (
@@ -35,14 +35,13 @@ export function createResidentDriftWatch(now: () => number = Date.now): (
       return false;
     }
     if (live === chat.loadedContextLength) {
-      flagged = null;
+      flaggedAt = null;
       return false;
     }
-    // Once per value per RETRY_MS, so a backend whose two reads disagree cannot drive a /status loop.
-    const key = `${monitor.active_model}\n${live}`;
+    // At most once per RETRY_MS until they agree, whatever the live value does, so reads cannot loop /status.
     const at = now();
-    if (flagged?.key === key && at - flagged.at < RETRY_MS) return false;
-    flagged = { key, at };
+    if (flaggedAt != null && at - flaggedAt < RETRY_MS) return false;
+    flaggedAt = at;
     return true;
   };
 }
