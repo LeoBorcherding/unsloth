@@ -359,3 +359,15 @@ def test_the_sweep_reaps_a_prepared_upload_a_crash_left_behind():
         os.utime(path, (time.time() - age, time.time() - age))
     audio_inputs.sweep()
     assert not stale.exists() and waiting.exists()
+
+
+def test_the_sweep_reaps_separate_staging_a_crash_left_behind():
+    root = gallery.gallery_dir()
+    stale, running = root / ".separate-stale", root / ".separate-running"
+    for folder, age in ((stale, audio_inputs.TTL_SECONDS + 60), (running, 2 * 60 * 60)):
+        folder.mkdir(parents = True)
+        (folder / ".response.json").write_text("{}")
+        (folder / "vocals.wav").write_bytes(wav_bytes(0.2))
+        os.utime(folder, (time.time() - age, time.time() - age))
+    audio_inputs.sweep()
+    assert not stale.exists() and running.exists()

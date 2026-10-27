@@ -545,6 +545,10 @@ def sweep(
             for run in runs.iterdir():
                 if run.is_dir() and now - _mtime(run) > _STALE_TMP_SECONDS:
                     shutil.rmtree(run, ignore_errors = True)
+        # Separate's staging a crash left behind; full TTL so a running separation is never swept.
+        for staging in directory.parent.glob(".separate-*"):
+            if staging.is_dir() and now - _mtime(staging) > ttl:
+                shutil.rmtree(staging, ignore_errors = True)
         return removed
     except Exception as exc:  # noqa: BLE001 - housekeeping never fails a request
         logger.warning("audio_inputs.sweep_failed: %s", exc)
