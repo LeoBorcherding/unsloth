@@ -171,8 +171,22 @@ export const BUDGET = {
   // (6,788,764 -> 6,790,997 B raw, 2,041,243 -> 2,042,101 B transfer against 5e5511027, one machine and build,
   // Node 24, chunk count unchanged at 95). Lazy-loading the dialog cost more (2.7 KB transfer) and a 96th
   // startup chunk, so it is imported statically and the budget raised by that growth.
-  transferBytes: 2_042_291,
-  rawBytes: 6_791_181,
+  // Voice mode (#12384) adds 6,100 B raw / 2,062 B transfer to the startup set (6,791,181 -> 6,797,281 B raw,
+  // 2,042,291 -> 2,044,353 B transfer, one machine and build, Node 24, chunk count unchanged at 95; main measured
+  // 6,631.8 KB raw / 1,994.2 KB transfer at the merge base 565630c6b4). The engine, orb, pickers, TTS player and
+  // the loop's adapter load on use through one dynamic entry; loading them eagerly measured 6,676.2 KB raw /
+  // 2,007.9 KB transfer. What stays is what must exist before voice is opened: the plus menu's Voice toggle,
+  // the chat store's voice fields and the chat page's voice slot logic. Raised by that growth.
+  // Not rendering the voice components until Voice is clicked, and unlocking playback inside that click, adds
+  // 415 B raw and saves 101 B transfer (6,797,281 -> 6,797,696 B raw, 2,044,353 -> 2,044,252 B transfer, one
+  // machine and build, chunk count unchanged at 95): the bridge's requested flag and the playback context moved
+  // out of the lazy player. Raw is raised by that; transfer is left where it was.
+  // Unloading a voice whose load settles after Voice was turned off moves the chat page's voice slot logic
+  // into its own module, with every page's slot loads and unloads run in order, and adds 352 B raw / 220 B
+  // transfer (6,797,645 -> 6,797,997 B raw, 2,044,255 -> 2,044,475 B transfer, one machine and build, chunk
+  // count unchanged at 95). Raised by that.
+  transferBytes: 2_044_573,
+  rawBytes: 6_798_048,
 };
 
 // The chunk count is reported but not budgeted. Splitting a page out of the entry raises it while lowering the
