@@ -10778,6 +10778,7 @@ async def _maybe_auto_switch_model(
         warm_index_soon,
     )
     from core.inference.llama_keepwarm import (
+        get_last_unloaded_load,
         get_last_unloaded_model,
         inference_lifecycle_gate,
         model_load_gate,
@@ -10918,6 +10919,7 @@ async def _maybe_auto_switch_model(
         resolved = None
         repo_level_companion_resolution = False
         stashed_gguf_companion_roots: tuple[str, ...] = ()
+        stashed_load: Optional[dict] = None
         if auto_switch_on and not reload_only:
             # audio.cpp GGUFs load via the audio worker, not llama-server; the HF cache resolves them.
             resolved = await asyncio.to_thread(_audio_cpp_switch_target, requested_model)
@@ -10967,6 +10969,9 @@ async def _maybe_auto_switch_model(
                 if claim_resident:
                     _claim_slot_for_non_preview(fastapi_request)
                 return
+            stashed_for, stashed_settings = get_last_unloaded_load()
+            if stashed_for == last:
+                stashed_load = stashed_settings
             if len(last) >= 3:
                 target_id, variant, override_id = last[:3]
                 if len(last) >= 4:
@@ -11361,13 +11366,22 @@ async def _maybe_auto_switch_model(
                         load_kwargs.update(
                             model_override_load_kwargs(override, is_gguf = target_is_gguf)
                         )
+                        if stashed_load and target_is_gguf:
+                            # Put back what ran, not the saved row: a load nobody saved has no row.
+                            load_kwargs.update(stashed_load)
+                            if "gpu_ids" not in stashed_load:
+                                load_kwargs.pop("gpu_ids", None)
                         if caller_hf_token:
                             load_kwargs["hf_token"] = caller_hf_token
                         if beside:
                             load_kwargs["alongside"] = True
                         saved_gpu_ids = load_kwargs.get("gpu_ids")
-                        if saved_gpu_ids and not await _override_gpu_ids_still_resolve(
-                            saved_gpu_ids, stored_gpu_index_kind(override)
+                        if (
+                            saved_gpu_ids
+                            and not (stashed_load and "gpu_ids" in stashed_load)
+                            and not await _override_gpu_ids_still_resolve(
+                                saved_gpu_ids, stored_gpu_index_kind(override)
+                            )
                         ):
                             # Stale pin (GPU removed, another host, or a backend change
                             # renumbering these ids): drop it rather than 400 the load.

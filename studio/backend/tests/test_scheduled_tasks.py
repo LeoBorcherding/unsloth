@@ -1342,10 +1342,24 @@ class SwapWorld:
 
         self.loaded = earlier
         self.unloaded, self.stashed, self.reloads = [], [], []
+        self.stashed_loads = []
         self.idle = idle
+        # What the loaded model ran with, keyed by its identity.
+        self.ran_with = {earlier: {"max_seq_length": 4096, "cache_type_kv": "q8_0"}} if earlier else {}
         monkeypatch.setattr(llama_keepwarm, "idle_for", lambda seconds: self.idle)
         monkeypatch.setattr(llama_keepwarm, "loaded_identity", lambda: self.loaded)
-        monkeypatch.setattr(llama_keepwarm, "stash_for_reload", self.stashed.append)
+        monkeypatch.setattr(
+            llama_keepwarm,
+            "loaded_load_settings",
+            lambda: self.ran_with.get(self.loaded),
+            raising = False,
+        )
+
+        def stash(identity, load = None):
+            self.stashed.append(identity)
+            self.stashed_loads.append(load)
+
+        monkeypatch.setattr(llama_keepwarm, "stash_for_reload", stash)
         monkeypatch.setattr(
             inference_routes,
             "_loaded_satisfies",
@@ -1420,6 +1434,13 @@ def test_a_scheduled_run_while_away_switches_back_to_the_earlier_model(monkeypat
     assert world.stashed == [SwapWorld.EARLIER]
     assert world.reloads == [(inference_routes._RELOAD_ONLY_MODEL, True)]
     assert world.loaded == SwapWorld.EARLIER
+
+
+def test_switching_back_puts_the_earlier_model_back_with_the_settings_it_ran_with(monkeypatch):
+    world = SwapWorld(monkeypatch)
+    world.run(monkeypatch, {"id": "run-1", "source": "schedule"})
+    assert world.stashed == [SwapWorld.EARLIER]
+    assert world.stashed_loads == [{"max_seq_length": 4096, "cache_type_kv": "q8_0"}]
 
 
 def test_switching_back_unloads_only_a_task_model_loaded_beside_the_primary(monkeypatch):

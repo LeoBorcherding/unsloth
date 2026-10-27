@@ -2710,6 +2710,98 @@ def test_idle_stash_reload_of_manual_snapshot_does_not_add_sibling_roots(tmp_pat
     assert recorder.calls[0]._gguf_companion_roots == ()
 
 
+def _reload_stash_with_saved_row(tmp_path, monkeypatch, load, **row):
+    repo, old, newer = _vision_gguf_cache_repo(tmp_path)
+    _mock_override_store(monkeypatch)
+    settings.set_model_override("org/Vision-GGUF", max_seq_length = 8192, **row)
+    backend = _FakeBackend(None)
+    recorder = _LoadRecorder(backend)
+    _wire(monkeypatch, enabled = True, resolves_to = None, backend = backend, recorder = recorder)
+    monkeypatch.setattr(kw, "_inflight", 0)
+    identity = (str(old), "Q4_K_M", "org/Vision-GGUF")
+    monkeypatch.setattr(kw, "_last_unloaded_model", identity)
+    monkeypatch.setattr(kw, "_last_unloaded_load", load, raising = False)
+    asyncio.run(
+        inference_route._maybe_auto_switch_model(
+            inference_route._RELOAD_ONLY_MODEL, object(), "tester"
+        )
+    )
+    assert len(recorder.calls) == 1
+    return recorder.calls[0]
+
+
+def test_swap_restore_reloads_with_the_settings_the_model_ran_with(tmp_path, monkeypatch):
+    request = _reload_stash_with_saved_row(
+        tmp_path,
+        monkeypatch,
+        {"max_seq_length": 4096, "cache_type_kv": "q8_0", "n_parallel": 2, "llama_extra_args": []},
+    )
+    assert request.max_seq_length == 4096
+    assert request.cache_type_kv == "q8_0"
+    assert request.n_parallel == 2
+
+
+def test_swap_restore_drops_a_saved_gpu_pin_the_model_did_not_run_with(tmp_path, monkeypatch):
+    async def resolves(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(inference_route, "_override_gpu_ids_still_resolve", resolves)
+    request = _reload_stash_with_saved_row(
+        tmp_path, monkeypatch, {"max_seq_length": 4096}, gpu_ids = [0]
+    )
+    assert request.max_seq_length == 4096
+    assert request.gpu_ids is None
+
+
+def test_idle_stash_without_load_settings_still_reloads_with_the_saved_row(tmp_path, monkeypatch):
+    request = _reload_stash_with_saved_row(tmp_path, monkeypatch, None)
+    assert request.max_seq_length == 8192
+
+
+def test_load_settings_of_maps_the_intent_to_load_request_fields():
+    backend = _FakeBackend("org/A-GGUF", "Q4_K_M")
+    backend.last_load_intent = llama_cpp_mod.GgufLoadIntent(
+        model_identifier = "org/A-GGUF",
+        n_ctx = 4096,
+        cache_type_kv = "q8_0",
+        n_parallel = 4,
+        gpu_memory_mode = "manual",
+        gpu_layers = 20,
+        extra_args = ("--flash-attn", "on"),
+        gpu_ids = (0, 1),
+    )
+    backend._requested_gpu_ids = [1]
+    settings_ran = kw._load_settings_of(backend)
+    assert settings_ran["max_seq_length"] == 4096
+    assert settings_ran["cache_type_kv"] == "q8_0"
+    assert settings_ran["n_parallel"] == 4
+    assert (settings_ran["gpu_memory_mode"], settings_ran["gpu_layers"]) == ("manual", 20)
+    assert settings_ran["llama_extra_args"] == ["--flash-attn", "on"]
+    # The caller's pick, not the GPUs placement resolved it to.
+    assert settings_ran["gpu_ids"] == [1]
+    LoadRequest(model_path = "org/A-GGUF", **settings_ran)
+
+
+def test_load_settings_of_leaves_defaulted_slots_and_no_extras_to_the_reload():
+    backend = _FakeBackend("org/A-GGUF", "Q4_K_M")
+    backend.last_load_intent = llama_cpp_mod.GgufLoadIntent(
+        model_identifier = "org/A-GGUF", n_ctx = 0, n_parallel_from_default = True
+    )
+    settings_ran = kw._load_settings_of(backend)
+    assert "n_parallel" not in settings_ran and "gpu_ids" not in settings_ran
+    assert settings_ran["max_seq_length"] == 0
+    assert settings_ran["llama_extra_args"] == []
+    backend.is_loaded = False
+    assert kw._load_settings_of(backend) is None
+
+
+def test_a_new_stash_drops_the_previous_ones_load_settings():
+    kw.stash_for_reload(("org/A-GGUF", "Q4_K_M", "org/A-GGUF"), {"max_seq_length": 4096})
+    kw._set_last_unloaded(("org/B-GGUF", "Q4_K_M", "org/B-GGUF"))
+    assert kw.get_last_unloaded_load() == (("org/B-GGUF", "Q4_K_M", "org/B-GGUF"), None)
+    kw._set_last_unloaded(None)
+
+
 def test_companion_root_scan_does_not_block_the_event_loop(tmp_path, monkeypatch):
     old = tmp_path / "models--org--Vision-GGUF" / "snapshots" / "weights-revision"
     old.mkdir(parents = True)
