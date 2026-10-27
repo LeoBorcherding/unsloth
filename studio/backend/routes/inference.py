@@ -17094,7 +17094,7 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
         local_target_is_gguf, request.model_path, alias or request.model_path
     )
     kwargs = model_override_load_kwargs(override, is_gguf = is_gguf)
-    sent = request.model_fields_set
+    sent = set(request.model_fields_set)
     # Halves of one choice: a caller sending either keeps the saved other half out.
     for group in (
         ("gpu_ids", "tensor_split"),
@@ -17109,9 +17109,42 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     ):
         kwargs.pop("gpu_ids", None)
         kwargs.pop("tensor_split", None)
+    extras = kwargs.pop("llama_extra_args", None)
     for key, value in kwargs.items():
         if key not in sent:
             setattr(request, key, value)
+    if extras and "llama_extra_args" not in sent:
+        request.llama_extra_args = _strip_preset_extras(request, extras)
+
+
+def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:
+    """Preset extras are appended last, so drop flags a set field emits itself, as the inherited path does."""
+    from core.inference.llama_server_args import (
+        matches_explicit_ctx_override,
+        strip_shadowing_flags,
+    )
+
+    fields_set = request.model_fields_set
+    return strip_shadowing_flags(
+        extras,
+        strip_context = "max_seq_length" in fields_set
+        and not matches_explicit_ctx_override(extras, request.max_seq_length),
+        strip_cache = "cache_type_kv" in fields_set,
+        strip_spec = "speculative_type" in fields_set or "spec_draft_n_max" in fields_set,
+        strip_template = "chat_template_override" in fields_set,
+        strip_split_mode = _should_strip_split_mode(request, extras),
+        strip_tensor_split = _should_strip_tensor_split(request),
+        strip_offload = request.gpu_memory_mode == "manual",
+        strip_reasoning_budget = "reasoning_budget" in fields_set,
+        strip_reasoning_budget_message = "reasoning_budget_message" in fields_set,
+        strip_batch = "n_batch" in fields_set,
+        strip_ubatch = "n_ubatch" in fields_set,
+        strip_ctx_checkpoints = "ctx_checkpoints" in fields_set,
+        strip_cache_ram = "cache_ram" in fields_set,
+        strip_spec_draft_cache = "spec_draft_cache_type" in fields_set,
+        strip_load_mode = "load_mode" in fields_set,
+        strip_load_mode_aliases = "load_mode" in fields_set,
+    )
 
 
 @router.post("/load", response_model = LoadResponse)

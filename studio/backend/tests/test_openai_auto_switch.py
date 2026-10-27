@@ -1535,6 +1535,22 @@ def test_explicit_load_brings_the_saved_extra_args_on_a_fresh_load(monkeypatch):
     assert _explicit_load(monkeypatch, {**body, "llama_extra_args": []}).llama_extra_args == []
 
 
+def test_explicit_load_drops_preset_flags_that_shadow_sent_fields(monkeypatch):
+    # Extras go on the command line last, so a preset -c would beat the caller's Auto.
+    _mock_override_store(monkeypatch)
+    _put(
+        f"{_QWEN_SMALL}:UD-Q4_K_XL",
+        custom_context_length = 8192,
+        llama_extra_args = ["--ctx-size", "8192", "--no-mmap"],
+    )
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    auto = _explicit_load(monkeypatch, {**body, "max_seq_length": 0})
+    assert (auto.max_seq_length, auto.llama_extra_args) == (0, ["--no-mmap"])
+    saved = _explicit_load(monkeypatch, body)
+    assert saved.max_seq_length == 8192
+    assert "--no-mmap" in saved.llama_extra_args
+
+
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
     _mock_override_store(monkeypatch)
     body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
