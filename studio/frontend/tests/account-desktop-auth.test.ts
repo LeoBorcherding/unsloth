@@ -13,7 +13,6 @@ type AutoAuth = {
   getTauriAuthFailure(): string | null;
   markDesktopSignedOut(): Promise<void>;
   continueAsDesktopOwner(): Promise<boolean>;
-  resetDesktopOwnerPassword(newPassword: string): Promise<boolean>;
 };
 
 type Guards = {
@@ -113,11 +112,6 @@ function fixture(
         invokes.push([command, args]);
         if (command === "desktop_mark_signed_out") return void (shell.signedOut = true);
         if (command === "desktop_clear_signed_out") return void (shell.signedOut = false);
-        if (command === "desktop_reset_password") {
-          if (response instanceof Error) throw response;
-          shell.signedOut = false;
-          return response;
-        }
         assert.equal(command, "desktop_auth");
         invokeCalls++;
         if (shell.signedOut) return { signed_out: true };
@@ -498,24 +492,4 @@ test("a second desktop window cannot auto-sign in after another window logs out"
   // API recovery in the other window, after its tokens were cleared under it.
   assert.equal(await second.auth.tauriAutoAuth(), false);
   assert.equal(second.access, null);
-});
-
-test("Forgot password on the desktop signs the owner in with the reset session", async (t) => {
-  const f = fixture(t);
-  f.setResponse({ access_token: "reset-access", refresh_token: "reset-refresh" });
-  await f.auth.markDesktopSignedOut();
-  assert.equal(await f.auth.resetDesktopOwnerPassword("fresh-password"), false);
-  assert.deepEqual(f.invokes.at(-1), ["desktop_reset_password", { newPassword: "fresh-password" }]);
-  assert.equal(f.access, "reset-access");
-  assert.equal(f.shell.signedOut, false);
-  assert.deepEqual(f.transitions, [{ account: "unsloth", route: "/chat" }]);
-});
-
-test("a refused desktop reset keeps the sign-out and surfaces the backend's reason", async (t) => {
-  const f = fixture(t);
-  await f.auth.markDesktopSignedOut();
-  f.setResponse(new Error("Too many failed login attempts. Try again in 60 seconds."));
-  await assert.rejects(f.auth.resetDesktopOwnerPassword("fresh-password"), /Too many failed login attempts/);
-  assert.equal(f.access, null);
-  assert.equal(f.shell.signedOut, true);
 });

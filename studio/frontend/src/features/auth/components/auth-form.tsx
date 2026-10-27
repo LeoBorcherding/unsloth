@@ -16,7 +16,6 @@ import type { ReactElement } from "react";
 import type { SyntheticEvent } from "react";
 import { refreshSession, refreshSessionOutcome } from "../api";
 import { clearDesktopSignedOut, continueAsDesktopOwner } from "../tauri-auto-auth";
-import { DesktopOwnerReset } from "./desktop-owner-reset";
 import {
   deadlineFromStatus,
   formatCountdown,
@@ -590,13 +589,6 @@ export function AuthForm({ mode }: AuthFormProps): ReactElement | null {
           </Button>
         )}
       </form>
-      {isTauri && isLoginMode && (
-        <DesktopOwnerReset
-          onDone={(replaced) => {
-            if (!replaced) navigate({ to: getPostAuthRoute() });
-          }}
-        />
-      )}
 
       {showSwitchLink && (
         <p className="text-center text-sm text-muted-foreground">

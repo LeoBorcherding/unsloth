@@ -573,8 +573,8 @@ test("rows show each profile name and avatar with the name to sign in with", asy
         role: "owner",
         is_active: true,
         created_at: "2026-09-01T12:00:00Z",
-        login_alias: "blu3",
-        display_name: "Blu3",
+        login_alias: "riley",
+        display_name: "Riley",
         avatar_url: "data:image/png;base64,AAAA",
       },
       {
@@ -589,15 +589,15 @@ test("rows show each profile name and avatar with the name to sign in with", asy
   const tree = await ui.initialize();
   const ownerRow = nodes(tree).find((node) => node.props["data-testid"] === "account-unsloth");
   const avatar = nodes(ownerRow).find((node) => node.type === "UserAvatar");
-  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Blu3", "data:image/png;base64,AAAA"]);
-  assert.match(content(ownerRow), /Blu3/);
-  assert.match(content(ownerRow), /Signs in as blu3 or unsloth/);
+  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Riley", "data:image/png;base64,AAAA"]);
+  assert.match(content(ownerRow), /Riley/);
+  assert.match(content(ownerRow), /Signs in as riley or unsloth/);
   const aliceRow = nodes(tree).find((node) => node.props["data-testid"] === "account-alice");
   const aliceAvatar = nodes(aliceRow).find((node) => node.type === "UserAvatar");
   assert.deepEqual([aliceAvatar?.props.name, aliceAvatar?.props.imageUrl], ["alice", null]);
   assert.match(content(aliceRow), /Signs in as alice/);
   const input = nodes(tree).find((node) => node.props.id === "owner-sign-in-name");
-  assert.equal(input?.props.value, "blu3");
+  assert.equal(input?.props.value, "riley");
 });
 
 test("the owner sets a sign-in name and an empty one falls back to unsloth", async () => {
@@ -613,26 +613,26 @@ test("the owner sets a sign-in name and an empty one falls back to unsloth", asy
     await click(tree, "Save name");
     tree = ui.render();
   };
-  type("Blu3");
+  type("Riley");
   await submit();
-  assert.ok(ui.calls.includes("alias:Blu3"));
-  assert.match(content(tree), /Signs in as blu3 or unsloth/);
+  assert.ok(ui.calls.includes("alias:Riley"));
+  assert.match(content(tree), /Signs in as riley or unsloth/);
   type("");
   await submit();
   assert.ok(ui.calls.includes("alias:"));
   assert.match(content(tree), /Signs in as unsloth/);
-  assert.doesNotMatch(content(tree), /blu3 or unsloth/);
+  assert.doesNotMatch(content(tree), /riley or unsloth/);
 });
 
 test("the owner row matches the sidebar's local profile before the server copy and offers a password change", async () => {
   const ui = tab(true, null, {
-    localProfile: { displayName: " Blu3 ", avatarDataUrl: "data:image/png;base64,LOCAL" },
+    localProfile: { displayName: " Riley ", avatarDataUrl: "data:image/png;base64,LOCAL" },
   });
   const tree = await ui.initialize();
   const ownerRow = nodes(tree).find((node) => node.props["data-testid"] === "account-unsloth");
   const avatar = nodes(ownerRow).find((node) => node.type === "UserAvatar");
-  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Blu3", "data:image/png;base64,LOCAL"]);
-  assert.match(content(ownerRow), /Blu3/);
+  assert.deepEqual([avatar?.props.name, avatar?.props.imageUrl], ["Riley", "data:image/png;base64,LOCAL"]);
+  assert.match(content(ownerRow), /Riley/);
   assert.match(content(ownerRow), /Installation owner/);
   const aliceRow = nodes(tree).find((node) => node.props["data-testid"] === "account-alice");
   assert.ok(!content(aliceRow).includes("Change password"));
