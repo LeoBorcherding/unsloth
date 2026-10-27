@@ -11,15 +11,18 @@ type ChatResidentWindow = {
   modelLoading: boolean;
 };
 
+// A refresh that failed or read the old value gets another try after this long.
+const RETRY_MS = 15_000;
+
 /**
  * True once per drift: the monitor reads the live window every poll, the chat store only on its own
  * loads and focus, so an API reload of the same model at a new context would leave the header stale.
  */
-export function createResidentDriftWatch(): (
+export function createResidentDriftWatch(now: () => number = Date.now): (
   monitor: Pick<ApiMonitorResponse, "active_model" | "context_length">,
   chat: ChatResidentWindow,
 ) => boolean {
-  let flagged: string | null = null;
+  let flagged: { key: string; at: number } | null = null;
   return (monitor, chat) => {
     const live = monitor.context_length ?? null;
     if (
@@ -35,10 +38,11 @@ export function createResidentDriftWatch(): (
       flagged = null;
       return false;
     }
-    // Once per value, so a backend whose two reads disagree cannot drive a /status loop.
+    // Once per value per RETRY_MS, so a backend whose two reads disagree cannot drive a /status loop.
     const key = `${monitor.active_model}\n${live}`;
-    if (key === flagged) return false;
-    flagged = key;
+    const at = now();
+    if (flagged?.key === key && at - flagged.at < RETRY_MS) return false;
+    flagged = { key, at };
     return true;
   };
 }

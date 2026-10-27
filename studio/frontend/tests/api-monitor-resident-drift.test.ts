@@ -56,6 +56,20 @@ test("the drift watch stays quiet when in sync, loading or unknown, and re-arms 
   assert.equal(drifted({ active_model: MODEL, context_length: 4096 }, loadedAt(8192)), true);
 });
 
+test("a drift the refresh did not clear is retried after a while, not every poll", () => {
+  let clock = 0;
+  const drifted = createResidentDriftWatch(() => clock);
+  const monitor = { active_model: MODEL, context_length: 16384 };
+  assert.equal(drifted(monitor, loadedAt(4096)), true);
+  clock = 1_500;
+  assert.equal(drifted(monitor, loadedAt(4096)), false);
+  // The status read failed, so the store still says 4096.
+  clock = 15_000;
+  assert.equal(drifted(monitor, loadedAt(4096)), true);
+  clock = 16_500;
+  assert.equal(drifted(monitor, loadedAt(4096)), false);
+});
+
 test("both monitor polls feed the drift watch", () => {
   for (const file of [
     "features/api-monitor/use-api-monitor.ts",
