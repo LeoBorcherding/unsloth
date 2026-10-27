@@ -23,6 +23,7 @@ import {
   isSemanticTargetHandle,
   normalizeRecipeHandleId,
 } from "../handles";
+import { serializeBenchmarkSettings } from "../benchmark";
 import { readNodeWidth } from "../rf-node-dimensions";
 import {
   buildExpressionColumn,
@@ -196,7 +197,7 @@ export function buildRecipePayload(
       // seed-dataset columns are added by DataDesigner.
       continue;
     }
-    if (config.kind === "markdown_note") {
+    if (config.kind === "markdown_note" || config.kind === "benchmark") {
       continue;
     }
     if (config.kind === "model_provider") {
@@ -272,6 +273,19 @@ export function buildRecipePayload(
           markdown: config.markdown,
           note_color: config.note_color,
           note_opacity: config.note_opacity,
+        },
+      ];
+    }
+    if (config.kind === "benchmark") {
+      return [
+        {
+          id: config.name,
+          x: node.position.x,
+          y: node.position.y,
+          ...(width !== null ? { width } : {}),
+          node_type: "benchmark" as const,
+          name: config.name,
+          benchmark: serializeBenchmarkSettings(config),
         },
       ];
     }

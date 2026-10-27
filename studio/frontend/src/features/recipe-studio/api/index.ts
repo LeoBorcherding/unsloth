@@ -8,6 +8,7 @@ import {
   readFastApiError,
 } from "@/lib/format-fastapi-error";
 import { openStreamResponse } from "@/lib/open-stream-response";
+import type { LoadedModelStatus } from "../utils/benchmark";
 
 const DEFAULT_BASE = "/api/data-recipe";
 
@@ -532,5 +533,15 @@ export async function removeUnstructuredBlock(blockId: string): Promise<void> {
   );
   if (!res.ok && res.status !== 404) {
     throw new Error("Failed to remove uploaded files");
+  }
+}
+
+/** What Chat has loaded, for the Benchmark card's GGUF gate on lm-eval tasks. */
+export async function fetchLoadedModelStatus(): Promise<LoadedModelStatus | null> {
+  try {
+    const response = await authFetch("/api/inference/status");
+    return response.ok ? ((await response.json()) as LoadedModelStatus) : null;
+  } catch {
+    return null;
   }
 }

@@ -14,6 +14,7 @@ import type {
   ToolProfileConfig,
   ValidatorConfig,
 } from "../../types";
+import { parseBenchmarkSettings } from "../benchmark";
 import { buildEdges } from "./edges";
 import { isRecord, parseJson, readString } from "./helpers";
 import { parseColumn, parseModelConfig, parseModelProvider } from "./parsers";
@@ -464,6 +465,24 @@ export function importRecipePayload(
   );
   const uiMarkdownNotes = parseUiMarkdownNoteNodes(ui?.nodes);
   const uiToolProfilesByName = parseUiToolProfileNodes(ui?.nodes);
+
+  for (const node of Array.isArray(ui?.nodes) ? ui.nodes : []) {
+    if (!isRecord(node) || readString(node.node_type) !== "benchmark") {
+      continue;
+    }
+    const name = (readString(node.name) ?? readString(node.id))?.trim();
+    if (!name) {
+      continue;
+    }
+    if (nameToId.has(name)) {
+      errors.push(`Duplicate column name: ${name}.`);
+      continue;
+    }
+    const id = `n${nextId}`;
+    nextId += 1;
+    nameToId.set(name, id);
+    configs.push(parseBenchmarkSettings(id, name, node.benchmark));
+  }
 
   for (const note of uiMarkdownNotes) {
     const id = `n${nextId}`;

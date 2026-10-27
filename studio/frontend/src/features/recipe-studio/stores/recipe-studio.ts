@@ -61,6 +61,7 @@ type SheetView =
   | "validator"
   | "expression"
   | "note"
+  | "benchmark"
   | "processor";
 
 type RecipeStudioState = {
@@ -118,6 +119,7 @@ type RecipeStudioState = {
     openDialog?: boolean,
   ) => void;
   addMarkdownNoteNode: (position?: XYPosition, openDialog?: boolean) => void;
+  addBenchmarkNode: (position?: XYPosition, openDialog?: boolean) => void;
   updateConfig: (id: string, patch: Partial<NodeConfig>) => void;
   loadRecipe: (snapshot: RecipeSnapshot) => void;
   setAuxNodePosition: (id: string, position: XYPosition) => void;
@@ -714,6 +716,19 @@ export const useRecipeStudioStore = create<RecipeStudioState>((set, get) => ({
         state,
         "note",
         "markdown_note",
+        position,
+        openDialog,
+      );
+    }),
+  addBenchmarkNode: (position, openDialog = true) =>
+    set((state) => {
+      if (state.executionLocked) {
+        return state;
+      }
+      return buildAddedNodeState(
+        state,
+        "benchmark",
+        "benchmark",
         position,
         openDialog,
       );
