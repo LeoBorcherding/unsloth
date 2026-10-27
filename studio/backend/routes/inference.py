@@ -17094,8 +17094,6 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
         local_target_is_gguf, request.model_path, alias or request.model_path
     )
     kwargs = model_override_load_kwargs(override, is_gguf = is_gguf)
-    # The impl already inherits stored extra args when omitted, with its own same-model checks.
-    kwargs.pop("llama_extra_args", None)
     sent = request.model_fields_set
     # Halves of one choice: a caller sending either keeps the saved other half out.
     for group in (

@@ -1526,6 +1526,15 @@ def test_explicit_load_fields_the_caller_sent_beat_the_saved_preset(monkeypatch)
     assert (request.max_seq_length, request.n_parallel) == (4096, 1)
 
 
+def test_explicit_load_brings_the_saved_extra_args_on_a_fresh_load(monkeypatch):
+    # A fresh process has no backend args to inherit, so only the preset can supply them.
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", llama_extra_args = ["--no-mmap"])
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    assert _explicit_load(monkeypatch, body).llama_extra_args == ["--no-mmap"]
+    assert _explicit_load(monkeypatch, {**body, "llama_extra_args": []}).llama_extra_args == []
+
+
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
     _mock_override_store(monkeypatch)
     body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
