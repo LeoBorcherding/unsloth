@@ -315,9 +315,17 @@ export function useAudioSource({
             : "webm";
       if (blob.size > 0) void pickFile(blob, `Recording.${extension}`);
     });
-    recorderRef.current = recorder;
     discardRecording.current = false;
-    recorder.start(RECORDING_CHUNK_MS);
+    try {
+      recorder.start(RECORDING_CHUNK_MS);
+    } catch (error) {
+      // A recorder that never started fires no "stop", so nothing else would release the mic.
+      window.clearTimeout(limit);
+      stopStream();
+      dispatch({ type: "fail", message: micErrorMessage(error, isTauri) });
+      return;
+    }
+    recorderRef.current = recorder;
     dispatch({ type: "record-start", now: Date.now() });
   }, [pickFile, stopStream, maxRecordSeconds]);
 
