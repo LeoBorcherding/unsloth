@@ -66,6 +66,7 @@ def models_disk_usage(cache: Optional[Path] = None) -> Optional[dict]:
     return {
         "total_gb": round(usage.total / 1e9, 2),
         "free_gb": round(usage.free / 1e9, 2),
+        "used_gb": round(usage.used / 1e9, 2),
         "percent_used": round(usage.used / seen * 100, 1) if seen else 0,
     }
 

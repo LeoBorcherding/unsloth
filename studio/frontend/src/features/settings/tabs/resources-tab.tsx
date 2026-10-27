@@ -69,6 +69,7 @@ import {
   StorageOverview,
 } from "../components/storage-overview";
 import { useMonitorOverlayStore } from "../stores/monitor-overlay-store";
+import { diskUsedGb } from "../disk-used";
 import { useSettingsPanelPrefsStore } from "../stores/settings-panel-prefs-store";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -369,16 +370,15 @@ export function ResourcesTab() {
     const ramUsed = Math.max(0, ramTotal - ramAvailable);
     const diskTotal = systemInfo.disk?.total_gb ?? 0;
     const diskFree = systemInfo.disk?.free_gb ?? 0;
-    const diskUsed = Math.max(0, diskTotal - diskFree);
-    const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
+    const diskUsed = diskUsedGb(systemInfo.disk);
+    // Over what files can use, as psutil's percent: reserved blocks are neither used nor free.
+    const diskUsable = diskUsed + diskFree;
+    const diskPercent = diskUsable > 0 ? (diskUsed / diskUsable) * 100 : 0;
     const modelsDisk = systemInfo.models_disk ?? null;
-    const modelsDiskUsed = modelsDisk
-      ? Math.max(0, modelsDisk.total_gb - modelsDisk.free_gb)
-      : 0;
+    const modelsDiskUsed = modelsDisk ? diskUsedGb(modelsDisk) : 0;
+    const modelsDiskUsable = modelsDisk ? modelsDiskUsed + modelsDisk.free_gb : 0;
     const modelsDiskPercent =
-      modelsDisk && modelsDisk.total_gb > 0
-        ? (modelsDiskUsed / modelsDisk.total_gb) * 100
-        : 0;
+      modelsDiskUsable > 0 ? (modelsDiskUsed / modelsDiskUsable) * 100 : 0;
     const display = gpuMemoryDisplay(displayedGpu);
     const usageDevices = display.usageDevices;
     const gpuMemoryTotals = gpuMemoryTotalsGb(usageDevices);
@@ -413,6 +413,7 @@ export function ResourcesTab() {
       diskTotal,
       diskFree,
       diskUsed,
+      diskUsable,
       diskPercent,
       modelsDisk,
       modelsDiskUsed,
@@ -1140,7 +1141,7 @@ export function ResourcesTab() {
               {t("settings.resources.storage.refreshAction")}
             </Button>
           }
-          totalBytes={metrics.diskTotal}
+          totalBytes={metrics.diskUsable}
           segments={storageSegments}
           footer={
             metrics.modelsDisk
