@@ -335,9 +335,35 @@ def _model_fields(model: Optional[str], may_load: bool) -> tuple[dict, Optional[
     raise RunFailed("model_not_loaded")
 
 
-async def _plan_swap(task: dict, model: str, unattended: bool, carried: Optional[_Swap]) -> _Swap:
+async def _wait_out_launch(cancel_event: Optional[threading.Event]) -> None:
+    """Hold a run until Studio has been up and unused for the away window, or someone uses it."""
+    from core.inference.llama_keepwarm import attended_since_launch, idle_for
+
+    deadline = asyncio.get_running_loop().time() + _AWAY_SECONDS
+    while (
+        not idle_for(_AWAY_SECONDS)
+        and not attended_since_launch()
+        and asyncio.get_running_loop().time() < deadline
+    ):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RunFailed("cancelled")
+        await asyncio.sleep(_YIELD_POLL_SECONDS)
+
+
+async def _plan_swap(
+    task: dict,
+    model: str,
+    unattended: bool,
+    carried: Optional[_Swap],
+    cancel_event: Optional[threading.Event] = None,
+) -> _Swap:
     """What a load must put back; an unattended run swaps only a restorable GGUF while Studio is idle."""
-    from core.inference.llama_keepwarm import attended_stamp, idle_for, loaded_identity
+    from core.inference.llama_keepwarm import (
+        attended_since_launch,
+        attended_stamp,
+        idle_for,
+        loaded_identity,
+    )
     from routes.inference import (
         _loaded_slot_ident,
         _resident_npu_model,
@@ -353,6 +379,9 @@ async def _plan_swap(task: dict, model: str, unattended: bool, carried: Optional
         # Another account's model, which this account could not load back afterwards.
         resident = _loaded_slot_ident()
         foreign = resident is not None and account_access.resident_hidden("chat", resident)
+        # A run missed while the app was closed is claimed at launch, inside the idle clock's first window.
+        if not (unrestorable or foreign) and not attended_since_launch():
+            await _wait_out_launch(cancel_event)
         if (
             unrestorable
             or foreign
@@ -500,6 +529,7 @@ async def generate_answer(
             task["model"],
             run.get("source") == "schedule" and not run.get("allowModelLoad"),
             carried,
+            cancel_event,
         )
         if allow_switch
         else None
