@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useNativeFileDrop } from "@/features/native-intents/use-native-file-drop";
+import { useTheme } from "@/features/settings/stores/theme-store";
 import {
   Background,
   BackgroundVariant,
@@ -29,7 +30,7 @@ import { toast } from "sonner";
 import { categoryColor, findPort, getSpec } from "../stores/catalog-store";
 import { useDocStore } from "../stores/doc-store";
 import { useUiStore } from "../stores/ui-store";
-import type { FlowEdge } from "../types";
+import type { FlowEdge, FlowGroup } from "../types";
 import { dragHasFiles } from "./canvas-rules";
 import {
   checkConnection,
@@ -52,15 +53,32 @@ import {
   disconnectColumns,
   recipeConnectionError,
 } from "../recipe/recipe-actions";
-import { COLUMN_TYPE } from "../recipe/recipe-columns";
+import {
+  auxGroupId,
+  auxLayout,
+  isAuxId,
+  withAuxPosition,
+} from "../recipe/recipe-aux";
+import {
+  type AuxData,
+  AUX_IN,
+  AUX_OUT,
+  RecipeAuxEdge,
+  RecipeAuxNode,
+  editAuxCard,
+} from "../recipe/recipe-column-node";
+import { COLUMN_TYPE, columnOf } from "../recipe/recipe-columns";
+import { noteRecipeGroup, withRecipeNotes } from "../recipe/recipe-notes";
+import { columnLook } from "../recipe/recipe-look";
 import { SelectedNodeToolbar } from "./node-toolbar";
 
 const NODE_TYPES = {
   flowNode: FlowNodeView,
   flowGroup: GroupFrame,
   flowNote: NoteFrame,
+  recipeAux: RecipeAuxNode,
 };
-const EDGE_TYPES = { flowEdge: FlowEdgeView };
+const EDGE_TYPES = { flowEdge: FlowEdgeView, recipeAux: RecipeAuxEdge };
 const SNAP_GRID: [number, number] = [16, 16];
 const VISIBLE_ONLY_THRESHOLD = 300;
 const PRO_OPTIONS = { hideAttribution: true };
@@ -74,15 +92,16 @@ type Positions = Record<string, { x: number; y: number }>;
 function portTypeOf(edge: FlowEdge): string {
   if (edge.kind === "flow") return "flow";
   const node = useDocStore.getState().graph.nodes[edge.source];
+  if (node?.type === COLUMN_TYPE) return columnLook(columnOf(node)).valueType;
   const spec = node ? getSpec(node.type) : undefined;
   return findPort(spec, "out", edge.source_port)?.type ?? "any";
 }
 
 function minimapColor(node: RfNode): string {
-  if (node.type !== "flowNode") return "#27272a";
+  if (node.type !== "flowNode") return "var(--muted)";
   const doc = useDocStore.getState().graph.nodes[node.id];
   const spec = doc ? getSpec(doc.type) : undefined;
-  return spec ? categoryColor(spec.category) : "#52525b";
+  return spec ? categoryColor(spec.category) : "var(--muted-foreground)";
 }
 
 function insideRect(
@@ -124,6 +143,7 @@ function groupMembership(
 }
 
 export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
+  const colorMode = useTheme().resolved;
   const graph = useDocStore((s) => s.graph);
   const selectedNodes = useUiStore((s) => s.selectedNodes);
   const selectedEdges = useUiStore((s) => s.selectedEdges);
@@ -149,14 +169,53 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     () => new Set([...selectedNodes, ...selectedEdges]),
     [selectedNodes, selectedEdges],
   );
-  const nodes = useMemo(
+  const derivedNodes = useMemo(
     () => (deriver.current as RfDeriver).nodes(graph, selectedSet, drag, sizes),
     [graph, selectedSet, drag, sizes],
   );
-  const edges = useMemo(
+  const derivedEdges = useMemo(
     () => (deriver.current as RfDeriver).edges(graph, selectedSet, portTypeOf),
     [graph, selectedSet],
   );
+  const aux = useMemo(() => auxLayout(graph, drag, sizes), [graph, drag, sizes]);
+  const nodes = useMemo(() => {
+    if (!aux.elements.length) return derivedNodes;
+    const grown = derivedNodes.map((node) => {
+      const height = node.id.startsWith(GROUP_PREFIX)
+        ? aux.heights[node.id.slice(GROUP_PREFIX.length)]
+        : undefined;
+      return height ? { ...node, style: { ...node.style, height } } : node;
+    });
+    const cards: RfNode[] = aux.elements.map(({ card, x, y }) => {
+      const size = sizes.get(card.id);
+      return {
+        id: card.id,
+        type: "recipeAux",
+        position: { x, y },
+        data: { card } as unknown as RfNode["data"],
+        selectable: false,
+        deletable: false,
+        connectable: false,
+        ...(size ? { measured: size } : {}),
+      };
+    });
+    return [...grown, ...cards];
+  }, [derivedNodes, aux, sizes]);
+  const edges = useMemo(() => {
+    if (!aux.links.length) return derivedEdges;
+    const links: RfEdge[] = aux.links.map((link) => ({
+      id: link.id,
+      source: link.source,
+      target: link.target,
+      sourceHandle: AUX_OUT,
+      targetHandle: AUX_IN,
+      type: "recipeAux",
+      selectable: false,
+      deletable: false,
+      focusable: false,
+    }));
+    return [...derivedEdges, ...links];
+  }, [derivedEdges, aux]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<RfNode>[]) => {
@@ -257,11 +316,20 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     const current = dragRef.current;
     if (current) {
       const positions: Record<string, [number, number]> = {};
-      for (const [id, p] of Object.entries(current))
-        positions[id] = [Math.round(p.x), Math.round(p.y)];
-      useDocStore
-        .getState()
-        .moveNodes(positions, groupMembership(positions, sizesRef.current));
+      const doc = useDocStore.getState();
+      const groups = new Map<string, FlowGroup>();
+      for (const [id, p] of Object.entries(current)) {
+        if (!isAuxId(id)) {
+          positions[id] = [Math.round(p.x), Math.round(p.y)];
+          continue;
+        }
+        const groupId = auxGroupId(id);
+        const group = groups.get(groupId) ?? doc.graph.groups[groupId];
+        if (group) groups.set(groupId, withAuxPosition(group, id, [p.x, p.y]));
+      }
+      if (Object.keys(positions).length)
+        doc.moveNodes(positions, groupMembership(positions, sizesRef.current));
+      if (groups.size) doc.patchGraph({ groups: [...groups.values()] });
     }
     setDrag(null);
   }, []);
@@ -377,7 +445,20 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           ids.notes.push(node.id.slice(NOTE_PREFIX.length));
         else ids.nodes.push(node.id);
       }
-      useDocStore.getState().removeElements(ids);
+      // A deleted recipe note leaves the recipe's ui notes too.
+      const notes = new Set(ids.notes);
+      const remaining = graph.noteOrder
+        .filter((id) => !notes.has(id))
+        .map((id) => graph.notes[id]);
+      const touched = new Map<string, FlowGroup>();
+      for (const id of ids.notes) {
+        const group = noteRecipeGroup(graph, id);
+        if (group && !ids.groups.includes(group.id))
+          touched.set(group.id, withRecipeNotes(group, remaining));
+      }
+      useDocStore
+        .getState()
+        .removeElements({ ...ids, updateGroups: [...touched.values()] });
       useUiStore.getState().setSelection([], []);
     },
     [],
@@ -445,13 +526,17 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
   );
 
   const onNodeDoubleClick = useCallback((_: ReactMouseEvent, node: RfNode) => {
+    if (node.type === "recipeAux") {
+      if (!readOnly) editAuxCard((node.data as unknown as AuxData).card);
+      return;
+    }
     if (node.type !== "flowNode") return;
     const ui = useUiStore.getState();
     ui.openInspector(node.id);
     const flowNode = useDocStore.getState().graph.nodes[node.id];
     if (flowNode?.type === COLUMN_TYPE && flowNode.group)
       ui.setRecipeEditor({ groupId: flowNode.group, nodeId: node.id });
-  }, []);
+  }, [readOnly]);
 
   return (
     <div
@@ -500,29 +585,29 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         onlyRenderVisibleElements={nodes.length > VISIBLE_ONLY_THRESHOLD}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly}
-        colorMode="dark"
+        colorMode={colorMode}
         proOptions={PRO_OPTIONS}
         fitView={true}
         fitViewOptions={FIT_VIEW_OPTIONS}
-        className="flows-canvas bg-zinc-950"
+        className="flows-canvas bg-background"
       >
         <Background
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1.2}
-          color="#3f3f46"
+          color="color-mix(in oklab, var(--foreground) 28%, transparent)"
         />
         <MiniMap
           pannable={true}
           zoomable={true}
           nodeColor={minimapColor}
           nodeStrokeWidth={0}
-          maskColor="rgba(9,9,11,0.7)"
-          className="!rounded-lg !border !border-white/10 !bg-zinc-900"
+          maskColor="color-mix(in oklab, var(--background) 70%, transparent)"
+          className="!rounded-lg !border !border-border !bg-card"
         />
         <Controls
           showInteractive={false}
-          className="!rounded-lg !border !border-white/10 !shadow-none"
+          className="!rounded-lg !border !border-border !shadow-none"
         />
         <SelectedNodeToolbar readOnly={readOnly} />
       </ReactFlow>
