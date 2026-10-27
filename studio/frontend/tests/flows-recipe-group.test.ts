@@ -177,6 +177,10 @@ test("reference wires follow the prompts, like the backend import", () => {
     groupOrder: [],
     notes: {},
     noteOrder: [],
+    reroutes: {},
+    rerouteOrder: [],
+    wires: {},
+    wireOrder: [],
   };
   const diff = referenceEdgeDiff(graph, nodes);
   assert.deepEqual(diff.remove, ["stale"]);
