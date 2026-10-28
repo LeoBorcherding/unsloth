@@ -410,6 +410,38 @@ def _apply_data_designer_mixed_type_parquet_patch() -> None:
     setattr(ArtifactStorage, "_unsloth_mixed_type_parquet_patch_applied", True)
 
 
+def _apply_data_designer_seed_repeat_warning_patch() -> None:
+    # The engine starts the seed over without a word when a run asks for more rows than the seed has.
+    try:
+        from data_designer.engine.column_generators.generators.seed_dataset import (  # pyright: ignore[reportMissingImports]
+            SeedDatasetColumnGenerator,
+        )
+    except ImportError:
+        return
+
+    if getattr(SeedDatasetColumnGenerator, "_unsloth_seed_repeat_warning_patch_applied", False):
+        return
+
+    original_reset = SeedDatasetColumnGenerator._reset_batch_reader
+
+    @functools.wraps(original_reset)
+    def _patched_reset(self: Any, num_records: int) -> None:
+        # The first call opens the reader; any later one means the seed ran out and is read again.
+        if self._batch_reader is not None and not getattr(self, "_unsloth_seed_repeat_warned", False):
+            self._unsloth_seed_repeat_warned = True
+            index_range = getattr(self, "_index_range", None)
+            size = index_range.size if index_range is not None else self._seed_dataset_size
+            logging.getLogger("data_designer.unsloth").warning(
+                "The run asks for more rows than the seed data has (%s), so later rows reuse seed "
+                "rows from the start.",
+                size,
+            )
+        return original_reset(self, num_records)
+
+    SeedDatasetColumnGenerator._reset_batch_reader = _patched_reset
+    setattr(SeedDatasetColumnGenerator, "_unsloth_seed_repeat_warning_patch_applied", True)
+
+
 def _apply_data_designer_seed_uri_quote_patch() -> None:
     # Seeds are read as FROM '<uri>': quote it for DuckDB. No ImportError guard: never run unquoted.
     from data_designer.engine.resources.seed_reader import SeedReader  # pyright: ignore[reportMissingImports]
@@ -833,6 +865,7 @@ def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = 
     _apply_data_designer_prompt_blank_patch()
     _apply_data_designer_expression_blank_patch()
     _apply_data_designer_mixed_type_parquet_patch()
+    _apply_data_designer_seed_repeat_warning_patch()
     _apply_data_designer_seed_uri_quote_patch()
     _apply_data_designer_sql_inline_config_patch()
     _apply_data_designer_python_validator_path_patch()

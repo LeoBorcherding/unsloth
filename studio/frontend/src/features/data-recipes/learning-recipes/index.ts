@@ -147,9 +147,9 @@ export const LEARNING_RECIPES: LearningRecipeDef[] = [
   },
   {
     id: "ocr-document-extraction",
-    title: "OCR Document Extraction",
+    title: "Handwritten Digit OCR",
     description:
-      "Use image context to generate OCR-style document extraction output.",
+      "Read the digit in each MNIST image with a hosted vision model; swap in document images to transcribe pages.",
     loadPayload: () => loadPayloadFromUrl(ocrDocumentExtractionUrl),
   },
   {

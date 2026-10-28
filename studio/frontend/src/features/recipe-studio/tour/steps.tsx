@@ -59,8 +59,8 @@ export function buildRecipeEditorTourSteps({
       title: "Add a step",
       body: (
         <>
-          Source data, samplers, model calls, validators and expressions. Import
-          is where a PDF or a folder of text enters the graph.
+          Source data, samplers, model calls, validators and expressions. A PDF
+          or text file enters the graph through Source data, then Document file.
         </>
       ),
     },

@@ -45,8 +45,9 @@ export function buildDataRecipesTourSteps({
           title: "Learning recipes",
           body: (
             <>
-              Worked examples you can open and run as they are. The fastest way
-              to see how nodes connect.
+              Worked examples you can open and run as they are on the local
+              model (Handwritten Digit OCR needs an OpenRouter key). The fastest
+              way to see how nodes connect.
             </>
           ),
         },

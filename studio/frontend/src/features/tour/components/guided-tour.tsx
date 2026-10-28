@@ -391,7 +391,8 @@ export function GuidedTour({
 
                   <div className="h-px bg-gradient-to-r from-transparent via-black/10 to-transparent dark:via-white/14" />
                   <div className="px-5 py-3 text-ui-11 text-foreground/55 dark:text-zinc-300/65">
-                    Tip: `Esc` skips. Tour blocks clicks so you can read.
+                    Tip: <kbd className="font-sans">Esc</kbd> skips. Tour blocks
+                    clicks so you can read.
                   </div>
                 </motion.div>
               </DialogPrimitive.Content>

@@ -36,7 +36,7 @@
         "name": "ocr_text",
         "drop": false,
         "model_alias": "provider_column",
-        "prompt": "Transcribe all text from this document image.",
+        "prompt": "This image shows one handwritten digit from 0 to 9. Reply with that digit only.",
         "multi_modal_context": [
           {
             "modality": "image",
@@ -61,7 +61,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_1",
-        "markdown": "This recipe uses **Gemini 2.0 Flash** via OpenRouter to transcribe document images into clean text.\n\nThe Seed block is prefilled with `ylecun/mnist` so you can run immediately. You can swap to any Hugging Face dataset that includes an `image` column.\n\nOutput: `ocr_text` column with the raw transcribed text per image.",
+        "markdown": "This recipe uses **Gemini 2.0 Flash** via OpenRouter to read the handwritten digit in each image.\n\nThe Seed block is prefilled with `ylecun/mnist` (28x28 digits) so you can run immediately. For real documents, swap to a Hugging Face dataset of page or receipt images with an `image` column and change the prompt to transcribe all text.\n\nOutput: `ocr_text` column with the digit read from each image.",
         "note_color": "#DCFCE7",
         "note_opacity": "35"
       },
@@ -72,7 +72,7 @@
         "width": 400,
         "node_type": "markdown_note",
         "name": "note_2",
-        "markdown": "##### Setup\n\nAdd your OpenRouter API key to the **Model Provider** block — same as every other recipe.\n\nGemini 2.0 Flash is well-suited for OCR: fast, cheap, and strong on tables, receipts, forms, and multi-column layouts.\n\nWant a purpose-built OCR model? Swap the endpoint to a local vLLM server running `lightonai/LightOnOCR-2-1B` for maximum throughput.",
+        "markdown": "##### Setup\n\nAdd your OpenRouter API key to the **Model Provider** block. This is the one learning recipe that needs a key: it sends images, so it uses a hosted vision model instead of the local model.\n\nGemini 2.0 Flash is well-suited for OCR: fast, cheap, and strong on tables, receipts, forms, and multi-column layouts.\n\nWant a purpose-built OCR model? Swap the endpoint to a local vLLM server running `lightonai/LightOnOCR-2-1B` for maximum throughput.",
         "note_color": "#DCFCE7",
         "note_opacity": "35"
       },
