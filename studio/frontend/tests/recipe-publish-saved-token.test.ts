@@ -60,6 +60,8 @@ function mountDialog(savedToken: string) {
         hfApiToken: (token: string | null | undefined) =>
           token?.startsWith("hf_") ? token : undefined,
       },
+      "@/lib/chevron-icons": { ChevronRightStandardIcon: "ChevronRightStandardIcon" },
+      "@/lib/copy-icon": { Copy01Icon: "Copy01Icon" },
       "@/lib/copy-to-clipboard": { copyToClipboard: async () => true },
       "@/shared/toast": { toastError: quiet, toastSuccess: quiet },
     },
