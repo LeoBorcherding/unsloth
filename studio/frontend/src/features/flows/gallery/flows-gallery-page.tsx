@@ -44,6 +44,8 @@ import {
   TestTube01Icon,
 } from "../editor/icon-data";
 import { MediaThumb } from "../editor/media";
+import { starterRecipeGraph } from "../recipe/recipe-actions";
+import { COLUMN_TYPE, referenceEdges } from "../recipe/recipe-columns";
 import { RecipeImportDialog } from "../recipe/recipe-import-dialog";
 import type { FlowKind, FlowRecord, FlowSummary } from "../types";
 import {
@@ -445,22 +447,57 @@ export function FlowsGalleryPage(): ReactElement {
     }
   };
 
+  const newRecipe = async () => {
+    setCreating(true);
+    try {
+      const doc = templateDocument("pipeline");
+      const { group, nodes } = starterRecipeGraph([0, 0], {
+        rows: 5,
+        mode: "preview",
+      });
+      const record = await createFlow({
+        ...doc,
+        name: "New recipe",
+        description: "A Data Recipe: columns that generate a dataset.",
+        nodes,
+        edges: referenceEdges(nodes.filter((n) => n.type === COLUMN_TYPE)),
+        groups: [group],
+        notes: [],
+      });
+      open(record.id);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not create the recipe",
+      );
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const bringRecipes = async () => {
     setMigrating(true);
     try {
       const result = await importAllRecipes();
-      const made = result.created.length;
+      const refreshed = result.created.filter((c) => c.replaces).length;
+      const made = result.created.length - refreshed;
       const kept = result.skipped.length;
-      if (made === 0 && kept === 0 && result.failed.length === 0)
+      if (made + refreshed === 0 && kept === 0 && result.failed.length === 0)
         toast.info("No saved Data Recipes yet");
-      else if (made === 0 && kept === 0)
+      else if (made + refreshed === 0 && kept === 0)
         toast.error("Could not bring in your Data Recipes", {
           description: result.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
         });
       else
         toast.success(
-          made
-            ? `Brought ${made} Data Recipe${made === 1 ? "" : "s"} into Flows${kept ? `; ${kept} already here` : ""}`
+          made + refreshed
+            ? [
+                made && `Brought ${made} Data Recipe${made === 1 ? "" : "s"} into Flows`,
+                refreshed &&
+                  `${refreshed} edited recipe${refreshed === 1 ? "" : "s"} brought in again`,
+                kept && `${kept} already here`,
+              ]
+                .filter(Boolean)
+                .join("; ")
             : `All ${kept} Data Recipe${kept === 1 ? " is" : "s are"} already in Flows`,
           {
             description: result.failed.length
@@ -501,6 +538,15 @@ export function FlowsGalleryPage(): ReactElement {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            disabled={creating}
+            onClick={() => void newRecipe()}
+            title="A new flow with a starter Data Recipe in it"
+            data-testid="flows-new-recipe"
+          >
+            <HugeiconsIcon icon={PlusSignIcon} size={15} /> New recipe
+          </Button>
           <Button
             variant="outline"
             disabled={migrating}

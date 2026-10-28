@@ -11,6 +11,7 @@ import type {
   RecipeNode,
   RecipeProcessorConfig,
 } from "@/features/recipe-studio/types";
+import { makeToolProfileConfig } from "@/features/recipe-studio/utils/config-factories";
 import { importRecipePayload } from "@/features/recipe-studio/utils/import/importer";
 import { buildRecipePayload } from "@/features/recipe-studio/utils/payload/build-payload";
 import {
@@ -25,6 +26,7 @@ import {
   type RecipeColumn,
   columnName,
   groupPayload,
+  pendingToolProfiles,
 } from "./recipe-columns";
 
 const COLUMN_KINDS = new Set(["sampler", "llm", "expression", "validator"]);
@@ -45,6 +47,18 @@ export interface StudioView {
   errors: string[];
 }
 
+/** Recipe Studio's own pre-server checks (a used provider with no endpoint, a preset with no model, ...). */
+export function clientErrors(group: FlowGroup, columns: FlowNode[]): string[] {
+  const view = studioView(group, columns);
+  if (view.errors.length) return view.errors;
+  return buildRecipePayload(
+    view.configs,
+    asNodes(view.configs),
+    [],
+    view.processors,
+  ).errors;
+}
+
 /** The group as Recipe Studio configs, the same ones its importer makes for a saved recipe. */
 export function studioView(group: FlowGroup, columns: FlowNode[]): StudioView {
   const result = importRecipePayload(
@@ -53,7 +67,13 @@ export function studioView(group: FlowGroup, columns: FlowNode[]): StudioView {
   if (!result.snapshot) {
     return { configs: {}, byNode: {}, processors: [], errors: result.errors };
   }
-  const configs = result.snapshot.configs;
+  const configs = { ...result.snapshot.configs };
+  // A tool profile with no server yet lives only in the ui nodes (Recipe Studio's payload drops it).
+  for (const name of pendingToolProfiles(group)) {
+    if (Object.values(configs).some((c) => c.name === name)) continue;
+    const id = `flows-tools-${name}`;
+    configs[id] = { ...makeToolProfileConfig(id, []), name };
+  }
   const idByName = new Map(
     Object.values(configs).map((config) => [config.name, config.id]),
   );
@@ -171,9 +191,14 @@ export function commitStudioEdit(
       params: { ...node.params, column },
     });
   }
-  const recipeLevel = Object.values(configs).some(
-    (config) => !isColumnConfig(config) && config !== before.configs[config.id],
-  );
+  const recipeLevel =
+    Object.values(configs).some(
+      (config) =>
+        !isColumnConfig(config) && config !== before.configs[config.id],
+    ) ||
+    Object.values(before.configs).some(
+      (config) => !isColumnConfig(config) && !configs[config.id],
+    );
   if (!recipeLevel && processors === before.processors) {
     return { nodes, group: null };
   }

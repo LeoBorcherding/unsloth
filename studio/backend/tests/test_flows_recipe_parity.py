@@ -120,6 +120,12 @@ def test_every_seed_kind_reaches_the_job_as_saved(name, seed_type):
     group = doc["groups"][0]
     assert group["config"]["seed_config"] == payload["recipe"]["seed_config"]
     assert group["ui"].get("seed_source_type", seed_type) == seed_type
+    if seed_type == "unstructured":
+        # The learning recipe ships without its document: it runs once one is picked, as in Recipe Studio.
+        with pytest.raises(FlowNodeError, match = "Load the seed first"):
+            _run(_compiled(doc), mode = "preview", rows = 2)
+        group["config"]["seed_config"]["source"]["path"] = "/srv/uploads/book.pdf"
+        payload["recipe"]["seed_config"]["source"]["path"] = "/srv/uploads/book.pdf"
     sent = _run(_compiled(doc), mode = "preview", rows = 2)
     assert sent["recipe"]["seed_config"] == payload["recipe"]["seed_config"]
     assert sent["recipe"]["seed_config"]["source"]["seed_type"] == seed_type
@@ -276,6 +282,21 @@ def test_recipe_json_round_trips_out_of_flows_and_back(client):
     assert step["params"] == {"rows": 250, "mode": "full"}
 
 
+def test_recipe_json_export_keeps_the_recipes_notes(client):
+    doc = _flow()
+    notes = [n["text"] for n in doc["notes"]]
+    assert notes, "the learning recipe brings its notes in as flow notes"
+    exported = client.post(
+        "/api/flows/export/recipe", json = {"doc": doc, "group_id": "recipe"}
+    ).json()
+    out = [n for n in exported["ui"].get("nodes", []) if n.get("node_type") == "markdown_note"]
+    assert [n["markdown"] for n in out] == notes
+    back = client.post(
+        "/api/flows/import/recipe", json = {"payload": exported, "name": "Back"}
+    ).json()
+    assert [n["text"] for n in back["flow"]["doc"]["notes"]] == notes
+
+
 def test_recipe_json_export_follows_the_sharing_rule(client):
     doc = _flow(_with_tools())
     exported = client.post(
@@ -329,8 +350,15 @@ def test_run_settings_follow_recipe_studios_run_dialog():
     preview = _run(_compiled(doc), mode = "preview", rows = 4)
     assert preview["run"]["run_config"]["buffer_size"] == 4
     assert preview["run"]["merge_batches"] is False and "run_name" not in preview["run"]
+    # Nothing saved: what Recipe Studio's run dialog shows and sends.
     plain = _run(_compiled(_flow()), mode = "preview", rows = 2)
-    assert plain["run"] == {"execution_type": "preview", "rows": 2}
+    assert plain["run"] == {
+        "execution_type": "preview",
+        "rows": 2,
+        "merge_batches": False,
+        "run_config": {**data.DEFAULT_RUN_CONFIG, "buffer_size": 2},
+    }
+    assert plain["run"]["run_config"]["disable_early_shutdown"] is True
 
 
 def test_run_settings_change_the_cache_key_of_the_step():

@@ -168,7 +168,7 @@ const TimelineRow = memo(function TimelineRow({
                 .getState()
                 .setRecipeRuns({ groupId: recipeGroup, view })
             }
-            className="mr-2 rounded px-1.5 py-0.5 text-[11.5px] capitalize text-sky-300 hover:bg-white/10"
+            className="mr-2 rounded px-1.5 py-0.5 text-[11.5px] capitalize text-sky-700 hover:bg-muted dark:text-sky-300"
           >
             {view}
           </button>
@@ -280,7 +280,7 @@ function Outputs() {
     <div className="flex flex-col gap-3 p-3">
       {datasets.map((item) => (
         <section key={item.key} className="flex max-w-xl flex-col gap-1">
-          <h4 className="font-mono text-[11px] text-zinc-500">{item.label}</h4>
+          <h4 className="font-mono text-ui-11 text-muted-foreground">{item.label}</h4>
           <DatasetOutput value={item.value} compact />
         </section>
       ))}

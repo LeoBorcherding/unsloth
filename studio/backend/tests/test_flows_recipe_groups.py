@@ -253,13 +253,35 @@ def test_the_group_runs_as_one_validated_job():
     out = asyncio.run(data.recipe_group(ctx))
     assert seen[:2] == ["/api/data-recipe/validate", "/api/data-recipe/jobs"]
     sent = [c[3] for c in ctx.calls if c[1] == "/api/data-recipe/jobs"][0]
-    assert sent["run"] == {"execution_type": "preview", "rows": 2}
+    assert sent["run"] == {
+        "execution_type": "preview",
+        "rows": 2,
+        "merge_batches": False,
+        "run_config": {**data.DEFAULT_RUN_CONFIG, "buffer_size": 2},
+    }
     assert [c["name"] for c in sent["recipe"]["columns"]] == [
         c["name"] for c in SQL["recipe"]["columns"]
     ]
     assert out["dataset"]["ref"] == "recipes/recipe_sql/parquet-files"
     assert out["preview"] == [{"sql_prompt": "Find", "sql": "SELECT 1"}]
     assert ctx.hooks, "Stop must reach the recipe job"
+
+
+def test_the_dataset_counts_every_batch_not_the_last_one():
+    def routes(method, path, params, body):
+        if path == "/api/data-recipe/validate":
+            return {"valid": True}
+        if path == "/api/data-recipe/jobs":
+            return {"job_id": "job9"}
+        if path.endswith("/status"):
+            return {"status": "completed", "rows": 2, "artifact_path": "/x/recipes/recipe_sql"}
+        if path.endswith("/dataset"):
+            return {"dataset": [{"sql": "SELECT 1"}], "total": 6}
+        raise AssertionError(path)
+
+    ctx = _Ctx(routes, params = {RECIPE_PARAM: _compiled(_flow()), "rows": 6, "mode": "full"})
+    out = asyncio.run(data.recipe_group(ctx))
+    assert out["dataset"]["rows"] == 6
 
 
 def test_an_invalid_recipe_never_starts_a_job():
@@ -416,18 +438,29 @@ def test_import_a_saved_recipe_or_recipe_json(client):
     body = client.post("/api/flows/import/recipe", json = {"recipe_id": "r1"}).json()
     doc = body["flow"]["doc"]
     assert body["flow"]["name"] == "My SQL"
-    assert doc["meta"]["from_recipe"] == {"id": "r1", "name": "My SQL", "updatedAt": 2}
+    made_from = doc["meta"]["from_recipe"]
+    assert {k: made_from[k] for k in ("id", "name", "updatedAt")} == {
+        "id": "r1",
+        "name": "My SQL",
+        "updatedAt": 2,
+    }
     assert compiler.validate(doc)["ok"]
     loose = client.post("/api/flows/import/recipe", json = {"payload": SQL, "name": "Loose"}).json()
     assert "from_recipe" not in loose["flow"]["doc"]["meta"]
     again = client.post("/api/flows/import/recipe", json = {"recipe_id": "r1"}).json()
     assert again["flow"]["id"] == body["flow"]["id"] and again["report"]["reused"]
+    # Recipe Studio's header saves before "Open in Flows", bumping updatedAt with nothing changed.
     _save_recipe("r1", "My SQL", updated = 3)
+    resaved = client.post("/api/flows/import/recipe", json = {"recipe_id": "r1"}).json()
+    assert resaved["flow"]["id"] == body["flow"]["id"] and resaved["report"]["reused"]
+    edited = copy.deepcopy(SQL)
+    edited["recipe"]["columns"][0]["name"] = "area"
+    _save_recipe("r1", "My SQL", payload = edited, updated = 4)
     changed = client.post("/api/flows/import/recipe", json = {"recipe_id": "r1"}).json()
     assert changed["flow"]["id"] != body["flow"]["id"]
     assert client.post("/api/flows/import/recipe", json = {"recipe_id": "nope"}).status_code == 404
     assert client.post("/api/flows/import/recipe", json = {}).status_code == 400
-    assert data_recipes_db.get_recipe("r1")["payload"] == SQL
+    assert data_recipes_db.get_recipe("r1")["payload"] == edited
 
 
 def test_bringing_every_recipe_in_twice_makes_one_flow_each(client):
@@ -439,8 +472,17 @@ def test_bringing_every_recipe_in_twice_makes_one_flow_each(client):
     assert [f["recipe_id"] for f in first["failed"]] == ["bad"]
     second = client.post("/api/flows/import/recipes").json()
     assert second["created"] == [] and len(second["skipped"]) == 2
+    edited = copy.deepcopy(SQL)
+    edited["recipe"]["columns"][0]["name"] = "area"
+    _save_recipe("r2", "Two", payload = edited, updated = 5)
+    third = client.post("/api/flows/import/recipes").json()
+    assert [c["recipe_id"] for c in third["created"]] == ["r2"]
+    old_two = next(c["flow_id"] for c in first["created"] if c["recipe_id"] == "r2")
+    assert third["created"][0]["replaces"] == old_two
+    assert [s["recipe_id"] for s in third["skipped"]] == ["r1"]
+    client.post("/api/flows/import/recipes")
     flows = client.get("/api/flows").json()["flows"]
-    assert sorted(f["name"] for f in flows) == ["One", "Two"]
+    assert sorted(f["name"] for f in flows) == ["One", "Two", "Two"]
     assert len(data_recipes_db.list_recipes()) == 3
 
 
@@ -478,3 +520,34 @@ def test_a_restart_ends_the_recipe_runs_it_left_running(client):
     runs = {r["id"]: r for r in flows_db.recipe_runs("f", "gen")}
     assert runs["live"]["status"] == "error" and "restarted" in runs["live"]["error"]
     assert runs["live"]["finishedAt"] and runs["done"]["status"] == "completed"
+
+
+def test_a_shared_recipe_without_its_seed_file_says_so_and_does_not_run():
+    payload = copy.deepcopy(SQL)
+    payload["recipe"]["seed_config"] = {"source": {"seed_type": "local", "path": ""}}
+    doc, notices = flow_from_recipe(payload, name = "SQL")
+    assert any(n.startswith("Load the seed first") for n in notices)
+    routes, seen = _routes(["job1"])
+    ctx = _Ctx(routes, params = {RECIPE_PARAM: _compiled(doc)})
+    with pytest.raises(FlowNodeError, match = "Load the seed first"):
+        asyncio.run(data.recipe_group(ctx))
+    assert seen == []
+    _, _, report = package.read_package(json.dumps(doc).encode())
+    assert any("Load the seed first" in w for w in report["warnings"])
+
+
+def test_a_full_run_keeps_its_run_name(monkeypatch):
+    saved = []
+    from storage import flows_db
+
+    monkeypatch.setattr(
+        flows_db, "save_recipe_run", lambda flow, node, record: saved.append(record)
+    )
+    doc = _flow()
+    doc["groups"][0]["run"] = {"run_name": "nightly sql"}
+    ctx = _FlowCtx(
+        _job_routes("completed", preview_rows = 3),
+        params = {RECIPE_PARAM: _compiled(doc), "rows": 3, "mode": "full"},
+    )
+    asyncio.run(data.recipe_group(ctx))
+    assert saved and all(r["run_name"] == "nightly sql" for r in saved)

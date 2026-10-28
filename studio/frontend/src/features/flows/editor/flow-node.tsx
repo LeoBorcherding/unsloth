@@ -12,6 +12,7 @@ import {
   useRuntimeStore,
 } from "../stores/runtime-store";
 import type { FlowNode, NodeSpec, PortSpec } from "../types";
+import { isDatasetValue } from "../dataset/dataset-value";
 import {
   FLOW_IN_HANDLE,
   flowOutHandle,
@@ -19,6 +20,7 @@ import {
   outHandle,
 } from "./connection-rules";
 import type { RfNode } from "./derive-rf";
+import { DatasetOutput } from "./dataset-output";
 import { nodeIcon } from "./icons";
 import { MediaThumb, isMediaValue } from "./media";
 import {
@@ -36,8 +38,6 @@ import {
 } from "./node-card";
 import { NODE_LOOKS } from "./node-looks";
 import { CATEGORY_TONES } from "./node-tones";
-import { isDatasetValue } from "../dataset/dataset-value";
-import { DatasetOutput } from "./dataset-output";
 import { StructuredBadge, isStructuredValue } from "./value-viewers";
 
 /** Below this zoom the text is unreadable anyway; hiding it (layout kept, so handles stay put)
