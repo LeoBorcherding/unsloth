@@ -528,8 +528,8 @@ export const useDocStore = create<DocState>((set, get) => {
           if (duplicate) return null;
           const occupiesInput =
             replaceSingleInput &&
-            edge.kind === "data" &&
-            existing.kind === "data" &&
+            edge.kind !== "flow" &&
+            existing.kind !== "flow" &&
             existing.target === edge.target &&
             existing.target_port === edge.target_port;
           const occupiesFlowOut =
@@ -883,7 +883,7 @@ function removeReroutes(
   };
 }
 
-function frameAt(graph: DocGraph, pos: [number, number]): string | null {
+export function frameAt(graph: DocGraph, pos: [number, number]): string | null {
   const [x, y] = [pos[0] + 130, pos[1] + 16];
   let best: { id: string; area: number } | null = null;
   for (const id of graph.groupOrder) {
