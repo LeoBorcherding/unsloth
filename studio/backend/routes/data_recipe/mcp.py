@@ -14,6 +14,7 @@ from auth.authentication import (
     authenticated_via_api_key,
     require_ui_session_for_local_commands,
 )
+from core.data_recipe.mcp_tools import describe_error, list_tool_names, root_cause
 from core.data_recipe.service import (
     build_mcp_providers,
     recipe_has_stdio_mcp,
@@ -43,7 +44,8 @@ def list_mcp_tools(
         require_ui_session_for_local_commands(via_api_key)
     require_ui_session_for_host_env_credentials(payload.mcp_providers, via_api_key)
     try:
-        from data_designer.engine.mcp import io as mcp_io
+        import data_designer.config.mcp  # noqa: F401
+        import mcp  # noqa: F401
     except ImportError as exc:
         logger.error(
             "data_recipe.mcp.dependencies_unavailable",
@@ -86,8 +88,7 @@ def list_mcp_tools(
 
         provider = built[0]
         try:
-            tools = mcp_io.list_tools(provider, timeout_sec = payload.timeout_sec)
-            tool_names = sorted({tool.name for tool in tools if getattr(tool, "name", "")})
+            tool_names = list_tool_names(provider, payload.timeout_sec)
             for tool_name in tool_names:
                 tool_to_providers[tool_name].append(provider.name)
             providers.append(
@@ -97,15 +98,17 @@ def list_mcp_tools(
                 )
             )
         except Exception as exc:
+            cause = root_cause(exc)
             logger.error(
                 "data_recipe.mcp.list_tools_failed",
-                error = str(exc),
+                error = f"{type(cause).__name__}: {cause}",
                 exc_info = True,
             )
             providers.append(
                 McpToolsProviderResult(
                     name = provider.name or provider_name,
-                    error = safe_error_detail(exc, fallback = "Failed to load tools."),
+                    error = describe_error(exc, provider)
+                    or safe_error_detail(cause, fallback = "Failed to load tools."),
                 )
             )
 

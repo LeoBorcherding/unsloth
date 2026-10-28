@@ -13,8 +13,10 @@ from auth.authentication import (
     authenticated_via_api_key,
     require_ui_session_for_local_commands,
 )
+from core.data_recipe.mcp_tools import tool_wiring_errors
 from core.data_recipe.service import (
     build_config_builder,
+    build_mcp_providers,
     create_data_designer,
     recipe_has_stdio_mcp,
     require_ui_session_for_host_env_credentials,
@@ -161,6 +163,17 @@ def _patch_local_providers(recipe: dict[str, Any]) -> None:
             provider.pop("extra_body", None)
 
 
+def _tool_wiring_response(recipe: dict[str, Any]) -> ValidateResponse | None:
+    # The engine only checks tool wiring when a run starts.
+    wiring = tool_wiring_errors(recipe, build_mcp_providers)
+    if not wiring:
+        return None
+    return ValidateResponse(
+        valid = False,
+        errors = [ValidateError(message = message, path = path) for path, message in wiring],
+    )
+
+
 @router.post("/validate", response_model = ValidateResponse)
 def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> ValidateResponse:
     recipe = payload.recipe
@@ -203,6 +216,19 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
                 errors = [ValidateError(message = detail)],
                 raw_detail = detail,
             )
+        else:
+            # build_config_builder doesn't build the tool servers, so a refusal can surface here.
+            try:
+                wiring = _tool_wiring_response(recipe)
+            except Exception as exc:
+                detail = safe_curated_detail(exc, fallback = "Validation failed.")
+                return ValidateResponse(
+                    valid = False,
+                    errors = [ValidateError(message = detail)],
+                    raw_detail = detail,
+                )
+            if wiring is not None:
+                return wiring
         return ValidateResponse(valid = True, raw_detail = _GITHUB_VALIDATE_NOTE)
 
     try:
@@ -233,4 +259,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
             raw_detail = detail,
         )
 
+    wiring = _tool_wiring_response(recipe)
+    if wiring is not None:
+        return wiring
     return ValidateResponse(valid = True)

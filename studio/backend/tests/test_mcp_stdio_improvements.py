@@ -240,12 +240,14 @@ _STDIO_RECIPE = {
 }
 
 
-def test_data_recipe_skips_stdio_when_disabled(monkeypatch):
+def test_data_recipe_refuses_stdio_when_disabled(monkeypatch):
     pytest.importorskip("data_designer")
     _disable(monkeypatch)
     from core.data_recipe.service import build_mcp_providers
 
-    assert build_mcp_providers(_STDIO_RECIPE) == []
+    # gate off -> refused before any subprocess is spawned, not dropped for the run to trip on
+    with pytest.raises(ValueError, match = "disabled on this host"):
+        build_mcp_providers(_STDIO_RECIPE)
 
 
 def test_data_recipe_builds_stdio_when_enabled(monkeypatch):

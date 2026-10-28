@@ -677,7 +677,7 @@ def build_mcp_providers(recipe: dict[str, Any]) -> list:
         provider_type = provider.get("provider_type")
         if provider_type == "stdio":
             if not stdio_allowed:
-                continue
+                raise ValueError("Local (stdio) MCP servers are disabled on this host.")
             env = provider.get("env")
             if not isinstance(env, dict):
                 env = {}
