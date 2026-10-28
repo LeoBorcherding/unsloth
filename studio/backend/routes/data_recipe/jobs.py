@@ -486,6 +486,28 @@ def _normalize_run_name(value: Any) -> str | None:
     return trimmed[:120]
 
 
+_MAX_RUN_ROWS = 200_000  # the Records field's cap in the UI
+
+
+def _normalize_rows(value: Any) -> int | None:
+    if value is None:
+        return None
+    rows = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        rows = value
+    elif isinstance(value, str):
+        text = value.strip()
+        # isdigit alone passes "²", which int() rejects; the length cap keeps int() off huge strings.
+        if text.isascii() and text.isdigit() and len(text) <= 9:
+            rows = int(text)
+    if rows is None or not 1 <= rows <= _MAX_RUN_ROWS:
+        raise HTTPException(
+            status_code = 400,
+            detail = f"invalid rows: must be a whole number from 1 to {_MAX_RUN_ROWS}",
+        )
+    return rows
+
+
 def _resolve_seed_endpoint(recipe: dict[str, Any]) -> None:
     """Fill in the HF endpoint for a backend-executed seed fetch, in place.
 
@@ -543,6 +565,7 @@ def create_job(
             detail = "invalid execution_type: must be 'preview' or 'full'",
         )
     run["execution_type"] = execution_type
+    run["rows"] = _normalize_rows(run.get("rows"))
     run["run_name"] = _normalize_run_name(run.get("run_name"))
     run_config_raw = run.get("run_config")
     if run_config_raw is not None:
@@ -651,6 +674,14 @@ def job_analysis(job_id: str):
     mgr = get_job_manager()
     analysis = mgr.get_analysis(job_id)
     if analysis is None:
+        status = (mgr.get_status(job_id) or {}).get("status")
+        if status in {"cancelled", "error"}:
+            raise HTTPException(
+                status_code = 404,
+                detail = f"This run ended ({status}) before it produced an analysis.",
+            )
+        if status == "completed":
+            raise HTTPException(status_code = 404, detail = "This run has no analysis.")
         raise HTTPException(status_code = 404, detail = "analysis not ready")
     return analysis
 
@@ -738,10 +769,11 @@ def _resolve_download_artifact_path(*, job_id: str, artifact_path: str | None) -
     mgr = get_job_manager()
     status = mgr.get_status(job_id)
     if status is not None:
-        if status.get("status") != "completed":
+        # A cancelled or failed full run keeps its finished batches, which /dataset already shows.
+        if status.get("status") not in {"completed", "cancelled", "error"}:
             raise HTTPException(
                 status_code = 409,
-                detail = "Only completed runs can be downloaded.",
+                detail = "Only finished runs can be downloaded.",
             )
         status_artifact = status.get("artifact_path")
         if isinstance(status_artifact, str) and status_artifact.strip():
@@ -790,8 +822,11 @@ def create_job_dataset_download_url(
                 detail = "Parquet download requires persisted recipe artifacts.",
             )
         # An in-memory preview lives only while its job is current: ask before the chooser opens.
-        if get_job_manager().get_dataset(job_id, limit = 1, offset = 0) is None:
+        result = get_job_manager().get_dataset(job_id, limit = 1, offset = 0)
+        if result is None:
             raise HTTPException(status_code = 404, detail = "dataset not ready")
+        if "error" in result:
+            raise HTTPException(status_code = 422, detail = result["error"])
         name = f"{stem}.jsonl"
 
     token = _sign_download_link(
@@ -932,6 +967,8 @@ def publish_job_dataset(
             description = description,
             hf_token = hf_token or None,
             private = payload.private,
+            # Without a status, only the folder's own metadata says whether every batch finished.
+            require_all_batches = status is None,
             # client_ip: behind the tunnel the socket peer is cloudflared.
             link_endpoint = client_reachable_endpoint(client_ip(request)),
         )

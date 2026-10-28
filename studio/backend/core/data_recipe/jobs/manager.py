@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -45,6 +45,10 @@ logger = get_logger(__name__)
 
 
 _CTX = mp.get_context("spawn")
+
+# Finished runs still answerable after the next one starts (a preview's rows live only here).
+_FINISHED_JOBS_KEPT = 5
+_TERMINAL_STATUSES = frozenset({"completed", "error", "cancelled"})
 
 
 def _github_source_estimated_total(recipe: dict) -> int | None:
@@ -136,6 +140,7 @@ class JobManager:
         )
         self._lock = threading.Lock()
         self._job: Job | None = None
+        self._finished: OrderedDict[str, Job] = OrderedDict()
         self._proc: mp.Process | None = None
         self._mp_q: Any | None = None
         self._events: deque[dict] = deque(maxlen = 5000)
@@ -145,6 +150,7 @@ class JobManager:
 
     def _clear_account_result(self):
         self._job = None
+        self._finished.clear()
         self._events.clear()
         # Old subscribers retain their private queues but never receive a successor's events.
         self._subs.clear()
@@ -180,6 +186,10 @@ class JobManager:
             if self._proc is not None and self._proc.is_alive():
                 raise RuntimeError("job already running")
 
+            if self._job is not None:
+                self._finished[self._job.job_id] = self._job
+                while len(self._finished) > _FINISHED_JOBS_KEPT:
+                    self._finished.popitem(last = False)
             job_id = uuid.uuid4().hex
             self._job = Job(job_id = job_id, status = "pending", started_at = time.time())
             self._job.progress_columns_total = llm_column_count
@@ -234,8 +244,12 @@ class JobManager:
     def cancel(self, job_id: str) -> bool:
         """Hard stop. We terminate the subprocess. Quick + reliable."""
         with self._lock:
-            if self._job is None or self._job.job_id != job_id:
+            job = self._find_job(job_id)
+            if job is None:
                 return False
+            # The worker outlives its completed event briefly; a late click must not undo the run.
+            if job is not self._job or job.status in _TERMINAL_STATUSES:
+                return True
             if self._proc is None or not self._proc.is_alive():
                 return True
             self._job.status = "cancelling"
@@ -250,9 +264,9 @@ class JobManager:
     def get_status(self, job_id: str) -> dict | None:
         """UI-friendly structured snapshot; an alternative to SSE."""
         with self._lock:
-            if self._job is None or self._job.job_id != job_id:
+            job = self._find_job(job_id)
+            if job is None:
                 return None
-            job = self._job
             return {
                 "job_id": job.job_id,
                 "status": job.status,
@@ -325,9 +339,8 @@ class JobManager:
     def get_analysis(self, job_id: str) -> dict | None:
         """Final profiling output (only after job completes)."""
         with self._lock:
-            if self._job is None or self._job.job_id != job_id:
-                return None
-            return self._job.analysis
+            job = self._find_job(job_id)
+            return None if job is None else job.analysis
 
     @job_read(lambda self, *args, **kwargs: None)
     def get_dataset(
@@ -339,19 +352,22 @@ class JobManager:
     ) -> dict[str, Any] | None:
         """Load dataset page (offset + limit) and include total rows."""
         with self._lock:
-            if self._job is None or self._job.job_id != job_id:
+            job = self._find_job(job_id)
+            if job is None:
                 return None
-            in_memory_dataset = self._job.dataset
-            artifact_path = self._job.artifact_path
-            job_status = self._job.status
+            in_memory_dataset = job.dataset
+            artifact_path = job.artifact_path
+            job_status = job.status
 
         if in_memory_dataset is not None:
             total = len(in_memory_dataset)
             rows = in_memory_dataset[offset : offset + limit]
             return {"dataset": rows, "total": total}
         if not artifact_path:
-            if job_status in {"completed", "error", "cancelled"}:
-                return {"error": "artifact path missing"}
+            if job_status == "completed":
+                return {"error": "This run produced no rows."}
+            if job_status in {"error", "cancelled"}:
+                return {"error": f"This run ended ({job_status}) before it produced any rows."}
             return None
 
         try:
@@ -441,6 +457,11 @@ class JobManager:
         total = int(len(dataframe.index))
         rows = dataframe.iloc[offset : offset + limit].to_dict(orient = "records")
         return {"dataset": to_preview_jsonable_row(rows), "total": total}
+
+    def _find_job(self, job_id: str) -> Job | None:
+        if self._job is not None and self._job.job_id == job_id:
+            return self._job
+        return self._finished.get(job_id)
 
     @job_read(lambda self, *args, **kwargs: None)
     def subscribe(
@@ -595,28 +616,32 @@ class JobManager:
 
         terminal = False
         with self._lock:
-            if self._job is None or self._job.job_id != job.job_id:
+            current = self._job is not None and self._job.job_id == job.job_id
+            # A worker can exit with its last events still queued after the next run started: they
+            # still land on its kept run, just not on the new run's stream.
+            target = self._job if current else self._finished.get(job.job_id)
+            if target is None:
                 return
             if et == EVENT_JOB_STARTED:
-                self._job.status = "active"
-                self._job.artifact_path = event.get("artifact_path") or self._job.artifact_path
-                self._job.execution_type = event.get("execution_type") or self._job.execution_type
+                target.status = "active"
+                target.artifact_path = event.get("artifact_path") or target.artifact_path
+                target.execution_type = event.get("execution_type") or target.execution_type
             if et == EVENT_JOB_COMPLETED:
-                self._job.status = "completed"
-                self._job.finished_at = time.time()
-                self._job.analysis = event.get("analysis")
-                self._job.artifact_path = event.get("artifact_path")
-                self._job.execution_type = event.get("execution_type")
-                self._job.dataset = event.get("dataset")
-                self._job.processor_artifacts = event.get("processor_artifacts")
-                if self._job.progress.total and self._job.progress.total > 0:
-                    self._job.progress.done = self._job.progress.total
-                    self._job.progress.percent = 100.0
+                target.status = "completed"
+                target.finished_at = time.time()
+                target.analysis = event.get("analysis")
+                target.artifact_path = event.get("artifact_path")
+                target.execution_type = event.get("execution_type")
+                target.dataset = event.get("dataset")
+                target.processor_artifacts = event.get("processor_artifacts")
+                if target.progress.total and target.progress.total > 0:
+                    target.progress.done = target.progress.total
+                    target.progress.percent = 100.0
                 terminal = True
             if et == EVENT_JOB_ERROR:
-                self._job.status = "error"
-                self._job.finished_at = time.time()
-                self._job.error = event.get("error") or "error"
+                target.status = "error"
+                target.finished_at = time.time()
+                target.error = event.get("error") or "error"
                 terminal = True
             if et == EVENT_JOB_CANCELLED:
                 terminal = True
@@ -624,12 +649,15 @@ class JobManager:
             if msg:
                 upd = parse_log_message(msg)
                 if upd:
-                    apply_update(self._job, upd)
+                    apply_update(target, upd)
 
         if terminal:
             self._retire_workflow_key(job)
 
-        self._emit(event)
+        # Rechecked under the lock: start() may have swapped in the next run meanwhile.
+        with self._lock:
+            if self._job is target:
+                self._emit(event)
 
     def _retire_workflow_key(self, job: Job) -> None:
         """Best-effort: errors are swallowed, since the key expires on its own after 24h."""
