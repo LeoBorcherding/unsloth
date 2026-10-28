@@ -683,6 +683,18 @@ def test_a_malformed_container_is_repaired_only_when_healing(text, repaired):
     assert at_seam(False) == text
 
 
+@pytest.mark.parametrize("text", ['{{"a": 1}}', "{[1]: 2}"])  # literal_eval raises TypeError
+def test_an_unhashable_literal_keeps_its_text(text):
+    props = {"cfg": {"type": "object"}}
+    assert _coerce_one("cfg", text, props) == text
+    schemas = [{"type": "function", "function": {"name": "cfg", "parameters": {"properties": props}}}]
+    for heal in (True, False):
+        seam = coerce_tool_arguments(
+            json.dumps({"cfg": text}), heal = heal, tool_name = "cfg", tool_schemas = schemas
+        )
+        assert seam.arguments == {"cfg": text}
+
+
 def test_an_mcp_tool_call_parsed_from_xml_arrives_typed():
     content = (
         "<function=mcp__notes__search>"

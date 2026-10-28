@@ -341,7 +341,7 @@ _SCHEMA_TRUE_WORDS = frozenset({"true", "yes"})
 _SCHEMA_FALSE_WORDS = frozenset({"false", "no"})
 # not ValueErrors, so a decode-shaped except would let deep model output escape as a 500
 _DECODE_ERRORS = (ValueError, RecursionError)
-_LITERAL_ERRORS = (*_DECODE_ERRORS, SyntaxError, MemoryError)
+_LITERAL_ERRORS = (*_DECODE_ERRORS, SyntaxError, MemoryError, TypeError)
 
 
 # Group 1 is the closing quote. The `\?$` tail stops a started match failing, which would make
