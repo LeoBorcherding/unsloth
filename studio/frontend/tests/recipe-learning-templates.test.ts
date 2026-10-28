@@ -27,7 +27,7 @@ const list = (value: unknown): Rec[] => (Array.isArray(value) ? (value as Rec[])
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
 test("every learning template names a model and a provider that can reach it", () => {
-  assert.equal(templates.length, 7);
+  assert.equal(templates.length, 8);
   for (const { name, recipe } of templates) {
     const providers = new Map(list(recipe.model_providers).map((p) => [text(p.name), p]));
     for (const config of list(recipe.model_configs)) {
@@ -93,7 +93,10 @@ test("templates pass the editor's Check as shipped, short of a PDF upload", asyn
       snapshot.layoutDirection,
       snapshot.auxNodePositions,
     );
-    const expected = name === "pdf-grounded-qa.json" ? ["seed: Load the source-data preview first."] : [];
+    // Document seeds need an upload before Check can pass.
+    const expected = ["pdf-grounded-qa.json", "books-and-documents.json"].includes(name)
+      ? ["seed: Load the source-data preview first."]
+      : [];
     assert.deepEqual(built.errors, expected, name);
   }
 });
