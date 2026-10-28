@@ -143,7 +143,7 @@ export function buildRecipePayload(
 
     if (config.kind === "sampler") {
       nameToConfig.set(config.name, config);
-      columns.push(buildSamplerColumn(config, errors));
+      columns.push(buildSamplerColumn(config, errors, allNameToConfig));
       continue;
     }
     if (config.kind === "llm") {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import type { CategoryConditionalParams, SamplerConfig } from "../../types";
+import type { CategoryConditionalParams, NodeConfig, SamplerConfig } from "../../types";
 import { isValidSex, parseAgeRange, parseNumber } from "./parse";
 
 const DATETIME_UNIT_MAP: Record<string, "Y" | "M" | "D" | "h" | "m" | "s"> = {
@@ -12,6 +12,56 @@ const DATETIME_UNIT_MAP: Record<string, "Y" | "M" | "D" | "h" | "m" | "s"> = {
   minute: "m",
   second: "s",
 };
+
+type DatetimeUnit = "Y" | "M" | "D" | "h" | "m" | "s";
+
+// Without a format the engine picks one from the sample, and a sample inside one month prints
+// only the year ("2024").
+const DATETIME_FORMAT: Record<DatetimeUnit, string> = {
+  Y: "%Y",
+  M: "%Y-%m",
+  D: "%Y-%m-%d",
+  h: "%Y-%m-%dT%H:%M",
+  m: "%Y-%m-%dT%H:%M",
+  s: "%Y-%m-%dT%H:%M:%S",
+};
+const UNIT_ORDER: DatetimeUnit[] = ["Y", "M", "D", "h", "m", "s"];
+
+function datetimeUnit(raw: string | undefined): DatetimeUnit | undefined {
+  const unit = raw?.trim();
+  if (!unit) {
+    return undefined;
+  }
+  if (DATETIME_UNIT_MAP[unit]) {
+    return DATETIME_UNIT_MAP[unit];
+  }
+  return UNIT_ORDER.includes(unit as DatetimeUnit) ? (unit as DatetimeUnit) : undefined;
+}
+
+function datetimeFormat(
+  config: SamplerConfig,
+  nameToConfig?: ReadonlyMap<string, NodeConfig>,
+): string | undefined {
+  if (config.sampler_type === "datetime") {
+    const unit = datetimeUnit(config.datetime_unit);
+    return unit ? DATETIME_FORMAT[unit] : undefined;
+  }
+  if (config.sampler_type !== "timedelta") {
+    return undefined;
+  }
+  // An offset lands on its reference date, so it prints at the finer of the two units, days at least.
+  const reference = nameToConfig?.get(config.reference_column_name ?? "");
+  const referenceUnit =
+    reference?.kind === "sampler" && reference.sampler_type === "datetime"
+      ? datetimeUnit(reference.datetime_unit)
+      : undefined;
+  const finest = Math.max(
+    UNIT_ORDER.indexOf("D"),
+    UNIT_ORDER.indexOf(datetimeUnit(config.timedelta_unit) ?? "D"),
+    referenceUnit ? UNIT_ORDER.indexOf(referenceUnit) : -1,
+  );
+  return DATETIME_FORMAT[UNIT_ORDER[finest]];
+}
 
 function buildCategoryConditionalParams(
   config: SamplerConfig,
@@ -180,6 +230,7 @@ function buildSamplerParams(
 export function buildSamplerColumn(
   config: SamplerConfig,
   errors: string[],
+  nameToConfig?: ReadonlyMap<string, NodeConfig>,
 ): Record<string, unknown> {
   const samplerColumn: Record<string, unknown> = {
     // biome-ignore lint/style/useNamingConvention: api schema
@@ -190,7 +241,7 @@ export function buildSamplerColumn(
     sampler_type: config.sampler_type,
     params: buildSamplerParams(config, errors),
     // biome-ignore lint/style/useNamingConvention: api schema
-    convert_to: config.convert_to ?? undefined,
+    convert_to: config.convert_to ?? datetimeFormat(config, nameToConfig),
   };
   if (config.sampler_type === "category") {
     const conditionalParams = buildCategoryConditionalParams(config, errors);
