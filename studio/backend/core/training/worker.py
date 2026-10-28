@@ -5494,9 +5494,13 @@ def _create_embedding_progress_callback(
     class _EmbeddingProgressCallback(TrainerCallback):
         _start_step = 0
         _training_start_time = training_start_time
+        _total_steps = total_steps
 
         def on_train_begin(self, args, state, control, **kwargs):
             self._start_step = state.global_step
+            # The trainer's own count wins over the estimate made before it was built.
+            if getattr(state, "max_steps", 0) and state.max_steps > 0:
+                self._total_steps = state.max_steps
             if state.global_step > 0:
                 self._training_start_time = time.time()
             # Progress events carry an empty status, else the parent keeps showing "Starting...".
@@ -5537,7 +5541,7 @@ def _create_embedding_progress_callback(
             current_step = state.global_step
 
             elapsed = time.time() - self._training_start_time
-            eta = session_eta_seconds(elapsed, current_step, self._start_step, total_steps)
+            eta = session_eta_seconds(elapsed, current_step, self._start_step, self._total_steps)
 
             event_queue.put(
                 {
@@ -5546,7 +5550,7 @@ def _create_embedding_progress_callback(
                     "epoch": round(state.epoch, 2) if state.epoch else 0,
                     "loss": loss_value,
                     "learning_rate": logs.get("learning_rate", None),
-                    "total_steps": total_steps,
+                    "total_steps": self._total_steps,
                     "elapsed_seconds": elapsed,
                     "eta_seconds": eta,
                     "session_start_step": self._start_step,
@@ -5991,7 +5995,7 @@ def _run_embedding_training(event_queue: Any, stop_queue: Any, config: dict) -> 
     else:
         effective_epochs = num_epochs if num_epochs > 0 else 2
         len_dataloader = math.ceil(len(dataset) / batch_size)
-        steps_per_epoch = max(len_dataloader // gradient_accumulation_steps, 1)
+        steps_per_epoch = max(math.ceil(len_dataloader / gradient_accumulation_steps), 1)
         total_steps = steps_per_epoch * effective_epochs
 
     progress_callback = _create_embedding_progress_callback(

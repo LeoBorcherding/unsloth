@@ -365,3 +365,40 @@ def test_embedding_resumed_run_eta_uses_the_steps_done_in_this_session():
     assert backend._progress.eta_seconds == pytest.approx(540, rel = 0.02)
     assert backend._progress.session_start_step == 900
     assert backend._progress.elapsed_seconds == 60
+
+
+def test_embedding_total_steps_follows_the_trainer():
+    # 1000 rows, batch 256, grad accum 3, 2 epochs: 4 batches per epoch, and transformers
+    # rounds 4 / 3 up to 2 optimizer steps, so the trainer runs 4 steps. The worker's own
+    # estimate floored it to 2.
+    event_queue = _FakeQueue()
+    backend = TrainingBackend()
+    callback = _create_embedding_progress_callback(
+        event_queue,
+        total_steps = 2,
+        training_start_time = 0.0,
+        should_stop = lambda: False,
+    )
+    state = SimpleNamespace(global_step = 0, epoch = 0.0, num_input_tokens_seen = 0, max_steps = 4)
+    control = SimpleNamespace(should_training_stop = False)
+
+    callback.on_train_begin(None, state, control)
+    for step in range(1, 5):
+        state.global_step = step
+        callback.on_log(None, state, control, logs = {"loss": 1.0, "learning_rate": 1e-4})
+        if step == 2:
+            for event in event_queue.events:
+                backend._handle_event(event)
+            assert backend._progress.total_steps == 4
+
+    progress = [e for e in event_queue.events if e["type"] == "progress"]
+    assert [e["total_steps"] for e in progress] == [4, 4, 4, 4]
+    assert progress[1]["eta_seconds"] > 0
+
+
+def test_embedding_total_steps_kept_when_the_trainer_has_none():
+    event_queue = _FakeQueue()
+    _drive(_make_embedding_callback(event_queue), steps = 1)
+
+    progress = [e for e in event_queue.events if e["type"] == "progress"]
+    assert progress[-1]["total_steps"] == 4
