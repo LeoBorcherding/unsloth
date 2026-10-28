@@ -165,6 +165,8 @@ class DiffusionFamily:
     fp16_incompatible: bool = False
     # diffusion_fp16_guard recipe keeping an fp16_incompatible family in float16 on fp16-only cards; None = promote.
     fp16_guard: Optional[str] = None
+    # Lowercase base repos the guard does not hold on; those promote to float32 instead (``family_for_base``).
+    fp16_guard_excluded_bases: tuple[str, ...] = ()
     # false only for a family whose denoiser block does not compile cleanly with regional torch.compile
     supports_torch_compile: bool = True
     # False keeps cudnn.benchmark off (as VideoFamily.cudnn_benchmark): its per-process conv pick changes pixels.
@@ -1127,6 +1129,9 @@ _FAMILIES: tuple[DiffusionFamily, ...] = (
         fp16_incompatible = True,
         # The attention / FFN branches overflow float16 before their post-norm.
         fp16_guard = "rescale_post_norm",
+        # Measured on Turbo. The undistilled base overflows the residual stream itself (layers.28 at 256 px), which no
+        # branch rescale reaches, so it renders NaN in float16.
+        fp16_guard_excluded_bases = ("tongyi-mai/z-image",),
         mlx_model_config = "z-image-turbo",
         mlx_model_config_by_base = (("Tongyi-MAI/Z-Image", "z-image"),),
         # Z-Image decodes with the FLUX.1 autoencoder: BFL's ae.safetensors, byte-identical to the repack's file.
@@ -2123,6 +2128,15 @@ def family_for_checkpoint(fam: Any, *identifiers: Optional[str]) -> Any:
     if row is None or row[1] == getattr(fam, "max_condition_images", None):
         return fam
     return replace(fam, max_condition_images = row[1])
+
+
+def family_for_base(fam: Any, base: Optional[str]) -> Any:
+    """``fam`` without its fp16 guard when ``base`` is in ``fp16_guard_excluded_bases``, so float16 promotes to float32."""
+    if fam is None or not base or not getattr(fam, "fp16_guard", None):
+        return fam
+    if str(base).strip().lower() not in getattr(fam, "fp16_guard_excluded_bases", ()):
+        return fam
+    return replace(fam, fp16_guard = None)
 
 
 def comfy_flow_shift_for(fam: Any, *identifiers: Optional[str]) -> Optional[float]:
