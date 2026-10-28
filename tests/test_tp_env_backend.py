@@ -24,15 +24,7 @@ class _Stop(Exception):
     pass
 
 
-@pytest.mark.parametrize(
-    "cuda, nccl, expected",
-    [
-        (True, True, "nccl"),
-        (True, False, "gloo"),  # Windows CUDA / ROCm torch
-        (False, False, "gloo"),
-    ],
-)
-def test_mesh_picks_a_backend_torch_has(monkeypatch, cuda, nccl, expected):
+def _mesh(monkeypatch, cuda, nccl, windows):
     seen = []
 
     def init_process_group(backend, *a, **k):
@@ -44,6 +36,27 @@ def test_mesh_picks_a_backend_torch_has(monkeypatch, cuda, nccl, expected):
     monkeypatch.setattr(dist, "is_initialized", lambda: False)
     monkeypatch.setattr(dist, "is_nccl_available", lambda: nccl)
     monkeypatch.setattr(dist, "init_process_group", init_process_group)
+    module = _tp_env()
+    monkeypatch.setattr(module, "_WINDOWS", windows)
     with pytest.raises(_Stop):
-        _tp_env().TPEnvLayout(tp = 2, dp = 1, world = 2, fsdp2 = False).mesh()
-    assert seen == [expected]
+        module.TPEnvLayout(tp = 2, dp = 1, world = 2, fsdp2 = False).mesh()
+    return seen
+
+
+@pytest.mark.parametrize(
+    "cuda, nccl, windows, expected",
+    [
+        (True, True, False, "nccl"),
+        (True, False, False, "gloo"),  # Linux torch without NCCL: gloo has GPU collectives there
+        (False, False, False, "gloo"),
+        (False, False, True, "gloo"),
+    ],
+)
+def test_mesh_picks_a_backend_torch_has(monkeypatch, cuda, nccl, windows, expected):
+    assert _mesh(monkeypatch, cuda, nccl, windows) == [expected]
+
+
+def test_windows_gpu_without_nccl_refuses_before_init(monkeypatch):
+    # Windows gloo has no GPU all_reduce and crashes natively on the first one (pytorch#186535).
+    with pytest.raises(RuntimeError, match = "needs NCCL"):
+        _mesh(monkeypatch, cuda = True, nccl = False, windows = True)
