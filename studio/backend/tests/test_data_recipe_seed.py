@@ -1783,6 +1783,129 @@ def test_validate_answers_when_the_error_collector_cannot_read_the_seed(monkeypa
     assert "repository not found" in (response.raw_detail or "")
 
 
+def _inspect_gsm8k(monkeypatch, tmp_path, subset):
+    configs = [
+        {
+            "config_name": name,
+            "data_files": [
+                {"split": "train", "path": f"{name}/train-*"},
+                {"split": "test", "path": f"{name}/test-*"},
+            ],
+        }
+        for name in ("main", "socratic")
+    ]
+    return _inspect_card(monkeypatch, tmp_path, "openai/gsm8k", _GSM8K_FILES, configs, subset)
+
+
+def _inspect_card(monkeypatch, tmp_path, dataset_name, files, configs, subset):
+    seed_route = _load_seed_route(monkeypatch, tmp_path)
+    monkeypatch.setattr(seed_route, "_list_hf_repo_files", lambda **kwargs: files)
+    monkeypatch.setattr(seed_route, "_list_hf_dataset_configs", lambda **kwargs: configs)
+    monkeypatch.setattr(seed_route, "refuse_unauthorized_dataset_preview", lambda *a, **k: None)
+    loads = []
+
+    def fake_preview(*, load_dataset_fn, load_kwargs, preview_size):
+        loads.append(load_kwargs)
+        return [{"question": "q"}]
+
+    monkeypatch.setattr(seed_route, "_load_preview_rows", fake_preview)
+    response = seed_route.inspect_seed_dataset(
+        SimpleNamespace(
+            dataset_name = dataset_name,
+            split = "train",
+            subset = subset,
+            hf_token = None,
+            preview_size = 1,
+        ),
+        allow_ambient_token = False,
+    )
+    return response, loads
+
+
+def test_a_card_with_several_configs_and_no_default_seeds_from_one(monkeypatch, tmp_path):
+    # gsm8k ships main and socratic, neither the default: a repo-root glob read both, every
+    # question twice, while the preview showed one.
+    response, loads = _inspect_gsm8k(monkeypatch, tmp_path, None)
+    assert response.resolved_path == "datasets/openai/gsm8k/main/train-*.parquet"
+    assert response.subset == "main"
+    assert loads[0].get("name") == "main"
+    assert loads[0]["data_files"] == ["main/train-00000-of-00001.parquet"]
+
+
+def test_a_named_subset_still_wins(monkeypatch, tmp_path):
+    response, _loads = _inspect_gsm8k(monkeypatch, tmp_path, "socratic")
+    assert response.resolved_path == "datasets/openai/gsm8k/socratic/train-*.parquet"
+    assert response.subset == "socratic"
+
+
+def test_the_implicit_subset_is_one_that_has_the_split(monkeypatch, tmp_path):
+    # glue lists ax first and ax ships only a test split: seeding train from it would read the
+    # unlabeled test rows as train.
+    files = [
+        "ax/test-00000-of-00001.parquet",
+        "cola/test-00000-of-00001.parquet",
+        "cola/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "ax", "data_files": [{"split": "test", "path": "ax/test-*"}]},
+        {
+            "config_name": "cola",
+            "data_files": [
+                {"split": "train", "path": "cola/train-*"},
+                {"split": "test", "path": "cola/test-*"},
+            ],
+        },
+    ]
+    response, loads = _inspect_card(monkeypatch, tmp_path, "nyu-mll/glue", files, configs, None)
+    assert response.subset == "cola"
+    assert response.resolved_path == "datasets/nyu-mll/glue/cola/train-*.parquet"
+    assert loads[0]["data_files"] == ["cola/train-00000-of-00001.parquet"]
+
+
+def test_a_data_dir_only_config_first_is_still_the_implicit_subset(monkeypatch, tmp_path):
+    # english names only a folder, so its splits come from the files there; it must not be
+    # passed over for a later config just because that one maps train explicitly.
+    files = [
+        "en/train-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "english"
+    assert response.resolved_path.startswith("datasets/org/bilingual/en/")
+
+
+def test_a_data_dir_only_config_without_the_split_is_passed_over(monkeypatch, tmp_path):
+    files = [
+        "en/test-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "french"
+    assert response.resolved_path == "datasets/org/bilingual/fr/train-*.parquet"
+
+
+def test_a_data_dir_config_whose_shards_name_another_split_is_passed_over(monkeypatch, tmp_path):
+    # The loader reads data/extra-00000-of-00001.parquet as split "extra", not as train.
+    files = [
+        "en/data/extra-00000-of-00001.parquet",
+        "fr/train-00000-of-00001.parquet",
+    ]
+    configs = [
+        {"config_name": "english", "data_dir": "en"},
+        {"config_name": "french", "data_files": [{"split": "train", "path": "fr/train-*"}]},
+    ]
+    response, _loads = _inspect_card(monkeypatch, tmp_path, "org/bilingual", files, configs, None)
+    assert response.subset == "french"
+
+
 def test_every_recipe_document_type_has_an_extractor(monkeypatch, tmp_path):
     seed_route = _load_seed_route(monkeypatch, tmp_path)
     from core.rag import config

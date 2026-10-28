@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File as FastA
 from auth.authentication import allow_ambient_hf_token
 from core.data_recipe.jsonable import to_preview_jsonable
 from hub.services.datasets.local_options import (
+    _grouped_splits,
     _sharded_splits,
     _IGNORED_DATA_FILENAMES,
     _MAX_MODULE_INFERENCE_FILES,
@@ -235,6 +236,25 @@ def _config_scope(configs: list[dict[str, Any]], subset: str | None) -> str:
     """The folder a config is confined to, for a card that names one and lists no files."""
     config = _pick_config(configs, subset)
     return _config_folder(config) if config else ""
+
+
+def _config_holds_split(
+    config: dict[str, Any],
+    configs: list[dict[str, Any]],
+    name: str,
+    split: str,
+    data_files: list[str],
+) -> bool:
+    if config.get("data_files"):
+        return bool(_declared_split_patterns(configs, split, name))
+    folder = _config_folder(config)
+    if not folder:
+        return True
+    # A data_dir config's splits are the ones the loader infers from the folder.
+    inside = [PurePosixPath(f[len(folder) + 1 :]) for f in data_files if f.startswith(f"{folder}/")]
+    grouped = _grouped_splits(inside) if inside else None
+    labels = _split_labels(split.lower())
+    return bool(grouped) and any(name.lower() in labels for name in grouped)
 
 
 def _pick_config(configs: list[dict[str, Any]], subset: str | None) -> dict[str, Any] | None:
@@ -1046,6 +1066,19 @@ def inspect_seed_dataset(
     repo_files = _list_hf_repo_files(dataset_name = dataset_name, token = token)
     data_files = [file for file in repo_files if file.lower().endswith(DATA_EXTS)]
     configs = _list_hf_dataset_configs(dataset_name = dataset_name, token = token)
+    # Several configs and none the default: the first that holds this split (glue's first, ax, is
+    # test-only), returned as the subset so the run reads it too. The repo-root glob read every
+    # config at once (gsm8k twice over).
+    if not subset and len(configs) > 1 and _pick_config(configs, None) is None:
+        names = [str(c.get("config_name") or DEFAULT_CONFIG) for c in configs]
+        subset = next(
+            (
+                name
+                for name, config in zip(names, configs)
+                if _config_holds_split(config, configs, name, split, data_files)
+            ),
+            names[0],
+        )
 
     # Preview the same files the recipe will read, not from a config the resolved path excludes.
     declared_files = _files_under_patterns(
