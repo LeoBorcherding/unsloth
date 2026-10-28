@@ -253,8 +253,9 @@ def test_no_kwargs_renders_the_template_default():
     assert "Reasoning strength: 512." in _render()
 
 
-def test_other_architectures_still_forward_none():
-    """gpt-oss-style templates honour "none"; only muse-spark coerces it."""
-    assert _shim(architecture = "gpt-oss")._request_reasoning_kwargs(None, "none", None) == {
-        "reasoning_effort": "none"
-    }
+def test_other_architectures_forward_none_only_when_offered():
+    """A template that branches on "none" gets it; one that doesn't (gpt-oss) gets "low"."""
+    backend = _shim(architecture = "gpt-oss")
+    assert backend._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "low"}
+    backend._reasoning_effort_levels = ["none", *LEVELS]
+    assert backend._request_reasoning_kwargs(None, "none", None) == {"reasoning_effort": "none"}
