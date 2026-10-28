@@ -909,13 +909,32 @@ def _read_preview_rows_from_local_file(path: Path, preview_size: int) -> list[di
         raise log_and_http_error(
             exc,
             422,
-            "seed inspect failed",
+            _seed_failure_detail(exc),
             event = "data_recipe.seed.local_preview_failed",
             log = logger,
         ) from exc
 
     rows = df.to_dict(orient = "records")
     return _serialize_preview_rows(rows)
+
+
+def _seed_failure_detail(exc: BaseException) -> str:
+    """The reason when the loader's own text is safe to show: no paths, no internals."""
+    if isinstance(exc, UnicodeDecodeError):
+        return "The file isn't UTF-8 text. Save it as UTF-8 and upload it again."
+    try:
+        from datasets.exceptions import DatasetNotFoundError
+    except ImportError:
+        DatasetNotFoundError = None
+    message = str(exc)
+    # "Dataset 'x' doesn't exist on the Hub ...", "... is a gated dataset on the Hub. Visit ...".
+    if DatasetNotFoundError is not None and isinstance(exc, DatasetNotFoundError):
+        return message
+    if isinstance(exc, ValueError) and message.startswith("Bad split: "):
+        return message
+    if isinstance(exc, ConnectionError) and message.startswith("Couldn't reach '"):
+        return message
+    return "seed inspect failed"
 
 
 def _read_preview_rows_from_unstructured_file(
@@ -1093,7 +1112,7 @@ def inspect_seed_dataset(
             raise log_and_http_error(
                 exc,
                 422,
-                "seed inspect failed",
+                _seed_failure_detail(exc),
                 event = "data_recipe.seed.hf_preview_failed",
                 log = logger,
             ) from exc

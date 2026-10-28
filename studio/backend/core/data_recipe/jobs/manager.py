@@ -37,6 +37,7 @@ from .constants import (
     EVENT_JOB_ERROR,
     EVENT_JOB_STARTED,
 )
+from ..public_errors import all_rows_failed_error
 from .parse import apply_update, coerce_event, parse_log_message
 from .types import Job
 from loggers import get_logger
@@ -592,6 +593,9 @@ class JobManager:
         """Apply event -> job state + forward to SSE."""
         et = event.get("type")
         msg = event.get("message") if et == "log" else None
+        stack = event.pop("stack", None)
+        if stack:
+            logger.warning("data_recipe.job_failed", stack = stack)
 
         terminal = False
         with self._lock:
@@ -616,7 +620,11 @@ class JobManager:
             if et == EVENT_JOB_ERROR:
                 self._job.status = "error"
                 self._job.finished_at = time.time()
-                self._job.error = event.get("error") or "error"
+                error = event.get("error")
+                self._job.error = (
+                    all_rows_failed_error(error, self._job.record_failures) or error or "Run failed"
+                )
+                event["error"] = self._job.error
                 terminal = True
             if et == EVENT_JOB_CANCELLED:
                 terminal = True

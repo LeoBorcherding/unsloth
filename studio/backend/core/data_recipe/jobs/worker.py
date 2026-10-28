@@ -17,6 +17,7 @@ from typing import Any
 
 from ..jsonable import to_jsonable, to_preview_jsonable_row
 from .constants import EVENT_JOB_COMPLETED, EVENT_JOB_ERROR, EVENT_JOB_STARTED
+from ..public_errors import public_error_text
 from ..service import (
     build_config_builder,
     create_data_designer,
@@ -207,7 +208,7 @@ def run_job_process(*, event_queue, recipe: dict[str, Any], run: dict[str, Any])
             {
                 "type": EVENT_JOB_ERROR,
                 "ts": time.time(),
-                "error": _sanitize_log_message(str(exc)),
+                "error": _sanitize_log_message(public_error_text(exc)),
                 "stack": _sanitize_log_message(traceback.format_exc(limit = 20)),
             }
         )
