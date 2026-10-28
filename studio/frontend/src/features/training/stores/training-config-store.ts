@@ -1742,6 +1742,9 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
           setUserEdit({ grpoMaskTruncatedCompletions }),
         setGrpoEpsilonHigh: (grpoEpsilonHigh) =>
           setUserEdit({ grpoEpsilonHigh }),
+        setGrpoUseVllm: (grpoUseVllm) => setUserEdit({ grpoUseVllm }),
+        setGrpoVllmGpuMemoryUtilization: (grpoVllmGpuMemoryUtilization) =>
+          setUserEdit({ grpoVllmGpuMemoryUtilization }),
         setGrpoRewards: (grpoRewards) => setUserEdit({ grpoRewards }),
         restoreRunConfig: (config) => {
           const selections = runConfigDraftSelections(config);

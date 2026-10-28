@@ -1930,6 +1930,15 @@ def _offload_plan_shape(config: dict) -> dict:
     return {"batch_size": config.get("batch_size"), "lora_rank": config.get("lora_r")}
 
 
+def _grpo_vllm_load_kwargs(config: dict) -> "dict | None":
+    """fast_inference kwargs for a GRPO run that opted into vLLM rollouts, else None."""
+    settings = config.get("rl_settings") or {}
+    if config.get("objective") != "grpo" or not settings.get("use_vllm"):
+        return None
+    from core.training.rl import vllm_load_kwargs
+    return vllm_load_kwargs(settings, config.get("lora_r"))
+
+
 def _visible_gpu_count() -> int:
     """GPUs the load spreads over when no ids were resolved (a UUID / MIG mask is inherited as is)."""
     try:
@@ -4979,6 +4988,7 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 offload_layers = config.get("offload_layers", 0),
                 prefetch_depth = config.get("prefetch_depth", 2),
                 offload_plan_shape = _offload_plan_shape(config),
+                vllm_load_kwargs = _grpo_vllm_load_kwargs(config),
             )
             fallback_error = (
                 _model_cache_fallback_error(config, trainer.model_load_error)
@@ -5048,6 +5058,7 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                         offload_layers = config.get("offload_layers", 0),
                         prefetch_depth = config.get("prefetch_depth", 2),
                         offload_plan_shape = _offload_plan_shape(config),
+                        vllm_load_kwargs = _grpo_vllm_load_kwargs(config),
                     )
         finally:
             _load_watchdog_stop.set()

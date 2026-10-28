@@ -3,8 +3,9 @@
 
 """DPO, ORPO and GRPO for Studio training: dataset shaping and trainer construction.
 
-GRPO runs without vLLM: Unsloth only switches TRL to vLLM rollouts when the model carries a
-``vllm_engine``, which Studio never loads, so generation goes through TRL's own path.
+GRPO generates with vLLM only when the run opts in and the model loaded with ``fast_inference``:
+Unsloth then switches TRL to colocated vLLM rollouts and loads the LoRA into the engine each step.
+Everywhere else generation goes through TRL's own path (HF generate).
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import dataclasses
 import json
 import math
 import os
+import sys
 from typing import Any, Callable, Optional
 
 OBJECTIVES = ("sft", "dpo", "orpo", "grpo")
@@ -719,6 +721,69 @@ def fold_system_into_user(dataset):
     return dataset.map(fold)
 
 
+DEFAULT_VLLM_GPU_MEMORY_UTILIZATION = 0.5
+
+
+def _vllm_runtime_blocker() -> Optional[str]:
+    if sys.platform != "linux":
+        return "vLLM runs on Linux only"
+    try:
+        import torch
+    except ImportError:
+        return "PyTorch is not installed"
+    if not torch.cuda.is_available():
+        return "vLLM needs a CUDA or ROCm GPU"
+    hip = bool(getattr(torch.version, "hip", None))
+    if not hip and torch.cuda.get_device_capability()[0] < 7:
+        return "vLLM needs compute capability 7.0 or newer"
+    import importlib.util
+    if importlib.util.find_spec("vllm") is None:
+        return "this ROCm install has no vLLM build" if hip else "vLLM is not installed"
+    # Unsloth disables an installed vLLM at import when it can't work (ABI break, wrong transformers).
+    disabled = getattr(sys.modules.get("unsloth.import_fixes"), "VLLM_DISABLED_REASON", None)
+    if disabled:
+        return f"vLLM is installed but disabled ({disabled})"
+    return None
+
+
+def vllm_rollout_blocker(
+    *,
+    full_finetuning: bool = False,
+    vision: bool = False,
+    diffusion: bool = False,
+    offload_layers: Any = 0,
+    gpu_count: int = 1,
+    runtime: Callable[[], Optional[str]] = _vllm_runtime_blocker,
+) -> Optional[str]:
+    """Why this GRPO run can't generate with vLLM, or None when it can."""
+    if full_finetuning:
+        return "vLLM rollouts need LoRA training"
+    if vision:
+        return "vLLM rollouts cover text-only models"
+    if diffusion:
+        return "text-diffusion models don't generate through vLLM"
+    if offload_layers:
+        return "vLLM rollouts can't run with layer offloading"
+    if gpu_count > 1:
+        return "vLLM rollouts run on a single GPU"
+    return runtime()
+
+
+def vllm_fallback_message(reason: str) -> str:
+    return f"vLLM rollouts are off: {reason}. GRPO generates with Hugging Face generate instead (slower)."
+
+
+def vllm_load_kwargs(settings: dict, lora_r: int) -> dict:
+    """from_pretrained kwargs for a fast_inference load, as in the Unsloth GRPO notebooks."""
+    fraction = settings.get("vllm_gpu_memory_utilization") or DEFAULT_VLLM_GPU_MEMORY_UTILIZATION
+    return {
+        "fast_inference": True,
+        "gpu_memory_utilization": float(fraction),
+        # vLLM sizes its LoRA slots at load; a smaller max rank rejects the adapter at the first sync.
+        "max_lora_rank": max(int(lora_r or 16), 16),
+    }
+
+
 def _trl_older_than(version: str) -> bool:
     try:
         import trl
@@ -885,9 +950,11 @@ def build_rl_trainer(
             eval_dataset = drop_long_prompts(eval_dataset, tokenizer, max_prompt_length)
         num_generations = int(settings.get("num_generations") or 4)
         grpo_base = {**base, "max_prompt_length": max_prompt_length}
-        if _fp16_only_gpu():
+        use_vllm = getattr(model, "vllm_engine", None) is not None
+        if _fp16_only_gpu() and not use_vllm:
             # Gemma 3 overflows in fp16 sampling on these cards (T4): non-finite logits crash
-            # multinomial with a device-side assert. Drop them before sampling instead.
+            # multinomial with a device-side assert. Drop them before sampling instead. Only for HF
+            # generate: with vLLM these kwargs go to SamplingParams, which has no such field.
             grpo_base["generation_kwargs"] = {
                 **(grpo_base.get("generation_kwargs") or {}),
                 "remove_invalid_values": True,
@@ -923,7 +990,7 @@ def build_rl_trainer(
         args = trl.GRPOConfig(
             **_config_kwargs(trl.GRPOConfig, grpo_base),
             **variant_args,
-            use_vllm = False,
+            use_vllm = use_vllm,
             beta = beta,
             temperature = float(settings.get("temperature") or 1.0),
             num_generations = num_generations,

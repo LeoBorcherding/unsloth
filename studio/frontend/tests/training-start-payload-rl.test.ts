@@ -95,6 +95,25 @@ test("GRPO sends the loss variant and its clip/mask options; DPO drops them", ()
   assert.equal(dpo.grpo_epsilon_high, null);
 });
 
+test("vLLM rollouts are sent only for GRPO, with the memory share", () => {
+  const grpo = buildTrainingStartPayload(
+    {
+      ...BASE,
+      trainingObjective: "grpo",
+      grpoUseVllm: true,
+      grpoVllmGpuMemoryUtilization: 0.6,
+    },
+    null,
+  );
+  assert.equal(grpo.grpo_use_vllm, true);
+  assert.equal(grpo.grpo_vllm_gpu_memory_utilization, 0.6);
+  const dpo = buildTrainingStartPayload(
+    { ...BASE, trainingObjective: "dpo", grpoUseVllm: true },
+    null,
+  );
+  assert.equal(dpo.grpo_use_vllm, false);
+});
+
 test("DPO does not send GRPO-only fields", () => {
   const payload = buildTrainingStartPayload(
     { ...BASE, trainingObjective: "dpo", grpoMaxCompletionLength: 512 },

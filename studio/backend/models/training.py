@@ -151,6 +151,8 @@ _STORED_RL_SETTINGS = (
     ("system_prompt", "rl_system_prompt"),
     ("mask_truncated_completions", "grpo_mask_truncated_completions"),
     ("epsilon_high", "grpo_epsilon_high"),
+    ("use_vllm", "grpo_use_vllm"),
+    ("vllm_gpu_memory_utilization", "grpo_vllm_gpu_memory_utilization"),
 )
 
 
@@ -750,6 +752,18 @@ class TrainingStartRequest(BaseModel):
         le = 1,
         allow_inf_nan = False,
         description = "Upper clip bound (DAPO clip-higher). Null uses epsilon.",
+    )
+    grpo_use_vllm: bool = Field(
+        False,
+        description = "Generate GRPO rollouts with vLLM (fast_inference). Linux with a CUDA or ROCm vLLM "
+        "build only; elsewhere the run falls back to Hugging Face generate with a warning.",
+    )
+    grpo_vllm_gpu_memory_utilization: float = Field(
+        0.5,
+        ge = 0.1,
+        le = 0.95,
+        allow_inf_nan = False,
+        description = "Share of GPU memory vLLM reserves for weights and KV cache; training uses the rest",
     )
     grpo_rewards: List[RewardSelection] = Field(
         default_factory = list, max_length = 16, description = "Library rewards for GRPO"

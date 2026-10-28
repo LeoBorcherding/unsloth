@@ -161,6 +161,8 @@ export const DEFAULT_RL_SETTINGS = {
   grpoVariant: "dapo" as import("@/types/training").GrpoVariant,
   grpoMaskTruncatedCompletions: false,
   grpoEpsilonHigh: null as number | null,
+  grpoUseVllm: false,
+  grpoVllmGpuMemoryUtilization: 0.5,
   grpoRewards: [
     { name: "strict-xml-format", weight: 1 },
     { name: "exact-answer", weight: 1 },
