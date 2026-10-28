@@ -83,6 +83,17 @@ function buildInferenceParameters(
     config.inference_timeout,
     Math.trunc,
   );
+  const parallel = config.inference_max_parallel_requests?.trim();
+  if (parallel) {
+    const value = Number(parallel);
+    if (Number.isInteger(value) && value >= 1) {
+      inference.max_parallel_requests = value;
+    } else {
+      errors.push(
+        `Model ${config.name} requests at once: must be a whole number of 1 or more.`,
+      );
+    }
+  }
 
   const extraBody = parseJsonObject(
     config.inference_extra_body,

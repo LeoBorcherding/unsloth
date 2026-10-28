@@ -304,6 +304,8 @@ export function makeModelConfig(
     // biome-ignore lint/style/useNamingConvention: api schema
     inference_timeout: "",
     // biome-ignore lint/style/useNamingConvention: api schema
+    inference_max_parallel_requests: "",
+    // biome-ignore lint/style/useNamingConvention: api schema
     inference_extra_body: "",
     // biome-ignore lint/style/useNamingConvention: api schema
     skip_health_check: false,

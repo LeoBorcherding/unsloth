@@ -45,6 +45,7 @@ export function ModelConfigDialog({
   const topPId = `${config.id}-top-p`;
   const maxTokensId = `${config.id}-max-tokens`;
   const timeoutId = `${config.id}-timeout`;
+  const parallelId = `${config.id}-max-parallel-requests`;
   const extraBodyId = `${config.id}-inference-extra-body`;
   const skipHealthCheckId = `${config.id}-skip-health-check`;
   const providerAnchorRef = useRef<HTMLDivElement>(null);
@@ -260,6 +261,28 @@ export function ModelConfigDialog({
               value={config.inference_timeout ?? ""}
               onChange={(event) =>
                 updateField("inference_timeout", event.target.value)
+              }
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <FieldLabel
+              label="Requests at once"
+              htmlFor={parallelId}
+              hint={
+                isLinkedToLocal
+                  ? "How many rows to send this model at the same time. Empty uses the loaded model's slot count."
+                  : "How many rows to send this model at the same time. Empty uses 4."
+              }
+            />
+            <Input
+              id={parallelId}
+              className="nodrag"
+              value={config.inference_max_parallel_requests ?? ""}
+              onChange={(event) =>
+                updateField(
+                  "inference_max_parallel_requests",
+                  event.target.value,
+                )
               }
             />
           </div>

@@ -58,6 +58,10 @@ export function parseModelConfig(
     // biome-ignore lint/style/useNamingConvention: api schema
     inference_timeout: readNumberString(inference.timeout),
     // biome-ignore lint/style/useNamingConvention: api schema
+    inference_max_parallel_requests: readNumberString(
+      inference.max_parallel_requests,
+    ),
+    // biome-ignore lint/style/useNamingConvention: api schema
     inference_extra_body: isRecord(inference.extra_body)
       ? JSON.stringify(inference.extra_body, null, 2)
       : "",

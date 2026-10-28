@@ -169,6 +169,8 @@ download_router = APIRouter(dependencies = [Depends(_authorize_dataset_download)
 
 # Keepalive cadence, well inside the ~100s a quick tunnel allows between body bytes.
 _KEEPALIVE_EVERY_S = 15.0
+# Per-request timeout for local-model recipe calls the user left unset.
+_LOCAL_MODEL_TIMEOUT_S = 600
 
 # Only UI sessions may supply stdio commands, since this host would run them; Annotated so direct calls get False.
 ViaApiKey = Annotated[bool, Depends(authenticated_via_api_key)]
@@ -289,6 +291,27 @@ def _loaded_local_model_identity() -> tuple[bool, str, str]:
     if active_model:
         return True, active_model, ""
     return False, "", ""
+
+
+def _loaded_local_parallel_slots() -> int:
+    """Requests the loaded local backend serves at once: llama-server's slots, else the safetensors engine's."""
+    from routes.inference import get_llama_cpp_backend
+    from core.inference import get_inference_backend
+
+    llama = get_llama_cpp_backend()
+    if llama.is_loaded:
+        backend = llama
+    else:
+        backend = get_inference_backend()
+        # Same rule as /v1's serving fields: a model that can't batch serves one request at a time.
+        models = getattr(backend, "models", None) or {}
+        entry = models.get(getattr(backend, "active_model_name", None) or "") or {}
+        if entry.get("can_batch") is not True:
+            return 1
+    slots = getattr(backend, "effective_parallel_slots", None)
+    if isinstance(slots, bool) or not isinstance(slots, int) or slots < 1:
+        return 1
+    return slots
 
 
 def _ensure_selected_local_model_loaded(
@@ -421,9 +444,11 @@ def _inject_local_providers(
 
     token = ""
     internal_key_id: Optional[int] = None
+    local_slots: Optional[int] = None
     if local_names & referenced_providers:
         # Point-in-time check; /v1 still returns a clear 400 if the model changes later.
         _ensure_selected_local_model_loaded(recipe, local_names)
+        local_slots = _loaded_local_parallel_slots()
 
         from auth import storage
 
@@ -467,6 +492,12 @@ def _inject_local_providers(
             tpl_kwargs["enable_thinking"] = False
             extra_body["chat_template_kwargs"] = tpl_kwargs
             params["extra_body"] = extra_body
+            # data_designer's defaults (60 s, 4 at once) assume a hosted API: a slow local model or a one-slot
+            # llama-server times rows out and drops them. Values the user set are kept.
+            if params.get("timeout") is None:
+                params["timeout"] = _LOCAL_MODEL_TIMEOUT_S
+            if local_slots is not None and params.get("max_parallel_requests") is None:
+                params["max_parallel_requests"] = local_slots
 
     # Only llama.cpp has a grammar engine; other backends refuse response_format.
     if _local_chat_serves_gguf():
