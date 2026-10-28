@@ -345,3 +345,8 @@ def test_grpo_without_saved_rewards_or_prompt_uses_the_node_defaults():
     config = {}
     training.rl_config({"system_prompt": ""}, "grpo", config)
     assert "rl_system_prompt" not in config
+
+def test_a_coded_route_error_reaches_the_node_as_its_message():
+    from core.flows.caller import route_detail
+    body = b'{"detail": {"code": "hf_model_verification_failed", "message": "The Hugging Face model could not be verified."}}'
+    assert route_detail(body) == "The Hugging Face model could not be verified."
