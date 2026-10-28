@@ -50,6 +50,11 @@ import {
   type WireInfo,
 } from "./derive-rf";
 import { addFileNodes } from "./file-drop";
+import {
+  SuperCardSelectionToolbar,
+  SuperCardView,
+  useSuperCardView,
+} from "./super-card-node";
 import { FlowEdgeView } from "./flow-edge";
 import { FlowNodeView } from "./flow-node";
 import { GroupFrame, NoteFrame } from "./frame-nodes";
@@ -88,6 +93,7 @@ import {
 import { WireRouterController, setWireHover } from "./wire-routing";
 
 const NODE_TYPES = {
+  flowSuperCard: SuperCardView,
   flowNode: FlowNodeView,
   flowGroup: GroupFrame,
   flowNote: NoteFrame,
@@ -336,6 +342,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       ui.setSelection(ui.selectedNodes, [...next]);
     }
   }, []);
+
+  const view = useSuperCardView(nodes, edges);
 
   const onNodeDragStart = useCallback(
     (_: ReactMouseEvent, node: RfNode) => {
@@ -667,8 +675,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       data-testid="flows-canvas"
     >
       <ReactFlow<RfNode, RfEdge>
-        nodes={nodes}
-        edges={edges}
+        nodes={view.nodes}
+        edges={view.edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
@@ -714,6 +722,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           color="color-mix(in oklab, var(--foreground) 28%, transparent)"
         />
         <CanvasControls readOnly={readOnly} />
+        <SuperCardSelectionToolbar readOnly={readOnly} />
         <SelectedNodeToolbar readOnly={readOnly} />
         {bus && <WireRouterController scope={flowId ?? ""} />}
       </ReactFlow>
