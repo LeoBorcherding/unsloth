@@ -8,10 +8,8 @@ import {
   BackgroundVariant,
   type Connection,
   ConnectionMode,
-  Controls,
   type EdgeChange,
   type FinalConnectionState,
-  MiniMap,
   type NodeChange,
   type OnConnectStartParams,
   ReactFlow,
@@ -27,7 +25,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import { categoryColor, findPort, getSpec } from "../stores/catalog-store";
+import { findPort, getSpec } from "../stores/catalog-store";
 import { type DocGraph, useDocStore } from "../stores/doc-store";
 import {
   type RerouteWire,
@@ -36,6 +34,7 @@ import {
 } from "../stores/reroute-graph";
 import { useUiStore } from "../stores/ui-store";
 import type { FlowEdge, FlowGroup } from "../types";
+import { CanvasControls } from "./canvas-controls";
 import { dragHasFiles } from "./canvas-rules";
 import {
   checkConnection,
@@ -146,14 +145,6 @@ function hasWires(graph: DocGraph, rerouteId: string): boolean {
       graph.wires[id].source === rerouteId ||
       graph.wires[id].target === rerouteId,
   );
-}
-
-function minimapColor(node: RfNode): string {
-  if (node.type === "flowReroute") return "var(--muted-foreground)";
-  if (node.type !== "flowNode") return "var(--muted)";
-  const doc = useDocStore.getState().graph.nodes[node.id];
-  const spec = doc ? getSpec(doc.type) : undefined;
-  return spec ? categoryColor(spec.category) : "var(--muted-foreground)";
 }
 
 function insideRect(
@@ -722,18 +713,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           size={1.2}
           color="color-mix(in oklab, var(--foreground) 28%, transparent)"
         />
-        <MiniMap
-          pannable={true}
-          zoomable={true}
-          nodeColor={minimapColor}
-          nodeStrokeWidth={0}
-          maskColor="color-mix(in oklab, var(--background) 70%, transparent)"
-          className="!rounded-lg !border !border-border !bg-card"
-        />
-        <Controls
-          showInteractive={false}
-          className="!rounded-lg !border !border-border !shadow-none"
-        />
+        <CanvasControls readOnly={readOnly} />
         <SelectedNodeToolbar readOnly={readOnly} />
         {bus && <WireRouterController scope={flowId ?? ""} />}
       </ReactFlow>
