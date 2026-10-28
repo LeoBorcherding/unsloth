@@ -330,7 +330,8 @@ def _job_routes(final, *, preview_rows = 3):
             }
         if path.endswith("/dataset"):
             rows = [{"sql_prompt": f"q{i}", "sql": "SELECT 1"} for i in range(preview_rows)]
-            return {"dataset": rows[: params["limit"]], "total": preview_rows}
+            start = params.get("offset", 0)
+            return {"dataset": rows[start : start + params["limit"]], "total": preview_rows}
         if path.endswith("/analysis"):
             return {"num_records": preview_rows, "column_statistics": []}
         raise AssertionError(path)
@@ -362,6 +363,19 @@ def test_each_run_is_kept_as_a_recipe_studio_execution_record(monkeypatch):
     ids = [r["lastEventId"] for _, _, r in saved]
     assert ids == sorted(ids) and len({r["id"] for _, _, r in saved}) == 1
     assert len(out["preview"]) == 20
+
+
+def test_a_long_preview_keeps_every_row(monkeypatch):
+    saved = []
+    from storage import flows_db
+
+    monkeypatch.setattr(flows_db, "save_recipe_run", lambda f, n, record: saved.append(record))
+    ctx = _FlowCtx(
+        _job_routes("completed", preview_rows = 700),
+        params = {RECIPE_PARAM: _compiled(_flow()), "rows": 700, "mode": "preview"},
+    )
+    asyncio.run(data.recipe_group(ctx))
+    assert len(saved[-1]["dataset"]) == 700 and saved[-1]["datasetTotal"] == 700
 
 
 def test_a_failed_run_is_kept_with_its_error(monkeypatch):
@@ -439,8 +453,13 @@ def test_recipe_runs_are_listed_per_step_and_go_with_the_flow(client):
         record = {"id": f"e{i}", "recipeId": f"flow:{flow_id}:gen", "createdAt": created}
         flows_db.save_recipe_run(flow_id, "gen", record)
     flows_db.save_recipe_run(flow_id, "other", {"id": "e9", "createdAt": 1})
+    rows = [{"sql": "SELECT 1"}] * 3
+    flows_db.save_recipe_run(flow_id, "gen", {"id": "e1", "createdAt": 9, "dataset": rows})
     listed = client.get(f"/api/flows/{flow_id}/nodes/gen/recipe-runs").json()["executions"]
-    assert [e["id"] for e in listed] == ["e1", "e0"]
+    assert [e["id"] for e in listed] == ["e1", "e0"] and "dataset" not in listed[0]
+    whole = client.get(f"/api/flows/{flow_id}/nodes/gen/recipe-runs/e1").json()
+    assert whole["dataset"] == rows
+    assert client.get(f"/api/flows/{flow_id}/nodes/other/recipe-runs/e1").status_code == 404
     flows_db.save_recipe_run(flow_id, "gen", {"id": "e0", "createdAt": 5, "status": "completed"})
     listed = client.get(f"/api/flows/{flow_id}/nodes/gen/recipe-runs").json()["executions"]
     assert listed[1]["status"] == "completed"

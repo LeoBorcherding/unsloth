@@ -240,19 +240,25 @@ class RunHistory:
             fields["rows"] = status["rows"]
         await self.update(**fields)
 
-    async def finish(self, ctx: NodeContext, job_id: str, preview: list, total: Any) -> None:
+    async def finish(
+        self, ctx: NodeContext, job_id: str, preview: list, total: Any, kept: Optional[list]
+    ) -> None:
+        """``kept`` is every row when the step already read them all (a run with no saved artifact)."""
         if not self.enabled:
             return
         rows, analysis = preview, None
-        path = f"{RECIPES}/jobs/{quote(job_id, safe = '')}"
+        if self.record.get("kind") == "preview":
+            # The view pages a preview from the record alone, as Recipe Studio does: keep every row.
+            try:
+                rows = kept if kept is not None else await recipe_rows(ctx, job_id)
+            except FlowNodeError:
+                pass
         try:
-            if self.record.get("kind") == "preview":
-                page = await ctx.call("GET", f"{path}/dataset", params = {"limit": 500})
-                if isinstance(page, dict):
-                    rows = [r for r in page.get("dataset") or [] if isinstance(r, dict)]
-            analysis = await ctx.call("GET", f"{path}/analysis")
+            analysis = await ctx.call("GET", f"{RECIPES}/jobs/{quote(job_id, safe = '')}/analysis")
         except FlowNodeError:
             pass
+        if self.record.get("kind") == "preview":
+            total = len(rows)
         await self.update(
             status = "completed",
             dataset = rows,
@@ -324,10 +330,12 @@ async def run_recipe(
             total = page.get("total")
     except FlowNodeError:
         pass
-    await history.finish(ctx, job_id, preview, total)
     rows = status.get("rows") if isinstance(status, dict) else None
     artifact = status.get("artifact_path") if isinstance(status, dict) else None
-    if isinstance(artifact, str) and artifact.strip():
+    saved = isinstance(artifact, str) and artifact.strip()
+    kept = None if saved else await recipe_rows(ctx, job_id)
+    await history.finish(ctx, job_id, preview, total, kept)
+    if saved:
         ref = f"recipes/{Path(artifact.strip()).name}/parquet-files"
         dataset = {
             "kind": "dataset",
@@ -337,7 +345,6 @@ async def run_recipe(
             "rows": rows,
         }
     else:
-        kept = await recipe_rows(ctx, job_id)
         if not kept:
             raise FlowNodeError("The Data Recipe produced no rows")
         dataset = await upload_rows(ctx, kept, f"recipe-{job_id}")
