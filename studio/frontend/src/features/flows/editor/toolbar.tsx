@@ -27,7 +27,6 @@ import {
   PlayIcon,
   Redo02Icon,
   Share08Icon,
-  SidebarLeftIcon,
   StickyNote01Icon,
   StopIcon,
   Undo02Icon,
@@ -92,7 +91,6 @@ function ToolbarImpl({
   const saveState = useUiStore((s) => s.saveState);
   const snap = useUiStore((s) => s.snapToGrid);
   const wireStyle = useUiStore((s) => s.wireStyle);
-  const paletteOpen = useUiStore((s) => s.paletteOpen);
   const runStatus = useRuntimeStore((s) => s.runStatus);
   const running =
     runStatus === "running" ||
@@ -104,12 +102,6 @@ function ToolbarImpl({
   return (
     <div className="flex h-12 shrink-0 items-center gap-1 border-border border-b bg-background px-2 text-foreground">
       <IconButton icon={ArrowLeft01Icon} label="All flows" onClick={onBack} />
-      <IconButton
-        icon={SidebarLeftIcon}
-        label="Toggle node palette"
-        onClick={() => useUiStore.getState().togglePalette()}
-        active={paletteOpen}
-      />
       <input
         value={name}
         onChange={(e) =>
