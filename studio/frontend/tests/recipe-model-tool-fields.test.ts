@@ -187,6 +187,8 @@ test("the model Chat has loaded is listed first in the local model picker", () =
       "@/features/chat": {},
       "@/lib/utils": {},
       "@/lib/refresh-icon": {},
+      "@/lib/chevron-icons": {},
+      "@hugeicons/react": {},
       "@tanstack/react-router": {},
       "lucide-react": {},
       "@/features/hub": {},
