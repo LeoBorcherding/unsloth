@@ -13,6 +13,19 @@ def _keyword_in_column(keyword: str, col_name: str) -> bool:
     return re.search(r"\b" + re.escape(keyword) + r"\b", col_name, re.IGNORECASE) is not None
 
 
+def is_recipe_side_column(name: str, value) -> bool:
+    """A data recipe judge ({criterion: {score, reasoning}}) or validator ({is_valid, ...}) cell,
+    or a column's __trace / __reasoning_content companion."""
+    if name.lower().endswith(("__trace", "__reasoning_content")):
+        return True
+    if not isinstance(value, dict) or not value:
+        return False
+    # A judge criterion is exactly Data Designer's {reasoning, score}; validators add arbitrary extras.
+    return "is_valid" in value or all(
+        isinstance(item, dict) and item.keys() == {"reasoning", "score"} for item in value.values()
+    )
+
+
 CONVERSATION_COLUMNS = ("messages", "conversations", "texts")
 _CHATML_KEYS = frozenset({"role", "content"})
 _SHAREGPT_KEYS = frozenset({"from", "value"})
@@ -220,6 +233,7 @@ def detect_custom_format_heuristic(dataset):
         "solution",
         "explanation",
         "solve",
+        "implementation",
     ]
 
     user_words_high_priority = [
@@ -433,7 +447,11 @@ def detect_custom_format_heuristic(dataset):
             and not has_keyword(col_name, assistant_words)
         )
 
-    content_columns = [col for col in all_columns if not is_metadata(col)]
+    content_columns = [
+        col
+        for col in all_columns
+        if not is_metadata(col) and not is_recipe_side_column(col, sample.get(col))
+    ]
     system_named = [
         col
         for col in content_columns
@@ -443,6 +461,11 @@ def detect_custom_format_heuristic(dataset):
     ]
 
     assistant_potential = [col for col in content_columns if has_keyword(col, assistant_words)]
+    # "implementation" (Text to Python's code column) counts only when no other column reads as the answer.
+    answer_words = [word for word in assistant_words if word != "implementation"]
+    assistant_potential = [
+        col for col in assistant_potential if has_keyword(col, answer_words)
+    ] or assistant_potential
     user_potential = [
         col
         for col in content_columns
