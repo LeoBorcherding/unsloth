@@ -24,25 +24,34 @@ def _stub_data_designer(monkeypatch, seen):
     class _UploadError(Exception):
         pass
 
+    class _Api:
+        def repo_exists(self, **kwargs):
+            return True
+
+        def list_repo_files(self, **kwargs):
+            return []
+
+        def create_commit(self, *, operations, **kwargs):
+            for op in operations:
+                if op.path_in_repo == "metadata.json":
+                    seen["uploaded_metadata"] = op.path_in_repo
+                if op.path_in_repo == "builder_config.json":
+                    with op.as_file() as fh:
+                        seen["uploaded"] = fh.read().decode("utf-8")
+                    seen["uploaded_name"] = op.path_in_repo
+
     class _Client:
         def __init__(self, token):
-            pass
+            self._api = _Api()
 
         def __getattr__(self, name):
             return lambda **kwargs: None
-
-        def _upload_config_files(self, *, repo_id, metadata_path, builder_config_path):
-            if metadata_path.exists():
-                seen["uploaded_metadata"] = metadata_path.name
-            if builder_config_path.exists():
-                seen["uploaded"] = builder_config_path.read_text(encoding = "utf-8")
-                seen["uploaded_name"] = builder_config_path.name
 
     class _Card:
         @classmethod
         def from_metadata(cls, *, builder_config, **kwargs):
             seen["card"] = json.dumps(builder_config)
-            return SimpleNamespace(text = "", push_to_hub = lambda *args, **kwargs: None)
+            return SimpleNamespace(text = "")
 
     modules = {
         "data_designer.engine.storage.artifact_storage": {

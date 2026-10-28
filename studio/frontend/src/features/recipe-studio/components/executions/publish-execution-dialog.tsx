@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { hfApiToken, useHfTokenStore } from "@/features/hub";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { toastError, toastSuccess } from "@/shared/toast";
 import type { RecipeExecutionRecord } from "../../execution-types";
@@ -76,6 +77,8 @@ export function PublishExecutionDialog({
   const [repoId, setRepoId] = useState("");
   const [description, setDescription] = useState("");
   const [hfToken, setHfToken] = useState("");
+  // The token saved in Settings, used when the field is left empty (as Export does).
+  const savedHfToken = hfApiToken(useHfTokenStore((s) => s.token));
   const [privateRepo, setPrivateRepo] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -136,7 +139,7 @@ export function PublishExecutionDialog({
       const result = await onPublish({
         repo_id: repoId.trim(),
         description: description.trim(),
-        hf_token: hfToken.trim() || null,
+        hf_token: hfToken.trim() || savedHfToken || null,
         private: privateRepo,
         artifact_path: execution.artifact_path,
       });
@@ -212,7 +215,8 @@ export function PublishExecutionDialog({
             <DialogHeader>
               <DialogTitle>Publish to Hugging Face</DialogTitle>
               <DialogDescription>
-                Create or update a dataset repo from this completed run.
+                Create a dataset repo from this completed run. Publishing to an existing
+                repo replaces its dataset files with this run's.
               </DialogDescription>
             </DialogHeader>
 
@@ -298,7 +302,9 @@ export function PublishExecutionDialog({
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Leave empty if you're already logged in via CLI.
+                  {savedHfToken
+                    ? "Leave empty to use the token saved in Settings."
+                    : "No token is saved in Settings. Leave empty only if this machine is logged in to Hugging Face."}
                 </p>
               </div>
 
