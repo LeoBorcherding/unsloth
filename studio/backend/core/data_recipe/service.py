@@ -233,6 +233,30 @@ def _apply_data_designer_prompt_blank_patch() -> None:
     setattr(RecordBasedPromptRenderer, "_unsloth_prompt_blank_patch_applied", True)
 
 
+def _apply_data_designer_hf_anonymous_seed_patch() -> None:
+    """A managed account's tokenless HF seed reads anonymously. The engine passes ``token=None``,
+    which lets huggingface_hub fall back to the host's saved token or HF_TOKEN."""
+    from data_designer.engine.resources import seed_reader  # pyright: ignore[reportMissingImports]
+
+    reader = seed_reader.HuggingFaceSeedReader
+    if getattr(reader.create_duckdb_connection, "_unsloth_anonymous_patch", False):
+        return
+    original = reader.create_duckdb_connection
+
+    def _patched_connect(self: Any) -> Any:
+        if self.source.token or not managed_account():
+            return original(self)
+        hffs = seed_reader.HfFileSystem(
+            endpoint = self.source.endpoint, token = False, skip_instance_cache = True
+        )
+        conn = seed_reader.lazy.duckdb.connect()
+        conn.register_filesystem(hffs)
+        return conn
+
+    _patched_connect._unsloth_anonymous_patch = True  # type: ignore[attr-defined]
+    reader.create_duckdb_connection = _patched_connect
+
+
 def _is_none(value: Any) -> bool:
     return value is None
 
@@ -533,12 +557,14 @@ def install_public_egress_guard() -> None:
     socket.gethostbyname = guarded_gethostbyname
 
 
-def build_model_providers(recipe: dict[str, Any]):
+def build_model_providers(recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None):
+    """``local_endpoints``: provider name -> the endpoint the server itself filled in, never from the payload."""
     from data_designer.config.models import ModelProvider  # pyright: ignore[reportMissingImports]
 
     providers: list[ModelProvider] = []
     for provider in recipe.get("model_providers", []):
-        _require_public_provider_endpoint(provider.get("endpoint"))
+        if (local_endpoints or {}).get(provider.get("name")) != provider.get("endpoint"):
+            _require_public_provider_endpoint(provider.get("endpoint"))
         api_key = provider.get("api_key")
         api_key_env = provider.get("api_key_env")
         if not api_key and api_key_env and not managed_account():
@@ -789,6 +815,7 @@ def build_config_builder(recipe: dict[str, Any]):
     validate_recipe_access(recipe)
     validate_recipe_names(recipe)
     _apply_data_designer_image_context_patch()
+    _apply_data_designer_hf_anonymous_seed_patch()
     from data_designer.config import DataDesignerConfigBuilder  # pyright: ignore[reportMissingImports]
     from data_designer.config.processors import ProcessorType  # pyright: ignore[reportMissingImports]
 
@@ -826,10 +853,16 @@ def build_config_builder(recipe: dict[str, Any]):
     return builder
 
 
-def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = None):
+def create_data_designer(
+    recipe: dict[str, Any],
+    *,
+    artifact_path: str | None = None,
+    local_endpoints: dict[str, str] | None = None,
+):
     validate_recipe_access(recipe)
     account_path(artifact_path)
     _apply_data_designer_image_context_patch()
+    _apply_data_designer_hf_anonymous_seed_patch()
     _apply_data_designer_prompt_blank_patch()
     _apply_data_designer_expression_blank_patch()
     _apply_data_designer_mixed_type_parquet_patch()
@@ -843,7 +876,7 @@ def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = 
         artifact_path = str(recipe_datasets_root())
 
     recipe = _strip_frontend_model_config_metadata(recipe)
-    model_providers = build_model_providers(recipe)
+    model_providers = build_model_providers(recipe, local_endpoints = local_endpoints)
     _validate_recipe_runtime_support(recipe, model_providers)
 
     # DataDesigner requires >=1 model provider even with no LLM columns.
@@ -865,9 +898,11 @@ def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = 
     )
 
 
-def validate_recipe(recipe: dict[str, Any]) -> None:
+def validate_recipe(
+    recipe: dict[str, Any], *, local_endpoints: dict[str, str] | None = None
+) -> None:
     builder = build_config_builder(recipe)
-    designer = create_data_designer(recipe)
+    designer = create_data_designer(recipe, local_endpoints = local_endpoints)
     designer.validate(builder)
 
 

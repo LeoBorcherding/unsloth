@@ -291,6 +291,35 @@ def _loaded_local_model_identity() -> tuple[bool, str, str]:
     return False, "", ""
 
 
+def _require_named_model_when_resident_hidden(
+    recipe: dict[str, Any], local_provider_names: set[str]
+) -> None:
+    """/v1 serves an unnamed model to a managed account only when the loaded one is shared with it.
+    Say so before the run instead of letting every row 404 and drop."""
+    from hub.services.models import account_access
+
+    if not account_access.managed_account():
+        return
+    used_aliases = _used_llm_model_aliases(recipe)
+    unnamed = sorted(
+        mc["alias"]
+        for mc in recipe.get("model_configs", [])
+        if isinstance(mc, dict)
+        and mc.get("alias") in used_aliases
+        and mc.get("provider") in local_provider_names
+        and str(mc.get("model") or "").strip().lower() in {"", "local"}
+    )
+    if not unnamed:
+        return
+    from routes.inference import _loaded_slot_ident
+
+    if account_access.resident_hidden("chat", _loaded_slot_ident()):
+        raise ValueError(
+            "The model loaded in Chat is not shared with this account. "
+            f"Choose a model in: {', '.join(unnamed)}."
+        )
+
+
 def _ensure_selected_local_model_loaded(
     recipe: dict[str, Any], local_provider_names: set[str]
 ) -> None:
@@ -298,6 +327,7 @@ def _ensure_selected_local_model_loaded(
     if not model_loaded:
         raise ValueError("No model loaded in Chat. Load a model first, then run the recipe.")
 
+    _require_named_model_when_resident_hidden(recipe, local_provider_names)
     selection = _single_used_local_model_selection(recipe, local_provider_names)
     if selection is None:
         return

@@ -94,7 +94,9 @@ def _all_blocks_dropped_message(columns: list[Any]) -> str:
     )
 
 
-def _collect_validation_errors(recipe: dict[str, Any]) -> list[ValidateError]:
+def _collect_validation_errors(
+    recipe: dict[str, Any], local_endpoints: dict[str, str] | None = None
+) -> list[ValidateError]:
     try:
         from data_designer.engine.compiler import (
             _add_internal_row_id_column_if_needed,
@@ -110,7 +112,7 @@ def _collect_validation_errors(recipe: dict[str, Any]) -> list[ValidateError]:
 
     try:
         builder = build_config_builder(recipe)
-        designer = create_data_designer(recipe)
+        designer = create_data_designer(recipe, local_endpoints = local_endpoints)
         resource_provider = designer._create_resource_provider(  # type: ignore[attr-defined]
             "validate-configuration",
             builder,
@@ -146,9 +148,11 @@ def _collect_validation_errors(recipe: dict[str, Any]) -> list[ValidateError]:
     return errors
 
 
-def _patch_local_providers(recipe: dict[str, Any]) -> None:
+def _patch_local_providers(recipe: dict[str, Any]) -> dict[str, str]:
     """Strip is_local and fill a dummy endpoint so validation doesn't choke. Strict `is True` matches
-    _inject_local_providers: truthy non-boolean values aren't treated as local."""
+    _inject_local_providers: truthy non-boolean values aren't treated as local. Returns what was filled
+    so the managed-account endpoint guard skips it: validation never dials it."""
+    filled: dict[str, str] = {}
     for provider in recipe.get("model_providers", []):
         if not isinstance(provider, dict):
             continue
@@ -159,6 +163,9 @@ def _patch_local_providers(recipe: dict[str, Any]) -> None:
             provider.pop("api_key_env", None)
             provider.pop("extra_headers", None)
             provider.pop("extra_body", None)
+            if isinstance(provider.get("name"), str):
+                filled[provider["name"]] = provider["endpoint"]
+    return filled
 
 
 @router.post("/validate", response_model = ValidateResponse)
@@ -173,7 +180,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
         require_ui_session_for_local_commands(via_api_key)
     require_ui_session_for_host_env_credentials(recipe, via_api_key)
 
-    _patch_local_providers(recipe)
+    local_endpoints = _patch_local_providers(recipe)
     _resolve_seed_endpoint(recipe)
 
     github_source = _github_seed_source(recipe)
@@ -206,7 +213,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
         return ValidateResponse(valid = True, raw_detail = _GITHUB_VALIDATE_NOTE)
 
     try:
-        validate_recipe(recipe)
+        validate_recipe(recipe, local_endpoints = local_endpoints)
     except RuntimeError as exc:
         raise log_and_http_error(
             exc,
@@ -223,7 +230,7 @@ def validate(payload: RecipePayload, via_api_key: ViaApiKey = False) -> Validate
         )
         detail = safe_curated_detail(exc, fallback = "Validation failed.")
         try:
-            parsed_errors = _collect_validation_errors(recipe)
+            parsed_errors = _collect_validation_errors(recipe, local_endpoints)
         except Exception:
             # The seed is re-read here; keep errors answerable instead of a 500.
             parsed_errors = []
