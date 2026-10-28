@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="785.218906pt" height="354.5856pt" viewBox="0 0 785.218906 354.5856" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-27T19:53:25.439469</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.2, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 354.5856 
+L 785.218906 354.5856 
+L 785.218906 -0 
+L 0 -0 
+z
+" style="fill: #fcfcfb"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 126.418906 294.192 
+L 767.218906 294.192 
+L 767.218906 75.6 
+L 126.418906 75.6 
+z
+" style="fill: #fcfcfb"/>
+   </g>
+   <g id="matplotlib.axis_1"/>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_1">
+      <path d="M 126.418906 111.837176 
+L 767.218906 111.837176 
+" clip-path="url(#pa4b6bcbd52)" style="fill: none; stroke: #e6e5e0; stroke-width: 0.6; stroke-linecap: round"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="text_1">
+      <text style="font-size: 9.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #52514e" x="120.418906" y="116.359176" transform="rotate(-0 120.418906 116.359176)">llama-bench run directly</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_3">
+      <path d="M 126.418906 184.896 
+L 767.218906 184.896 
+" clip-path="url(#pa4b6bcbd52)" style="fill: none; stroke: #e6e5e0; stroke-width: 0.6; stroke-linecap: round"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="text_2">
+      <text style="font-size: 9.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #52514e" x="120.418906" y="189.418" transform="rotate(-0 120.418906 189.418)">The tab's API</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_5">
+      <path d="M 126.418906 257.954824 
+L 767.218906 257.954824 
+" clip-path="url(#pa4b6bcbd52)" style="fill: none; stroke: #e6e5e0; stroke-width: 0.6; stroke-linecap: round"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="text_3">
+      <text style="font-size: 9.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #52514e" x="120.418906" y="262.476824" transform="rotate(-0 120.418906 262.476824)">The tab in the UI</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 126.418906 85.536 
+L 639.058906 85.536 
+L 639.058906 111.837176 
+L 126.418906 111.837176 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #2a78d6"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 126.418906 158.594824 
+L 631.866526 158.594824 
+L 631.866526 184.896 
+L 126.418906 184.896 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #2a78d6"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 126.418906 231.653647 
+L 623.893538 231.653647 
+L 623.893538 257.954824 
+L 126.418906 257.954824 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #2a78d6"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 126.418906 111.837176 
+L 639.058906 111.837176 
+L 639.058906 138.138353 
+L 126.418906 138.138353 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #1baf7a"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 126.418906 184.896 
+L 630.495388 184.896 
+L 630.495388 211.197176 
+L 126.418906 211.197176 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #1baf7a"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 126.418906 257.954824 
+L 617.027975 257.954824 
+L 617.027975 284.256 
+L 126.418906 284.256 
+z
+" clip-path="url(#pa4b6bcbd52)" style="fill: #1baf7a"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 126.418906 294.192 
+L 126.418906 75.6 
+" style="fill: none; stroke: #e6e5e0; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="642.134746" y="102.381588" transform="rotate(-0 642.134746 102.381588)">100.0%  (2,088 t/s)</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="634.942366" y="175.440412" transform="rotate(-0 634.942366 175.440412)">98.6%  (2,059 t/s)</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="626.969378" y="248.499235" transform="rotate(-0 626.969378 248.499235)">97.0%  (2,027 t/s)</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="642.134746" y="128.682765" transform="rotate(-0 642.134746 128.682765)">100.0%  (70.0 t/s)</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="633.571228" y="201.741588" transform="rotate(-0 633.571228 201.741588)">98.3%  (68.9 t/s)</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 10px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start" x="620.103815" y="274.800412" transform="rotate(-0 620.103815 274.800412)">95.7%  (67.0 t/s)</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_10">
+     <path d="M 130.218906 66.06966 
+L 140.668906 66.06966 
+L 140.668906 58.18466 
+L 130.218906 58.18466 
+z
+" style="fill: #2a78d6"/>
+    </g>
+    <g id="text_10">
+     <text style="font-size: 9.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #52514e" x="148.268906" y="65.40466" transform="rotate(-0 148.268906 65.40466)">pp512</text>
+    </g>
+    <g id="patch_11">
+     <path d="M 188.679531 66.06966 
+L 199.129531 66.06966 
+L 199.129531 58.18466 
+L 188.679531 58.18466 
+z
+" style="fill: #1baf7a"/>
+    </g>
+    <g id="text_11">
+     <text style="font-size: 9.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #52514e" x="206.729531" y="65.40466" transform="rotate(-0 206.729531 65.40466)">tg128</text>
+    </g>
+   </g>
+  </g>
+  <g id="text_12">
+   <text style="font-weight: 700; font-size: 15px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0b0b0b" x="77.458906" y="32.625" transform="rotate(-0 77.458906 32.625)">The llama-bench tab lands within 5% of llama-bench run by hand</text>
+  </g>
+  <g id="text_13">
+   <text style="font-size: 10.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #52514e" x="77.458906" y="51.036" transform="rotate(-0 77.458906 51.036)">Throughput as a share of the direct run, -p 512 -n 128 -r 5, flash attention auto</text>
+  </g>
+  <g id="text_14">
+   <text style="font-size: 8.5px; font-family: 'Inter', 'Segoe UI', 'Helvetica Neue', 'Arial', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #8a8984" x="77.458906" y="334.7751" transform="rotate(-0 77.458906 334.7751)">Source: Unsloth Studio llama-bench tab, Colab T4 15 GB, llama.cpp b11876, Qwen3-4B Q4_K_M, 2026-10-27</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pa4b6bcbd52">
+   <rect x="126.418906" y="75.6" width="640.8" height="218.592"/>
+  </clipPath>
+ </defs>
+</svg>
