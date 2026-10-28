@@ -4,51 +4,68 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
 import data_designer.lazy_heavy_imports as lazy
 from data_designer.engine.resources.seed_reader import SeedReader
+from utils.paths import github_seed_cache_root
+from utils.paths.lazy import LazyPath
 
 from .config import GitHubRepoSeedSource
 from .scraper import ScrapeConfig, materialize_to_jsonl
 
 
-# Memoize seed scrapes so a recipe job does not re-hit GitHub; keyed on a short SHA-256 of the token, never the raw value.
-_SCRAPE_CACHE: dict[tuple, str] = {}
+# Each job runs in its own spawned worker, so the scrape is cached on disk, in the account's tmp root, for
+# the preview and run that follow. The key holds a short SHA-256 of the token, never the token.
+_CACHE_DIR = LazyPath(github_seed_cache_root)
+_SCRAPE_TTL_SECONDS = 60 * 60
+# Deleted only well past the TTL: a run that started on a scrape keeps reading it for hours.
+_SCRAPE_KEEP_SECONDS = 24 * 60 * 60
 _SCRAPE_CACHE_LOCK = threading.Lock()
+# This job's scrape per key: the engine asks for the URI again when it cycles the seed mid-run.
+_JOB_SCRAPES: dict[str, str] = {}
 
 
-def _scrape_cache_key(cfg: ScrapeConfig) -> tuple:
+def _scrape_cache_key(cfg: ScrapeConfig) -> str:
     token_digest = hashlib.sha256(
         (cfg.token or "").encode("utf-8"),
     ).hexdigest()[:16]
-    return (
-        tuple(cfg.repos),
-        tuple(cfg.item_types),
+    key = (
+        list(cfg.repos),
+        list(cfg.item_types),
         cfg.limit,
         bool(cfg.include_comments),
         cfg.max_comments_per_item,
         token_digest,
     )
+    return hashlib.sha256(json.dumps(key).encode("utf-8")).hexdigest()[:24]
 
 
-def _lookup_cached_scrape(key: tuple) -> Optional[str]:
-    with _SCRAPE_CACHE_LOCK:
-        path = _SCRAPE_CACHE.get(key)
-    if path and Path(path).exists():
-        return path
-    # Stale entry (tmp cleanup/restart); drop it so the caller re-materializes.
-    if path:
-        with _SCRAPE_CACHE_LOCK:
-            _SCRAPE_CACHE.pop(key, None)
-    return None
-
-
-def _store_cached_scrape(key: tuple, path: str) -> None:
-    with _SCRAPE_CACHE_LOCK:
-        _SCRAPE_CACHE[key] = path
+def _fresh_cached_scrape(cache_dir: Path, key: str) -> Optional[Path]:
+    """The newest scrape for `key` younger than the TTL; scrapes of any key past the keep window are removed."""
+    now = time.time()
+    fresh: Optional[Path] = None
+    fresh_mtime = 0.0
+    for path in cache_dir.glob("github_*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+            if now - mtime > _SCRAPE_KEEP_SECONDS:
+                path.unlink()
+                continue
+        except OSError:
+            # Gone already, or a job still has it open (Windows).
+            continue
+        if (
+            now - mtime <= _SCRAPE_TTL_SECONDS
+            and path.name.startswith(f"github_{key}_")
+            and mtime > fresh_mtime
+        ):
+            fresh, fresh_mtime = path, mtime
+    return fresh
 
 
 class GitHubRepoSeedReader(SeedReader[GitHubRepoSeedSource]):
@@ -56,10 +73,6 @@ class GitHubRepoSeedReader(SeedReader[GitHubRepoSeedSource]):
         return lazy.duckdb.connect()
 
     def get_dataset_uri(self) -> str:
-        from utils.paths.private_tmp import private_tmp_dir
-
-        # Private: a token-backed scrape can hold a private repo's issues and PRs.
-        out_dir = private_tmp_dir("studio-github-repo-seed")
         cfg = ScrapeConfig(
             repos = list(self.source.repos),
             token = self.source.token,
@@ -68,10 +81,15 @@ class GitHubRepoSeedReader(SeedReader[GitHubRepoSeedSource]):
             include_comments = self.source.include_comments,
             max_comments_per_item = self.source.max_comments_per_item,
         )
-        cache_key = _scrape_cache_key(cfg)
-        cached_path = _lookup_cached_scrape(cache_key)
-        if cached_path is not None:
-            return cached_path
-        path = materialize_to_jsonl(cfg, out_dir)
-        _store_cached_scrape(cache_key, str(path))
-        return str(path)
+        cache_dir = Path(_CACHE_DIR)
+        key = _scrape_cache_key(cfg)
+        with _SCRAPE_CACHE_LOCK:
+            path = _JOB_SCRAPES.get(key)
+            if path and Path(path).exists():
+                return path
+            cache_dir.mkdir(parents = True, exist_ok = True)
+            cached = _fresh_cached_scrape(cache_dir, key)
+            if cached is None:
+                cached = materialize_to_jsonl(cfg, cache_dir, stem = f"github_{key}")
+            _JOB_SCRAPES[key] = str(cached)
+            return str(cached)

@@ -113,9 +113,9 @@ export function buildSeedConfig(
       return undefined;
     }
     const maxCommentsNum = parseIntStrict(config.github_max_comments_per_item ?? "30");
-    if (maxCommentsNum === null || maxCommentsNum < 0 || maxCommentsNum > 200) {
+    if (maxCommentsNum === null || maxCommentsNum < 0 || maxCommentsNum > 30) {
       errors.push(
-        `Seed ${config.name}: GitHub max comments per item must be an integer from 0 to 200.`,
+        `Seed ${config.name}: GitHub max comments per item must be an integer from 0 to 30.`,
       );
       return undefined;
     }

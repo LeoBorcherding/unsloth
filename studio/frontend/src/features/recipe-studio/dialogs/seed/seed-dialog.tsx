@@ -185,6 +185,8 @@ export function GithubRepoSeedForm({
   const includeComments = config.github_include_comments ?? true;
   const hasToken = Boolean(config.github_token?.trim());
   const usingEnvToken = !hasToken && serverHasEnvToken === true;
+  // The seed is GraphQL-only, and GitHub refuses anonymous GraphQL requests.
+  const tokenRequired = serverHasEnvToken === false;
 
   useEffect(() => {
     let cancelled = false;
@@ -314,7 +316,13 @@ export function GithubRepoSeedForm({
       <div className="grid gap-1.5">
         <div className="flex items-start justify-between gap-2">
           <FieldLabel
-            label="GitHub token (optional)"
+            label={
+              tokenRequired
+                ? "GitHub token (required)"
+                : serverHasEnvToken
+                  ? "GitHub token (optional)"
+                  : "GitHub token"
+            }
             htmlFor={tokenId}
             hint="Prefer the server GH_TOKEN / GITHUB_TOKEN env var. Use public_repo for public repos or repo for private repos."
           />
@@ -333,14 +341,19 @@ export function GithubRepoSeedForm({
           placeholder={
             usingEnvToken
               ? "Using server GH_TOKEN / GITHUB_TOKEN"
-              : "Leave blank to use server GH_TOKEN"
+              : tokenRequired
+                ? "No server GH_TOKEN, paste a token"
+                : "Leave blank to use server GH_TOKEN"
           }
+          aria-invalid={tokenRequired && !hasToken}
           aria-describedby={tokenHelpId}
         />
         <p id={tokenHelpId} className="text-xs text-muted-foreground">
           {usingEnvToken
             ? "Unsloth detected a server env token, so saved/shared recipes can leave this blank."
-            : "Blank is safest for saved/shared recipes because Unsloth will read the server environment at run time."}
+            : tokenRequired
+              ? "The server has no GH_TOKEN / GITHUB_TOKEN, and GitHub's API needs a token even for public repos."
+              : "Blank is safest for saved/shared recipes because Unsloth will read the server environment at run time."}
         </p>
         {hasToken && (
           <p className="rounded-lg bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
@@ -438,7 +451,7 @@ export function GithubRepoSeedForm({
               type="number"
               className="nodrag"
               min={0}
-              max={200}
+              max={30}
               disabled={!includeComments}
               value={config.github_max_comments_per_item ?? "30"}
               onChange={(e) =>

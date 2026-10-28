@@ -43,6 +43,7 @@ class RepoScraper:
         client: GitHubClient,
         trial_limits: Optional[Dict[str, int]] = None,
         light: bool = False,
+        comments: bool = True,
     ):
         self.owner = owner
         self.name = name
@@ -51,6 +52,7 @@ class RepoScraper:
         self.trial_limits = trial_limits or {}
         # light=True uses trimmed GraphQL queries so PR pages can be larger without hitting GitHub's node-count ceiling.
         self.light = light
+        self.comments = comments
         self.repo_dir = base_dir / f"{owner}__{name}"
         if not self.repo_dir.resolve().is_relative_to(base_dir.resolve()):
             raise ValueError(f"Repository {owner}/{name} would be scraped outside {base_dir}")
@@ -123,7 +125,12 @@ class RepoScraper:
                 "first": per_page,
                 "after": cursor,
             }
-            query = Q.ISSUES_PAGE_QUERY_LIGHT if self.light else Q.ISSUES_PAGE_QUERY
+            if not self.light:
+                query = Q.ISSUES_PAGE_QUERY
+            elif self.comments:
+                query = Q.ISSUES_PAGE_QUERY_LIGHT
+            else:
+                query = Q.ISSUES_PAGE_QUERY_LIGHT_NO_COMMENTS
             data = self.client.graphql(query, vars_)
             self._log_rate("issues", data)
             repo = (data.get("data") or {}).get("repository") or {}
@@ -228,7 +235,12 @@ class RepoScraper:
                 "first": per_page,
                 "after": cursor,
             }
-            query = Q.PRS_PAGE_QUERY_LIGHT if self.light else Q.PRS_PAGE_QUERY
+            if not self.light:
+                query = Q.PRS_PAGE_QUERY
+            elif self.comments:
+                query = Q.PRS_PAGE_QUERY_LIGHT
+            else:
+                query = Q.PRS_PAGE_QUERY_LIGHT_NO_COMMENTS
             data = self.client.graphql(query, vars_)
             self._log_rate("prs", data)
             repo = (data.get("data") or {}).get("repository") or {}

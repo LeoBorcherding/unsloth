@@ -390,6 +390,10 @@ def unstructured_seed_cache_root() -> Path:
     return tmp_root() / "unstructured-seed-cache"
 
 
+def github_seed_cache_root() -> Path:
+    return tmp_root() / "github-seed-cache"
+
+
 def unstructured_uploads_root() -> Path:
     return account_path("assets/datasets/unstructured-uploads")
 

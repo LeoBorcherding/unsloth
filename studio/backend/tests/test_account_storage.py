@@ -345,6 +345,10 @@ def test_lazy_paths_keep_imported_references_live(account_home):
             "plugins/data-designer-unstructured-seed/src/data_designer_unstructured_seed/chunking.py",
             {"_CACHE_DIR": roots.unstructured_seed_cache_root},
         ),
+        (
+            "plugins/data-designer-github-repo-seed/src/data_designer_github_repo_seed/impl.py",
+            {"_CACHE_DIR": roots.github_seed_cache_root},
+        ),
     ],
 )
 def test_legacy_root_names_resolve_at_use(account_home, filename, names):
