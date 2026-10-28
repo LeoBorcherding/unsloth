@@ -406,11 +406,13 @@ function BackendFileLink({
   const openFile = () => {
     void target
       .load()
-      .then((blob) =>
-        filesOpenInBrowser()
-          ? openFileInBrowser({ blob, name: named(blob), contentType: blob.type, key: `backend:${href}` })
-          : downloadFile(blob, named(blob), blob.type || undefined),
-      )
+      .then(async (blob) => {
+        if (filesOpenInBrowser()) {
+          openFileInBrowser({ blob, name: named(blob), contentType: blob.type, key: `backend:${href}` });
+          return;
+        }
+        await downloadFile(blob, named(blob), blob.type || undefined);
+      })
       .catch((error) => {
         if (!isDownloadCancelled(error)) toast.error(t("linkMenu.openFailed", { name: base }));
       });
