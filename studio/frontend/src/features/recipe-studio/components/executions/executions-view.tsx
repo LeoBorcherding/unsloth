@@ -391,7 +391,8 @@ export function ExecutionsView({
   }, [terminalLines.length]);
 
   return (
-    <div className="flex h-full min-h-0 max-md:w-full max-md:flex-col">
+    // min-w-0: without it this row grows to the table's width and the page clips it, Download included.
+    <div className="flex h-full min-h-0 min-w-0 flex-1 max-md:w-full max-md:flex-col">
       <ExecutionSidebar
         executions={executions}
         selectedExecutionId={selectedExecutionId}

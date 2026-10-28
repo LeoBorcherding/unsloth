@@ -699,7 +699,7 @@ function RunDialogBody({
           variant="dark"
           type="button"
           onClick={onRun}
-          disabled={loading || isFullRunNameMissing}
+          disabled={loading || validateLoading || isFullRunNameMissing}
           className="corner-squircle"
         >
           <HugeiconsIcon icon={CookBookIcon} className="size-3.5" />

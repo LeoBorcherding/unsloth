@@ -8,18 +8,20 @@ import {
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import { Button } from "@/components/ui/button";
-import { buildFitViewOptions } from "../../utils/graph/fit-view";
+import { buildFitViewOptions, fitViewPadding } from "../../utils/graph/fit-view";
 
 type LayoutControlsProps = {
   direction: "LR" | "TB";
   onLayout: () => void;
   onToggleDirection: () => void;
+  runIslandVisible?: boolean;
 };
 
 export function LayoutControls({
   direction,
   onLayout,
   onToggleDirection,
+  runIslandVisible = false,
 }: LayoutControlsProps): ReactElement {
   const { fitView, getNodes } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -36,10 +38,14 @@ export function LayoutControls({
     requestAnimationFrame(() => {
       refreshNodeInternals();
       requestAnimationFrame(() => {
-        fitView(buildFitViewOptions(getNodes()));
+        fitView(
+          buildFitViewOptions(getNodes(), {
+            padding: fitViewPadding(runIslandVisible),
+          }),
+        );
       });
     });
-  }, [fitView, getNodes, onLayout, refreshNodeInternals]);
+  }, [fitView, getNodes, onLayout, refreshNodeInternals, runIslandVisible]);
 
   const handleToggleDirection = useCallback(() => {
     onToggleDirection();
@@ -48,11 +54,22 @@ export function LayoutControls({
       requestAnimationFrame(() => {
         refreshNodeInternals();
         requestAnimationFrame(() => {
-          fitView(buildFitViewOptions(getNodes()));
+          fitView(
+            buildFitViewOptions(getNodes(), {
+              padding: fitViewPadding(runIslandVisible),
+            }),
+          );
         });
       });
     });
-  }, [fitView, getNodes, onLayout, onToggleDirection, refreshNodeInternals]);
+  }, [
+    fitView,
+    getNodes,
+    onLayout,
+    onToggleDirection,
+    refreshNodeInternals,
+    runIslandVisible,
+  ]);
 
   return (
     <Panel position="top-left" className="m-3 flex items-center gap-2">

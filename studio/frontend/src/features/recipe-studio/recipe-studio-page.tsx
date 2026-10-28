@@ -65,7 +65,7 @@ import { getGraphWarnings } from "./utils/graph-warnings";
 import {
   FIT_VIEW_DURATION_MS,
   FIT_VIEW_MAX_ZOOM,
-  FIT_VIEW_PADDING,
+  fitViewPadding,
   getFitViewTargetNodes,
 } from "./utils/graph/fit-view";
 import { buildRecipePayload } from "./utils/payload";
@@ -243,6 +243,7 @@ export function RecipeStudioPage({
   const pendingEditorTabFitRef = useRef(false);
   const forceEditorTabFitRef = useRef(false);
   const viewportMovedSinceAutoFitRef = useRef(true);
+  const runIslandVisibleRef = useRef(false);
   const {
     handleNodeClick,
     handleNodeDoubleClick,
@@ -401,6 +402,11 @@ export function RecipeStudioPage({
   const canvasInteractive = interactive && !executionLocked;
   const runBusy = previewLoading || fullLoading || executionLocked;
   const islandExecution = activeExecution ?? recentCompletedExecution;
+  const runIslandVisible = Boolean(
+    islandExecution &&
+      (isExecutionInProgress(islandExecution.status) ||
+        islandExecution.status === "completed"),
+  );
 
   // runFull needs a non-empty fullRunName and Easy mode has no input for it, so seed a default.
   useEffect(() => {
@@ -516,7 +522,7 @@ export function RecipeStudioPage({
         reactFlowInstance.fitView({
           duration: FIT_VIEW_DURATION_MS,
           maxZoom: FIT_VIEW_MAX_ZOOM,
-          padding: FIT_VIEW_PADDING,
+          padding: fitViewPadding(runIslandVisibleRef.current),
           nodes: targets.map((n) => ({ id: n.id })),
         });
       };
@@ -627,6 +633,19 @@ export function RecipeStudioPage({
     return scheduleFitView();
   }, [activeView, fitViewTick, reactFlowInstance, scheduleFitView]);
 
+  useEffect(() => {
+    runIslandVisibleRef.current = runIslandVisible;
+  }, [runIslandVisible]);
+
+  // A run's island docks top-center over the canvas: refit below it when a run starts.
+  const activeExecutionId = activeExecution?.id ?? null;
+  useEffect(() => {
+    if (!activeExecutionId || activeView !== "editor") {
+      return;
+    }
+    return scheduleFitView();
+  }, [activeExecutionId, activeView, scheduleFitView]);
+
   let editorContent: ReactElement;
   if (initialRecipeReady) {
     editorContent = (
@@ -665,6 +684,7 @@ export function RecipeStudioPage({
           direction={layoutDirection}
           onLayout={applyLayout}
           onToggleDirection={handleToggleDirection}
+          runIslandVisible={runIslandVisible}
         />
         <InternalsSync nodeIds={displayNodeIds} />
         <Background
@@ -748,20 +768,19 @@ export function RecipeStudioPage({
           onToggleInteractive={toggleInteractive}
           maximized={maximized}
           onToggleMaximize={toggleMaximize}
+          runIslandVisible={runIslandVisible}
         />
-        {islandExecution &&
-          (isExecutionInProgress(islandExecution.status) ||
-            islandExecution.status === "completed") && (
-            <Panel position="top-center" className="!m-0">
-              <ExecutionProgressIsland
-                execution={islandExecution}
-                currentColumnIcon={currentColumnIcon}
-                minimized={runtimeIslandMinimized}
-                onMinimizedChange={setRuntimeIslandMinimized}
-                onViewExecutions={() => setActiveView("executions")}
-              />
-            </Panel>
-          )}
+        {islandExecution && runIslandVisible && (
+          <Panel position="top-center" className="!m-0">
+            <ExecutionProgressIsland
+              execution={islandExecution}
+              currentColumnIcon={currentColumnIcon}
+              minimized={runtimeIslandMinimized}
+              onMinimizedChange={setRuntimeIslandMinimized}
+              onViewExecutions={() => setActiveView("executions")}
+            />
+          </Panel>
+        )}
         <RunValidateFloatingControls
           runBusy={runBusy}
           runDialogKind={runDialogKind}

@@ -6,6 +6,21 @@ import type { FitViewOptions, Node } from "@xyflow/react";
 export const FIT_VIEW_MAX_ZOOM = 1.1;
 export const FIT_VIEW_PADDING = 0.12;
 export const FIT_VIEW_DURATION_MS = 340;
+/** The run progress island docks top-center over the canvas (about 141 px tall expanded). */
+export const RUN_ISLAND_CLEARANCE_PX = 160;
+
+/** Fit padding that keeps nodes out from under the run progress island while it shows. */
+export function fitViewPadding(
+  runIslandVisible: boolean,
+): FitViewOptions["padding"] {
+  return runIslandVisible
+    ? {
+        top: `${RUN_ISLAND_CLEARANCE_PX}px`,
+        bottom: FIT_VIEW_PADDING,
+        x: FIT_VIEW_PADDING,
+      }
+    : FIT_VIEW_PADDING;
+}
 
 function isMarkdownNoteNode(node: Node): boolean {
   if (node.type !== "builder") {

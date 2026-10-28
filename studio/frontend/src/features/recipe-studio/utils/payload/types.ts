@@ -19,8 +19,6 @@ export type RecipePayload = {
   run: {
     rows: number;
     preview: boolean;
-    // biome-ignore lint/style/useNamingConvention: api schema
-    output_formats: string[];
     // biome-ignore lint/style/useNamingConvention: backend schema
     execution_type?: "preview" | "full";
     // biome-ignore lint/style/useNamingConvention: backend schema
