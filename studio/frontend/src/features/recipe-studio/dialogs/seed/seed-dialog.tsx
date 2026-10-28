@@ -42,7 +42,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { LocalSeedDropZone } from "./local-seed-drop-zone";
 import { UnstructuredDropZone, type FileEntry } from "./unstructured-drop-zone";
 import {
   LOCAL_SEED_UPLOAD_MAX_BYTES,
@@ -81,7 +83,6 @@ const SELECTION_OPTIONS: Array<{ value: SeedSelectionType; label: string }> = [
   { value: "partition_block", label: "Partition block" },
 ];
 
-const LOCAL_ACCEPT = ".csv,.json,.jsonl,.parquet";
 const DEFAULT_CHUNK_SIZE = 1200;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const MAX_CHUNK_SIZE = 20000;
@@ -799,6 +800,11 @@ export function SeedDialog({
             content_base64: payload,
             preview_size: 10,
           });
+          if (response.dropped_columns?.length) {
+            toast.info(
+              `Dropped the row-number column (${response.dropped_columns.join(", ")}).`,
+            );
+          }
           // Only uid-namespaced upload directories are deleted (single owner).
           if (uploadUid && unstructuredFileCount > 0) {
             queueUploadCleanup(uploadUid);
@@ -1020,23 +1026,30 @@ export function SeedDialog({
                 label="Structured file"
                 hint="Upload CSV, JSON, JSONL, or Parquet seed file."
               />
+              <LocalSeedDropZone
+                disabled={isInspecting}
+                onFile={(file) => {
+                  setLocalFile(file);
+                  onUpdate({
+                    hf_path: "",
+                    seed_columns: [],
+                    seed_drop_columns: [],
+                    seed_preview_rows: [],
+                    local_file_name: file.name,
+                  });
+                }}
+              />
               <div className="flex items-center gap-2">
-                <Input
-                  className="nodrag flex-1"
-                  type="file"
-                  accept={LOCAL_ACCEPT}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0] ?? null;
-                    setLocalFile(file);
-                    onUpdate({
-                      hf_path: "",
-                      seed_columns: [],
-                      seed_drop_columns: [],
-                      seed_preview_rows: [],
-                      local_file_name: file?.name ?? "",
-                    });
-                  }}
-                />
+                <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {(localFile?.name || config.local_file_name?.trim()) && (
+                    <>
+                      Selected:{" "}
+                      <span data-reload-snapshot-sensitive>
+                        {localFile?.name ?? config.local_file_name?.trim()}
+                      </span>
+                    </>
+                  )}
+                </p>
                 <Button
                   type="button"
                   variant="outline"
@@ -1047,17 +1060,6 @@ export function SeedDialog({
                   {isInspecting ? "Loading..." : "Load"}
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Max {LOCAL_SEED_UPLOAD_MAX_LABEL} per file.
-              </p>
-              {(localFile?.name || config.local_file_name?.trim()) && (
-                <p className="text-xs text-muted-foreground">
-                  Selected:{" "}
-                  <span data-reload-snapshot-sensitive>
-                    {localFile?.name ?? config.local_file_name?.trim()}
-                  </span>
-                </p>
-              )}
             </div>
           )}
 

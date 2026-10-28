@@ -104,10 +104,36 @@ def _serialize_preview_value(value: Any) -> Any:
     return to_preview_jsonable(value)
 
 
-def _serialize_preview_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {str(key): _serialize_preview_value(value) for key, value in row.items()} for row in rows
-    ]
+_PREVIEW_CELL_MAX_CHARS = 2000
+_BASE64_IMAGE_PREFIXES = ("data:image/", "iVBORw0KGgo", "/9j/", "R0lGOD", "UklGR")
+# The editor's MAX_IMAGE_PREVIEW_BYTES: past it, it shows a note instead of the image.
+_PREVIEW_IMAGE_MAX_BYTES = 200 * 1024
+
+
+def _cap_preview_cell(value: Any) -> Any:
+    # The rows ride along in every saved recipe. Image strings the editor can render stay whole.
+    if isinstance(value, dict):
+        return {key: _cap_preview_cell(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_cap_preview_cell(item) for item in value]
+    if not isinstance(value, str) or len(value) <= _PREVIEW_CELL_MAX_CHARS:
+        return value
+    if value.startswith(_BASE64_IMAGE_PREFIXES):
+        encoded = value.split("base64,", 1)[-1].rstrip("=")
+        if len(encoded) * 3 // 4 <= _PREVIEW_IMAGE_MAX_BYTES:
+            return value
+        return f"(image, {len(value)} chars, too large to preview)"
+    return f"{value[:_PREVIEW_CELL_MAX_CHARS]}... ({len(value)} chars)"
+
+
+def _serialize_preview_rows(
+    rows: list[dict[str, Any]], *, cap_cells: bool = False
+) -> list[dict[str, Any]]:
+    def serialize(value: Any) -> Any:
+        value = _serialize_preview_value(value)
+        return _cap_preview_cell(value) if cap_cells else value
+
+    return [{str(key): serialize(value) for key, value in row.items()} for row in rows]
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -851,6 +877,66 @@ def _decode_base64_payload(content_base64: str) -> bytes:
 _JSON_READ_OPTIONS = {"dtype": False, "convert_dates": False}
 
 
+def _duckdb_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _drop_csv_index_column(path: Path) -> list[str]:
+    """Drop a blank-header first column that only numbers the rows (a saved pandas index).
+
+    Any other blank-header column is data and keeps the name DuckDB gives it, as the run does.
+    """
+    import duckdb
+
+    source = _duckdb_literal(str(path))
+    tmp_csv = path.with_suffix(".tmp.csv")
+    try:
+        with duckdb.connect() as conn:
+            (delimiter,) = conn.execute("SELECT Delimiter FROM sniff_csv(?)", [str(path)]).fetchone()
+            read = f"read_csv({source}, delim = {_duckdb_literal(delimiter)}, all_varchar = true"
+            header = conn.execute(f"SELECT * FROM {read}, header = false) LIMIT 1").fetchone()
+            if not header or len(header) < 2 or (header[0] or "").strip():
+                return []
+            # Judged on the raw cells: with an all-text header and body the sniffer reads the
+            # header as data, so its types can't tell an index from text.
+            index = "TRY_CAST(column0 AS BIGINT)"
+            rows, filled, low, high, distinct = conn.execute(
+                f"SELECT count(*), count({index}), min({index}), max({index}), "
+                f"count(DISTINCT {index}) FROM {read}, header = false, skip = 1)"
+            ).fetchone()
+            if not (rows and filled == distinct == rows and low == 0 and high == rows - 1):
+                return []
+            names = [
+                row[0]
+                for row in conn.execute(f"DESCRIBE SELECT * FROM {read}, header = true)").fetchall()
+            ]
+            kept = ", ".join('"' + name.replace('"', '""') + '"' for name in names[1:])
+            conn.execute(
+                f"COPY (SELECT {kept} FROM {read}, header = true)) "
+                f"TO {_duckdb_literal(str(tmp_csv))} (HEADER, DELIMITER ',')"
+            )
+    except duckdb.Error as exc:
+        raise ValueError(str(exc)) from exc
+    tmp_csv.replace(path)
+    return [names[0]]
+
+
+def _read_csv_preview_rows(path: Path, preview_size: int) -> list[dict[str, Any]]:
+    # The run's own read (data_designer's `SELECT * FROM '<path>'`), so the sniffed delimiter and
+    # the deduped names (a, a_1) match what the recipe sees.
+    import duckdb
+
+    try:
+        with duckdb.connect() as conn:
+            cursor = conn.execute(
+                f"SELECT * FROM {_duckdb_literal(str(path))} LIMIT {int(preview_size)}"
+            )
+            names = [column[0] for column in cursor.description]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+    except duckdb.Error as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def _read_preview_rows_from_local_file(path: Path, preview_size: int) -> list[dict[str, Any]]:
     account_path(path)
     try:
@@ -867,24 +953,9 @@ def _read_preview_rows_from_local_file(path: Path, preview_size: int) -> list[di
     ext = path.suffix.lower()
     try:
         if ext == ".csv":
-            # Keep text as written: inference made 007 -> 7, 3 -> 3.0, NA/None -> missing.
-            csv_options = {
-                "encoding": "utf-8-sig",
-                "dtype": str,
-                "keep_default_na": False,
-                "na_values": [""],
-            }
-            df = pd.read_csv(path, nrows = preview_size, **csv_options)
-            df.columns = df.columns.str.strip()
-            unnamed = [c for c in df.columns if c == "" or c.startswith("Unnamed:")]
-            if unnamed:
-                df = df.drop(columns = unnamed)
-                full_df = pd.read_csv(path, **csv_options)
-                full_df.columns = full_df.columns.str.strip()
-                full_df = full_df.drop(columns = unnamed)
-                tmp_csv = path.with_suffix(".tmp.csv")
-                full_df.to_csv(tmp_csv, index = False, encoding = "utf-8")
-                tmp_csv.replace(path)
+            return _serialize_preview_rows(
+                _read_csv_preview_rows(path, preview_size), cap_cells = True
+            )
         elif ext == ".jsonl":
             df = pd.read_json(path, lines = True, **_JSON_READ_OPTIONS).head(preview_size)
         elif ext == ".json":
@@ -915,7 +986,7 @@ def _read_preview_rows_from_local_file(path: Path, preview_size: int) -> list[di
         ) from exc
 
     rows = df.to_dict(orient = "records")
-    return _serialize_preview_rows(rows)
+    return _serialize_preview_rows(rows, cap_cells = True)
 
 
 def _read_preview_rows_from_unstructured_file(
@@ -1100,7 +1171,7 @@ def inspect_seed_dataset(
 
     if not preview_rows:
         raise HTTPException(status_code = 422, detail = "dataset appears empty or unreadable")
-    preview_rows = _serialize_preview_rows(preview_rows)
+    preview_rows = _serialize_preview_rows(preview_rows, cap_cells = True)
     columns = _extract_columns(preview_rows)
 
     if not data_files:
@@ -1518,9 +1589,10 @@ def inspect_seed_upload(payload: SeedInspectUploadRequest) -> SeedInspectRespons
         )
 
     ensure_dir(SEED_UPLOAD_DIR)
-    stored_name = f"{uuid4().hex}_{filename}"
-    stored_path = SEED_UPLOAD_DIR / stored_name
+    # The display name goes back in the response; in the stored name a long one passes 255 chars.
+    stored_path = SEED_UPLOAD_DIR / f"{uuid4().hex}{ext}"
     stored_path.write_bytes(file_bytes)
+    dropped_columns: list[str] = []
 
     if seed_source_type == "unstructured":
         preview_rows = _read_preview_rows_from_unstructured_file(
@@ -1530,6 +1602,18 @@ def inspect_seed_upload(payload: SeedInspectUploadRequest) -> SeedInspectRespons
             chunk_overlap = payload.unstructured_chunk_overlap,
         )
     else:
+        if ext == ".csv":
+            account_path(stored_path)
+            try:
+                dropped_columns = _drop_csv_index_column(stored_path)
+            except (ValueError, OSError) as exc:
+                raise log_and_http_error(
+                    exc,
+                    422,
+                    "seed inspect failed",
+                    event = "data_recipe.seed.local_preview_failed",
+                    log = logger,
+                ) from exc
         preview_rows = _read_preview_rows_from_local_file(
             stored_path,
             int(payload.preview_size),
@@ -1545,6 +1629,7 @@ def inspect_seed_upload(payload: SeedInspectUploadRequest) -> SeedInspectRespons
         preview_rows = preview_rows,
         split = None,
         subset = None,
+        dropped_columns = dropped_columns,
     )
 
 

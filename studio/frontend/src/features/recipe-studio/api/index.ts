@@ -165,6 +165,8 @@ export type SeedInspectResponse = {
   // biome-ignore lint/style/useNamingConvention: api schema
   resolved_paths?: string[] | null;
   // biome-ignore lint/style/useNamingConvention: api schema
+  dropped_columns?: string[];
+  // biome-ignore lint/style/useNamingConvention: api schema
   total_rows?: number | null;
 };
 
