@@ -237,9 +237,16 @@ def _is_none(value: Any) -> bool:
     return value is None
 
 
+def _json_for_containers(value: Any) -> Any:
+    # The engine parses JSON text cells before rendering, so {{ col }} would print a Python repr.
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii = False)
+    return value
+
+
 def _apply_data_designer_expression_blank_patch() -> None:
     # "" is a real text Expression value (an unanswered optional field); data-designer 0.5 fails the run on it and
-    # later releases drop the row. Number / bool dtypes keep that, since "" cannot be cast.
+    # later releases drop the row. Number / bool dtypes can't hold "", so they fail with a message that says so.
     try:
         from data_designer.engine.column_generators.generators.expression import (  # pyright: ignore[reportMissingImports]
             ExpressionColumnGenerator,
@@ -251,17 +258,38 @@ def _apply_data_designer_expression_blank_patch() -> None:
         return
 
     original_prepare = ExpressionColumnGenerator.prepare_jinja2_template_renderer
+    original_cast = ExpressionColumnGenerator._cast_type
 
     @functools.wraps(original_prepare)
     def _patched_prepare(self: Any, *args: Any, **kwargs: Any) -> None:
         original_prepare(self, *args, **kwargs)
         env = getattr(getattr(self, "_template_render_fn", None), "func", None)
         env = getattr(env, "__self__", None)
-        if env is not None and self.config.dtype == "str":
-            env._assert_rendered_text_not_empty = _allow_empty_prompt
+        if env is None:
+            return
+        env.finalize = _json_for_containers
+        env._assert_rendered_text_not_empty = _allow_empty_prompt
+        if self.config.dtype == "str":
             self._is_empty_rendered_expression = _is_none
 
+    @functools.wraps(original_cast)
+    def _patched_cast(self: Any, value: Any) -> Any:
+        dtype = self.config.dtype
+        kind = {"int": "a whole number", "float": "a number", "bool": "true or false"}.get(dtype)
+        if kind is None:
+            return original_cast(self, value)
+        if str(value).strip():
+            try:
+                return original_cast(self, value)
+            except ValueError:
+                pass
+        raise ValueError(
+            f"Formula '{self.config.name}' produced {value!r}, which is not {kind}. "
+            "Change its type to text, or handle that case in the formula."
+        )
+
     ExpressionColumnGenerator.prepare_jinja2_template_renderer = _patched_prepare
+    ExpressionColumnGenerator._cast_type = _patched_cast
     setattr(ExpressionColumnGenerator, "_unsloth_expression_blank_patch_applied", True)
 
 
