@@ -2,7 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { CategoryConditionalParams, SamplerConfig } from "../../types";
-import { isValidSex, parseAgeRange, parseNumber } from "./parse";
+import { isValidSex, parseAgeRange, parseNumber, parseUuidFormat } from "./parse";
 
 const DATETIME_UNIT_MAP: Record<string, "Y" | "M" | "D" | "h" | "m" | "s"> = {
   year: "Y",
@@ -85,10 +85,19 @@ function buildSamplerParams(
     };
   }
   if (config.sampler_type === "uniform") {
-    return {
-      low: parseNumber(config.low),
-      high: parseNumber(config.high),
-    };
+    const low = parseNumber(config.low);
+    const high = parseNumber(config.high);
+    // The engine rounds a continuous draw, so whole-number ends would get half the share of the rest.
+    if (
+      config.convert_to === "int" &&
+      low !== null &&
+      high !== null &&
+      Number.isInteger(low) &&
+      Number.isInteger(high)
+    ) {
+      return { low: low - 0.5, high: high + 0.5 };
+    }
+    return { low, high };
   }
   if (config.sampler_type === "gaussian") {
     return {
@@ -129,27 +138,15 @@ function buildSamplerParams(
     };
   }
   if (config.sampler_type === "uuid") {
-    const raw = config.uuid_format?.trim();
-    if (!raw) {
-      return {};
-    }
     // data_designer uuid is always uuid4; older UI saved it as a format.
-    if (raw.toLowerCase() === "uuid4") {
+    const params = parseUuidFormat(config.uuid_format ?? "");
+    if (!params) {
+      errors.push(
+        `Unique ID ${config.name}: format must be short, upper or prefix:<text>, separated by commas.`,
+      );
       return {};
     }
-    if (raw.toLowerCase() === "short" || raw.toLowerCase() === "short_form") {
-      // biome-ignore lint/style/useNamingConvention: api schema
-      return { short_form: true };
-    }
-    if (raw.toLowerCase() === "upper" || raw.toLowerCase() === "uppercase") {
-      return { uppercase: true };
-    }
-    if (raw.toLowerCase().startsWith("prefix:")) {
-      return { prefix: raw.slice("prefix:".length).trim() || undefined };
-    }
-    return {
-      prefix: raw,
-    };
+    return params;
   }
   const params: Record<string, unknown> = {};
   if (config.person_locale?.trim()) {

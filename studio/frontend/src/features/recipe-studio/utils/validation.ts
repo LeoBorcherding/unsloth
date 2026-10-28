@@ -2,7 +2,13 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { NodeConfig } from "../types";
-import { isValidSex, parseAgeRange, parseIntNumber, parseNumber } from "./parse";
+import {
+  isValidSex,
+  parseAgeRange,
+  parseIntNumber,
+  parseNumber,
+  parseUuidFormat,
+} from "./parse";
 import { VALIDATOR_OXC_CODE_LANGS, VALIDATOR_SQL_CODE_LANGS } from "./validators/code-lang";
 import { isOxcCodeShape } from "./validators/oxc-code-shape";
 import { isOxcValidationMode } from "./validators/oxc-mode";
@@ -89,7 +95,9 @@ export function getConfigErrors(config: NodeConfig | null): string[] {
       if (!config.datetime_unit) {
         errors.push("Datetime unit required.");
       }
-      if (config.datetime_start && config.datetime_end) {
+      if (!config.datetime_start?.trim() || !config.datetime_end?.trim()) {
+        errors.push("Pick a start and end date.");
+      } else {
         const start = new Date(config.datetime_start).getTime();
         const end = new Date(config.datetime_end).getTime();
         if (!(Number.isFinite(start) && Number.isFinite(end))) {
@@ -104,6 +112,8 @@ export function getConfigErrors(config: NodeConfig | null): string[] {
       const max = parseNumber(config.dt_max);
       if (min === null || max === null) {
         errors.push("Timedelta dt_min/dt_max must be numbers.");
+      } else if (!(Number.isInteger(min) && Number.isInteger(max)) || min < 0) {
+        errors.push("Timedelta dt_min/dt_max must be whole numbers, 0 or more.");
       } else if (min >= max) {
         errors.push("Timedelta dt_min must be < dt_max.");
       }
@@ -113,6 +123,9 @@ export function getConfigErrors(config: NodeConfig | null): string[] {
       if (!config.timedelta_unit) {
         errors.push("Timedelta unit required.");
       }
+    }
+    if (config.sampler_type === "uuid" && !parseUuidFormat(config.uuid_format ?? "")) {
+      errors.push("Unique ID format must be short, upper or prefix:<text>, separated by commas.");
     }
     if (config.sampler_type === "subcategory" && !config.subcategory_parent) {
       errors.push("Subcategory needs a parent category column.");
@@ -131,6 +144,12 @@ export function getConfigErrors(config: NodeConfig | null): string[] {
         const parsed = parseAgeRange(config.person_age_range);
         if (!parsed) {
           errors.push("Person age range must be like 18-70.");
+        } else if (
+          !(Number.isInteger(parsed[0]) && Number.isInteger(parsed[1])) ||
+          parsed[0] >= parsed[1] ||
+          parsed[1] > 114
+        ) {
+          errors.push("Person age range must be whole numbers from 0 to 114, low to high.");
         }
       }
     }

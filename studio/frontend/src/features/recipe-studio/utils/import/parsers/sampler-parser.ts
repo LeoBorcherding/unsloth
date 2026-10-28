@@ -10,6 +10,7 @@ import {
   readNumberString,
   readString,
 } from "../helpers";
+import { parseUuidFormat } from "../../parse";
 
 const SAMPLER_TYPES: SamplerType[] = [
   "category",
@@ -59,25 +60,38 @@ function parseCategoryConditionalParams(
   return Object.keys(conditional).length > 0 ? conditional : undefined;
 }
 
-const UUID_RESERVED_FORMATS = new Set(["uuid4", "short", "short_form", "upper", "uppercase"]);
-
-// Rebuild the UI string from the three uuid fields buildSamplerParams writes; a prefix equal to a
-// reserved word comes back in its `prefix:` escaped form so re-saving keeps it a prefix.
+// Rebuild the UI string from the three uuid fields buildSamplerParams writes; a prefix that would
+// read back as something else comes back in its `prefix:` escaped form so re-saving keeps it a prefix.
 function readUuidFormat(params: Record<string, unknown>): string {
-  const prefix = readString(params.prefix)?.trim();
-  if (prefix) {
-    const lowered = prefix.toLowerCase();
-    return UUID_RESERVED_FORMATS.has(lowered) || lowered.startsWith("prefix:")
-      ? `prefix:${prefix}`
-      : prefix;
-  }
+  const parts: string[] = [];
   if (params.short_form === true) {
-    return "short";
+    parts.push("short");
   }
   if (params.uppercase === true) {
-    return "upper";
+    parts.push("upper");
+  }
+  const prefix = readString(params.prefix)?.trim();
+  if (prefix) {
+    const bare = parseUuidFormat(prefix);
+    const readsBack =
+      parts.length === 0 && bare?.prefix === prefix && Object.keys(bare).length === 1;
+    parts.push(readsBack ? prefix : `prefix:${prefix}`);
+  }
+  if (parts.length > 0) {
+    return parts.join(", ");
   }
   return readString(params.format) ?? "";
+}
+
+// The builder widens a whole-number int range by half a unit each side; undo that for the fields.
+function readUniformBounds(params: Record<string, unknown>, isInt: boolean): [string, string] {
+  const { low, high } = params;
+  const isHalf = (value: unknown) =>
+    typeof value === "number" && Number.isInteger(value + 0.5) && !Number.isInteger(value);
+  if (isInt && isHalf(low) && isHalf(high)) {
+    return [String((low as number) + 0.5), String((high as number) - 0.5)];
+  }
+  return [readNumberString(low), readNumberString(high)];
 }
 
 export function parseSampler(
@@ -151,6 +165,7 @@ export function parseSampler(
   }
 
   if (samplerType === "uniform") {
+    const [low, high] = readUniformBounds(params, normalizedConvertTo === "int");
     return {
       id,
       kind: "sampler",
@@ -160,8 +175,8 @@ export function parseSampler(
       drop,
       // biome-ignore lint/style/useNamingConvention: api schema
       convert_to: normalizedConvertTo,
-      low: readNumberString(params.low),
-      high: readNumberString(params.high),
+      low,
+      high,
     };
   }
 

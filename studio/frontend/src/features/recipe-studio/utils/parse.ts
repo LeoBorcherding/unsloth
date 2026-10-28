@@ -17,6 +17,42 @@ export function parseIntNumber(value?: string): number | null {
   return num;
 }
 
+const UUID_SHORT = new Set(["short", "short_form"]);
+const UUID_UPPER = new Set(["upper", "uppercase"]);
+
+/**
+ * Unique ID format: `short`, `upper` and `prefix:<text>` combine with commas; text that starts with
+ * none of them is a bare prefix. Null when a list mixes the two.
+ */
+export function parseUuidFormat(raw: string): Record<string, unknown> | null {
+  const value = raw.trim();
+  const params: Record<string, unknown> = {};
+  let rest = value;
+  let first = true;
+  while (rest) {
+    const comma = rest.indexOf(",");
+    const token = (comma === -1 ? rest : rest.slice(0, comma)).trim().toLowerCase();
+    if (token.startsWith("prefix:")) {
+      // Runs to the end, so a prefix can hold commas.
+      const prefix = rest.trim().slice("prefix:".length).trim();
+      if (prefix) {
+        params.prefix = prefix;
+      }
+      return params;
+    }
+    if (UUID_SHORT.has(token)) {
+      params.short_form = true;
+    } else if (UUID_UPPER.has(token)) {
+      params.uppercase = true;
+    } else if (token !== "uuid4") {
+      return first ? { prefix: value } : null;
+    }
+    first = false;
+    rest = comma === -1 ? "" : rest.slice(comma + 1);
+  }
+  return params;
+}
+
 export function parseAgeRange(value?: string): [number, number] | null {
   if (!value) {
     return null;

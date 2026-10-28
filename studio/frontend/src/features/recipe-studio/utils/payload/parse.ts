@@ -6,5 +6,6 @@ export {
   parseAgeRange,
   parseJsonObject,
   parseNumber,
+  parseUuidFormat,
 } from "../parse";
 
