@@ -28,9 +28,10 @@ export function OutputValue({ value }: { value: unknown }) {
       </div>
     );
   }
-  if (isDatasetValue(value) && value.ref) return <DatasetOutput value={value} />;
-  if (isStructuredValue(value)) return <StructuredOutput value={value} />;
+  // Inline rows first: a Benchmark result shows without reading its file back.
   if (isDatasetPreview(value)) return <DatasetRows value={value} />;
+  if (isDatasetValue(value)) return <DatasetOutput value={value} />;
+  if (isStructuredValue(value)) return <StructuredOutput value={value} />;
   if (typeof value === "string") {
     return (
       <p className="max-h-72 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-foreground">
