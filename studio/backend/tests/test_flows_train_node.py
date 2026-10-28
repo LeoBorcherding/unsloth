@@ -156,3 +156,100 @@ def test_live_metrics_stream_to_the_node_as_a_partial(monkeypatch):
     assert ctx.partials[0][1]["loss_history"] == [2.0, 1.5]
     assert out["metrics"]["loss_history"] == [2.0, 1.5]
     assert out["holdout"] is None
+
+
+def test_holdout_splits_only_the_sliced_rows(monkeypatch):
+    monkeypatch.setattr("hub.utils.host_paths.cache_reference", lambda p: f"cache:{p}")
+    started = []
+    ctx = _Ctx(_recipe_routes(started), holdout_percent = 10, dataset_slice_end = 9)
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    files = _uploads(ctx)
+    train = next(rows for name, rows in files.items() if name.endswith("-train.jsonl"))
+    held = next(rows for name, rows in files.items() if name.endswith("-holdout.jsonl"))
+    assert len(train) == 9 and len(held) == 1
+    assert {r["q"] for r in train + held} == {f"q{i}" for i in range(10)}
+    assert "dataset_slice_end" not in started[0]
+
+
+def test_holdout_reads_hub_datasets_with_the_requests_token(monkeypatch):
+    seen = {}
+
+    def load_rows(dataset, token, end):
+        seen["token"] = token
+        return ROWS
+
+    monkeypatch.setattr(training, "_load_rows", load_rows)
+    monkeypatch.setattr("core.training.account_jobs.managed_account", lambda: False)
+    ctx = _Ctx(_recipe_routes([]), holdout_percent = 10)
+    ctx.inputs = {"dataset": {"kind": "dataset", "source": "hf", "ref": "org/gated"}}
+    ctx.caller = type("C", (), {"hf_token": "hf_req"})()
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    assert seen["token"] == "hf_req"
+
+
+def test_grpo_sends_objective_rewards_and_roles(monkeypatch):
+    monkeypatch.setattr("hub.utils.host_paths.cache_reference", lambda p: f"cache:{p}")
+    started = []
+    ctx = _Ctx(
+        _recipe_routes(started),
+        objective = "grpo",
+        prompt_column = "q",
+        answer_column = "a",
+        num_generations = 6,
+        rewards = [{"name": "exact-answer", "weight": 2}, {"name": " ", "weight": 1}],
+    )
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    body = started[0]
+    assert body["objective"] == "grpo" and body["grpo_num_generations"] == 6
+    assert body["grpo_rewards"] == [{"name": "exact-answer", "weight": 2.0}]
+    assert body["custom_format_mapping"] == {"q": "prompt", "a": "answer"}
+    assert "<answer>" in body["rl_system_prompt"]
+
+
+def test_dpo_maps_chosen_and_rejected_and_ignores_the_response_column(monkeypatch):
+    monkeypatch.setattr("hub.utils.host_paths.cache_reference", lambda p: f"cache:{p}")
+    started = []
+    ctx = _Ctx(
+        _recipe_routes(started),
+        objective = "dpo",
+        response_column = "unused",
+        chosen_column = "q",
+        rejected_column = "a",
+        beta = 0.2,
+    )
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    body = started[0]
+    assert body["objective"] == "dpo" and body["rl_beta"] == 0.2
+    assert body["custom_format_mapping"] == {"q": "chosen", "a": "rejected"}
+    assert "grpo_rewards" not in body
+
+
+def test_grpo_without_rewards_is_refused():
+    ctx = _Ctx(_recipe_routes([]), objective = "grpo", rewards = [])
+    with pytest.raises(FlowNodeError, match = "reward"):
+        asyncio.run(training.finetune(ctx))
+
+
+def test_reward_ceiling_is_the_best_weighted_sum():
+    assert training.reward_ceiling(
+        [{"name": "exact-answer", "weight": 1.0}, {"name": "soft-xml-format", "weight": 1.0}]
+    ) == 2.5
+    # A negative weight's best is its rule's lowest score.
+    assert training.reward_ceiling([{"name": "numeric-close", "weight": -1.0}]) == 2.0
+    assert training.reward_ceiling([{"name": "no-such-reward", "weight": 1.0}]) is None
+
+
+def test_reward_history_reads_the_status_rl_log():
+    payload = {"metric_history": {"rl": [{"step": 1, "reward": 0.25}, {"step": 2, "kl": 0.1}, {"step": 3, "reward": 1.5}]}}
+    assert training.reward_history(payload) == [0.25, 1.5]
+    assert training.reward_metrics([0.25, 1.5], 2.5) == {
+        "reward": 1.5,
+        "reward_start": 0.25,
+        "reward_history": [0.25, 1.5],
+        "reward_max": 2.5,
+    }
+    assert training.reward_history({}) == [] and training.reward_metrics([], 2.5) == {}

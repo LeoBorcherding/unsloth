@@ -21,7 +21,6 @@ import {
 import type { RfNode } from "./derive-rf";
 import { nodeIcon } from "./icons";
 import { MediaThumb, isMediaValue } from "./media";
-import { TrainNodeBody } from "./train-node";
 import {
   CollapsedPorts,
   type FieldRow,
@@ -307,10 +306,7 @@ function FlowNodeViewImpl({ id }: NodeProps<RfNode>) {
           {Body ? <Body node={node} /> : null}
           {fields && <NodeFieldRows rows={fields.rows} />}
           {fields && <NodeDisclosure sections={fields.long} />}
-          {spec.type === "train.finetune" && (
-            <TrainNodeBody node={node} runtime={runtime} />
-          )}
-          {spec.type !== "train.finetune" &&
+          {!look.ownsOutputs &&
             (runtime.outputs ||
               runtime.partial ||
               runtime.text ||

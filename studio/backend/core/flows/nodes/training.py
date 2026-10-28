@@ -34,6 +34,13 @@ OPTIONAL_INTS = (
 HOLDOUT_MAX_ROWS = 200_000
 HISTORY_POINTS = 80
 LOADERS = {".parquet": "parquet", ".csv": "csv", ".json": "json", ".jsonl": "json"}
+OBJECTIVES = ("sft", "grpo", "dpo", "orpo")
+GRPO_SETTINGS = {
+    "num_generations": ("grpo_num_generations", int),
+    "max_completion_length": ("grpo_max_completion_length", int),
+    "temperature": ("grpo_temperature", float),
+    "grpo_variant": ("grpo_variant", str),
+}
 EXPORT_QUANTS = {"q4_k_m": "Q4_K_M", "q5_k_m": "Q5_K_M", "q8_0": "Q8_0", "f16": "F16"}
 
 
@@ -76,18 +83,30 @@ async def finetune(ctx: NodeContext) -> dict:
     mapping = ctx.params.get("custom_format_mapping")
     prompt_col = str(ctx.params.get("prompt_column") or "").strip()
     response_col = str(ctx.params.get("response_column") or "").strip()
+    objective = str(ctx.params.get("objective") or "sft")
+    if objective not in OBJECTIVES:
+        raise FlowNodeError(f"Unknown objective {objective!r}")
+    rewards: list[dict] = []
     if isinstance(mapping, dict) and mapping:
         config["custom_format_mapping"] = mapping
+    elif objective != "sft":
+        roles = rl_roles(ctx.params, objective)
+        if roles:
+            config["custom_format_mapping"] = roles
     elif prompt_col and response_col:
         config["custom_format_mapping"] = {prompt_col: "user", response_col: "assistant"}
     elif prompt_col or response_col:
         raise FlowNodeError("Set both the prompt and the response column, or leave both blank")
+    if objective != "sft":
+        rewards = rl_config(ctx.params, objective, config)
     holdout = None
     percent = int(ctx.params.get("holdout_percent") or 0)
     if percent > 0:
         dataset, holdout = await holdout_split(
             ctx, dataset, percent, int(ctx.params.get("holdout_seed") or 0)
         )
+        # The split already covers only the sliced rows; slicing the train half again would shrink it.
+        config.pop("dataset_slice_end", None)
     if dataset.get("source") == "hf":
         config["hf_dataset"] = dataset["ref"]
         if dataset.get("subset"):
@@ -129,13 +148,15 @@ async def finetune(ctx: NodeContext) -> dict:
     async def cancel() -> None:
         await ctx.call("POST", "/api/train/stop", json = {"save": True, "expected_job_id": job_id})
 
-    history: dict[str, list] = {"loss": []}
+    history: dict[str, list] = {"loss": [], "reward": []}
+    reward_max = reward_ceiling(rewards) if rewards else None
 
     async def status() -> Any:
         payload = await ctx.call("GET", "/api/train/status")
         slot = _training(payload if isinstance(payload, dict) else {})
         if slot.step and (not slot.job_id or slot.job_id == job_id):
             history["loss"] = await loss_history(ctx, job_id) or history["loss"]
+            history["reward"] = reward_history(payload) or history["reward"]
             ctx.partial(
                 "metrics",
                 {
@@ -143,6 +164,7 @@ async def finetune(ctx: NodeContext) -> dict:
                     "steps": slot.step,
                     "total": slot.total_steps,
                     "loss_history": history["loss"],
+                    **reward_metrics(history["reward"], reward_max),
                 },
                 step = slot.step,
                 total = slot.total_steps,
@@ -182,7 +204,10 @@ async def finetune(ctx: NodeContext) -> dict:
         "total": slot.total_steps,
         "job_id": job_id,
         "loss_history": await loss_history(ctx, job_id) or history["loss"],
+        **reward_metrics(reward_history(payload) or history["reward"], reward_max),
     }
+    if objective != "sft":
+        metrics["objective"] = objective
     if holdout:
         metrics["train_rows"] = dataset.get("rows")
         metrics["holdout_rows"] = holdout["rows"]
@@ -191,9 +216,85 @@ async def finetune(ctx: NodeContext) -> dict:
             "kind": "checkpoint",
             "name": run,
             "base_model": config["model_name"],
+            "output_dir": details.get("output_dir"),
         },
         "metrics": metrics,
         "holdout": holdout,
+    }
+
+
+def rl_roles(params: dict, objective: str) -> dict:
+    """Column -> RL role for the columns the node names; Studio detects the rest by name."""
+    named = {"prompt": params.get("prompt_column")}
+    if objective == "grpo":
+        named["answer"] = params.get("answer_column")
+    else:
+        named["chosen"] = params.get("chosen_column")
+        named["rejected"] = params.get("rejected_column")
+    return {str(col).strip(): role for role, col in named.items() if str(col or "").strip()}
+
+
+def rl_config(params: dict, objective: str, config: dict) -> list[dict]:
+    """The /api/train/start RL fields; returns the GRPO rewards it picked."""
+    config["objective"] = objective
+    if params.get("beta") not in (None, ""):
+        config["rl_beta"] = float(params["beta"])
+    if objective != "grpo":
+        return []
+    rewards = [
+        {"name": str(r.get("name") or "").strip(), "weight": float(r.get("weight", 1.0))}
+        for r in params.get("rewards") or []
+        if isinstance(r, dict) and str(r.get("name") or "").strip()
+    ]
+    if not rewards:
+        raise FlowNodeError("GRPO needs at least one reward")
+    config["grpo_rewards"] = rewards
+    for param, (field, cast) in GRPO_SETTINGS.items():
+        if params.get(param) not in (None, ""):
+            config[field] = cast(params[param])
+    if str(params.get("system_prompt") or "").strip():
+        config["rl_system_prompt"] = str(params["system_prompt"])
+    return rewards
+
+
+def _rule_best(rule: dict) -> tuple[float, float]:
+    scores = [v for v in (rule.get("score") or {}).values()]
+    scores += [b["score"] for b in rule.get("bands") or []]
+    scores += [rule[k] for k in ("missing", "else") if k in rule]
+    return min(scores), max(scores)
+
+
+def reward_ceiling(rewards: list[dict]) -> Optional[float]:
+    """Best summed reward a completion can earn with these weights; None if a reward is unknown."""
+    from core.training.rewards import RewardError, get_reward
+
+    total = 0.0
+    for r in rewards:
+        try:
+            lo, hi = _rule_best(get_reward(r["name"])["rule"])
+        except (RewardError, KeyError, ValueError):
+            return None
+        total += r["weight"] * (hi if r["weight"] >= 0 else lo)
+    return round(total, 4)
+
+
+def reward_history(payload: Any) -> list:
+    rl = ((payload or {}).get("metric_history") or {}).get("rl") if isinstance(payload, dict) else None
+    if not isinstance(rl, list):
+        return []
+    return downsample(
+        [round(float(e["reward"]), 4) for e in rl if isinstance(e, dict) and isinstance(e.get("reward"), (int, float))]
+    )
+
+
+def reward_metrics(history: list, ceiling: Optional[float]) -> dict:
+    if not history:
+        return {}
+    return {
+        "reward": history[-1],
+        "reward_start": history[0],
+        "reward_history": history,
+        "reward_max": ceiling,
     }
 
 
@@ -227,7 +328,7 @@ def holdout_row_ids(total: int, percent: int, seed: int) -> list[int]:
     return sorted(order[:count])
 
 
-def _load_rows(dataset: dict) -> list[dict]:
+def _load_rows(dataset: dict, token: Any, end: Optional[int]) -> list[dict]:
     from datasets import load_dataset
 
     from core.flows.nodes.data import local_seed_path
@@ -237,6 +338,7 @@ def _load_rows(dataset: dict) -> list[dict]:
             str(dataset["ref"]),
             dataset.get("subset") or None,
             split = dataset.get("split") or "train",
+            token = token,
         )
     else:
         path = local_seed_path(dataset.get("ref"))
@@ -246,6 +348,8 @@ def _load_rows(dataset: dict) -> list[dict]:
                 "Hold-out works on Parquet, CSV or JSON datasets; set Hold out % to 0 for this one"
             )
         loaded = load_dataset(builder, data_files = path, split = "train")
+    if end is not None:
+        loaded = loaded.select(range(min(len(loaded), end + 1)))
     if len(loaded) > HOLDOUT_MAX_ROWS:
         raise FlowNodeError(
             f"{len(loaded)} rows is too many to hold out from here; set Hold out % to 0 or use a smaller slice"
@@ -258,17 +362,25 @@ async def holdout_split(
 ) -> tuple[dict, dict]:
     """Train on the rest of the rows and hand the held-out ones on as their own dataset."""
     from core.flows.nodes.data import recipe_artifact, recipe_rows, upload_rows
+    from core.training.account_jobs import account_hf_token
 
     if str(ctx.params.get("task") or "text") != "text" or ctx.params.get("dataset_streaming"):
         raise FlowNodeError(
             "Hold-out works on text datasets that are not streamed; set Hold out % to 0"
         )
     ctx.progress(phase = "Holding out rows")
+    # Same "use rows up to" slice the trainer would apply, so the split is of the configured range.
+    end = ctx.params.get("dataset_slice_end")
+    end = None if end in (None, "") else int(end)
     if dataset.get("source") == "recipe" and not recipe_artifact(dataset.get("ref")):
         rows = await recipe_rows(ctx, str(dataset["ref"]))
+        if end is not None:
+            rows = rows[: end + 1]
     else:
+        # The request's own Hub token, as /api/train/start gets it; managed accounts never borrow the server's.
+        token = account_hf_token(getattr(ctx.caller, "hf_token", None))
         try:
-            rows = await asyncio.to_thread(_load_rows, dataset)
+            rows = await asyncio.to_thread(_load_rows, dataset, token, end)
         except FlowNodeError:
             raise
         except Exception as exc:
