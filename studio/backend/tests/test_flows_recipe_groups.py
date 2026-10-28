@@ -180,8 +180,9 @@ def test_seed_tokens_and_local_seed_paths_stay_on_this_machine():
     }
     doc, _ = flow_from_recipe(payload, name = "SQL")
     assert "ghp_live" in json.dumps(doc)
-    out, _, _ = asyncio.run(package.export_flow(doc, "json", None))
-    assert b"ghp_live" not in out
+    for mode in ("json", "package", "baked"):
+        out, _, _ = asyncio.run(package.export_flow(doc, mode, None))
+        assert b"ghp_live" not in out
 
     payload = copy.deepcopy(SQL)
     payload["recipe"]["seed_config"] = {

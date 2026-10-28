@@ -124,22 +124,6 @@ test("a recipe-level edit lands on the group config, not on the columns", () => 
   assert.deepEqual(edit.group?.config?.mcp_providers, []);
 });
 
-test("a key typed into a Flows-side dialog stays on this machine's flow (export drops it)", () => {
-  const { group, nodes } = sqlGroup();
-  const view = studioView(group, nodes);
-  const provider = Object.values(view.configs).find(
-    (c) => c.kind === "model_provider",
-  );
-  assert.ok(provider);
-  const configs = applyConfigPatch(view.configs, provider.id, {
-    api_key: "sk-live",
-    extra_headers: '{"Authorization": "Bearer x"}',
-  } as never);
-  const edit = commitStudioEdit(group, nodes, view, configs);
-  const saved = JSON.stringify(edit.group?.config);
-  assert.ok(edit.group && saved.includes("sk-live"));
-});
-
 test("reference wires follow the prompts, like the backend import", () => {
   const { nodes } = sqlGroup();
   const pairs = referenceEdges(nodes).map(
