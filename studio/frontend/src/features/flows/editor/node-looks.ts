@@ -6,6 +6,7 @@ import type { ComponentType } from "react";
 import { COLUMN_TYPE } from "../recipe/recipe-columns";
 import { RECIPE_COLUMN_LOOK } from "../recipe/recipe-node-look";
 import type { FlowNode, NodeSpec } from "../types";
+import { BENCHMARK_LOOK } from "./benchmark-node";
 import { TRAIN_LOOK } from "./train-node";
 
 /** Per-type content for the shared node card. Anything left out falls back to the
@@ -29,4 +30,5 @@ export interface NodeLook {
 export const NODE_LOOKS: Record<string, NodeLook> = {
   [COLUMN_TYPE]: RECIPE_COLUMN_LOOK,
   "train.finetune": TRAIN_LOOK,
+  "train.benchmark": BENCHMARK_LOOK,
 };
