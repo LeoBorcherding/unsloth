@@ -11,6 +11,7 @@ import {
   Clock01Icon,
   CodeIcon,
   CodeSimpleIcon,
+  Delete02Icon,
   DiceFaces03Icon,
   EqualSignIcon,
   FingerPrintIcon,
@@ -29,6 +30,8 @@ import {
   type NodeProps,
   NodeResizer,
   Position,
+  useReactFlow,
+  useStore,
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import { type ReactElement, memo, useEffect, useMemo } from "react";
@@ -380,6 +383,9 @@ function RecipeGraphNodeBase({
     (state) => state.setLlmAuxVisibility,
   );
   const updateNodeInternals = useUpdateNodeInternals();
+  const { deleteElements } = useReactFlow();
+  // The canvas lock control turns selection off, which already stops the Delete keys.
+  const canvasLocked = !useStore((state) => state.elementsSelectable);
   const executionLocked = Boolean(data.executionLocked);
   const runtimeState = data.runtimeState ?? "idle";
   const connectionStatus = useNodeConnectionStatus(id, config);
@@ -539,6 +545,22 @@ function RecipeGraphNodeBase({
             }}
           >
             Configure
+          </Button>
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            className="nodrag"
+            disabled={executionLocked || canvasLocked}
+            aria-label={`Delete ${data.name}`}
+            title="Delete block"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void deleteElements({ nodes: [{ id }] });
+            }}
+          >
+            <HugeiconsIcon icon={Delete02Icon} className="size-3.5" />
           </Button>
         </div>
       </BaseNodeHeader>

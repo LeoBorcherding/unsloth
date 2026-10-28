@@ -18,6 +18,8 @@ export type RecipeSnapshot = {
   layoutDirection: LayoutDirection;
   nextId: number;
   nextY: number;
+  // Some block had no stored position, so the loader lays the graph out.
+  needsLayout?: boolean;
 };
 
 export type ImportResult = {

@@ -10,12 +10,17 @@ type AvailableReferencesInlineProps = {
 };
 
 const MAX_ROWS = 2;
+// More chips than two rows of the widest card can hold; measuring past this
+// made every node render every column twice (quadratic in column count).
+const MAX_MEASURED = 96;
 
 export function AvailableReferencesInline({
   entries,
 }: AvailableReferencesInlineProps): ReactElement | null {
   const [expanded, setExpanded] = useState(false);
-  const [collapsedCount, setCollapsedCount] = useState(entries.length);
+  const [collapsedCount, setCollapsedCount] = useState(
+    Math.min(entries.length, MAX_MEASURED),
+  );
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const measureRefs = useRef<Array<HTMLSpanElement | null>>([]);
 
@@ -28,7 +33,7 @@ export function AvailableReferencesInline({
       (node): node is HTMLSpanElement => Boolean(node),
     );
     if (!(wrapper && items.length > 0)) {
-      setCollapsedCount(entries.length);
+      setCollapsedCount(Math.min(entries.length, MAX_MEASURED));
       return;
     }
 
@@ -73,7 +78,7 @@ export function AvailableReferencesInline({
         {!expanded && (
           <div className="invisible pointer-events-none absolute inset-0 -z-10">
             <div className="flex flex-wrap gap-1">
-              {entries.map((entry, index) => (
+              {entries.slice(0, MAX_MEASURED).map((entry, index) => (
                 <Badge
                   // biome-ignore lint/suspicious/noArrayIndexKey: static measurement mirror
                   key={`${entry.source}:${entry.name}:${index}`}

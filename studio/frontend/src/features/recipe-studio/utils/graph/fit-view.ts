@@ -4,6 +4,8 @@
 import type { FitViewOptions, Node } from "@xyflow/react";
 
 export const FIT_VIEW_MAX_ZOOM = 1.1;
+/** React Flow stops at 0.5x by default, too close to fit a 20-node TB recipe. */
+export const CANVAS_MIN_ZOOM = 0.15;
 export const FIT_VIEW_PADDING = 0.12;
 export const FIT_VIEW_DURATION_MS = 340;
 
@@ -38,6 +40,7 @@ export function buildFitViewOptions(
   return {
     duration: FIT_VIEW_DURATION_MS,
     maxZoom: FIT_VIEW_MAX_ZOOM,
+    minZoom: CANVAS_MIN_ZOOM,
     padding: FIT_VIEW_PADDING,
     nodes: targets.map((n) => ({ id: n.id })),
     ...overrides,
