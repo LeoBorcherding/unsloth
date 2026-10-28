@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""`unsloth doctor --gpus`: a multi-GPU preflight to run before a distributed job.
-
-Reports the GPUs, versions and interconnect, checks that peer copies keep their
-data, runs a short all_reduce across every visible GPU, and ends with a verdict
-and the settings to try. torch is imported lazily so `unsloth --help` stays fast.
-"""
+"""unsloth doctor --gpus: multi-GPU preflight; torch imported lazily to keep --help fast."""
 
 import os
 import shutil
@@ -85,8 +80,12 @@ def collect_gpus(torch) -> dict:
         "hip": hip,
         "nccl": None,
         "gpus": [],
+        "accelerator": None,
     }
     if not torch.cuda.is_available():
+        # A CUDA build that sees no device stays a failure.
+        if not info["cuda"] and not hip:
+            info["accelerator"] = _non_cuda_accelerator(torch)
         return info
     try:
         nccl = torch.cuda.nccl.version()
@@ -115,6 +114,22 @@ def collect_gpus(torch) -> dict:
             }
         )
     return info
+
+
+def _non_cuda_accelerator(torch) -> Optional[str]:
+    for name, probe in (
+        (
+            "mps",
+            getattr(getattr(getattr(torch, "backends", None), "mps", None), "is_available", None),
+        ),
+        ("xpu", getattr(getattr(torch, "xpu", None), "is_available", None)),
+    ):
+        try:
+            if callable(probe) and probe():
+                return name
+        except Exception:
+            pass
+    return None
 
 
 def driver_version(pynvml = None) -> Optional[str]:
@@ -403,6 +418,9 @@ def verdict(
     """(healthy, hints). Pure, so every branch is testable without GPUs."""
     hints = []
     gpus = info["gpus"]
+    if not gpus and info.get("accelerator"):
+        name = "Metal (MPS)" if info["accelerator"] == "mps" else "Intel XPU"
+        return True, [f"{name} detected: multi-GPU CUDA checks skipped."]
     if not gpus:
         return False, [
             "No GPU is visible to torch. Check `nvidia-smi`, CUDA_VISIBLE_DEVICES, and "
