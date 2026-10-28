@@ -351,6 +351,20 @@ class TestOneLoadedPackPerProcess:
             dd.resolve_selected_cuda_ordinals([0, 1])
         assert dd.resolve_selected_cuda_ordinals([0]) == [0]
 
+    def test_an_automatic_load_leaves_a_card_0_that_cannot_run_the_pack(self, monkeypatch, no_mask, tmp_path):
+        from core.inference import diffusion_device as dd
+
+        torch = self._torch(tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",))
+        _install(monkeypatch, torch)
+        assert dd.kpack_safe_auto_ordinal(None) == 1
+        assert dd.kpack_safe_auto_ordinal(0) == 0
+
+    def test_an_automatic_load_stays_put_when_card_0_runs_the_pack(self, monkeypatch, no_mask, tmp_path):
+        from core.inference import diffusion_device as dd
+
+        _install(monkeypatch, self._torch(tmp_path, [_props("gfx1010:xnack-"), _props("gfx1034")]))
+        assert dd.kpack_safe_auto_ordinal(None) is None
+
 class TestIdSpace:
     """Results are consumed as physical ids, so ordinals map through the mask."""
 

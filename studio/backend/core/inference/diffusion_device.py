@@ -594,6 +594,27 @@ def auto_cuda_ranking_possible() -> bool:
         return False
 
 
+def kpack_safe_auto_ordinal(ordinal: Optional[int]) -> Optional[int]:
+    """``ordinal``, or for an automatic load left on card 0 (None) the first card of the ROCm kernel pack this process
+    loads when card 0 cannot run it. Never raises."""
+    if ordinal is not None:
+        return ordinal
+    try:
+        import torch
+
+        from utils.hardware import hardware as hw
+
+        loaded, foreign = hw.rocm_ordinals_on_another_arch_pack()
+        if 0 not in foreign:
+            return None
+        for candidate in range(torch.cuda.device_count()):
+            if hw._props_gfx_arch(torch.cuda.get_device_properties(candidate)) == loaded:
+                return candidate
+    except Exception:  # noqa: BLE001 -- automatic placement keeps the current device
+        pass
+    return None
+
+
 def auto_cuda_ordinal_for_load() -> Optional[int]:
     """``resolve_auto_cuda_ordinal`` behind the cheap gate and the CUDA target check, for automatic loads."""
     planned = _PLANNED_ORDINAL.get()

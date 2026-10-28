@@ -113,6 +113,7 @@ from .diffusion_device import (
     pin_cuda_ordinal,
     placed_cuda_ordinal,
     auto_cuda_ordinal_for_load,
+    kpack_safe_auto_ordinal,
     resolve_diffusion_device_target,
     resolve_selected_cuda_ordinal,
     resolve_selected_cuda_ordinals,
@@ -5209,7 +5210,7 @@ class DiffusionBackend:
         _refuse_lora_without_loader(fam, loras)
         if auto_ordinal:
             # Automatic, after validation: one GPU, Apple, CPU and ROCm skip every probe here.
-            gpu_ordinal = auto_cuda_ordinal_for_load()
+            gpu_ordinal = kpack_safe_auto_ordinal(auto_cuda_ordinal_for_load())
         # Refuse an EXPLICIT precision this host can never honor BEFORE the load starts, so the route answers 409 with
         # the reason instead of evicting the resident model, downloading several GB and only then failing. The
         # declines that need the real footprint can only be found mid-load and surface through load-progress.
