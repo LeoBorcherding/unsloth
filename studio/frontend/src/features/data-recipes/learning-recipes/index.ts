@@ -22,6 +22,10 @@ const textToPythonUrl = new URL(
 ).href;
 const textToSqlUrl = new URL("./text-to-sql.json?no-inline", import.meta.url)
   .href;
+const conversationUrl = new URL(
+  "./conversation.json?no-inline",
+  import.meta.url,
+).href;
 const ocrDocumentExtractionUrl = new URL(
   "./ocr-document-extraction.json?no-inline",
   import.meta.url,
@@ -130,6 +134,13 @@ export const LEARNING_RECIPES: LearningRecipeDef[] = [
     description:
       "Use seed answer columns to generate high-quality instruction targets.",
     loadPayload: () => loadPayloadFromUrl(instructionFromAnswerUrl),
+  },
+  {
+    id: "conversation",
+    title: "Multi-Turn Chat",
+    description:
+      "Generate user-assistant conversations as a messages column ready for chat training.",
+    loadPayload: () => loadPayloadFromUrl(conversationUrl),
   },
   {
     id: "text-to-python",

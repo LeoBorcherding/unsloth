@@ -165,6 +165,25 @@ def _build_recipe_dataset_items() -> list[LocalDatasetItem]:
             )
         )
 
+        # Schema transform output, often the training shape, is written beside parquet-files.
+        processors_dir = entry / "processors-files"
+        if processors_dir.is_dir():
+            for processor_dir in sorted(processors_dir.iterdir()):
+                if not processor_dir.is_dir() or not any_not_appledouble_metadata(
+                    processor_dir.glob("*.parquet")
+                ):
+                    continue
+                items.append(
+                    LocalDatasetItem(
+                        id = f"{entry.name}:{processor_dir.name}",
+                        label = f"{entry.name} ({processor_dir.name})",
+                        path = str(processor_dir.resolve()),
+                        source = "recipe",
+                        rows = rows,
+                        updated_at = _safe_mtime(processor_dir),
+                    )
+                )
+
     return items
 
 

@@ -79,7 +79,8 @@ export function ProcessorsDialog({
             <div>
               <p className="text-sm font-semibold">Schema transform</p>
               <p className="text-xs text-muted-foreground">
-                Transform final rows to target schema (post-batch).
+                Writes a reshaped copy of the rows, listed for training as
+                its own dataset. The main dataset keeps the original rows.
               </p>
             </div>
             <Switch

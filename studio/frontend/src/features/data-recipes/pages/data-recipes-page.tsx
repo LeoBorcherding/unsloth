@@ -32,6 +32,7 @@ import { toastError } from "@/shared/toast";
 import {
   Album02Icon,
   BookOpen01Icon,
+  BubbleChatIcon,
   CodeIcon,
   CookBookIcon,
   Database02Icon,
@@ -100,6 +101,22 @@ const TEMPLATE_CARDS: TemplateCard[] = [
       "rgb(168 85 247 / 0.45)",
     ],
     learningRecipeId: "pdf-grounded-qa",
+  },
+  {
+    title: "Multi-Turn Chat",
+    description:
+      "Realistic user-assistant conversations in a messages column, ready for chat SFT.",
+    icon: BubbleChatIcon,
+    difficulty: "Starter",
+    learningBadges: ["Structured LLM", "Category", "Subcategory"],
+    surfaceClassName:
+      "from-rose-500/15 via-pink-500/5 to-transparent dark:from-rose-400/20 dark:via-pink-400/10 dark:to-rose-950/16",
+    shineColor: [
+      "rgb(244 63 94 / 0.45)",
+      "rgb(236 72 153 / 0.4)",
+      "rgb(251 113 133 / 0.45)",
+    ],
+    learningRecipeId: "conversation",
   },
   {
     title: "OCR Document Extraction",
