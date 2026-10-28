@@ -204,6 +204,7 @@ async def run_recipe_heldout(
             )
 
         duration = time.monotonic() - t0
+        # Two runs can finish in the same second (a Loop scores probe then test rows).
         run_id = f"benchmark_{RECIPE_HELDOUT_TASK_ID}_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         run_ids = {"candidate": run_id}
         _store(run_id, candidate_model, result["candidate"], result["samples"]["candidate"], duration)
