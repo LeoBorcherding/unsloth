@@ -60,9 +60,9 @@ const SEED_LABEL: Record<string, string> = {
 };
 
 const BUTTON =
-  "rounded-md border border-white/10 px-2 py-1 text-[12px] hover:bg-white/5";
+  "rounded-md border border-border/60 px-2 py-1 text-[12px] hover:bg-muted/60";
 const HEADING =
-  "text-[11px] font-semibold uppercase tracking-wider text-zinc-500";
+  "text-[11px] font-semibold uppercase tracking-wider text-muted-foreground";
 
 function names(list: unknown, key: string): string[] {
   return Array.isArray(list)
@@ -125,15 +125,15 @@ export function ColumnPanel({ node }: { node: FlowNode }) {
   return (
     <section className="flex flex-col gap-3 px-4 py-3">
       <div className="flex items-center gap-2">
-        <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300">
+        <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-700 dark:text-sky-300">
           {badge}
         </span>
-        <span className="truncate font-mono text-[12px] text-zinc-300">
+        <span className="truncate font-mono text-[12px] text-foreground">
           {columnName(node)}
         </span>
       </div>
       {line && (
-        <p className="line-clamp-4 whitespace-pre-wrap text-[12px] text-zinc-400">
+        <p className="line-clamp-4 whitespace-pre-wrap text-[12px] text-muted-foreground">
           {line}
         </p>
       )}
@@ -147,7 +147,7 @@ export function ColumnPanel({ node }: { node: FlowNode }) {
       >
         Edit column
       </button>
-      <label className="flex items-center justify-between gap-2 text-[12px] text-zinc-300">
+      <label className="flex items-center justify-between gap-2 text-[12px] text-foreground">
         Keep out of the final dataset
         <input
           type="checkbox"
@@ -156,7 +156,7 @@ export function ColumnPanel({ node }: { node: FlowNode }) {
         />
       </label>
       {(reads.length > 0 || readBy.length > 0) && (
-        <div className="flex flex-col gap-1 text-[12px] text-zinc-400">
+        <div className="flex flex-col gap-1 text-[12px] text-muted-foreground">
           {reads.length > 0 && <p>Reads {reads.join(", ")}</p>}
           {readBy.length > 0 && <p>Read by {readBy.join(", ")}</p>}
         </div>
@@ -168,7 +168,7 @@ export function ColumnPanel({ node }: { node: FlowNode }) {
             <p
               // biome-ignore lint/suspicious/noArrayIndexKey: rows have no id
               key={i}
-              className="line-clamp-3 whitespace-pre-wrap rounded bg-white/5 px-2 py-1 text-[11.5px] text-zinc-300"
+              className="line-clamp-3 whitespace-pre-wrap rounded bg-muted/50 px-2 py-1 text-[11.5px] text-foreground"
             >
               {value}
             </p>
@@ -194,13 +194,13 @@ function ConfigList({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11.5px] font-medium text-zinc-400">{title}</span>
+      <span className="text-[11.5px] font-medium text-muted-foreground">{title}</span>
       {items.map((name) => (
         <button
           key={name}
           type="button"
           onClick={() => edit({ groupId, configName: name })}
-          className="truncate rounded-md bg-white/5 px-2 py-1 text-left text-[12px] hover:bg-white/10"
+          className="truncate rounded-md bg-muted/50 px-2 py-1 text-left text-[12px] hover:bg-muted"
         >
           {name}
         </button>
@@ -291,7 +291,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
   const [check, setCheck] = useState<Check>({ state: "idle" });
   if (group?.kind !== "recipe") {
     return (
-      <p className="mx-4 my-3 rounded bg-amber-500/10 px-2 py-1.5 text-[12px] text-amber-300">
+      <p className="mx-4 my-3 rounded bg-amber-500/10 px-2 py-1.5 text-[12px] text-amber-700 dark:text-amber-300">
         Put this step inside a Data Recipe group; dropped on an empty spot it
         makes one.
       </p>
@@ -321,11 +321,11 @@ export function RecipePanel({ node }: { node: FlowNode }) {
   };
   return (
     <section
-      className="flex flex-col gap-3 border-white/10 border-t px-4 py-3"
+      className="flex flex-col gap-3 border-border/60 border-t px-4 py-3"
       data-testid="recipe-panel"
     >
       <div className="flex flex-col gap-1">
-        <span className="text-[11.5px] font-medium text-zinc-400">
+        <span className="text-[11.5px] font-medium text-muted-foreground">
           Recipe name
         </span>
         <input
@@ -335,7 +335,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
               .getState()
               .upsertGroup({ ...group, label: e.target.value || "Data Recipe" })
           }
-          className="rounded-md border border-white/10 bg-zinc-900 px-2 py-1 text-[12.5px] outline-none"
+          className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12.5px] outline-none"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -348,10 +348,10 @@ export function RecipePanel({ node }: { node: FlowNode }) {
               useUiStore.getState().setSelection([column.id], []);
               edit({ groupId, nodeId: column.id });
             }}
-            className="flex items-center justify-between gap-2 rounded-md bg-white/5 px-2 py-1 text-left text-[12px] hover:bg-white/10"
+            className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1 text-left text-[12px] hover:bg-muted"
           >
             <span className="truncate font-mono">{columnName(column)}</span>
-            <span className="shrink-0 text-[10.5px] text-zinc-500">
+            <span className="shrink-0 text-[10.5px] text-muted-foreground">
               {columnSummary(columnOf(column)).badge}
             </span>
           </button>
@@ -363,7 +363,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
             if (pick)
               edit({ groupId, add: { kind: pick.kind, type: pick.type } });
           }}
-          className="mt-1 rounded-md border border-white/10 bg-zinc-900 px-2 py-1 text-[12px]"
+          className="mt-1 rounded-md border border-border/60 bg-background px-2 py-1 text-[12px]"
           aria-label="Add a column"
         >
           <option value="">+ Add a column…</option>
@@ -404,7 +404,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
           Run settings
         </button>
         {check.state === "done" && check.errors.length === 0 && (
-          <span className="text-[12px] text-emerald-300">Ready to run</span>
+          <span className="text-[12px] text-emerald-700 dark:text-emerald-300">Ready to run</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -425,14 +425,14 @@ export function RecipePanel({ node }: { node: FlowNode }) {
         </button>
       </div>
       {check.state === "done" && check.errors.length > 0 && (
-        <ul className="flex flex-col gap-1 rounded bg-red-500/10 px-2 py-1.5 text-[12px] text-red-300">
+        <ul className="flex flex-col gap-1 rounded bg-red-500/10 px-2 py-1.5 text-[12px] text-red-700 dark:text-red-300">
           {check.errors.slice(0, 6).map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>
       )}
       <details>
-        <summary className="cursor-pointer select-none text-[11.5px] font-medium text-zinc-400 hover:text-zinc-200">
+        <summary className="cursor-pointer select-none text-[11.5px] font-medium text-muted-foreground hover:text-foreground">
           Models, seed and processors
         </summary>
         <div className="mt-3 flex flex-col gap-3">
@@ -458,7 +458,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
             add={{ kind: "llm", type: "tool_config" }}
           />
           <div className="flex flex-col gap-1">
-            <span className="text-[11.5px] font-medium text-zinc-400">
+            <span className="text-[11.5px] font-medium text-muted-foreground">
               Seed data
             </span>
             {seed ? (
@@ -466,7 +466,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
                 <button
                   type="button"
                   onClick={() => edit({ groupId, seed: true })}
-                  className="rounded-md bg-white/5 px-2 py-1 text-left text-[12px] hover:bg-white/10"
+                  className="rounded-md bg-muted/50 px-2 py-1 text-left text-[12px] hover:bg-muted"
                   data-testid="recipe-seed-edit"
                 >
                   {SEED_LABEL[String(seedType)] ?? "Seed data"}
@@ -490,7 +490,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
                   e.target.value &&
                   edit({ groupId, add: { kind: "seed", type: e.target.value } })
                 }
-                className="rounded-md border border-white/10 bg-zinc-900 px-2 py-1 text-[12px]"
+                className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12px]"
                 aria-label="Add seed data"
               >
                 <option value="">+ Start from data…</option>
@@ -501,7 +501,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
                 ))}
               </select>
             )}
-            <span className="text-[11px] text-zinc-500">
+            <span className="text-[11px] text-muted-foreground">
               A dataset wired into Seed dataset replaces it.
             </span>
           </div>
@@ -512,7 +512,7 @@ export function RecipePanel({ node }: { node: FlowNode }) {
           >
             Processors
           </button>
-          <p className="text-[11px] leading-snug text-zinc-500">
+          <p className="text-[11px] leading-snug text-muted-foreground">
             Local (stdio) tool servers only run from the Data Recipes page.
             Exporting or sharing drops keys and local tool servers.
           </p>
