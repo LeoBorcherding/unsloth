@@ -122,8 +122,9 @@ export function ModelProviderDialog({
         <div className="rounded-lg border border-border/60 bg-muted/10 px-4 py-3">
           <p className="text-sm font-semibold text-foreground">Ready to go</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Recipes will use whatever model is loaded in the Chat tab when you
-            hit run. No endpoint or API key needed.
+            Pick a model in each model block and Recipes loads it before the
+            run, or leave it empty to use the model loaded in the Chat tab. No
+            endpoint or API key needed.
           </p>
         </div>
       ) : (

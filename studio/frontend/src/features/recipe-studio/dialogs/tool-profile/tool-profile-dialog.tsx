@@ -22,6 +22,10 @@ import { listMcpTools } from "../../api";
 import { ChipInput } from "../../components/chip-input";
 import { CollapsibleSectionTriggerButton } from "../shared/collapsible-section-trigger";
 import type { LlmMcpProviderConfig, McpEnvVar, ToolProfileConfig } from "../../types";
+import {
+  DEFAULT_TOOL_TIMEOUT_SEC,
+  resolveToolTimeoutSec,
+} from "../../utils/payload/builders-llm";
 import { FieldLabel } from "../shared/field-label";
 import { NameField } from "../shared/name-field";
 import {
@@ -551,11 +555,7 @@ export function ToolProfileDialog({
 
     setLoadingTools(true);
     try {
-      const timeoutRaw = config.timeout_sec?.trim();
-      const timeoutSec =
-        timeoutRaw && Number.isFinite(Number(timeoutRaw))
-          ? Number(timeoutRaw)
-          : 15;
+      const timeoutSec = resolveToolTimeoutSec(config.timeout_sec);
       const response = await listMcpTools({
         // biome-ignore lint/style/useNamingConvention: api schema
         mcp_providers: readyProviders.map(toApiProvider),
@@ -771,10 +771,13 @@ export function ToolProfileDialog({
                   <div className="grid gap-1.5">
                     <FieldLabel
                       label="Timeout (seconds)"
-                      hint="How long to wait when loading or calling tools."
+                      hint={`How long to wait when loading or calling tools. Blank uses ${DEFAULT_TOOL_TIMEOUT_SEC} s.`}
                     />
                     <Input
                       className="nodrag"
+                      type="number"
+                      min={1}
+                      placeholder={String(DEFAULT_TOOL_TIMEOUT_SEC)}
                       value={config.timeout_sec ?? ""}
                       onChange={(event) =>
                         onUpdate({

@@ -53,6 +53,7 @@ from core.data_recipe.huggingface import (
 )
 from core.data_recipe.jobs import get_job_manager
 from core.data_recipe.service import (
+    build_config_builder,
     recipe_has_stdio_mcp,
     require_ui_session_for_host_env_credentials,
     validate_recipe_names,
@@ -559,6 +560,22 @@ def create_job(
             ) from exc
 
     _resolve_seed_endpoint(recipe)
+
+    # Reject a config the worker's BuilderConfig would refuse (a timeout of 0, say) before a
+    # workflow key is minted and a worker spawned for it. Same static build /validate runs.
+    try:
+        build_config_builder(copy.deepcopy(recipe))
+    except ModuleNotFoundError as exc:
+        if not (exc.name or "").startswith("data_designer"):
+            raise
+    except (TypeError, ValueError) as exc:
+        raise log_and_http_error(
+            exc,
+            400,
+            safe_curated_detail(exc, fallback = "Invalid recipe."),
+            event = "data_recipe.jobs.recipe_invalid",
+            log = logger,
+        ) from exc
 
     try:
         internal_api_key_id = _inject_local_providers(recipe, request, credential[1])

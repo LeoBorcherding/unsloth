@@ -646,7 +646,11 @@ def test_rotated_credential_job_start_is_401_not_500(loaded_local_model):
         raise storage.CredentialRotated("revoked")
 
     jobs_route._inject_local_providers = _boom
-    payload = SimpleNamespace(recipe = local_recipe(), run = {})
+    # create_job builds the config before minting, so this one has to be buildable.
+    recipe = local_recipe()
+    recipe["model_configs"][0]["model"] = "local"
+    recipe["columns"][0].update(name = "answer", prompt = "Say hi.")
+    payload = SimpleNamespace(recipe = recipe, run = {})
     with pytest.raises(HTTPException) as excinfo:
         jobs_route.create_job(payload, local_recipe_request("t"), ("unsloth", stale_gen))
     assert excinfo.value.status_code == 401

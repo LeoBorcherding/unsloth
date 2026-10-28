@@ -69,6 +69,18 @@ function assignFiniteNumber(
   }
 }
 
+/** data_designer takes a whole number of seconds, 1 or more; truncating 0.5 sent an invalid 0. */
+export function modelTimeoutError(rawValue: string | undefined): string | null {
+  const trimmed = rawValue?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) && parsed >= 1
+    ? null
+    : "Timeout must be a whole number of seconds, 1 or more.";
+}
+
 function buildInferenceParameters(
   config: ModelConfig,
   errors: string[],
@@ -77,12 +89,12 @@ function buildInferenceParameters(
   assignFiniteNumber(inference, "temperature", config.inference_temperature);
   assignFiniteNumber(inference, "top_p", config.inference_top_p);
   assignFiniteNumber(inference, "max_tokens", config.inference_max_tokens);
-  assignFiniteNumber(
-    inference,
-    "timeout",
-    config.inference_timeout,
-    Math.trunc,
-  );
+  const timeoutError = modelTimeoutError(config.inference_timeout);
+  if (timeoutError) {
+    errors.push(`Model ${config.name}: ${timeoutError}`);
+  } else {
+    assignFiniteNumber(inference, "timeout", config.inference_timeout);
+  }
 
   const extraBody = parseJsonObject(
     config.inference_extra_body,

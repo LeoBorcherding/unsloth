@@ -133,6 +133,58 @@ function findUsedLocalModelConfigs(
   });
 }
 
+/** A Local model block left empty runs on the model Chat has loaded, as the provider dialog says. */
+export async function fillBlankLocalModels(
+  payload: RecipePayload,
+): Promise<{ payload: RecipePayload; error: string | null }> {
+  const blank = findUsedLocalModelConfigs(
+    payload,
+    getLocalProviderNames(payload),
+  ).filter(
+    (config) => typeof config.model !== "string" || !config.model.trim(),
+  );
+  if (blank.length === 0) {
+    return { payload, error: null };
+  }
+  const aliases = new Set(blank.map((config) => config.alias));
+  let target = "";
+  let ggufVariant = "";
+  try {
+    const status = await getInferenceStatus();
+    const label = status.active_model?.trim() ?? "";
+    target = (
+      status.model_identifier ?? (status.is_gguf ? "" : label)
+    ).trim();
+    ggufVariant = target ? (status.gguf_variant?.trim() ?? "") : "";
+    // A GGUF opened from a native file path reports only its label, which the job's
+    // loaded-model check can't match; "local" runs on whatever Chat has loaded.
+    if (!target && label) {
+      target = "local";
+    }
+  } catch {
+    // Treated as nothing loaded.
+  }
+  if (!target) {
+    return {
+      payload,
+      error: `Model config ${[...aliases].join(", ")}: no model is loaded in Chat. Load one there, or choose a local model in the model block.`,
+    };
+  }
+  const modelConfigs = payload.recipe.model_configs.map((config) =>
+    aliases.has(config.alias)
+      ? {
+          ...config,
+          model: target,
+          // biome-ignore lint/style/useNamingConvention: api schema
+          gguf_variant: ggufVariant || undefined,
+        }
+      : config,
+  );
+  const recipe = { ...payload.recipe };
+  recipe.model_configs = modelConfigs;
+  return { payload: { ...payload, recipe }, error: null };
+}
+
 function readLocalModelSelection(
   boundConfig: Record<string, unknown>,
 ): LocalModelLoadPlan {
@@ -915,10 +967,17 @@ export function useRecipeExecutions({
         return false;
       }
 
-      const payload = readExecutablePayload();
-      if (!payload) {
+      const editorPayload = readExecutablePayload();
+      if (!editorPayload) {
         return false;
       }
+      const filled = await fillBlankLocalModels(editorPayload);
+      if (filled.error) {
+        setRunErrors([filled.error]);
+        toastError("No model loaded in Chat", filled.error);
+        return false;
+      }
+      const payload = filled.payload;
 
       // Flip to Runs before validation, which can re-crawl the seed for seconds.
       onExecutionStart?.();
@@ -981,8 +1040,8 @@ export function useRecipeExecutions({
 
   const validateFromDialog = useCallback(async (): Promise<boolean> => {
     setRunErrors([]);
-    const payload = readPayload();
-    if (!payload) {
+    const editorPayload = readPayload();
+    if (!editorPayload) {
       const nextErrors =
         payloadResult.errors.length > 0
           ? payloadResult.errors
@@ -1000,6 +1059,16 @@ export function useRecipeExecutions({
 
     setValidateLoading(true);
     try {
+      const filled = await fillBlankLocalModels(editorPayload);
+      if (filled.error) {
+        setValidateResult({
+          valid: false,
+          errors: [filled.error],
+          rawDetail: null,
+        });
+        return false;
+      }
+      const payload = filled.payload;
       const executionPayload = buildExecutionPayload({
         payload,
         kind: runDialogKind,

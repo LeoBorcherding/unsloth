@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import type { ModelConfig } from "../../types";
+import { modelTimeoutError } from "../../utils/payload/builders-model";
 import { CollapsibleSectionTriggerButton } from "../shared/collapsible-section-trigger";
 import { FieldLabel } from "../shared/field-label";
 import { NameField } from "../shared/name-field";
@@ -45,6 +46,7 @@ export function ModelConfigDialog({
   const topPId = `${config.id}-top-p`;
   const maxTokensId = `${config.id}-max-tokens`;
   const timeoutId = `${config.id}-timeout`;
+  const timeoutError = modelTimeoutError(config.inference_timeout);
   const extraBodyId = `${config.id}-inference-extra-body`;
   const skipHealthCheckId = `${config.id}-skip-health-check`;
   const providerAnchorRef = useRef<HTMLDivElement>(null);
@@ -152,7 +154,7 @@ export function ModelConfigDialog({
           htmlFor={modelId}
           hint={
             isLinkedToLocal
-              ? "Choose the local model Recipes should load before Run or Validate."
+              ? "Choose the local model Recipes should load before Run or Validate, or leave it empty to use the one loaded in Chat."
               : "The exact model name sent to the connection."
           }
         />
@@ -257,11 +259,18 @@ export function ModelConfigDialog({
             <Input
               id={timeoutId}
               className="nodrag"
+              type="number"
+              min={1}
+              step={1}
+              aria-invalid={timeoutError !== null}
               value={config.inference_timeout ?? ""}
               onChange={(event) =>
                 updateField("inference_timeout", event.target.value)
               }
             />
+            {timeoutError && (
+              <p className="text-xs text-destructive">{timeoutError}</p>
+            )}
           </div>
         </div>
       </div>

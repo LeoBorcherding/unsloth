@@ -15,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   type GgufVariantDetail,
   type LocalModelInfo,
+  getInferenceStatus,
   listGgufVariants,
   listLocalModels,
 } from "@/features/chat";
@@ -88,6 +89,28 @@ function sourceLabel(model: LocalModelInfo): string {
     default:
       return "Local";
   }
+}
+
+function isLoadedModel(model: LocalModelInfo, loadedId: string | null): boolean {
+  const loaded = loadedId?.trim().toLowerCase();
+  return Boolean(
+    loaded &&
+      [model.id, model.model_id, model.path].some(
+        (value) => value?.trim().toLowerCase() === loaded,
+      ),
+  );
+}
+
+/** The model Chat has loaded goes first: an empty Local model block runs on it. */
+export function loadedModelFirst(
+  models: LocalModelInfo[],
+  loadedId: string | null,
+): LocalModelInfo[] {
+  const loaded = models.filter((model) => isLoadedModel(model, loadedId));
+  if (loaded.length === 0) {
+    return models;
+  }
+  return [...loaded, ...models.filter((model) => !loaded.includes(model))];
 }
 
 type SelectedModelSummary = {
@@ -317,6 +340,7 @@ const SelectorTrigger = forwardRef<HTMLButtonElement, SelectorTriggerProps>(
 function LocalModelRow({
   model,
   selected,
+  loaded,
   expanded,
   probing,
   ggufVariant,
@@ -325,6 +349,7 @@ function LocalModelRow({
 }: {
   model: LocalModelInfo;
   selected: boolean;
+  loaded: boolean;
   expanded: boolean;
   probing: boolean;
   ggufVariant?: string | null;
@@ -366,6 +391,11 @@ function LocalModelRow({
           {probing ? (
             <Spinner className="size-3 text-muted-foreground" />
           ) : null}
+          {loaded ? (
+            <Badge variant="secondary" className="h-4 px-1.5 text-ui-10">
+              Loaded in Chat
+            </Badge>
+          ) : null}
           {expandable || directGguf ? (
             <Badge variant="secondary" className="h-4 px-1.5 text-ui-10">
               GGUF
@@ -391,6 +421,7 @@ function LocalModelResults({
   loading,
   error,
   models,
+  loadedId,
   value,
   ggufVariant,
   expandedModelId,
@@ -402,6 +433,7 @@ function LocalModelResults({
   loading: boolean;
   error: string | null;
   models: LocalModelInfo[];
+  loadedId: string | null;
   value: string;
   ggufVariant?: string | null;
   expandedModelId: string | null;
@@ -455,6 +487,7 @@ function LocalModelResults({
           key={model.id}
           model={model}
           selected={model.id === value}
+          loaded={isLoadedModel(model, loadedId)}
           expanded={expandedModelId === model.id}
           probing={probingVariantModelId === model.id}
           ggufVariant={ggufVariant}
@@ -478,6 +511,7 @@ export function LocalRecipeModelSelector({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [models, setModels] = useState<LocalModelInfo[]>([]);
+  const [loadedId, setLoadedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
@@ -507,6 +541,15 @@ export function LocalRecipeModelSelector({
       return;
     }
     let cancelled = false;
+    getInferenceStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setLoadedId(status.model_identifier ?? status.active_model ?? null);
+        }
+      })
+      .catch(() => {
+        // Sorting only; the list works without it.
+      });
     listLocalModels()
       .then((response) => {
         if (cancelled) {
@@ -539,16 +582,17 @@ export function LocalRecipeModelSelector({
 
   const filteredModels = useMemo(() => {
     const needle = normalizeForSearch(query.trim());
+    const sorted = loadedModelFirst(models, loadedId);
     if (!needle) {
-      return models;
+      return sorted;
     }
-    return models.filter((model) => {
+    return sorted.filter((model) => {
       const haystack = normalizeForSearch(
         `${model.id} ${model.display_name} ${model.model_id ?? ""} ${model.path}`,
       );
       return haystack.includes(needle);
     });
-  }, [models, query]);
+  }, [loadedId, models, query]);
 
   const selectModel = useCallback(
     async (model: LocalModelInfo) => {
@@ -639,6 +683,7 @@ export function LocalRecipeModelSelector({
               loading={loading}
               error={error}
               models={filteredModels}
+              loadedId={loadedId}
               value={value}
               ggufVariant={ggufVariant}
               expandedModelId={expandedModelId}

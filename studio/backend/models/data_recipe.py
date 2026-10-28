@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class RecipePayload(BaseModel):
@@ -128,7 +128,13 @@ class UnstructuredFileUploadResponse(BaseModel):
 
 class McpToolsListRequest(BaseModel):
     mcp_providers: list[dict[str, Any]] = Field(default_factory = list)
-    timeout_sec: float | None = Field(default = None, gt = 0)
+    # The editor's blank-Timeout default; with no default a hung server held the request for minutes.
+    timeout_sec: float = Field(default = 30, gt = 0)
+
+    @field_validator("timeout_sec", mode = "before")
+    @classmethod
+    def _null_timeout_is_default(cls, value: Any) -> Any:
+        return 30 if value is None else value
 
 
 class McpToolsProviderResult(BaseModel):

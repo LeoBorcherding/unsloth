@@ -167,6 +167,17 @@ export function buildLlmMcpProvider(
   };
 }
 
+/** Used for Load tools and for tool calls in the run when the Timeout field is blank. */
+export const DEFAULT_TOOL_TIMEOUT_SEC = 30;
+
+export function resolveToolTimeoutSec(raw: string | undefined): number {
+  const trimmed = raw?.trim();
+  const value = Number(trimmed);
+  return trimmed && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_TOOL_TIMEOUT_SEC;
+}
+
 export function buildLlmToolConfig(
   config: LlmToolConfig,
   errors: string[],
@@ -191,11 +202,7 @@ export function buildLlmToolConfig(
     maxToolCallTurnsRaw && Number.isFinite(Number(maxToolCallTurnsRaw))
       ? Number(maxToolCallTurnsRaw)
       : 5;
-  const timeoutRaw = config.timeout_sec?.trim();
-  const timeoutSec =
-    timeoutRaw && Number.isFinite(Number(timeoutRaw))
-      ? Number(timeoutRaw)
-      : undefined;
+  const timeoutSec = resolveToolTimeoutSec(config.timeout_sec);
   return {
     // biome-ignore lint/style/useNamingConvention: api schema
     tool_alias: toolAlias,
