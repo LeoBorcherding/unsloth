@@ -59,6 +59,9 @@ class _Ctx:
     def log(self, *a, **k):
         pass
 
+    async def ensure_model(self, *a, **k):
+        pass
+
     def check_cancelled(self):
         pass
 
