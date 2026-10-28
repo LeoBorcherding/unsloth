@@ -73,11 +73,19 @@ function setPinnedGlobal(next: boolean) {
   listeners.forEach((cb) => cb());
 }
 
-export function holdSidebarPinned() {
+function hold(value: boolean) {
   if (!held) beforeHold = pinnedValue;
   held = true;
-  pinnedValue = true;
+  pinnedValue = value;
   listeners.forEach((cb) => cb());
+}
+
+export function holdSidebarPinned() {
+  hold(true);
+}
+
+export function holdSidebarUnpinned() {
+  hold(false);
 }
 
 export function releaseSidebarPinned() {

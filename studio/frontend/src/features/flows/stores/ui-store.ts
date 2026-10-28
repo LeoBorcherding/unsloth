@@ -55,6 +55,16 @@ export function storedWireStyle(): WireStyle {
   }
 }
 
+const NODES_HIDDEN_KEY = "unsloth_flows_nodes_hidden";
+
+function storedPaletteOpen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(NODES_HIDDEN_KEY) !== "true";
+  } catch {
+    return true;
+  }
+}
+
 export type SaveState = "saved" | "dirty" | "saving" | "error" | "conflict";
 
 export interface PendingRun {
@@ -105,7 +115,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   quickAdd: null,
   drawerOpen: false,
   drawerTab: "run",
-  paletteOpen: true,
+  paletteOpen: storedPaletteOpen(),
   snapToGrid: false,
   wireStyle: storedWireStyle(),
   saveState: "saved",
@@ -147,7 +157,16 @@ export const useUiStore = create<UiState>((set, get) => ({
   setQuickAdd: (quickAdd) => set({ quickAdd }),
   setDrawer: (open, tab) =>
     set((s) => ({ drawerOpen: open, drawerTab: tab ?? s.drawerTab })),
-  togglePalette: () => set((s) => ({ paletteOpen: !s.paletteOpen })),
+  togglePalette: () => {
+    const paletteOpen = !get().paletteOpen;
+    set({ paletteOpen });
+    try {
+      if (paletteOpen) globalThis.localStorage?.removeItem(NODES_HIDDEN_KEY);
+      else globalThis.localStorage?.setItem(NODES_HIDDEN_KEY, "true");
+    } catch {
+      // No storage: the choice lasts until reload.
+    }
+  },
   toggleSnap: () => set((s) => ({ snapToGrid: !s.snapToGrid })),
   setWireStyle: (wireStyle) => {
     set({ wireStyle });
