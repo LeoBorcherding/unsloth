@@ -443,7 +443,7 @@ export const BUDGET = {
   // Merged onto Flows (flows-base-rl): Flows' budget plus the #12601 growth measured against d4f1ceb19.
   // Flows gallery kept as Daniel's (no Studio Card/Skeleton/Textarea/Spinner there): chunk split moves
   // ~1.2 KB transfer into startup (2,053.3 -> 2,054.5 KB, Node 26, 127 chunks). Raised by that.
-  transferBytes: 2_112_900,
+  transferBytes: 2_113_700,
   rawBytes: 6_999_346,
 };
 

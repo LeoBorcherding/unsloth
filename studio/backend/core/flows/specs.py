@@ -787,6 +787,7 @@ NODE_SPECS: list[dict] = [
             P("rounds", "int", 3, "Rounds", min = 1, max = 20),
             P("target", "number", 90, "Target test score %", min = 0, max = 100),
             P("feedback", "bool", True, "Feed failures into the next round"),
+            P("continue_rounds", "bool", True, "Continue from last round"),
             P("failure_percent", "int", 50, "Seed rows from failures %", min = 0, max = 100, advanced = True),
             P("probe_percent", "int", 50, "Held-out rows used as probe %", min = 1, max = 99, advanced = True),
             P("split_seed", "int", 3407, "Probe/test split seed", min = 0, max = 2**31 - 1, advanced = True),
@@ -1493,8 +1494,9 @@ NODE_SPECS: list[dict] = [
         "train.finetune",
         "Fine-tune",
         "data",
-        "Fine-tune a model on a dataset (SFT, or GRPO, DPO and ORPO), optionally holding out rows to score later. Waits for training to finish.",
-        inputs = [inp("dataset", "dataset")],
+        "Fine-tune a model on a dataset (SFT, or GRPO, DPO and ORPO), optionally holding out rows to score later. Waits for training to finish. "
+        "Wire a checkpoint into Continue from to keep training that LoRA instead of starting from the base model.",
+        inputs = [inp("dataset", "dataset"), inp("start", "checkpoint", "Continue from", optional = True)],
         outputs = [
             out("checkpoint", "checkpoint"),
             out("metrics", "json"),

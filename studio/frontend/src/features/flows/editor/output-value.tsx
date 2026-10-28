@@ -28,7 +28,7 @@ export function OutputValue({ value }: { value: unknown }) {
       </div>
     );
   }
-  if (isDatasetValue(value)) return <DatasetOutput value={value} />;
+  if (isDatasetValue(value) && value.ref) return <DatasetOutput value={value} />;
   if (isStructuredValue(value)) return <StructuredOutput value={value} />;
   if (isDatasetPreview(value)) return <DatasetRows value={value} />;
   if (typeof value === "string") {
