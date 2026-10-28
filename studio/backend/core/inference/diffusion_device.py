@@ -363,6 +363,7 @@ def resolve_selected_cuda_ordinals(gpu_ids: Optional[list[int]]) -> list[int]:
     try:
         from utils.hardware.hardware import (
             get_parent_visible_gpu_ids,
+            reject_ordinals_on_another_arch_pack,
             resolve_requested_gpu_ids,
         )
     except Exception as exc:  # noqa: BLE001 -- without the hardware layer the mask is unknowable
@@ -376,7 +377,9 @@ def resolve_selected_cuda_ordinals(gpu_ids: Optional[list[int]]) -> list[int]:
             f"Requested GPU {wanted} but none of them are visible to this process "
             f"(visible: {visible}). Clear the GPU selection to use the default device."
         )
-    return sorted(dict.fromkeys(ordinals))
+    ordinals = sorted(dict.fromkeys(ordinals))
+    reject_ordinals_on_another_arch_pack(ordinals)
+    return ordinals
 
 
 _UNPLANNED = object()

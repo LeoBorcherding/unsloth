@@ -307,6 +307,50 @@ class TestMultiArchKernelPacks:
             _hw_module.reject_gpu_ids_without_torch_kernels([0])
 
 
+class TestOneLoadedPackPerProcess:
+    """RX 5700 XT (gfx1010) + RX 6500 XT (gfx1034), both packs installed: the rocm7.14.0 HIP runtime loads the gfx1010
+    pack for both cards, and the image engine's first kernel on the 6500 XT kills the backend."""
+
+    def _torch(self, tmp_path, devices, packs = ("torch_gfx1010.kpack", "torch_gfx1034.kpack"), hip = "7.14.60850"):
+        torch = TestMultiArchKernelPacks._torch(self, tmp_path, devices, packs)
+        torch.version.hip = hip
+        return torch
+
+    def test_the_second_arch_is_foreign(self, monkeypatch, no_mask, tmp_path):
+        _install(monkeypatch, self._torch(tmp_path, [_props("gfx1010:xnack-"), _props("gfx1034")]))
+        assert _hw_module.rocm_ordinals_on_another_arch_pack() == ("gfx1010", {1})
+
+    @pytest.mark.parametrize(
+        "devices, packs, hip",
+        [
+            (["gfx1201", "gfx1201"], ("torch_gfx1201.kpack",), "7.14.60850"),
+            (["gfx1010", "gfx1034"], ("torch_gfx1010.kpack", "torch_gfx1034.kpack"), "10.1.62500"),
+            (["gfx1010", "gfx1034"], None, "7.14.60850"),
+            (["", "gfx1034"], ("torch_gfx1010.kpack", "torch_gfx1034.kpack"), "7.14.60850"),
+        ],
+        ids = ["same_arch", "per_arch_runtime", "no_packs", "unread_first_card"],
+    )
+    def test_nothing_is_foreign(self, monkeypatch, no_mask, tmp_path, devices, packs, hip):
+        _install(monkeypatch, self._torch(tmp_path, [_props(a) for a in devices], packs, hip))
+        assert _hw_module.rocm_ordinals_on_another_arch_pack()[1] == set()
+
+    def test_an_uncovered_first_card_loads_the_next_pack(self, monkeypatch, no_mask, tmp_path):
+        torch = self._torch(tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",))
+        _install(monkeypatch, torch)
+        assert _hw_module.rocm_ordinals_on_another_arch_pack() == ("gfx1101", {0})
+
+    def test_an_image_pick_of_the_second_card_is_refused(self, monkeypatch, no_mask, tmp_path):
+        from core.inference import diffusion_device as dd
+
+        _install(monkeypatch, self._torch(tmp_path, [_props("gfx1010:xnack-"), _props("gfx1034")]))
+        monkeypatch.setattr(_hw_module, "resolve_requested_gpu_ids", lambda ids: list(ids))
+        monkeypatch.setattr(_hw_module, "get_parent_visible_gpu_ids", lambda: [0, 1])
+        with pytest.raises(ValueError, match = r"GPU 1 .*loads the gfx1010 kernels"):
+            dd.resolve_selected_cuda_ordinals([1])
+        with pytest.raises(ValueError):
+            dd.resolve_selected_cuda_ordinals([0, 1])
+        assert dd.resolve_selected_cuda_ordinals([0]) == [0]
+
 class TestIdSpace:
     """Results are consumed as physical ids, so ordinals map through the mask."""
 
