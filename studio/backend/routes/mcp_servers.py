@@ -484,8 +484,11 @@ async def update_mcp_server(
     # Check both directions before any side effect; API keys must not repoint http rows or edit stdio env
     if is_stdio(old["url"]) or is_stdio(changes.get("url", old["url"])):
         require_ui_session_for_local_commands(via_api_key)
-    # Repointing either way; plain edits such as is_enabled stay open to API keys, as for any http row.
-    if "url" in changes and (is_studio_tools(old["url"]) or is_studio_tools(changes["url"])):
+    # Repointing either way, or turning the row back on, which grants its tools as surely as adding it.
+    # Turning it off and renaming stay open to API keys.
+    if (
+        "url" in changes and (is_studio_tools(old["url"]) or is_studio_tools(changes["url"]))
+    ) or (is_studio_tools(old["url"]) and changes.get("is_enabled") and not old.get("is_enabled")):
         _require_ui_for_studio_tools(via_api_key, no_credential)
     # On transport switch with no new headers, drop old ones so env secrets are not sent as HTTP headers
     if (

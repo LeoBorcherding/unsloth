@@ -2697,7 +2697,7 @@ def test_only_a_ui_session_can_add_the_studio_tools_row(tmp_path, monkeypatch, c
     assert created.url == STUDIO_TOOLS_URL
 
 
-def test_an_api_key_cannot_repoint_to_or_from_the_studio_tools_row_but_can_toggle_it(
+def test_an_api_key_cannot_repoint_to_or_from_the_studio_tools_row_or_turn_it_on_but_can_turn_it_off(
     tmp_path, monkeypatch
 ):
     import asyncio
@@ -2726,6 +2726,23 @@ def test_an_api_key_cannot_repoint_to_or_from_the_studio_tools_row_but_can_toggl
         )
     )
     assert off.is_enabled is False
+    # Turning it back on grants its tools, so it is the UI's, like adding the row.
+    for credential in ("via_api_key", "no_credential"):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(
+                routes_mcp.update_mcp_server(
+                    "studio",
+                    McpServerUpdate(is_enabled = True),
+                    current_subject = "u",
+                    **{credential: True},
+                )
+            )
+        assert exc.value.status_code == 403
+    assert not mcp_servers_db.get_server("studio")["is_enabled"]
+    on = asyncio.run(
+        routes_mcp.update_mcp_server("studio", McpServerUpdate(is_enabled = True), current_subject = "u")
+    )
+    assert on.is_enabled is True
 
 
 def test_the_studio_tools_row_is_reprobed_every_send_and_others_stay_cached(tmp_path, monkeypatch):
