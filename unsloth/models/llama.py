@@ -1369,6 +1369,10 @@ def LlamaModel_fast_forward(
             inputs_embeds = inputs_embeds[:, : self.max_seq_length, :]
         if attention_mask is not None and attention_mask.shape[-1] > self.max_seq_length:
             attention_mask = attention_mask[:, : self.max_seq_length]
+        if position_ids is not None and position_ids.shape[-1] > self.max_seq_length:
+            position_ids = position_ids[..., : self.max_seq_length]
+        seq_length = min(seq_length, self.max_seq_length)
+        seq_length_with_past = seq_length
 
     past_key_values_length = 0
 
@@ -2048,6 +2052,11 @@ def CausalLM_fast_forward(fast_forward_inference):
         hidden_states = outputs[0]
 
         bsz, q_len, hd = hidden_states.shape
+        # The model truncates over-length inputs to max_seq_length, so the labels must follow.
+        if labels is not None and labels.shape[-1] > q_len:
+            labels = labels[..., :q_len]
+        if shift_labels is not None and shift_labels.shape[-1] > q_len:
+            shift_labels = shift_labels[..., :q_len]
         # FSDP2 shards an untied lm_head in its own group, gathered only when lm_head is called.
         unsloth_fsdp_unshard(self.lm_head)
         lm_head = self.lm_head.weight

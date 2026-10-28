@@ -302,6 +302,9 @@ def MistralForCausalLM_fast_forward(
     hidden_states = outputs[0]
 
     bsz, q_len, hd = hidden_states.shape
+    # The model truncates over-length inputs to max_seq_length, so the labels must follow.
+    if labels is not None and labels.shape[-1] > q_len:
+        labels = labels[..., :q_len]
     unsloth_fsdp_unshard(self.lm_head)
     lm_head = self.lm_head.weight
     lm_head_device = lm_head.device
