@@ -47,11 +47,12 @@ def test_oxc_batch_falls_back_when_node_times_out(monkeypatch, tmp_path):
     assert calls[0][1]["timeout"] == validators._OXC_TIMEOUT_S
     assert json.loads(calls[0][1]["input"])["timeout_ms"] == validators._OXC_TIMEOUT_S * 1000
     assert len(results) == 2
-    assert all(result["is_valid"] is False for result in results)
-    assert all(result["error_count"] == 1 for result in results)
+    # The checker failed, not the code: rows stay unchecked instead of reading as invalid.
+    assert all(result["is_valid"] is None for result in results)
+    assert all(result["error_count"] == 0 for result in results)
     assert [result["error_message"] for result in results] == [
-        "OXC validation timed out",
-        "OXC validation timed out",
+        "Code check did not run: OXC validation timed out",
+        "Code check did not run: OXC validation timed out",
     ]
 
 
@@ -75,8 +76,10 @@ def test_the_wrapper_kills_oxlint_against_the_remaining_caller_budget():
         int(fallback_budget.group(1).replace("_", "")) == validators._OXC_TIMEOUT_S * 1000
     ), "the fallback budget must match the wait this process actually gives the wrapper"
 
-    options = re.search(r"spawnSync\(oxlintBin, oxlintArgs, \{(.*?)\}\)", source, re.S)
-    assert options, "oxlint must still be launched through spawnSync(oxlintBin, oxlintArgs, ...)"
+    options = re.search(
+        r"spawnSync\(process\.execPath, \[oxlintEntry, \.\.\.oxlintArgs\], \{(.*?)\}\)", source, re.S
+    )
+    assert options, "oxlint must still be launched through spawnSync(process.execPath, [oxlintEntry, ...])"
     assert "timeout: timeoutMs" in options.group(
         1
     ), "oxlint's bound must be the computed remainder, not a constant"

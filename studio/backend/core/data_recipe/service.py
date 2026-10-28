@@ -410,6 +410,37 @@ def _apply_data_designer_mixed_type_parquet_patch() -> None:
     setattr(ArtifactStorage, "_unsloth_mixed_type_parquet_patch_applied", True)
 
 
+# ruff reports a syntax error as `invalid-syntax` (older releases: E999); data-designer 0.5 maps neither, so the
+# row counts as a passing "warning".
+_RUFF_SYNTAX_ERROR_CODES = {"invalid-syntax", "E999"}
+
+
+def _apply_data_designer_python_syntax_patch() -> None:
+    try:
+        from data_designer.engine.validators.python import (  # pyright: ignore[reportMissingImports]
+            PythonValidator,
+        )
+    except ImportError:
+        return
+
+    if getattr(PythonValidator, "_unsloth_python_syntax_patch_applied", False):
+        return
+
+    original_run_linter = PythonValidator._run_linter
+
+    @functools.wraps(original_run_linter)
+    def _patched_run_linter(codebase_path: str) -> Any:
+        processed = original_run_linter(codebase_path)
+        for messages in processed.values():
+            for message in messages.messages:
+                if message.symbol in _RUFF_SYNTAX_ERROR_CODES:
+                    message.type = "fatal"
+        return processed
+
+    PythonValidator._run_linter = staticmethod(_patched_run_linter)
+    setattr(PythonValidator, "_unsloth_python_syntax_patch_applied", True)
+
+
 def _apply_data_designer_seed_uri_quote_patch() -> None:
     # Seeds are read as FROM '<uri>': quote it for DuckDB. No ImportError guard: never run unquoted.
     from data_designer.engine.resources.seed_reader import SeedReader  # pyright: ignore[reportMissingImports]
@@ -833,6 +864,7 @@ def create_data_designer(recipe: dict[str, Any], *, artifact_path: str | None = 
     _apply_data_designer_prompt_blank_patch()
     _apply_data_designer_expression_blank_patch()
     _apply_data_designer_mixed_type_parquet_patch()
+    _apply_data_designer_python_syntax_patch()
     _apply_data_designer_seed_uri_quote_patch()
     _apply_data_designer_sql_inline_config_patch()
     _apply_data_designer_python_validator_path_patch()

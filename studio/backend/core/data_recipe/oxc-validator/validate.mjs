@@ -229,7 +229,7 @@ function makeResult({
   codeframe = null,
 }) {
   return {
-    is_valid: Boolean(isValid),
+    is_valid: isValid === null ? null : Boolean(isValid),
     error_count: Number.isInteger(errorCount) ? errorCount : 0,
     warning_count: Number.isInteger(warningCount) ? warningCount : 0,
     error_message: String(message || ""),
@@ -371,16 +371,16 @@ function resolveLintEntry({ code, lang, index, codeShape }) {
   return moduleEntry;
 }
 
+// oxlint itself failed, so these rows were not linted: null, not invalid.
 function fallbackLintResults(entries, message) {
   return new Map(
     entries.map((entry) => [
       entry.index,
       makeResult({
-        isValid: false,
-        errorCount: 1,
+        isValid: null,
+        errorCount: 0,
         warningCount: 0,
-        message,
-        severity: "error",
+        message: `Code check did not run: ${message}`,
       }),
     ]),
   );
@@ -400,7 +400,8 @@ function runLintBatch(entries, budgetMs) {
       writeFileSync(filePath, entry.code, "utf8");
     }
 
-    const oxlintBin = join(TOOL_DIR, "node_modules", ".bin", "oxlint");
+    // The package's JS entry under this Node: on Windows .bin/oxlint is a shell script spawnSync can't run (ENOENT).
+    const oxlintEntry = join(TOOL_DIR, "node_modules", "oxlint", "bin", "oxlint");
     const oxlintArgs = [
       "--config",
       OXLINT_CONFIG_PATH,
@@ -414,7 +415,7 @@ function runLintBatch(entries, budgetMs) {
     if (timeoutMs < OXLINT_MIN_TIMEOUT_MS) {
       return fallbackLintResults(entries, "oxlint skipped: validation budget exhausted");
     }
-    const exec = spawnSync(oxlintBin, oxlintArgs, {
+    const exec = spawnSync(process.execPath, [oxlintEntry, ...oxlintArgs], {
       encoding: "utf8",
       cwd: TOOL_DIR,
       timeout: timeoutMs,

@@ -337,7 +337,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     kind: "validator",
     type: "validator_python",
     title: "Python check",
-    description: "Lint generated Python and filter out rows that fail.",
+    description: "Lint generated Python and mark each row as passing or failing.",
     icon: Shield02Icon,
     dialogKey: "validator",
     createConfig: (id, existing) =>
@@ -347,7 +347,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     kind: "validator",
     type: "validator_sql",
     title: "SQL check",
-    description: "Lint generated SQL and filter out rows that fail.",
+    description: "Lint generated SQL and mark each row as passing or failing.",
     icon: Shield02Icon,
     dialogKey: "validator",
     createConfig: (id, existing) =>
@@ -357,7 +357,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     kind: "validator",
     type: "validator_oxc",
     title: "JS/TS check",
-    description: "Lint generated JavaScript or TypeScript and filter out rows that fail.",
+    description: "Lint generated JavaScript or TypeScript and mark each row as passing or failing.",
     icon: Shield02Icon,
     dialogKey: "validator",
     createConfig: (id, existing) =>
@@ -367,7 +367,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     kind: "validator",
     type: "validator_json",
     title: "JSON check",
-    description: "Verify a field contains valid JSON and filter out rows that fail.",
+    description: "Check a field holds valid JSON and mark each row as passing or failing.",
     icon: Shield02Icon,
     dialogKey: "validator",
     createConfig: (id, existing) =>
@@ -377,7 +377,7 @@ const BLOCK_DEFINITIONS: BlockDefinition[] = [
     kind: "validator",
     type: "validator_markdown",
     title: "Markdown check",
-    description: "Verify a field contains well-formed markdown and filter out rows that fail.",
+    description: "Check a field holds well-formed markdown and mark each row as passing or failing.",
     icon: Shield02Icon,
     dialogKey: "validator",
     createConfig: (id, existing) =>

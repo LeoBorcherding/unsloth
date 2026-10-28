@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import structlog
 import subprocess
@@ -143,6 +144,12 @@ def _parse_oxc_spec(*, column: dict[str, Any]) -> OxcLocalCallableValidatorSpec 
         return None
 
     code_lang, validation_mode, code_shape = _parse_oxc_validation_marker(fn_name)
+    if code_lang not in _OXC_LANG_TO_NODE_LANG:
+        # Linting it as JavaScript would fail every row for the wrong reason.
+        raise ValueError(
+            f"Code check '{name}' can't check {code_lang} code: the JS/TS check takes "
+            "javascript, typescript, jsx or tsx."
+        )
     batch_size = _parse_batch_size(column.get("batch_size"))
     drop = bool(column.get("drop") is True)
 
@@ -173,7 +180,7 @@ def _parse_oxc_validation_marker(fn_name: str) -> tuple[str, str, str]:
     parts = [part.strip() for part in suffix.split(":") if part.strip()]
     if len(parts) < 2:
         return "javascript", "syntax", "auto"
-    code_lang = parts[0] if parts[0] in _OXC_LANG_TO_NODE_LANG else "javascript"
+    code_lang = parts[0]
     mode = parts[1] if parts[1] in _OXC_VALIDATION_MODES else "syntax"
     code_shape = parts[2] if len(parts) >= 3 and parts[2] in _OXC_CODE_SHAPES else "auto"
     return code_lang, mode, code_shape
@@ -304,7 +311,7 @@ def _run_oxc_batch(
                 }
             )
             continue
-        is_valid_raw = item.get("is_valid")
+        is_valid_raw = item.get("is_valid", False)
         error_count_raw = item.get("error_count")
         message_raw = item.get("error_message")
         severity_raw = item.get("severity")
@@ -314,7 +321,10 @@ def _run_oxc_batch(
         warning_count_raw = item.get("warning_count")
         out.append(
             {
-                "is_valid": bool(is_valid_raw) if isinstance(is_valid_raw, bool) else False,
+                # None: the runner could not lint this row (see fallbackLintResults).
+                "is_valid": is_valid_raw
+                if is_valid_raw is None or isinstance(is_valid_raw, bool)
+                else False,
                 "error_count": int(error_count_raw) if isinstance(error_count_raw, int) else 0,
                 "error_message": str(message_raw or ""),
                 "severity": str(severity_raw) if isinstance(severity_raw, str) else None,
@@ -330,11 +340,13 @@ def _run_oxc_batch(
 
 
 def _fallback_results(row_count: int, message: str) -> list[dict[str, Any]]:
+    # The checker failed, not the code: is_valid None is the engine's "not validated", so rows don't read as bad code.
+    logging.getLogger("data_designer.unsloth").warning("Code check did not run: %s", message)
     return [
         {
-            "is_valid": False,
-            "error_count": 1,
-            "error_message": message,
+            "is_valid": None,
+            "error_count": 0,
+            "error_message": f"Code check did not run: {message}",
             "severity": None,
             "code": None,
             "labels": [],
