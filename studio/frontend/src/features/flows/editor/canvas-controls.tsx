@@ -2,7 +2,6 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { Button } from "@/components/ui/button";
-import { RECIPE_FLOATING_ICON_BUTTON_CLASS } from "@/features/recipe-studio/components/recipe-floating-icon-button-class";
 import { usePersistedToggle } from "@/hooks/use-persisted-toggle";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { MiniMap, Panel, useReactFlow } from "@xyflow/react";
@@ -16,8 +15,12 @@ import {
   PlusSignIcon,
 } from "./icon-data";
 
-const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1, duration: 200 };
+// React Flow Controls' fit (default padding), animated.
+const FIT_VIEW_OPTIONS = { duration: 200 };
 const MINIMAP_STYLE = { width: 168, height: 112 };
+// Recipe Studio's floating button, as a true circle (its class adds corner-squircle).
+const ROUND_BUTTON =
+  "btn-fill group size-11 rounded-full border-0 p-0 text-muted-foreground hover:text-foreground";
 
 function minimapColor(node: RfNode): string {
   if (node.type !== "flowNode")
@@ -47,7 +50,7 @@ function FloatingButton({
       aria-pressed={active}
       title={label}
       onClick={onClick}
-      className={`${RECIPE_FLOATING_ICON_BUTTON_CLASS} ${active ? "text-foreground" : ""}`}
+      className={`${ROUND_BUTTON} ${active ? "text-foreground" : ""}`}
     >
       <HugeiconsIcon icon={icon} className="size-4" />
     </Button>
