@@ -169,6 +169,7 @@ download_router = APIRouter(dependencies = [Depends(_authorize_dataset_download)
 
 # Keepalive cadence, well inside the ~100s a quick tunnel allows between body bytes.
 _KEEPALIVE_EVERY_S = 15.0
+_TERMINAL_EVENT_TYPES = frozenset({"job.completed", "job.error", "job.cancelled"})
 
 # Only UI sessions may supply stdio commands, since this host would run them; Annotated so direct calls get False.
 ViaApiKey = Annotated[bool, Depends(authenticated_via_api_key)]
@@ -984,25 +985,39 @@ async def job_events(request: Request, job_id: str):
         raise HTTPException(status_code = 404, detail = "job not found")
 
     async def gen():
+        current = sub
+        last_seq = after_seq or 0
         try:
             last_sent = time.monotonic()
-            for event in sub.replay:
-                yield sub.format_sse(event)
-
-            while True:
-                if await request.is_disconnected():
-                    break
-                event = await sub.next_event(timeout_sec = 1.0)
-                if event is None:
-                    # A quiet job would otherwise go silent for minutes and take a tunnel 524.
-                    if time.monotonic() - last_sent >= _KEEPALIVE_EVERY_S:
-                        last_sent = time.monotonic()
-                        yield ": keepalive\n\n"
-                    continue
-                last_sent = time.monotonic()
-                yield sub.format_sse(event)
+            while current is not None:
+                pending = list(current.replay)
+                while True:
+                    if pending:
+                        event = pending.pop(0)
+                    else:
+                        if await request.is_disconnected():
+                            return
+                        event = await current.next_event(timeout_sec = 1.0)
+                    if event is None:
+                        if current.ended:
+                            # Fell behind or the job changed: carry on from the replay buffer,
+                            # or stop if this job is no longer the current one.
+                            mgr.unsubscribe(current)
+                            current = mgr.subscribe(job_id, after_seq = last_seq)
+                            break
+                        # A quiet job would otherwise go silent for minutes and take a tunnel 524.
+                        if time.monotonic() - last_sent >= _KEEPALIVE_EVERY_S:
+                            last_sent = time.monotonic()
+                            yield ": keepalive\n\n"
+                        continue
+                    last_sent = time.monotonic()
+                    last_seq = event.get("seq") or last_seq
+                    yield current.format_sse(event)
+                    if event.get("type") in _TERMINAL_EVENT_TYPES:
+                        return
         finally:
-            mgr.unsubscribe(sub)
+            if current is not None:
+                mgr.unsubscribe(current)
 
     return StreamingResponse(
         account_event_stream(mgr, gen()),

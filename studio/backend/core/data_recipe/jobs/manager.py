@@ -101,11 +101,22 @@ def _source_progress_status(job: Job) -> dict[str, Any] | None:
     }
 
 
+class _SubscriberQueue(queue.Queue):
+    def __init__(self) -> None:
+        super().__init__(maxsize = 2000)
+        # Set once the manager stops feeding this queue: the client fell behind or the job changed.
+        self.ended = False
+
+
 @dataclass
 class Subscription:
     replay: list[dict]
     _q: queue.Queue
     _next_id: int = 0
+
+    @property
+    def ended(self) -> bool:
+        return bool(getattr(self._q, "ended", False))
 
     async def next_event(self, *, timeout_sec: float) -> dict | None:
         """Wait for next event (SSE), w/ timeout so we can check disconnects."""
@@ -147,6 +158,11 @@ class JobManager:
         self._job = None
         self._events.clear()
         # Old subscribers retain their private queues but never receive a successor's events.
+        self._end_subscribers()
+
+    def _end_subscribers(self) -> None:
+        for q in self._subs:
+            q.ended = True
         self._subs.clear()
 
     @owned_job()
@@ -187,6 +203,7 @@ class JobManager:
             self._job.internal_api_key_id = internal_api_key_id
             self._events.clear()
             self._seq = 0
+            self._end_subscribers()
 
             run_payload = dict(run)
             run_payload["_job_id"] = job_id
@@ -453,7 +470,7 @@ class JobManager:
         with self._lock:
             if self._job is None or self._job.job_id != job_id:
                 return None
-            q: queue.Queue = queue.Queue(maxsize = 2000)
+            q = _SubscriberQueue()
             self._subs.append(q)
             if after_seq is None:
                 replay = list(self._events)
@@ -467,7 +484,7 @@ class JobManager:
             self._subs = [q for q in self._subs if q is not sub._q]
 
     def _emit(self, event: dict) -> None:
-        """Broadcast event to replay buffer + all subscribers."""
+        """Broadcast event to replay buffer + all subscribers. Caller holds ``self._lock``."""
         self._seq += 1
         event["seq"] = self._seq
         self._events.append(event)
@@ -476,6 +493,7 @@ class JobManager:
             try:
                 q.put_nowait(event)
             except queue.Full:
+                q.ended = True
                 stale.append(q)
         if stale:
             self._subs = [q for q in self._subs if q not in stale]
@@ -629,7 +647,10 @@ class JobManager:
         if terminal:
             self._retire_workflow_key(job)
 
-        self._emit(event)
+        # Under the lock: subscribe() reads the replay buffer under it, and cancel() emits under it.
+        with self._lock:
+            if self._job is job:
+                self._emit(event)
 
     def _retire_workflow_key(self, job: Job) -> None:
         """Best-effort: errors are swallowed, since the key expires on its own after 24h."""
