@@ -30,6 +30,7 @@ from core.inference.mcp_client import (
     close_mcp_sessions,
     invalidate_tool_cache,
     is_stdio,
+    is_studio_tools,
     join_stdio_command,
     list_tools_async,
     oauth_client_kwargs,
@@ -207,6 +208,16 @@ def _blender_row():
     )
 
 
+def _require_ui_for_studio_tools(via_api_key, no_credential = False) -> None:
+    # The row runs Unsloth Studio's own tools as the account, so like a stdio command only a UI session adds it.
+    if via_api_key or no_credential:
+        raise HTTPException(
+            status_code = 403,
+            detail = "The Unsloth Studio tools server can only be added from the Unsloth Studio UI, "
+            "not with an API key.",
+        )
+
+
 def _require_managed_access(
     via_api_key,
     no_credential,
@@ -367,6 +378,7 @@ async def create_mcp_server(
     payload: McpServerCreate,
     current_subject: str = Depends(get_current_subject),
     via_api_key: ViaApiKey = False,
+    no_credential: WithoutCredential = False,
 ):
     display_name = (payload.display_name or "").strip()
     if not display_name:
@@ -374,6 +386,8 @@ async def create_mcp_server(
     url = _validate_url(payload.url)
     if is_stdio(url):
         require_ui_session_for_local_commands(via_api_key)
+    if is_studio_tools(url):
+        _require_ui_for_studio_tools(via_api_key, no_credential)
     headers = _normalize_headers(payload.headers)
     # OAuth is HTTP-only; a stale flag would push stdio probes onto the 305s OAuth timeout.
     use_oauth = payload.use_oauth and not is_stdio(url)
@@ -470,6 +484,12 @@ async def update_mcp_server(
     # Check both directions before any side effect; API keys must not repoint http rows or edit stdio env
     if is_stdio(old["url"]) or is_stdio(changes.get("url", old["url"])):
         require_ui_session_for_local_commands(via_api_key)
+    # Repointing either way, or turning the row back on, which grants its tools as surely as adding it.
+    # Turning it off and renaming stay open to API keys.
+    if (
+        "url" in changes and (is_studio_tools(old["url"]) or is_studio_tools(changes["url"]))
+    ) or (is_studio_tools(old["url"]) and changes.get("is_enabled") and not old.get("is_enabled")):
+        _require_ui_for_studio_tools(via_api_key, no_credential)
     # On transport switch with no new headers, drop old ones so env secrets are not sent as HTTP headers
     if (
         "url" in changes
@@ -612,6 +632,7 @@ async def import_mcp_servers(
     payload: McpServerImportRequest,
     current_subject: str = Depends(get_current_subject),
     via_api_key: ViaApiKey = False,
+    no_credential: WithoutCredential = False,
 ):
     """Bulk-register servers from a standard mcpServers JSON config (issue
     #5936). Each entry rides the existing create path: _validate_url applies
@@ -630,6 +651,8 @@ async def import_mcp_servers(
             # Checked per entry: an API-key import of a mixed config still creates http entries, reports stdio.
             if is_stdio(url):
                 require_ui_session_for_local_commands(via_api_key)
+            if is_studio_tools(url):
+                _require_ui_for_studio_tools(via_api_key, no_credential)
             headers = _normalize_headers(entry.headers)
         except HTTPException as exc:
             errors.append(f"{entry.display_name}: {exc.detail}")
