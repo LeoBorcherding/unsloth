@@ -437,6 +437,15 @@ export function buildRecipePayload(
           firstSeed.local_file_name !== undefined && {
             local_file_name: firstSeed.local_file_name,
           }),
+        // The source keeps only the resolved path, which can't be read back into a subset/split.
+        ...(firstSeed?.seed_source_type === "hf" &&
+          firstSeed.hf_subset?.trim() && {
+            hf_subset: firstSeed.hf_subset.trim(),
+          }),
+        ...(firstSeed?.seed_source_type === "hf" &&
+          firstSeed.hf_split?.trim() && {
+            hf_split: firstSeed.hf_split.trim(),
+          }),
         ...(firstSeed &&
           firstSeed.unstructured_file_ids !== undefined && {
             unstructured_file_ids: firstSeed.unstructured_file_ids,

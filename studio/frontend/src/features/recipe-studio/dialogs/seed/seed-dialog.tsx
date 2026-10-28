@@ -68,6 +68,16 @@ import type {
 import { CollapsibleSectionTriggerButton } from "../shared/collapsible-section-trigger";
 import { HfDatasetCombobox } from "../../components/shared/hf-dataset-combobox";
 import { FieldLabel } from "../shared/field-label";
+import { HfSubsetSplitFields } from "./hf-subset-split-fields";
+
+function hfLoadKey(
+  dataset: string,
+  token?: string | null,
+  subset?: string | null,
+  split?: string | null,
+): string {
+  return `hf:${dataset}|${token?.trim() ?? ""}|${subset?.trim() ?? ""}|${split?.trim() ?? ""}`;
+}
 
 const SAMPLING_OPTIONS: Array<{ value: SeedSamplingStrategy; label: string }> =
   [
@@ -726,8 +736,7 @@ export function SeedDialog({
     if (mode === "hf") {
       const dataset = config.hf_repo_id.trim();
       if (!dataset) return null;
-      const token = config.hf_token?.trim() ?? "";
-      return `hf:${dataset}|${token}`;
+      return hfLoadKey(dataset, config.hf_token, config.hf_subset, config.hf_split);
     }
     if (mode === "local") {
       if (!localFile) return null;
@@ -780,7 +789,10 @@ export function SeedDialog({
             unstructured_file_sizes: [],
           });
           setPreviewRows(response.preview_rows ?? []);
-          setLastLoadedKey(loadKey);
+          // The server fills in the split (and subset) it read, which is the same load.
+          setLastLoadedKey(
+            hfLoadKey(datasetName, config.hf_token, response.subset, response.split),
+          );
           return true;
         }
 
@@ -993,6 +1005,12 @@ export function SeedDialog({
                   </Button>
                 </div>
               </div>
+
+              <HfSubsetSplitFields
+                config={config}
+                onUpdate={onUpdate}
+                disabled={isInspecting}
+              />
 
               <div className="grid gap-1.5">
                 <FieldLabel

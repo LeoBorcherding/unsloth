@@ -8,6 +8,7 @@ from __future__ import annotations
 from core.training.account_jobs import account_path, managed_account
 import base64
 import binascii
+import codecs
 import json
 import os
 import re
@@ -767,6 +768,90 @@ def _load_preview_rows(
     ]
 
 
+# A JSON array can't stream, so `datasets` reads the whole file for a 10-row preview (OpenHermes:
+# 1.9 GB). Past this size the preview decodes rows off the front of the file instead.
+JSON_HEAD_PREVIEW_MIN_BYTES = 16 * 1024 * 1024
+_JSON_HEAD_CHUNK_BYTES = 1024 * 1024
+_JSON_HEAD_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _open_hf_file(*, dataset_name: str, path: str, token: HfTokenArg):
+    from huggingface_hub import HfFileSystem
+
+    fs = HfFileSystem(token = token, block_size = _JSON_HEAD_CHUNK_BYTES)
+    return fs.open(f"datasets/{dataset_name}/{path}", "rb")
+
+
+def _read_json_array_head(handle, preview_size: int) -> list[dict[str, Any]] | None:
+    """The first rows of a top-level JSON array of objects, read a chunk at a time.
+
+    None when the file is not one, or no row fits in the byte cap; the caller then loads it whole.
+    """
+    decoder = json.JSONDecoder()
+    text = codecs.getincrementaldecoder("utf-8")()
+    buffer = ""
+    consumed = 0
+    opened = False
+    # One comma between rows, none before the first or the closing bracket, so a malformed
+    # array goes to the loader, which rejects it as the run would.
+    after_row = after_comma = False
+    rows: list[dict[str, Any]] = []
+    eof = False
+    while len(rows) < preview_size:
+        buffer = buffer.lstrip()
+        if buffer and not opened:
+            if buffer[0] != "[":
+                return None
+            opened = True
+            buffer = buffer[1:]
+            continue
+        if buffer.startswith("]"):
+            if after_comma:
+                return None
+            break
+        if buffer.startswith(","):
+            if not after_row:
+                return None
+            after_row, after_comma = False, True
+            buffer = buffer[1:]
+            continue
+        if buffer:
+            if after_row:
+                return None
+            try:
+                row, end = decoder.raw_decode(buffer)
+            except json.JSONDecodeError:
+                row, end = None, 0
+            if end:
+                if not isinstance(row, dict):
+                    return None
+                rows.append(row)
+                buffer = buffer[end:]
+                after_row, after_comma = True, False
+                continue
+        if eof:
+            return rows or None
+        if consumed >= _JSON_HEAD_MAX_BYTES:
+            return None
+        chunk = handle.read(_JSON_HEAD_CHUNK_BYTES)
+        consumed += len(chunk)
+        eof = not chunk
+        buffer += text.decode(chunk, final = eof)
+    return rows
+
+
+def _preview_large_json_head(
+    *, dataset_name: str, path: str, token: HfTokenArg, preview_size: int
+) -> list[dict[str, Any]] | None:
+    try:
+        with _open_hf_file(dataset_name = dataset_name, path = path, token = token) as handle:
+            if (getattr(handle, "size", None) or 0) < JSON_HEAD_PREVIEW_MIN_BYTES:
+                return None
+            return _read_json_array_head(handle, preview_size)
+    except (ImportError, OSError, ValueError, RuntimeError):
+        return None
+
+
 def _images_undecoded(feature):
     import dataclasses
 
@@ -820,6 +905,19 @@ def _decode_hub_images(feature, value, tokens):
     if inner is not None and isinstance(value, list):
         return [_decode_hub_images(inner, item, tokens) for item in value]
     return value
+
+
+def _data_suffix(path: str) -> str:
+    """`.jsonl.gz` for a compressed file, `.parquet` for a plain one; "" for repo metadata."""
+    name = PurePosixPath(path).name.lower()
+    if name in {"readme.md", ".gitattributes"} or name.startswith("."):
+        return ""
+    suffixes = PurePosixPath(name).suffixes
+    if not suffixes:
+        return ""
+    if len(suffixes) > 1 and suffixes[-1] in {".gz", ".bz2", ".xz", ".zst", ".zip"}:
+        return "".join(suffixes[-2:])
+    return suffixes[-1]
 
 
 def _extract_columns(rows: list[dict[str, Any]]) -> list[str]:
@@ -1045,6 +1143,18 @@ def inspect_seed_dataset(
     preview_rows: list[dict[str, Any]] = []
     repo_files = _list_hf_repo_files(dataset_name = dataset_name, token = token)
     data_files = [file for file in repo_files if file.lower().endswith(DATA_EXTS)]
+    if repo_files and not data_files:
+        # The preview would still load through `datasets`, but the run reads with DuckDB by
+        # extension, and a made-up parquet glob matches nothing.
+        found = sorted({_data_suffix(file) for file in repo_files} - {""})
+        raise HTTPException(
+            status_code = 422,
+            detail = (
+                f"{dataset_name} has no .parquet, .jsonl, .json or .csv files, which recipes need"
+                + (f" (its files are {', '.join(found)})" if found else "")
+                + "."
+            ),
+        )
     configs = _list_hf_dataset_configs(dataset_name = dataset_name, token = token)
 
     # Preview the same files the recipe will read, not from a config the resolved path excludes.
@@ -1059,7 +1169,17 @@ def inspect_seed_dataset(
     folder = _config_scope(configs, subset)
     in_folder = [f for f in data_files if f.startswith(f"{folder}/")] if folder else []
     selected_file = _select_best_file(declared_files or in_folder or data_files, split, subset)
-    if selected_file:
+    if selected_file and selected_file.lower().endswith(".json"):
+        preview_rows = (
+            _preview_large_json_head(
+                dataset_name = dataset_name,
+                path = selected_file,
+                token = token,
+                preview_size = preview_size,
+            )
+            or []
+        )
+    if selected_file and not preview_rows:
         try:
             single_file_kwargs = _build_stream_load_kwargs(
                 dataset_name = dataset_name,

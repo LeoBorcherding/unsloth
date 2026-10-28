@@ -200,6 +200,8 @@ export function parseSeedConfig(
     seed_preview_rows?: Record<string, unknown>[];
     seed_total_rows?: number;
     local_file_name?: string;
+    hf_subset?: string;
+    hf_split?: string;
     unstructuredUploadUid?: string;
     unstructuredFileIds?: string[];
     unstructuredFileNames?: string[];
@@ -246,6 +248,8 @@ export function parseSeedConfig(
     ...(options?.local_file_name !== undefined
       ? { local_file_name: options.local_file_name }
       : {}),
+    ...(options?.hf_subset ? { hf_subset: options.hf_subset } : {}),
+    ...(options?.hf_split ? { hf_split: options.hf_split } : {}),
     ...(options?.unstructuredUploadUid
       ? { unstructured_upload_uid: options.unstructuredUploadUid }
       : {}),
