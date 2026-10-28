@@ -239,11 +239,12 @@ export function documentSignature(doc: FlowDocument): string {
     graph: graphFromDocument(doc),
   });
   const { editor, ...rest } = canonical;
-  // The viewport is not an edit; reroutes are.
+  // The viewport is not an edit; reroutes and collapsed super cards are.
   return JSON.stringify({
     ...rest,
     reroutes: editor.reroutes,
     reroute_wires: editor.reroute_wires,
+    super_cards: editor.super_cards,
   });
 }
 
