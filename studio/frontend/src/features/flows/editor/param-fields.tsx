@@ -393,7 +393,9 @@ interface RewardEntry {
 function RewardListField({ spec, value, onChange }: FieldProps) {
   const listId = useId();
   const suggestions = useRouteSuggestions(spec);
-  const rows = Array.isArray(value) ? (value as RewardEntry[]) : [];
+  // A node saved before rewards existed gets the defaults the backend trains with.
+  const saved = value === undefined || value === null ? spec.default : value;
+  const rows = Array.isArray(saved) ? (saved as RewardEntry[]) : [];
   const update = (index: number, patch: Partial<RewardEntry>) =>
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   return (
@@ -512,7 +514,7 @@ function ParamFieldImpl({ spec, value, onChange }: FieldProps) {
     case "select":
       return (
         <Select
-          value={String(value ?? "")}
+          value={String(value ?? spec.default ?? "")}
           onValueChange={(next) => onChange(next)}
         >
           <SelectTrigger className={`${FIELD} w-full`}>
