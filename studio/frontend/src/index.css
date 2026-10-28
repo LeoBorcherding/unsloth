@@ -5479,6 +5479,10 @@ html.force-reduced-motion .sidebar-section-drop-line {
 .dark .flows-editor {
 	--flows-port-mix: 100%;
 }
+/* A Nodes panel item is armed: the pane places it on click. */
+.flows-armed .react-flow__pane {
+	cursor: copy;
+}
 
 /* Radix hides it (the viewport is the scroller so corners stay rounded); Firefox uses the inline
    scrollbar-width. */
