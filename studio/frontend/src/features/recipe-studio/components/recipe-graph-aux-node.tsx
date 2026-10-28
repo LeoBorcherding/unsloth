@@ -19,7 +19,10 @@ import type { LlmConfig, Score, ScoreOption } from "../types";
 import { AUX_HANDLE_CLASS } from "../utils/handle-layout";
 import { HANDLE_IDS } from "../utils/handles";
 import { findInvalidJinjaReferences } from "../utils/refs";
-import { getAvailableVariableEntries } from "../utils/variables";
+import {
+  getAvailableVariableEntries,
+  getNestedReferenceRoots,
+} from "../utils/variables";
 import { AvailableReferencesInline } from "./shared/available-references-inline";
 import { BaseNode, BaseNodeContent, BaseNodeHeader, BaseNodeHeaderTitle } from "./rf-ui/base-node";
 
@@ -132,7 +135,11 @@ function AuxNodeBase({
     const variableEntries = getAvailableVariableEntries(configs, data.llmId);
     const availableRefs = variableEntries.map((entry) => entry.name);
     const hasInvalidRefs =
-      findInvalidJinjaReferences(value, availableRefs).length > 0;
+      findInvalidJinjaReferences(
+        value,
+        availableRefs,
+        getNestedReferenceRoots(configs, data.llmId),
+      ).length > 0;
     return (
       <BaseNode className="corner-squircle w-full min-w-0 rounded-xl border-border/60 bg-card shadow-sm">
         <BaseNodeHeader className="border-b border-border/50 px-3 py-2">

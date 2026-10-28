@@ -5,6 +5,7 @@ import type {
   LlmConfig,
   ModelConfig,
   NodeConfig,
+  RecipeProcessorConfig,
   SamplerConfig,
 } from "../../types";
 import { removeRef, replaceRef } from "../../utils/refs";
@@ -193,12 +194,107 @@ export function applyRenameToConfigs(
   from: string,
   to: string,
 ): Record<string, NodeConfig> {
-  if (!from || from === to) {
+  if (!from || !to || from === to) {
     return configs;
   }
   return applyConfigTransform(configs, (config) =>
     applyRenameToConfig(config, from, to),
   );
+}
+
+export function applyRenameToProcessors(
+  processors: RecipeProcessorConfig[],
+  from: string,
+  to: string,
+): RecipeProcessorConfig[] {
+  if (!from || !to || from === to) {
+    return processors;
+  }
+  let changed = false;
+  const next = processors.map((processor) => {
+    const template = replaceRef(processor.template, from, to);
+    if (template === processor.template) {
+      return processor;
+    }
+    changed = true;
+    return { ...processor, template };
+  });
+  return changed ? next : processors;
+}
+
+/** A name references can follow: not empty, not another block's (notes aren't referenced), and not
+ * one another block's references still wait on. */
+export function isFreeName(
+  configs: Record<string, NodeConfig>,
+  id: string,
+  name: string,
+  renameSources: Record<string, string> = {},
+): boolean {
+  if (!name.trim()) {
+    return false;
+  }
+  if (Object.entries(renameSources).some(([other, source]) => other !== id && source === name)) {
+    return false;
+  }
+  return !Object.values(configs).some(
+    (config) =>
+      config.id !== id &&
+      config.kind !== "markdown_note" &&
+      config.name === name,
+  );
+}
+
+export type NameEditState = {
+  configs: Record<string, NodeConfig>;
+  processors: RecipeProcessorConfig[];
+  // Block id -> the name its references still use while its field holds an empty or taken name.
+  renameSources: Record<string, string>;
+};
+
+/** One edit of a block's name field, which fires per keystroke. References only follow the field
+ * while it holds a free name, so clearing it or typing through another block's name doesn't wipe
+ * or merge them; the next free name picks them up from where they were. */
+export function applyNameEdit(
+  state: NameEditState,
+  id: string,
+  oldName: string,
+  newName: string,
+): NameEditState {
+  // Notes aren't referenced; a block may share a note's name, so a note rename must not move its refs.
+  if (state.configs[id]?.kind === "markdown_note") {
+    return state;
+  }
+  const source = state.renameSources[id] ?? oldName;
+  if (!isFreeName(state.configs, id, newName, state.renameSources)) {
+    if (state.renameSources[id] === source) {
+      return state;
+    }
+    return { ...state, renameSources: { ...state.renameSources, [id]: source } };
+  }
+  const renameSources = { ...state.renameSources };
+  delete renameSources[id];
+  return {
+    configs: applyRenameToConfigs(state.configs, source, newName),
+    processors: applyRenameToProcessors(state.processors, source, newName),
+    renameSources,
+  };
+}
+
+/** Pending renames whose block now holds a free name (the other holder was renamed or removed)
+ * catch up, and pending renames of removed blocks are dropped. */
+export function reconcileRenameSources(state: NameEditState): NameEditState {
+  let next = state;
+  for (const [id, source] of Object.entries(state.renameSources)) {
+    const config = next.configs[id];
+    if (!config) {
+      const renameSources = { ...next.renameSources };
+      delete renameSources[id];
+      next = { ...next, renameSources };
+    } else if (isFreeName(next.configs, id, config.name, next.renameSources)) {
+      next = applyNameEdit(next, id, source, config.name);
+    }
+  }
+  return next;
 }
 
 export function applyRemovalToConfigs(

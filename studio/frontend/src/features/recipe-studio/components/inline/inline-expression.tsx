@@ -13,7 +13,10 @@ import type { ReactElement } from "react";
 import { useRecipeStudioStore } from "../../stores/recipe-studio";
 import type { ExpressionConfig, ExpressionDtype } from "../../types";
 import { findInvalidJinjaReferences } from "../../utils/refs";
-import { getAvailableVariableEntries } from "../../utils/variables";
+import {
+  getAvailableVariableEntries,
+  getNestedReferenceRoots,
+} from "../../utils/variables";
 import { AvailableReferencesInline } from "../shared/available-references-inline";
 import { InlineField } from "./inline-field";
 
@@ -33,6 +36,7 @@ export function InlineExpression({
   const invalidRefs = findInvalidJinjaReferences(
     config.expr,
     vars.map((entry) => entry.name),
+    getNestedReferenceRoots(configs, config.id),
   );
 
   return (

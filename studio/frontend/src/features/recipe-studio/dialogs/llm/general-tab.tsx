@@ -30,7 +30,10 @@ import { useRecipeStudioStore } from "../../stores/recipe-studio";
 import type { LlmConfig } from "../../types";
 import { isLikelyImageValue } from "../../utils/image-preview";
 import { findInvalidJinjaReferences } from "../../utils/refs";
-import { getAvailableVariables } from "../../utils/variables";
+import {
+  getAvailableVariables,
+  getNestedReferenceRoots,
+} from "../../utils/variables";
 import { CollapsibleSectionTriggerButton } from "../shared/collapsible-section-trigger";
 import { AvailableVariables } from "../shared/available-variables";
 import { FieldLabel } from "../shared/field-label";
@@ -95,13 +98,18 @@ export function LlmGeneralTab({
     () => getAvailableVariables(configs, config.id),
     [configs, config.id],
   );
+  const nestedRoots = useMemo(
+    () => getNestedReferenceRoots(configs, config.id),
+    [configs, config.id],
+  );
   const invalidPromptRefs = useMemo(
-    () => findInvalidJinjaReferences(config.prompt, validReferences),
-    [config.prompt, validReferences],
+    () => findInvalidJinjaReferences(config.prompt, validReferences, nestedRoots),
+    [config.prompt, validReferences, nestedRoots],
   );
   const invalidSystemRefs = useMemo(
-    () => findInvalidJinjaReferences(config.system_prompt, validReferences),
-    [config.system_prompt, validReferences],
+    () =>
+      findInvalidJinjaReferences(config.system_prompt, validReferences, nestedRoots),
+    [config.system_prompt, validReferences, nestedRoots],
   );
   const invalidPromptText = invalidPromptRefs
     .slice(0, 3)
