@@ -430,16 +430,20 @@ export const BUDGET = {
   // with startup code (chat-settings-api, sidebar-organization-keys) split into their own eager chunks, plus the
   // mount hook and store wiring: +3,074 B raw / +2,025 B transfer (6,958,762 -> 6,961,836 B raw, 2,099,260 ->
   // 2,101,285 B transfer against 9c397197e0, Node 24, 106 -> 109 chunks). Raised by that growth.
-  // The per-tool MCP switches at the end of Settings > Agents (#14348) add 3,593 B raw / 1,086 B transfer
-  // (6,972,239 -> 6,975,832 B raw, 2,102,226 -> 2,103,312 B transfer against a5956882f6, one machine and build,
-  // Node 24, 103 chunks both): the Agents panel and its tools dialog are lazy, so the growth is their strings in the
-  // eager English catalog plus the agents-mcp scroll target. Raised by that.
-  // The chat's Unsloth tools preset, its Desktop media links and the tools dialog's chat note (#14349) add
-  // 1,363 B raw / 366 B transfer on top (6,975,832 -> 6,977,195 B raw, 2,103,312 -> 2,103,678 B transfer against
-  // 8eeb3df91b, one machine and build, Node 24, 103 chunks both), in the eager chat chunk and English catalog.
-  // Raised by that.
-  transferBytes: 2_104_662,
-  rawBytes: 6_981_585,
+  // Mermaid, node-forge and js-yaml load on first use: -998.5 KB raw / -260.1 KB transfer against 4e673d32e.
+  // Lowered by that, so the headroom stays what it was and a regression of that size fails here.
+  // Full Access from a tool approval card (#15485: per-chat grant store and the card's confirm dialog) adds
+  // 5,293 B raw / 1,953 B transfer to the eager chat chunk (5,940,337 -> 5,945,630 B raw, 1,835,497 ->
+  // 1,837,450 B transfer against 8222149ee, Node 24, 85 chunks). Raised by that growth.
+  // The Trick or treat row (#15678) merged in between, unmeasured, and adds 29,984 B raw / 10,952 B transfer
+  // (5,942,150 -> 5,972,134 B raw, 1,836,750 -> 1,847,702 B transfer, ed9857c0c3 -> 39b8a6ce13, Node 24,
+  // 85 chunks): its color themes are read by the theme store at startup, and loading its dialog on first
+  // open saves 3 KB transfer but adds five startup chunks. Raised by that growth.
+  // The per-tool MCP switches at the end of Settings > Agents add 3,593 B raw / 1,086 B transfer, and the chat's
+  // Unsloth tools preset, its Desktop media links and the tools dialog's chat note add 1,363 B raw / 366 B transfer
+  // on top (both measured against a5956882f6, Node 24, before the merge of main). Raised by that growth.
+  transferBytes: 1_851_225,
+  rawBytes: 5_994_398,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.
