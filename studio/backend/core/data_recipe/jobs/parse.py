@@ -315,7 +315,9 @@ def apply_update(job: Job, update: ParsedUpdate) -> None:
         ):
             job._seen_generation_columns.append(update.current_column)
     if update.rows is not None:
-        job.rows = update.rows
+        job._batch_rows = update.rows
+        if job.rows is None:
+            job.rows = update.rows
     if update.cols is not None:
         job.cols = update.cols
     if update.progress is not None:
@@ -331,6 +333,8 @@ def apply_update(job: Job, update: ParsedUpdate) -> None:
             job.completed_columns.append(job.current_column)
         job.progress = _compute_overall_progress(job, update.progress)
     if update.batch_idx is not None:
+        if job.batch.idx is not None and update.batch_idx != job.batch.idx:
+            _start_next_batch(job)
         job.batch.idx = update.batch_idx
     if update.batch_total is not None:
         job.batch.total = update.batch_total
@@ -435,23 +439,40 @@ def _apply_source_progress(job: Job, progress: SourceProgress) -> None:
     )
 
 
+def _start_next_batch(job: Job) -> None:
+    job._rows_before_batch += int(job._batch_rows or 0)
+    job._failed_before_batch += sum(job._column_failed.values())
+    job._batch_rows = None
+    job._column_done.clear()
+    job._column_failed.clear()
+
+
 def _compute_overall_progress(job: Job, column_progress: Progress) -> Progress:
     if not job.rows:
         return column_progress
 
     total_rows = max(1, int(job.rows))
+    if not job._batch_rows:
+        job._batch_rows = column_progress.total or total_rows
+    batch_rows = max(1, int(job._batch_rows))
     current_done = 0 if column_progress.done is None else int(column_progress.done)
-    current_done = max(0, min(current_done, total_rows))
-    total_columns = max(1, int(job.progress_columns_total or 1))
+    current_done = max(0, min(current_done, batch_rows))
+    current_failed = max(0, int(column_progress.failed or 0))
 
-    if job.current_column:
-        job._column_done[job.current_column] = current_done
+    column = job.current_column or ""
+    job._column_done[column] = current_done
+    job._column_failed[column] = current_failed
+    total_columns = max(1, int(job.progress_columns_total or 1), len(job._column_done))
 
-    if len(job._column_done) == 0:
-        done = current_done
-    else:
-        sum_done = sum(max(0, min(value, total_rows)) for value in job._column_done.values())
-        done = int(sum_done / total_columns)
+    # A row an earlier column dropped is finished for every later column, seen or not yet started.
+    dropped = 0
+    sum_done = 0
+    for name, column_done in job._column_done.items():
+        sum_done += min(batch_rows, column_done + dropped)
+        dropped += job._column_failed.get(name, 0)
+    sum_done += (total_columns - len(job._column_done)) * min(batch_rows, dropped)
+    done = int(job._rows_before_batch + sum_done / total_columns)
+    failed = job._failed_before_batch + dropped
 
     prev_done = int(job.progress.done or 0)
     if done < prev_done:
@@ -463,14 +484,19 @@ def _compute_overall_progress(job: Job, column_progress: Progress) -> Progress:
     if percent < prev_percent:
         percent = prev_percent
 
+    now = time.time()
+    if job._progress_started_at is None:
+        job._progress_started_at = now
+    elapsed = now - job._progress_started_at
+    rate = done / elapsed if done > 0 and elapsed > 0 else None
     return Progress(
         done = done,
         total = total_rows,
         percent = percent,
-        eta_sec = column_progress.eta_sec,
-        rate = column_progress.rate,
-        ok = column_progress.ok,
-        failed = column_progress.failed,
+        eta_sec = (total_rows - done) / rate if rate else column_progress.eta_sec,
+        rate = rate if rate else column_progress.rate,
+        ok = max(0, done - failed),
+        failed = failed,
     )
 
 
