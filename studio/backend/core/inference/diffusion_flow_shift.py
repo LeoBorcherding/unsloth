@@ -37,7 +37,13 @@ def flow_shift_overrides(config: Any, shift: float) -> Optional[dict]:
     except Exception:  # noqa: BLE001 - an exotic config just keeps its scheduler
         return None
     if "flow_shift" in keys and config.get("use_flow_sigmas", True):
-        return {"flow_shift": float(shift)}
+        overrides = {"flow_shift": float(shift)}
+        # A UniPC built from a dynamic FlowMatchEuler config (diffusion_sampler) would ignore flow_shift otherwise.
+        if config.get("use_dynamic_shifting"):
+            overrides["use_dynamic_shifting"] = False
+        if config.get("shift_terminal"):
+            overrides["shift_terminal"] = None
+        return overrides
     if "shift" in keys and "use_dynamic_shifting" in keys:
         # FlowMatchEulerDiscrete: static shift, no resolution-dependent mu, no terminal stretch.
         overrides = {"shift": float(shift), "use_dynamic_shifting": False}

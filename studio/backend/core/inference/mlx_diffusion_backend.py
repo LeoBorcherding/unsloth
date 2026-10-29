@@ -1282,9 +1282,14 @@ class MlxDiffusionBackend:
         allow_oversized: bool = False,
         # Interface parity with the other engines; status advertises no Hires fix here, so a request is refused.
         hires: Any = None,
+        # Same: status offers no samplers here.
+        sampler: Optional[str] = None,
+        schedule_type: Optional[str] = None,
     ) -> dict[str, Any]:
         if hires is not None:
             raise ValueError("Hires fix is not available on the MLX engine.")
+        if sampler not in (None, "default") or schedule_type not in (None, "automatic"):
+            raise ValueError("Choosing a sampler is not available on the MLX engine.")
         if (
             init_image is not None
             or mask_image is not None

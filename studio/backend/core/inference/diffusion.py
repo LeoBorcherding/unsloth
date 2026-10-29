@@ -408,6 +408,7 @@ from .diffusion_sampler import (
     DEFAULT_SAMPLER,
     apply_checkpoint_prediction_type,
     apply_pipeline_prediction_type,
+    bind_flow_sampling,
     build_scheduler,
     sampler_options,
 )
@@ -14170,6 +14171,8 @@ class DiffusionBackend:
                             chunk_kwargs = applied_embeddings.rewrite(chunk_kwargs)
                         # Per pipe, idempotent: a workflow pipe built by from_pipe has its own image processor.
                         install_device_postprocess(pipe, logger)
+                        # After the Shift rebuild: a swapped flow sampler's step noise follows this chunk's seeds.
+                        bind_flow_sampling(getattr(pipe, "scheduler", None), chunk_kwargs.get("generator"))
                         protect_ctx = protect_generation(pipe, denoise_steps, logger = logger)
                         # Per chunk: a later chunk encodes again after an earlier one decoded.
                         gen.phase = "encode"

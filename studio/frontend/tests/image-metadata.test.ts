@@ -634,9 +634,10 @@ test("sampler and schedule come back from the recipe and from A1111 labels", () 
   assert.equal(parsed?.schedule_type, "exponential");
   // Unknown labels stay as written so the import can say it did not apply them.
   assert.equal(
-    parseA1111Parameters("a cat\nSteps: 20, Sampler: UniPC")?.sampler,
-    "UniPC",
+    parseA1111Parameters("a cat\nSteps: 20, Sampler: DDIM")?.sampler,
+    "DDIM",
   );
+  assert.equal(parseA1111Parameters("a cat\nSteps: 20, Sampler: UniPC")?.sampler, "unipc");
 });
 
 test("an older recipe without the newer fields still loads with the form's values", () => {
@@ -788,7 +789,7 @@ test("pre-1.9 AUTOMATIC1111 sampler names carry their schedule; denoising streng
   const both = parseA1111Parameters("a cat\nSteps: 20, Sampler: Euler a, Schedule type: Uniform, CFG scale: 7");
   assert.equal(both?.sampler, "euler_a");
   assert.equal(both?.schedule_type, "uniform");
-  assert.equal(parseA1111Parameters("a cat\nSteps: 20, Sampler: UniPC Karras")?.sampler, "UniPC");
+  assert.equal(parseA1111Parameters("a cat\nSteps: 20, Sampler: DDIM Karras")?.sampler, "DDIM");
   const img2img = parseA1111Parameters("a cat\nSteps: 20, CFG scale: 7, Seed: 1, Denoising strength: 0.4");
   assert.equal(img2img?.workflow, "img2img");
   assert.equal(img2img?.strength, 0.4);
