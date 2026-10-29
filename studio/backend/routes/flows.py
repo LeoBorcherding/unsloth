@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from auth.authentication import get_current_subject
 from core.flows import assets as asset_store
 from core.flows import caller as flow_caller
-from core.flows import capabilities, compiler, notebook_import, package, replication, triggers
+from core.flows import capabilities, compiler, custom_nodes, notebook_import, package, replication, triggers
 from core.flows.examples import build_examples as examples
 from core.flows.compiler import CompileError
 from core.flows.engine import get_engine
@@ -428,6 +428,70 @@ async def run_events(request: Request, run_id: str) -> StreamingResponse:
         media_type = "text/event-stream",
         headers = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class CustomNodeBody(BaseModel):
+    source: str = Field(max_length = custom_nodes.MAX_SCRIPT_BYTES)
+
+
+def _custom_node_error(exc: custom_nodes.CustomNodeError) -> HTTPException:
+    return HTTPException(
+        status_code = 400, detail = {"message": str(exc), "line": exc.line, "reason": exc.reason}
+    )
+
+
+@router.get("/custom-nodes")
+def list_custom_nodes() -> dict:
+    return {"nodes": custom_nodes.list_nodes()}
+
+
+@router.post("/custom-nodes/parse")
+def parse_custom_node(body: CustomNodeBody) -> dict:
+    """Reads the header with ast only; nothing in the script runs."""
+    try:
+        return {"spec": custom_nodes.build_spec(body.source), "hash": custom_nodes.script_hash(body.source)}
+    except custom_nodes.CustomNodeError as exc:
+        raise _custom_node_error(exc)
+
+
+@router.post("/custom-nodes")
+def create_custom_node(body: CustomNodeBody) -> dict:
+    try:
+        return custom_nodes.save_node(body.source)
+    except custom_nodes.CustomNodeError as exc:
+        raise _custom_node_error(exc)
+
+
+@router.get("/custom-nodes/libraries")
+async def custom_node_libraries() -> dict:
+    return await asyncio.to_thread(custom_nodes.sandbox_libraries)
+
+
+@router.get("/custom-nodes/template")
+async def custom_node_template() -> Response:
+    libraries = await asyncio.to_thread(custom_nodes.sandbox_libraries)
+    return Response(
+        custom_nodes.template_source(libraries),
+        media_type = "text/x-python; charset=utf-8",
+        headers = {"Content-Disposition": 'attachment; filename="my_node_template.py"'},
+    )
+
+
+@router.put("/custom-nodes/{node_id}")
+def replace_custom_node(node_id: str, body: CustomNodeBody) -> dict:
+    try:
+        return custom_nodes.save_node(body.source, node_id)
+    except custom_nodes.CustomNodeError as exc:
+        raise _custom_node_error(exc)
+    except KeyError:
+        raise HTTPException(status_code = 404, detail = "Custom node not found")
+
+
+@router.delete("/custom-nodes/{node_id}", status_code = 204)
+def delete_custom_node(node_id: str) -> Response:
+    if not custom_nodes.delete_node(node_id):
+        raise HTTPException(status_code = 404, detail = "Custom node not found")
+    return Response(status_code = 204)
 
 
 @router.get("")

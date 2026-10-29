@@ -7,6 +7,7 @@ from core.flows.nodes import (  # noqa: F401
     audio,
     automation,
     chat,
+    custom,
     data,
     image,
     inputs,

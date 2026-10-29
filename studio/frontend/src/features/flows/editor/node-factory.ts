@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { defaultParams, getSpec } from "../stores/catalog-store";
+import { customNodeSeed } from "../stores/custom-nodes-store";
 import { newId, useDocStore } from "../stores/doc-store";
 import type { FlowEdge, FlowNode, PortSpec } from "../types";
 import {
@@ -22,7 +23,13 @@ export function createNode(
 ): FlowNode | null {
   const spec = getSpec(type);
   if (!spec) return null;
-  return { id: newId("n"), type, v: spec.v, params: defaultParams(spec), pos };
+  const params = defaultParams(spec);
+  if (spec.custom) {
+    const seed = customNodeSeed(type);
+    if (!seed) return null;
+    Object.assign(params, seed);
+  }
+  return { id: newId("n"), type, v: spec.v, params, pos };
 }
 
 export interface ConnectRequest {

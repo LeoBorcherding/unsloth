@@ -175,21 +175,32 @@ def python_session(flow_id: str) -> str:
     return f"flow-{flow_id}"
 
 
-def _program(code: str, value: Any) -> str:
+def _program(code: str, value: Any, *, filename: str = "<python block>", entry: bool = False) -> str:
     """The user's code with `inputs` set. What it prints is held back, and `result` is printed as JSON on a marker line
-    FIRST, then the printed log: the tool cuts long output, and a long log must not cut the result."""
+    FIRST, then the printed log: the tool cuts long output, and a long log must not cut the result. With ``entry``
+    (a custom node) `inputs` is {"inputs", "params"} and `result` is what the script's ``run(inputs, params)`` returns."""
     encoded = json.dumps(value, default = str)
     if len(encoded) > PY_MAX_INPUT_BYTES:
         raise FlowNodeError("The input is too large to pass to Python")
+    call = (
+        "        _flow_run = globals().get('run')\n"
+        "        if not callable(_flow_run):\n"
+        "            raise RuntimeError('The script has no run(inputs, params) function')\n"
+        "        result = _flow_run(_flow_value['inputs'], _flow_value['params'])\n"
+        if entry
+        else ""
+    )
     return (
         "import contextlib as _flow_cl, io as _flow_io, json as _flow_json, sys as _flow_sys\n"
         f"inputs = _flow_json.loads({encoded!r})\n"
-        "result = None\n"
+        + ("_flow_value = inputs\n" if entry else "")
+        + "result = None\n"
         "_flow_log = _flow_io.StringIO()\n"
         "try:\n"
         "    with _flow_cl.redirect_stdout(_flow_log):\n"
-        f"        exec(compile({code!r}, '<python block>', 'exec'), globals())\n"
-        "except BaseException:\n"
+        f"        exec(compile({code!r}, {filename!r}, 'exec'), globals())\n"
+        + call
+        + "except BaseException:\n"
         "    _flow_sys.stdout.write(_flow_log.getvalue()[-4000:])\n"
         "    raise\n"
         f"_flow_sys.stdout.write({PY_RESULT_MARKER!r} + _flow_json.dumps(result, default = str) + '\\n')\n"

@@ -26,7 +26,7 @@ from core.flows import assets as asset_store
 from core.flows import glb, schema
 from core.flows.compiler import parse_document
 from core.flows import replication
-from core.flows.specs import SPECS_BY_TYPE
+from core.flows.custom_nodes import spec_for_node
 
 MAX_ENTRIES = schema.MAX_ASSETS + 8
 MAX_RATIO = 200
@@ -191,7 +191,7 @@ def record_lineage(doc: dict) -> None:
 
 def _uses_models(doc: dict) -> bool:
     return any(
-        (SPECS_BY_TYPE.get(n.get("type")) or {}).get("lane") == "gpu" for n in doc.get("nodes", [])
+        (spec_for_node(n) or {}).get("lane") == "gpu" for n in doc.get("nodes", [])
     )
 
 
@@ -374,7 +374,7 @@ def read_package(data: bytes) -> tuple[dict, dict[str, tuple[bytes, str]], dict]
             doc["assets"].append(
                 {"id": f"sha256:{digest}", "mime": mime, "bytes": len(blob), "name": None}
             )
-    unknown = sorted({n["type"] for n in doc.get("nodes", []) if n["type"] not in SPECS_BY_TYPE})
+    unknown = sorted({n["type"] for n in doc.get("nodes", []) if spec_for_node(n) is None})
     if unknown:
         warnings.append(
             "Node types this Unsloth Studio does not know (the flow opens read-only until it is updated): "
