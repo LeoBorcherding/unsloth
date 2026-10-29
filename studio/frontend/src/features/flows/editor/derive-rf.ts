@@ -42,6 +42,8 @@ export const GROUP_PREFIX = GROUP_KEY;
 export const NOTE_PREFIX = NOTE_KEY;
 
 type Positions = Record<string, { x: number; y: number }>;
+/** A size set live by a resize handle, before it is committed on release. */
+export type Boxes = Record<string, { width: number; height: number }>;
 
 export class RfDeriver {
   private nodeCache = new Map<
@@ -52,6 +54,7 @@ export class RfDeriver {
       x: number;
       y: number;
       size: { width: number; height: number } | undefined;
+      box: unknown;
       rf: RfNode;
     }
   >();
@@ -64,6 +67,7 @@ export class RfDeriver {
       x: number;
       y: number;
       size: unknown;
+      box: unknown;
       rf: RfNode;
     }
   >();
@@ -75,6 +79,7 @@ export class RfDeriver {
       x: number;
       y: number;
       size: unknown;
+      box: unknown;
       rf: RfNode;
     }
   >();
@@ -104,6 +109,7 @@ export class RfDeriver {
     selected: ReadonlySet<string>,
     drag: Positions | null,
     sizes?: ReadonlyMap<string, { width: number; height: number }>,
+    boxes?: Boxes | null,
   ): RfNode[] {
     const next: RfNode[] = [];
     let changed = false;
@@ -115,6 +121,7 @@ export class RfDeriver {
       const pos = drag?.[rfId] ?? { x: group.rect[0], y: group.rect[1] };
       const isSelected = selected.has(rfId);
       const size = sizes?.get(rfId);
+      const box = boxes?.[rfId];
       const cached = this.groupCache.get(groupId);
       if (
         cached &&
@@ -122,7 +129,8 @@ export class RfDeriver {
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -134,7 +142,7 @@ export class RfDeriver {
         position: pos,
         data: { groupId },
         selected: isSelected,
-        style: { width: group.rect[2], height: group.rect[3] },
+        style: box ?? { width: group.rect[2], height: group.rect[3] },
         zIndex: -1,
         dragHandle: ".flow-group-drag",
         ...(size ? { measured: size } : {}),
@@ -145,6 +153,7 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
         rf,
       });
       next.push(rf);
@@ -156,6 +165,7 @@ export class RfDeriver {
       const pos = drag?.[rfId] ?? { x: note.rect[0], y: note.rect[1] };
       const isSelected = selected.has(rfId);
       const size = sizes?.get(rfId);
+      const box = boxes?.[rfId];
       const cached = this.noteCache.get(noteId);
       if (
         cached &&
@@ -163,7 +173,8 @@ export class RfDeriver {
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -176,7 +187,7 @@ export class RfDeriver {
         data: { noteId },
         selected: isSelected,
         // At least its stored height, taller when its text needs it: a note never clips mid-line.
-        style: { width: note.rect[2], minHeight: note.rect[3] },
+        style: box ?? { width: note.rect[2], minHeight: note.rect[3] },
         ...(size ? { measured: size } : {}),
       };
       this.noteCache.set(noteId, {
@@ -185,6 +196,7 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
         rf,
       });
       next.push(rf);
@@ -195,6 +207,7 @@ export class RfDeriver {
       const pos = drag?.[id] ?? { x: node.pos[0], y: node.pos[1] };
       const isSelected = selected.has(id);
       const size = sizes?.get(id);
+      const box = boxes?.[id];
       const cached = this.nodeCache.get(id);
       if (
         cached &&
@@ -202,7 +215,8 @@ export class RfDeriver {
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -220,6 +234,11 @@ export class RfDeriver {
         data,
         selected: isSelected,
         // The whole card drags; its controls opt out with `nodrag`.
+        ...(box || (node.size && !node.collapsed)
+          ? {
+              style: box ?? { width: node.size?.[0], height: node.size?.[1] },
+            }
+          : {}),
         ...(size ? { measured: size } : {}),
       };
       this.nodeCache.set(id, {
@@ -228,6 +247,7 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
         rf,
       });
       next.push(rf);
