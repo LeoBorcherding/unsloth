@@ -1,0 +1,21 @@
+{
+ "model": "unsloth/Qwen2.5-3B-Instruct",
+ "adapter": "/root/.unsloth/studio/outputs/unsloth_Qwen2.5-3B-Instruct_1793258317",
+ "n": 250,
+ "base": {
+  "exact": 5,
+  "soft_format": 230,
+  "strict_format": 220,
+  "number_correct": 168,
+  "n": 250,
+  "seconds": 63
+ },
+ "grpo": {
+  "exact": 211,
+  "soft_format": 248,
+  "strict_format": 244,
+  "number_correct": 212,
+  "n": 250,
+  "seconds": 77
+ }
+}
