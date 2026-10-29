@@ -315,6 +315,7 @@ function BusEdgeImpl({
   sourcePosition,
   targetPosition,
   selected,
+  deletable,
   data,
 }: EdgeProps<RfEdge>) {
   const color =
@@ -367,7 +368,7 @@ function BusEdgeImpl({
       id={id}
       x={x}
       y={y}
-      show={hover || !!selected}
+      show={deletable !== false && (hover || !!selected)}
       onEnter={enter}
       onLeave={leave}
     />
