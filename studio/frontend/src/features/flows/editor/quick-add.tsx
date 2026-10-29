@@ -20,6 +20,7 @@ import { nodeIcon } from "./icons";
 import { NodeIconTile } from "./node-card";
 import { addNodeConnected } from "./node-factory";
 import { REROUTE_TYPE } from "./reroutes";
+import { snapPoint } from "./placement";
 import { CATEGORY_TONES } from "./node-tones";
 
 export function QuickAdd() {
@@ -94,7 +95,10 @@ export function QuickAdd() {
               onSelect={() => {
                 addNodeConnected(
                   spec.type,
-                  [quickAdd.flow.x, quickAdd.flow.y],
+                  snapPoint(
+                    [quickAdd.flow.x, quickAdd.flow.y],
+                    useUiStore.getState().snapToGrid,
+                  ),
                   quickAdd.from,
                   port,
                 );

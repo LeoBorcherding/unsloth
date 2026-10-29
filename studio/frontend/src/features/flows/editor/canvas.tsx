@@ -79,6 +79,7 @@ import {
   SETUP_OUT,
   type SetupData,
 } from "../recipe/recipe-setup-node";
+import { GRID, placementPosition } from "./placement";
 import { SelectedNodeToolbar } from "./node-toolbar";
 import { RerouteNode } from "./reroute-node";
 import {
@@ -100,7 +101,9 @@ const NODE_TYPES = {
   flowReroute: RerouteNode,
 };
 const EDGE_TYPES = { flowEdge: FlowEdgeView, recipeSetup: RecipeSetupEdge };
-const SNAP_GRID: [number, number] = [16, 16];
+const SNAP_GRID: [number, number] = [GRID, GRID];
+// RF draws a dot at its tile corner plus the radius, less `offset`: offset = radius puts dots on multiples of GRID.
+const DOT_SIZE = 1.2;
 const VISIBLE_ONLY_THRESHOLD = 300;
 const PRO_OPTIONS = { hideAttribution: true };
 const DELETE_KEYS = ["Delete", "Backspace"];
@@ -657,10 +660,10 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       if (!type || readOnly) return;
       event.preventDefault();
       const flow = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      const node = addNodeConnected(type, [
-        Math.round(flow.x - 130),
-        Math.round(flow.y - 20),
-      ]);
+      const node = addNodeConnected(
+        type,
+        placementPosition(flow, useUiStore.getState().snapToGrid),
+      );
       if (node) useUiStore.getState().setSelection([node.id], []);
     },
     [readOnly, screenToFlowPosition],
@@ -759,8 +762,9 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       >
         <Background
           variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1.2}
+          gap={GRID}
+          size={DOT_SIZE}
+          offset={DOT_SIZE / 2}
           color="color-mix(in oklab, var(--foreground) 14%, transparent)"
         />
         <CanvasControls readOnly={readOnly} />
