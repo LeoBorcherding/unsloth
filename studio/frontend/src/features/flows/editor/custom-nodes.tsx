@@ -31,6 +31,7 @@ import {
   createCustomNode,
   deleteCustomNode,
   downloadCustomNodeTemplate,
+  getCustomNodeSandbox,
   getSandboxLibraries,
   parseCustomNode,
   replaceCustomNode,
@@ -41,7 +42,12 @@ import {
   useCustomNodesStore,
 } from "../stores/custom-nodes-store";
 import { useDocStore } from "../stores/doc-store";
-import type { CustomNodeEntry, NodeSpec, SandboxLibraries } from "../types";
+import type {
+  CustomNodeEntry,
+  CustomNodeSandbox,
+  NodeSpec,
+  SandboxLibraries,
+} from "../types";
 import {
   Download01Icon,
   MoreHorizontalIcon,
@@ -52,17 +58,17 @@ import { downloadBlob } from "./node-actions";
 
 export const CUSTOM_COLOR = "#64748b";
 
-function SandboxFacts({ open }: { open: boolean }) {
-  const [libraries, setLibraries] = useState<SandboxLibraries | null>(null);
+/** Up front in the dialog: custom nodes need the OS sandbox, and whether this machine has it. */
+function SandboxRequirement({ open }: { open: boolean }) {
+  const [status, setStatus] = useState<CustomNodeSandbox | null>(null);
   const [capability, setCapability] = useState<SandboxCapability | null>(null);
-  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    getSandboxLibraries()
-      .then((found) => alive && setLibraries(found))
-      .catch(() => alive && setFailed(true));
+    getCustomNodeSandbox()
+      .then((found) => alive && setStatus(found))
+      .catch(() => alive && setStatus(null));
     void loadSandboxCapability().then(
       (found) => alive && setCapability(found),
     );
@@ -72,18 +78,45 @@ function SandboxFacts({ open }: { open: boolean }) {
   }, [open]);
 
   return (
-    <div className="space-y-2 text-xs" data-testid="custom-node-sandbox">
-      <p className="text-muted-foreground">
-        Uploading never runs the script. It runs only as a node in a flow you
-        approve, in the same sandbox, timeout and limits as the Python block.
+    <div className="space-y-1.5 text-xs" data-testid="custom-node-requirement">
+      <p>
+        Custom nodes only run inside Studio's OS sandbox (bubblewrap on Linux,
+        Seatbelt on macOS). Without it they refuse to run; unlike the Python
+        block they never fall back to software safeguards. They do not run on
+        Windows, where Studio's sandbox reports it is not a security boundary.
+        Uploading never runs the script.
       </p>
-      {capability && (
-        <p data-testid="custom-node-isolation">
-          {capability.pythonOsIsolated
-            ? `On this machine the sandbox is OS-isolated (${capability.backend}).`
-            : `On this machine Python is not OS-isolated: it runs with software safeguards only. ${capability.reason}`}
+      {status && (
+        <p
+          className={status.ready ? "text-muted-foreground" : "text-destructive"}
+          data-testid="custom-node-isolation"
+        >
+          {status.ready
+            ? `This machine meets it${capability?.backend ? ` (${capability.backend})` : ""}.`
+            : `This machine does not: ${status.message}`}
         </p>
       )}
+    </div>
+  );
+}
+
+function SandboxFacts({ open }: { open: boolean }) {
+  const [libraries, setLibraries] = useState<SandboxLibraries | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    getSandboxLibraries()
+      .then((found) => alive && setLibraries(found))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  return (
+    <div className="space-y-2 text-xs" data-testid="custom-node-sandbox">
       <div>
         <p className="mb-1 font-medium text-foreground">
           {libraries
@@ -179,6 +212,7 @@ export function CustomNodeDialog({
             from the template if you have not written one yet.
           </DialogDescription>
         </DialogHeader>
+        <SandboxRequirement open={open} />
         <div className="flex items-center gap-2">
           <Button
             type="button"

@@ -8,6 +8,7 @@ import { readSseJsonEvents } from "@/lib/sse-json-events";
 import { isStudioMediaUrl } from "./media-url";
 import type {
   CustomNodeEntry,
+  CustomNodeSandbox,
   FlowDocument,
   FlowRecord,
   FlowRunSummary,
@@ -87,6 +88,9 @@ export const deleteCustomNode = (id: string) =>
   request<void>(`/custom-nodes/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+
+export const getCustomNodeSandbox = () =>
+  request<CustomNodeSandbox>("/custom-nodes/sandbox");
 
 export const getSandboxLibraries = () =>
   request<SandboxLibraries>("/custom-nodes/libraries");

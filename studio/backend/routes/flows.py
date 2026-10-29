@@ -467,6 +467,11 @@ async def custom_node_libraries() -> dict:
     return await asyncio.to_thread(custom_nodes.sandbox_libraries)
 
 
+@router.get("/custom-nodes/sandbox")
+async def custom_node_sandbox() -> dict:
+    return await asyncio.to_thread(custom_nodes.sandbox_status)
+
+
 @router.get("/custom-nodes/template")
 async def custom_node_template() -> Response:
     libraries = await asyncio.to_thread(custom_nodes.sandbox_libraries)

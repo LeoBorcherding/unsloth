@@ -233,7 +233,13 @@ def test_a_script_edited_inside_the_document_no_longer_matches_its_type():
 
 
 @pytest.fixture
-def ran(monkeypatch):
+def isolated(monkeypatch):
+    monkeypatch.setattr(custom_nodes, "_platform", lambda: "linux")
+    monkeypatch.setattr(custom_nodes, "_python_isolated", lambda: (True, "the bubblewrap live isolation probe passed"))
+
+
+@pytest.fixture
+def ran(monkeypatch, isolated):
     calls: list = []
     import core.inference.tools as tools
 
@@ -261,6 +267,8 @@ def test_the_template_runs_through_the_python_blocks_sandbox_call(ran):
     # Same tool, session and timeout as the Python block.
     assert name == "python" and kwargs["session_id"] == automation.python_session("f1")
     assert kwargs["timeout"] == 60 and "cancel_event" in kwargs
+    # Unlike the Python block, never the software-safeguards fallback.
+    assert kwargs["tool_execution_mode"] == "required"
     assert "<custom node>" in args["code"]
 
 
@@ -275,6 +283,71 @@ def test_errors_and_wrong_outputs_show_on_the_node(ran):
     timeout = Ctx(MINIMAL, params = {"timeout_s": 5000}, inputs = {"x": 2})
     assert asyncio.run(custom.run_custom(timeout))["y"] == 4
     assert ran[-1][2]["timeout"] == 600
+
+
+def test_without_os_isolation_the_node_refuses_and_says_how_to_set_it_up(monkeypatch):
+    import core.inference.tools as tools
+    from core.inference import sandbox_setup_plan
+
+    calls: list = []
+    monkeypatch.setattr(tools, "execute_tool", _subprocess_execute_tool(calls))
+    monkeypatch.setattr(custom_nodes, "_platform", lambda: "linux")
+    monkeypatch.setattr(custom_nodes, "_python_isolated", lambda: (False, "bubblewrap is not installed."))
+    monkeypatch.setattr(
+        sandbox_setup_plan,
+        "detect",
+        lambda available = None, force = False: sandbox_setup_plan.SetupPlan(
+            platform = "linux", manual_command = "sudo apt-get install -y bubblewrap", reason = "bubblewrap is missing"
+        ),
+    )
+    with pytest.raises(FlowNodeError) as caught:
+        asyncio.run(custom.run_custom(Ctx(inputs = {"text": "hi"})))
+    message = str(caught.value)
+    assert "only run inside Studio's OS sandbox" in message and "bubblewrap is not installed" in message
+    assert "sudo apt-get install -y bubblewrap" in message
+    assert calls == []
+
+
+def test_windows_refuses_because_its_sandbox_is_not_a_security_boundary(monkeypatch):
+    import core.inference.tools as tools
+
+    calls: list = []
+    monkeypatch.setattr(tools, "execute_tool", _subprocess_execute_tool(calls))
+    monkeypatch.setattr(custom_nodes, "_platform", lambda: "win32")
+    monkeypatch.setattr(custom_nodes, "_python_isolated", lambda: (True, "mxc"))
+    with pytest.raises(FlowNodeError, match = "not a security boundary"):
+        asyncio.run(custom.run_custom(Ctx(inputs = {"text": "hi"})))
+    assert calls == [] and custom_nodes.sandbox_status()["ready"] is False
+
+
+def test_the_python_block_still_falls_back_as_before(monkeypatch):
+    import core.inference.tools as tools
+
+    calls: list = []
+    monkeypatch.setattr(tools, "execute_tool", _subprocess_execute_tool(calls))
+    monkeypatch.setattr(custom_nodes, "_python_isolated", lambda: (False, "bubblewrap is not installed."))
+
+    class PyCtx:
+        flow_id = "f1"
+        params = {"code": "result = inputs * 2", "timeout_s": 60}
+        inputs = {"input": 21}
+
+        def on_cancel(self, fn):
+            pass
+
+    assert asyncio.run(automation.python(PyCtx()))["result"] == 42
+    [(name, args, kwargs)] = calls
+    # Same call as before custom nodes: the default ("auto") mode, so no OS sandbox still means software safeguards.
+    assert "tool_execution_mode" not in kwargs
+    assert set(kwargs) == {"cancel_event", "timeout", "session_id"}
+    assert "_flow_value" not in args["code"] and "'<python block>'" in args["code"]
+
+
+def test_the_sandbox_route_reports_the_requirement(client, monkeypatch):
+    assert client.get("/api/flows/custom-nodes/sandbox").json()["ready"] is True
+    monkeypatch.setattr(custom_nodes, "_platform", lambda: "win32")
+    found = client.get("/api/flows/custom-nodes/sandbox").json()
+    assert found["ready"] is False and "Windows" in found["message"]
 
 
 def test_a_handler_refuses_a_script_that_is_not_its_type():

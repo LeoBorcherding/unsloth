@@ -204,6 +204,14 @@ export interface CustomNodeEntry {
   updatedAt: number;
 }
 
+/** Whether custom nodes can run here: they need OS isolation and never run on Windows. */
+export interface CustomNodeSandbox {
+  ready: boolean;
+  platform: string;
+  message: string;
+  manual_command: string;
+}
+
 export interface SandboxLibraries {
   python: string;
   packages: { name: string; version: string }[];

@@ -4,8 +4,8 @@
 """Custom nodes: a Python script with a ``NODE = {...}`` header and a ``def run(inputs, params)`` becomes a block.
 
 The header is read with ``ast`` and ``ast.literal_eval`` only; nothing in the file runs on upload, parse or save. The
-script runs only as a block, through the same sandbox call, approval (by the hash of the script) and limits as the
-Python block (``core/flows/nodes/custom.py``). A flow embeds the script in the node (``_script``), so a shared flow
+script runs only as a block, through the Python block's sandbox call, approval (by the hash of the script) and
+limits, except that OS isolation is required and Windows is refused (``core/flows/nodes/custom.py``). A flow embeds the script in the node (``_script``), so a shared flow
 carries it; the node type is ``custom.n<first 16 hex of its sha256>`` and ``_script_id`` names the library entry it
 came from, so the editor can tell when the library copy changed."""
 
@@ -503,6 +503,66 @@ def delete_node(node_id: str) -> bool:
         conn.close()
 
 
+# --- Where custom nodes may run. ----------------------------------------------------------------------------------
+# Stricter than the Python block, which falls back to software safeguards: a custom node runs only inside the OS
+# sandbox (tool_execution_mode="required"), and never on Windows, whose MXC backend reports that it is not a
+# security boundary.
+
+WINDOWS_REFUSAL = (
+    "Custom nodes only run inside an OS sandbox, and on Windows Studio's sandbox (MXC) reports that it is not a "
+    "security boundary, so custom nodes do not run on Windows. Use the Python block there, or run Studio on Linux "
+    "or macOS."
+)
+
+
+def _platform() -> str:
+    import sys
+
+    return sys.platform
+
+
+def _python_isolated() -> tuple[bool, str]:
+    """(OS-isolated, why not) for the Python tool, from the same probe /api/sandbox/capability reports."""
+    from core.inference import os_sandbox
+
+    found = os_sandbox.cached_tool_capability("python")
+    if found is None:
+        os_sandbox.refresh_tool_isolation("python")
+        found = os_sandbox.cached_tool_capability("python")
+    if found is None:
+        return False, "the sandbox check has not finished yet"
+    return bool(found[0]), str(found[2] or "")
+
+
+def _setup_hint() -> tuple[str, str]:
+    """(command, reason) from the setup plan /api/sandbox/capability uses."""
+    try:
+        from core.inference import sandbox_setup_plan
+
+        plan = sandbox_setup_plan.detect(available = False)
+        return plan.manual_command or "", plan.reason or ""
+    except Exception:  # noqa: BLE001 - the refusal stands without the hint
+        return "", ""
+
+
+def sandbox_status() -> dict:
+    """Whether custom nodes can run on this machine, and what to do when they cannot."""
+    platform = _platform()
+    if platform == "win32":
+        return {"ready": False, "platform": platform, "message": WINDOWS_REFUSAL, "manual_command": ""}
+    isolated, why = _python_isolated()
+    if isolated:
+        return {"ready": True, "platform": platform, "message": "", "manual_command": ""}
+    command, reason = _setup_hint()
+    message = "Custom nodes only run inside Studio's OS sandbox, and Python is not OS-isolated on this machine"
+    message += f" ({why.rstrip('.')})." if why else "."
+    if command:
+        message += f" Set it up with: {command} Then run the flow again."
+    elif reason:
+        message += f" {reason}"
+    return {"ready": False, "platform": platform, "message": message, "manual_command": command}
+
+
 # --- What the sandbox can import. ---------------------------------------------------------------------------------
 
 _LIBS_MARKER = "<<FLOW_LIBRARIES>>"
@@ -586,8 +646,9 @@ TEMPLATE = '''\
 # A custom node for Unsloth Studio Flows.
 #
 # Upload this file in Flows > Nodes > Custom > Upload script. Studio reads the NODE header
-# without running anything; the file only runs when the node runs, inside the same sandbox
-# as the Python block, after you approve it for the flow.
+# without running anything; the file only runs when the node runs, after you approve it for
+# the flow, and only inside Studio's OS sandbox (bubblewrap on Linux, Seatbelt on macOS).
+# Without that sandbox the node refuses to run; custom nodes do not run on Windows.
 #
 # The sandbox runs Python {python} with the standard library plus these packages
 # (read from the sandbox when this template was downloaded):

@@ -178,5 +178,10 @@ test("the palette has the Custom section with upload, template and the sandbox f
     assert.match(src, new RegExp(id));
   }
   assert.match(src, /Uploading never runs the script/);
+  // The OS-sandbox requirement comes before the script box, with this machine's verdict.
+  assert.ok(src.indexOf("<SandboxRequirement open={open} />") < src.indexOf('data-testid="custom-node-source"'));
+  assert.match(src, /never fall back to software safeguards/);
+  assert.match(src, /do not run on\s+Windows, where Studio's sandbox reports it is not a security boundary/);
+  assert.match(src, /This machine does not: \$\{status\.message\}/);
   assert.match(read("flows-editor-page.tsx"), /await hydrateCustomSpecs\(record\.doc\)/);
 });

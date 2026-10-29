@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Custom nodes run the uploaded script's ``run(inputs, params)`` exactly as the Python block runs its code: the same
-``execute_tool("python")`` call, per-flow sandbox session, timeout bounds and owner approval (by the script's hash,
-checked by the engine before this handler is reached). See ``core/flows/custom_nodes.py`` for the format."""
+"""Custom nodes run the uploaded script's ``run(inputs, params)`` through the Python block's ``execute_tool("python")``
+call, per-flow sandbox session, timeout bounds and owner approval (by the script's hash, checked by the engine before
+this handler is reached), with one difference: OS isolation is required, never the software-safeguards fallback, and
+Windows is refused. See ``core/flows/custom_nodes.py``."""
 
 from __future__ import annotations
 
@@ -25,6 +26,9 @@ async def run_custom(ctx: NodeContext) -> dict:
         "inputs": {p["id"]: ctx.inputs.get(p["id"]) for p in ctx.spec["inputs"] if not p.get("param")},
         "params": {p["id"]: ctx.params.get(p["id"]) for p in ctx.spec["params"] if p["id"] != "timeout_s"},
     }
+    status = await asyncio.to_thread(custom_nodes.sandbox_status)
+    if not status["ready"]:
+        raise FlowNodeError(status["message"])
     program = _program(source, value, filename = "<custom node>", entry = True)
     timeout = max(1, min(int(ctx.params.get("timeout_s") or 60), 600))
     stop = threading.Event()
@@ -40,6 +44,8 @@ async def run_custom(ctx: NodeContext) -> dict:
         cancel_event = stop,
         timeout = timeout,
         session_id = python_session(ctx.flow_id),
+        # Refuse rather than fall back to software safeguards if the sandbox goes away after the check above.
+        tool_execution_mode = "required",
     )
     result, log = parse_python_output(str(output))
     try:
