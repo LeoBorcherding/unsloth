@@ -3,6 +3,11 @@
 
 import type { InternalNode } from "@xyflow/react";
 import { type DocGraph, useDocStore } from "../stores/doc-store";
+import {
+  isSetupId,
+  setupLayoutNodes,
+  withLaidOutSetup,
+} from "../recipe/recipe-setup";
 import type { LayoutRequest, LayoutResult } from "./layout-core";
 import { REROUTE_SIZE } from "./reroutes";
 import { foldLayout } from "./super-cards";
@@ -72,6 +77,10 @@ export async function autoLayout(
     (id) => getInternalNode(id)?.measured,
     direction,
   );
+  // Setup cards take part as nodes, so the layout leaves room for them and saves where they went.
+  const setup = setupLayoutNodes(graph, (id) => getInternalNode(id)?.measured);
+  request.nodes.push(...setup.nodes);
+  request.edges.push(...setup.edges);
   const id = ++nextId;
   const folded = foldLayout(request, useDocStore.getState(), (key) =>
     getInternalNode(key)?.measured,
@@ -80,5 +89,14 @@ export async function autoLayout(
     pending.set(id, { resolve, reject });
     getWorker().postMessage({ id, request: folded.request });
   });
-  useDocStore.getState().moveNodes(folded.unfold(result));
+  const laidOut = folded.unfold(result);
+  useDocStore
+    .getState()
+    .moveNodes(
+      Object.fromEntries(
+        Object.entries(laidOut).filter(([key]) => !isSetupId(key)),
+      ),
+    );
+  const groups = withLaidOutSetup(useDocStore.getState().graph, laidOut);
+  if (groups.length) useDocStore.getState().patchGraph({ groups });
 }
