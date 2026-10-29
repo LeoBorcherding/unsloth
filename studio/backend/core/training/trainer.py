@@ -56,6 +56,7 @@ from datasets import Dataset
 from core.training.eval_dataset import evaluation_enabled
 from core.training.rl import rl_log_metrics
 from utils.datasets.audio_decode import ensure_audio_decoding
+from utils.datasets.tokenizer_fingerprint import install_tokenizer_fingerprint
 from utils.datasets.cache_safe import load_dataset_cache_safe as load_dataset
 from utils.hf_dataset_options import hf_dataset_split_instruction_names
 from utils.third_party_source import (
@@ -121,6 +122,12 @@ _CPT_EMBEDDING_TARGETS = ("embed_tokens", "lm_head")
 
 # Streaming eval has no __len__, so cap it or an unbounded eval iterates the whole source on every eval step.
 STREAMING_EVAL_MAX_SAMPLES = 500
+
+
+def _optimizer_overrides(training_args) -> dict:
+    """Explicit clipping and AdamW betas; unset keeps each branch's own default."""
+    keys = ("max_grad_norm", "adam_beta1", "adam_beta2")
+    return {k: float(training_args[k]) for k in keys if training_args.get(k) is not None}
 
 
 def _build_report_targets(training_args) -> list[str] | str:
@@ -306,6 +313,65 @@ _AUDIO_SNIFF_ROWS = 16
 
 # Keep in step with detect_multimodal_dataset, so the veto answers False only for the columns that set the audio flag.
 _AUDIO_COLUMN_KEYWORDS = ("audio", "speech", "wav", "waveform", "sound")
+
+
+_IMAGE_PATH_PATTERN = r"(?i)\.(png|jpe?g|webp|gif|bmp|tiff|svg)(\?[^\s]*)?\s*$"
+
+
+def _string_column_has_image_paths(dataset, name: str) -> Optional[bool]:
+    """Every row of an Arrow string column, vectorised; None when the column is not one."""
+    try:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        column = dataset.data.column(name)
+        if not (pa.types.is_string(column.type) or pa.types.is_large_string(column.type)):
+            return None
+        return bool(pc.any(pc.match_substring_regex(column, _IMAGE_PATH_PATTERN)).as_py())
+    except Exception:  # noqa: BLE001 - not an Arrow-backed dataset
+        return None
+
+
+def _image_columns(dataset) -> list:
+    """Columns holding images, by feature type or by value; a column name alone does not count."""
+
+    def is_image_feature(feature) -> bool:
+        from datasets import Image
+
+        if isinstance(feature, Image):
+            return True
+        if isinstance(feature, (list, tuple)):
+            return bool(feature) and is_image_feature(feature[0])
+        inner = getattr(feature, "feature", None)  # Sequence / List
+        return inner is not None and is_image_feature(inner)
+
+    found = []
+    try:
+        features = getattr(dataset, "features", None) or {}
+        found = [name for name, feature in features.items() if is_image_feature(feature)]
+    except Exception:  # noqa: BLE001 - datasets missing or a mapping that is not a features dict
+        pass
+    names = [n for n in getattr(dataset, "column_names", None) or [] if n not in found]
+    # Image paths can start anywhere in a text column, so those are scanned whole.
+    sampled = []
+    for name in names:
+        whole = _string_column_has_image_paths(dataset, name)
+        if whole:
+            found.append(name)
+        elif whole is None:
+            sampled.append(name)
+    try:
+        import itertools
+
+        from utils.datasets.format_detection import _holds_images, _is_image_value
+
+        rows = [r for r in itertools.islice(iter(dataset), 100) if isinstance(r, dict)]
+        for name in sampled:
+            if any(_is_image_value(r.get(name)) or _holds_images(r.get(name)) for r in rows):
+                found.append(name)
+    except Exception:  # noqa: BLE001 - the checks above still stand
+        pass
+    return found
 
 
 def _dataset_has_audio_column(dataset) -> Optional[bool]:
@@ -906,8 +972,10 @@ class UnslothTrainer:
     def _create_progress_callback(self):
         """Create a TrainerCallback for progress tracking. Reused by all training branches."""
         from transformers import TrainerCallback
+        from core.training.startup_progress import TrainingStartupProgress
 
         trainer_ref = self
+        startup = TrainingStartupProgress()
 
         class _ProgressCallback(TrainerCallback):
             # Throttled republish: without HF's tqdm bar a long eval looks stalled after the last step log.
@@ -918,10 +986,17 @@ class UnslothTrainer:
                 trainer_ref.session_start_step = state.global_step
                 if state.global_step > 0:
                     trainer_ref.training_start_time = time.time()
-                # on_log reports an empty status, else the UI stays on "Starting training...".
                 if trainer_ref.should_stop:
                     return
-                trainer_ref._update_progress(status_message = "Training in progress...")
+                trainer_ref._update_progress(status_message = startup.begin(args, state))
+
+            def on_step_begin(self, args, state, control, **kwargs):
+                if not trainer_ref.should_stop and (message := startup.step_begin()):
+                    trainer_ref._update_progress(status_message = message)
+
+            def on_substep_end(self, args, state, control, **kwargs):
+                if not trainer_ref.should_stop and (message := startup.substep_end()):
+                    trainer_ref._update_progress(status_message = message)
 
             def on_evaluate(self, args, state, control, **kwargs):
                 cls = type(self)
@@ -1018,7 +1093,7 @@ class UnslothTrainer:
                     rl_metrics = rl_log_metrics(logs),
                     is_run_summary = is_run_summary,
                     offload = trainer_ref._offload_snapshot(),
-                    status_message = "",
+                    status_message = "" if trainer_ref.should_stop else startup.log(logs) or "",
                 )
 
             def on_epoch_end(self, args, state, control, **kwargs):
@@ -1031,6 +1106,8 @@ class UnslothTrainer:
                     logger.info(f"Stop detected at step {state.global_step}\n")
                     control.should_training_stop = True
                     return control
+                if message := startup.step_end(state):
+                    trainer_ref._update_progress(status_message = message)
 
         return _ProgressCallback()
 
@@ -1120,6 +1197,7 @@ class UnslothTrainer:
 
         if extra_args:
             config.update(extra_args)
+        config.update(_optimizer_overrides(training_args))
 
         return config
 
@@ -1740,7 +1818,8 @@ class UnslothTrainer:
                     f"Access denied for '{model_name}'. This model is gated or private. "
                     f"Please add a Hugging Face token with access and try again."
                 )
-            logger.error(f"Error loading model: {e}")
+            # The traceback names the failing call; str(e) alone (e.g. "[WinError 6]") does not (#15583).
+            logger.error(f"Error loading model: {e}", exc_info = True)
             self._update_progress(error = error_msg, is_training = False)
             return False
         except Exception as e:
@@ -1762,7 +1841,7 @@ class UnslothTrainer:
                     f"Access denied for '{model_name}'. This model is gated or private. "
                     f"Please add a Hugging Face token with access and try again."
                 )
-            logger.error(f"Error loading model: {e}")
+            logger.error(f"Error loading model: {e}", exc_info = True)
             self._update_progress(error = error_msg, is_training = False)
             return False
         finally:
@@ -2551,14 +2630,16 @@ class UnslothTrainer:
                     codes = snac_model.encode(waveform)
 
                 all_codes = []
+                # One host copy per level: .item() is a device sync per scalar on CUDA.
+                c0, c1, c2 = (level[0].tolist() for level in codes[:3])
                 for i in range(codes[0].shape[1]):
-                    all_codes.append(codes[0][0][i].item() + AUDIO_OFFSET)
-                    all_codes.append(codes[1][0][2 * i].item() + AUDIO_OFFSET + 4096)
-                    all_codes.append(codes[2][0][4 * i].item() + AUDIO_OFFSET + (2 * 4096))
-                    all_codes.append(codes[2][0][(4 * i) + 1].item() + AUDIO_OFFSET + (3 * 4096))
-                    all_codes.append(codes[1][0][(2 * i) + 1].item() + AUDIO_OFFSET + (4 * 4096))
-                    all_codes.append(codes[2][0][(4 * i) + 2].item() + AUDIO_OFFSET + (5 * 4096))
-                    all_codes.append(codes[2][0][(4 * i) + 3].item() + AUDIO_OFFSET + (6 * 4096))
+                    all_codes.append(c0[i] + AUDIO_OFFSET)
+                    all_codes.append(c1[2 * i] + AUDIO_OFFSET + 4096)
+                    all_codes.append(c2[4 * i] + AUDIO_OFFSET + (2 * 4096))
+                    all_codes.append(c2[(4 * i) + 1] + AUDIO_OFFSET + (3 * 4096))
+                    all_codes.append(c1[(2 * i) + 1] + AUDIO_OFFSET + (4 * 4096))
+                    all_codes.append(c2[(4 * i) + 2] + AUDIO_OFFSET + (5 * 4096))
+                    all_codes.append(c2[(4 * i) + 3] + AUDIO_OFFSET + (6 * 4096))
 
                 if len(all_codes) == 0:
                     skipped += 1
@@ -3264,6 +3345,9 @@ class UnslothTrainer:
         except Exception:  # noqa: BLE001 - never let a broken librosa stop a text run
             pass
 
+        # Every map below and TRL's / Unsloth's tokenization hash the tokenizer to name cache files.
+        install_tokenizer_fingerprint()
+
         s3_download = None
         try:
             self.dataset_loaded_from_exact_snapshot = False
@@ -3753,6 +3837,22 @@ class UnslothTrainer:
                     "has an audio column, so training cannot fall back to the text path. "
                     "Re-download the model or provide a token, then retry."
                 )
+            if objective != "sft" and (
+                self._audio_type
+                or self.is_audio_vlm
+                or any(
+                    _dataset_has_audio_column(d) is True
+                    for d in (dataset, eval_dataset)
+                    if d is not None
+                )
+            ):
+                # Not the request's audio flag: the audio preprocessing below would hand the RL
+                # formatter ASR or TTS rows, and the formatter drops audio columns. An audio-capable
+                # model on a text dataset still trains on the text.
+                raise ValueError(
+                    f"{objective.upper()} is not available for audio models or audio datasets "
+                    "yet; use SFT."
+                )
             # Every audio branch below, and the VLM path, casts an Audio column and reads its array.
             if self._audio_type or self.is_audio_vlm:
                 if not ensure_audio_decoding():
@@ -3870,6 +3970,16 @@ class UnslothTrainer:
                 raise ValueError(
                     f"{objective.upper()} is not available for vision-language models yet; "
                     "use SFT or GRPO."
+                )
+            if objective != "sft" and (
+                self.is_vlm
+                or any(_image_columns(d) for d in (dataset, eval_dataset) if d is not None)
+            ):
+                # The prompts carry no image parts and the media columns are dropped, so the run
+                # would quietly train (or evaluate) on text only.
+                raise ValueError(
+                    f"{objective.upper()} on an image dataset is not available yet; use SFT, or a "
+                    "dataset without image columns."
                 )
             if objective != "sft" and self.diffusion_lm_profile:
                 # Text-diffusion models train with their own denoising objective, not TRL's RL trainers.
@@ -4125,8 +4235,8 @@ class UnslothTrainer:
         save_steps: int = 0,
         weight_decay: float = 0.001,
         random_seed: int = 3407,
-        packing: bool = False,
-        train_on_completions: bool = False,
+        packing: bool = True,
+        train_on_completions: bool = True,
         enable_wandb: bool = False,
         wandb_project: str = "unsloth-training",
         wandb_token: str = None,
@@ -4935,6 +5045,8 @@ class UnslothTrainer:
                         f"Sequence packing: {'enabled' if packing_enabled else 'disabled'}\n"
                     )
 
+            config_args.update(_optimizer_overrides(training_args))
+
             # Audio codec overrides - BiCodec/DAC use the text SFTTrainer path
             if self._audio_type == "bicodec":
                 config_args["packing"] = False
@@ -5210,6 +5322,14 @@ class UnslothTrainer:
                     else:
                         logger.info(f"{message}\n")
 
+                # Rows as the trainer holds them (packed when packing is on), so the drop check counts masking only.
+                pre_mask_dataset = self.trainer.train_dataset
+                pre_mask_len = (
+                    None
+                    if pre_mask_dataset is None or detect_streaming_dataset(pre_mask_dataset)
+                    else len(pre_mask_dataset)
+                )
+
                 # No try/except: an exception here is a real masking failure.
                 self.trainer, masking_applied = apply_completion_masking(
                     self.trainer,
@@ -5230,10 +5350,12 @@ class UnslothTrainer:
                             logger.info("Skipping post-filter length check for streaming dataset\n")
                         else:
                             filtered_len = len(self.trainer.train_dataset)
-                            original_dataset_obj = (
-                                dataset["dataset"] if isinstance(dataset, dict) else dataset
-                            )
-                            original_len = len(original_dataset_obj)
+                            original_len = pre_mask_len
+                            if original_len is None:
+                                original_dataset_obj = (
+                                    dataset["dataset"] if isinstance(dataset, dict) else dataset
+                                )
+                                original_len = len(original_dataset_obj)
                             dropped = original_len - filtered_len
                             drop_pct = (
                                 round(100 * dropped / original_len, 1) if original_len > 0 else 0

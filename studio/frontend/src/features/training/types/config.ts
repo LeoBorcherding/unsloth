@@ -145,6 +145,8 @@ export interface TrainingConfigState {
   drafterCapability: DrafterCapability | null;
   packing: boolean;
   trainOnCompletions: boolean;
+  /** Explicit user/YAML choices, separate from automatic model and dataset defaults. */
+  trainingToggleChoices: { packing?: boolean; trainOnCompletions?: boolean };
   gradientCheckpointing: GradientCheckpointing;
   offloadLayers: OffloadLayers;
   offloadVramGb: number | null;
@@ -344,7 +346,10 @@ export interface TrainingConfigActions {
   setGrpoUseVllm: (value: boolean) => void;
   setGrpoVllmGpuMemoryUtilization: (value: number) => void;
   setGrpoRewards: (value: GrpoRewardSelection[]) => void;
-  restoreRunConfig: (config: Record<string, unknown>) => void;
+  /** Returns the RL objective that was loaded as SFT (Apple Silicon), else null. */
+  restoreRunConfig: (
+    config: Record<string, unknown>,
+  ) => Exclude<TrainingObjective, "sft"> | null;
   reset: () => void;
   resetToModelDefaults: () => void;
   applyConfigPatch: (config: BackendModelConfig) => void;

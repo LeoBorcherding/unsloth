@@ -117,6 +117,145 @@ def test_preference_objectives_are_refused_for_a_vision_model_on_text_data(train
     assert "vision-language" in (trainer.training_progress.error or "")
 
 
+def test_grpo_is_refused_on_an_image_dataset(trainer, tmp_path):
+    path = tmp_path / "grpo.jsonl"
+    path.write_text(json.dumps({"prompt": "q", "answer": "a"}) + "\n", encoding = "utf-8")
+    trainer.is_vlm = True
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo") is None
+    )
+    assert "image dataset" in (trainer.training_progress.error or "")
+
+
+def test_grpo_is_refused_on_image_columns_without_the_image_flag(trainer, tmp_path):
+    # An API caller can leave is_dataset_image unset; the columns still say it has images.
+    path = tmp_path / "grpo.jsonl"
+    row = {"prompt": "q", "answer": "a", "image": "cat.png"}
+    path.write_text(json.dumps(row) + "\n", encoding = "utf-8")
+    trainer.is_vlm = False
+    trainer.model_has_vision = True
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo") is None
+    )
+    assert "image dataset" in (trainer.training_progress.error or "")
+
+
+def test_grpo_is_refused_on_an_image_column_with_any_name(trainer, tmp_path):
+    path = tmp_path / "grpo.jsonl"
+    path.write_text(
+        json.dumps({"prompt": "q", "answer": "a", "photo": "cat.png"}) + "\n", encoding = "utf-8"
+    )
+    trainer.is_vlm = False
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo") is None
+    )
+    assert "image dataset" in (trainer.training_progress.error or "")
+
+
+def test_image_columns_are_found_by_feature_type_not_name():
+    from datasets import Dataset, Features, Image, Sequence, Value
+
+    features = Features(
+        {"scan": Image(), "frames": Sequence(Image()), "image_caption": Value("string")}
+    )
+    rows = {
+        "scan": [{"bytes": None, "path": "missing.png"}],
+        "frames": [[]],
+        "image_caption": ["a cat"],
+    }
+    dataset = Dataset.from_dict(rows, features = features)
+    assert sorted(tmod._image_columns(dataset)) == ["frames", "scan"]
+
+
+def test_image_paths_are_found_anywhere_in_a_text_column():
+    from datasets import Dataset
+
+    texts = ["plain answer"] * 500 + ["https://example.com/cat.JPG?size=2"] + ["more"] * 10
+    dataset = Dataset.from_dict({"prompt": ["q"] * len(texts), "asset": texts})
+    assert tmod._image_columns(dataset) == ["asset"]
+    assert tmod._image_columns(Dataset.from_dict({"prompt": ["see figure.pdf"]})) == []
+
+
+@pytest.mark.parametrize("objective", ["grpo", "dpo"])
+def test_rl_is_refused_for_an_audio_model_without_the_audio_flag(trainer, tmp_path, objective):
+    path = tmp_path / "rows.jsonl"
+    path.write_text(
+        json.dumps({"prompt": "q", "answer": "a", "chosen": "a", "rejected": "b"}) + "\n",
+        encoding = "utf-8",
+    )
+    trainer._audio_type = "whisper"
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = objective)
+        is None
+    )
+    assert "audio models" in (trainer.training_progress.error or "")
+
+
+def test_grpo_is_refused_on_an_audio_dataset_without_the_audio_flag(trainer, tmp_path):
+    # An audio-capable model reads as text-only when the request leaves the audio flag off.
+    path = tmp_path / "grpo.jsonl"
+    path.write_text(
+        json.dumps({"prompt": "q", "answer": "a", "clip": "turn.wav"}) + "\n", encoding = "utf-8"
+    )
+    trainer.is_audio_vlm = False
+    trainer._audio_type = None
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo") is None
+    )
+    assert "audio datasets" in (trainer.training_progress.error or "")
+
+
+@pytest.mark.parametrize("objective", ["dpo", "orpo"])
+def test_preference_objectives_are_refused_on_image_columns_for_a_text_model(
+    trainer, tmp_path, objective
+):
+    path = tmp_path / "pref.jsonl"
+    row = {"prompt": "q", "chosen": "a", "rejected": "b", "photo": "cat.png"}
+    path.write_text(json.dumps(row) + "\n", encoding = "utf-8")
+    trainer.is_vlm = False
+    trainer.model_has_vision = False
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = objective)
+        is None
+    )
+    assert "image dataset" in (trainer.training_progress.error or "")
+
+
+@pytest.mark.parametrize(
+    "media, message", [({"clip": "turn.wav"}, "audio datasets"), ({"photo": "cat.png"}, "image")]
+)
+def test_rl_is_refused_when_only_the_eval_split_carries_media(trainer, tmp_path, media, message):
+    train = tmp_path / "train.jsonl"
+    train.write_text(json.dumps({"prompt": "q", "answer": "a"}) + "\n", encoding = "utf-8")
+    held_out = tmp_path / "eval.jsonl"
+    held_out.write_text(
+        json.dumps({"prompt": "q", "answer": "a", **media}) + "\n", encoding = "utf-8"
+    )
+    trainer.is_vlm = False
+    assert (
+        trainer.load_and_format_dataset(
+            None,
+            local_datasets = [str(train)],
+            local_eval_datasets = [str(held_out)],
+            eval_steps = 10,
+            objective = "grpo",
+        )
+        is None
+    )
+    assert message in (trainer.training_progress.error or "")
+
+
+def test_grpo_still_runs_for_a_vision_model_on_text_data(trainer, tmp_path):
+    path = tmp_path / "grpo.jsonl"
+    path.write_text(json.dumps({"prompt": "q", "answer": "a"}) + "\n", encoding = "utf-8")
+    trainer.is_vlm = False
+    trainer.model_has_vision = True
+    dataset_info, _ = trainer.load_and_format_dataset(
+        None, local_datasets = [str(path)], objective = "grpo"
+    )
+    assert "prompt" in dataset_info["dataset"].column_names
+
+
 def test_grpo_runs_without_loss_based_early_stopping(trainer):
     trainer.training_objective = "grpo"
     trainer.trainer = object()

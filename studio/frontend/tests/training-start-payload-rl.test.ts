@@ -95,6 +95,20 @@ test("GRPO sends the loss variant and its clip/mask options; DPO drops them", ()
   assert.equal(dpo.grpo_epsilon_high, null);
 });
 
+test("GRPO sends the system prompt with its whitespace; a blank one is none", () => {
+  const prompt = "Think first.\nAnswer in <answer> tags.\n";
+  const sent = buildTrainingStartPayload(
+    { ...BASE, trainingObjective: "grpo", grpoSystemPrompt: prompt },
+    null,
+  );
+  assert.equal(sent.rl_system_prompt, prompt);
+  const blank = buildTrainingStartPayload(
+    { ...BASE, trainingObjective: "grpo", grpoSystemPrompt: "  \n" },
+    null,
+  );
+  assert.equal(blank.rl_system_prompt, null);
+});
+
 test("vLLM rollouts are sent only for GRPO, with the memory share", () => {
   const grpo = buildTrainingStartPayload(
     {
@@ -171,7 +185,10 @@ test("image and audio datasets always start as SFT", async () => {
 });
 
 test("the drafter is sent for SFT only: its phase reads tokenized SFT rows", () => {
-  const sft = buildTrainingStartPayload({ ...BASE, drafterEnabled: true }, null);
+  const sft = buildTrainingStartPayload(
+    { ...BASE, drafterEnabled: true },
+    null,
+  );
   assert.ok(sft.drafter);
   for (const trainingObjective of ["dpo", "orpo", "grpo"] as const) {
     const payload = buildTrainingStartPayload(

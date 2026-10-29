@@ -624,10 +624,12 @@ class TrainingStartRequest(BaseModel):
             "Global gradient norm clipping threshold. Unset keeps the training "
             "backend's own default; 0 turns global-norm clipping off, which on "
             "MLX leaves per-parameter clipping in force unless max_grad_leaf_norm "
-            "is also 0. Honored on MLX; the CUDA path trains with its own fixed "
-            "thresholds."
+            "is also 0. Honored on MLX and on the CUDA trainer (SFT, DPO, ORPO, GRPO)."
         ),
     )
+    # TRL's AdamW defaults.
+    adam_beta1: float = Field(0.9, ge = 0, lt = 1, allow_inf_nan = False, description = "AdamW beta1")
+    adam_beta2: float = Field(0.999, ge = 0, lt = 1, allow_inf_nan = False, description = "AdamW beta2")
     max_grad_value: Optional[float] = Field(
         None,
         ge = 0,
@@ -664,7 +666,7 @@ class TrainingStartRequest(BaseModel):
             "and unsloth's historical recommended value."
         ),
     )
-    packing: bool = Field(False, description = "Enable sequence packing")
+    packing: bool = Field(True, description = "Enable sequence packing where supported")
     optim: str = Field("adamw_8bit", description = "Optimizer")
     lr_scheduler_type: str = Field("linear", description = "Learning rate scheduler type")
     embedding_learning_rate: Optional[float] = Field(
@@ -707,7 +709,9 @@ class TrainingStartRequest(BaseModel):
     use_rslora: bool = Field(False, description = "Use RSLoRA")
     use_loftq: bool = Field(False, description = "Use LoftQ")
     use_dora: bool = Field(False, description = "Use DoRA")
-    train_on_completions: bool = Field(False, description = "Train on completions only")
+    train_on_completions: bool = Field(
+        True, description = "Train on assistant completions where supported"
+    )
 
     objective: Literal["sft", "dpo", "orpo", "grpo"] = Field(
         "sft",
@@ -826,6 +830,25 @@ class TrainingStartRequest(BaseModel):
     def _normalize_target_modules(cls, value: Any) -> Any:
         # Sanitized non-LoRA history stores the unused value as null; treat it as an omitted list.
         return [] if value is None else value
+
+    @model_validator(mode = "after")
+    def _default_training_objective_toggles(self) -> "TrainingStartRequest":
+        # getattr: validate_assignment on a model_construct() instance lacks required fields.
+        non_chat = getattr(self, "is_embedding", False) or getattr(self, "is_decision", False)
+        if "packing" not in self.model_fields_set and non_chat:
+            self.packing = False
+        if "train_on_completions" not in self.model_fields_set and (
+            non_chat
+            or getattr(self, "dataset_streaming", False)
+            or getattr(self, "training_type", None) == "Continued Pretraining"
+            or getattr(self, "format_type", None) in ("raw", "raw_text")
+        ):
+            self.train_on_completions = False
+        # SFT-only: DPO/ORPO/GRPO build their own batches and losses, whatever the payload says.
+        if getattr(self, "objective", "sft") != "sft":
+            self.packing = False
+            self.train_on_completions = False
+        return self
 
     @model_validator(mode = "after")
     def _validate_streaming_splits(self) -> "TrainingStartRequest":
@@ -964,7 +987,7 @@ class TokenPreviewRequest(BaseModel):
     dataset_known_cached: bool = False
     format_type: str = "auto"
     custom_format_mapping: Optional[Dict[str, Any]] = None
-    train_on_completions: bool = False
+    train_on_completions: bool = True
     is_cpt: bool = False
     max_seq_length: int = Field(2048, ge = 1, le = 1_048_576)
     num_samples: int = Field(3, ge = 1, le = 8)
