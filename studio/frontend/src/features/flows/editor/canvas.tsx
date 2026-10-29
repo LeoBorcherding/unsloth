@@ -230,6 +230,11 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
   const [boxes, setBoxes] = useState<Boxes | null>(null);
   const boxesRef = useRef(boxes);
   boxesRef.current = boxes;
+  const moving = useMemo(
+    () =>
+      drag ? new Set([...Object.keys(drag), ...Object.keys(boxes ?? {})]) : null,
+    [drag, boxes],
+  );
 
   const selectedSet = useMemo(
     () => new Set([...selectedNodes, ...selectedEdges]),
@@ -818,7 +823,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         <SuperCardSelectionToolbar readOnly={readOnly} />
         <SelectedNodeToolbar readOnly={readOnly} />
         {bus && (
-          <WireRouterController scope={flowId ?? ""} paused={drag !== null} />
+          <WireRouterController scope={flowId ?? ""} moving={moving} />
         )}
       </ReactFlow>
     </div>

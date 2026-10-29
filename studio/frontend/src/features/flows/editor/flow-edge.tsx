@@ -11,9 +11,9 @@ import { memo } from "react";
 import { useCatalogStore } from "../stores/catalog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RfEdge } from "./derive-rf";
+import { WireDelete, WireHalo, useWireHover } from "./wire-delete";
 import { BusEdge } from "./wire-routing";
 import { portInk } from "./theme-colors";
-import { WireDelete, WireHalo, useWireHover } from "./wire-delete";
 
 function CurvedEdgeImpl({
   id,
