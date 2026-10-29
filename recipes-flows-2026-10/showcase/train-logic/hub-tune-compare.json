@@ -1,0 +1,340 @@
+{
+ "format": "unsloth-flow",
+ "version": 1,
+ "id": "showcase-hub-tune-compare",
+ "name": "Showcase: Hub dataset \u2192 Fine-tune \u2192 Benchmark \u2192 compare",
+ "description": "Fine-tune Qwen2.5-1.5B-Instruct on the SetFit/emotion dataset from the Hub, benchmark it on the held-out rows against the base model, then ask both the same question side by side.",
+ "kind": "pipeline",
+ "seed": 7,
+ "params": [],
+ "requirements": {
+  "models": [
+   {
+    "ref": "base",
+    "kind": "chat",
+    "repo": "unsloth/Qwen2.5-1.5B-Instruct",
+    "variant": null,
+    "optional": false,
+    "note": "The base model answers the side-by-side question."
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "hub",
+   "type": "data.hf_dataset",
+   "v": 1,
+   "params": {
+    "repo": "SetFit/emotion",
+    "split": "train"
+   },
+   "pos": [
+    0.0,
+    0.0
+   ],
+   "size": null,
+   "label": "SetFit/emotion (Hub)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "tune",
+   "type": "train.finetune",
+   "v": 1,
+   "params": {
+    "base_model": "unsloth/Qwen2.5-1.5B-Instruct",
+    "objective": "sft",
+    "prompt_column": "text",
+    "response_column": "label_text",
+    "system_prompt": "Classify the emotion of the message. Answer with one word: sadness, joy, love, anger, fear, surprise.",
+    "max_steps": 250,
+    "holdout_percent": 5,
+    "dataset_slice_end": 6000,
+    "learning_rate": 0.0002,
+    "lora_r": 16,
+    "lora_alpha": 16
+   },
+   "pos": [
+    380.0,
+    0.0
+   ],
+   "size": null,
+   "label": "Fine-tune (5% held out)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "bench",
+   "type": "train.benchmark",
+   "v": 1,
+   "params": {
+    "task": "Recipe held-out",
+    "scorer": "Reference match",
+    "max_rows": 150,
+    "prompt_column": "text",
+    "reference_column": "label_text",
+    "compare_base": true,
+    "system_prompt": "Classify the emotion of the message. Answer with one word: sadness, joy, love, anger, fear, surprise."
+   },
+   "pos": [
+    760.0,
+    0.0
+   ],
+   "size": null,
+   "label": "Benchmark held-out rows",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "score",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1140.0,
+    0.0
+   ],
+   "size": [
+    300.0,
+    160.0
+   ],
+   "label": "Held-out accuracy",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "msg",
+   "type": "input.text",
+   "v": 1,
+   "params": {
+    "value": "i feel enormously honoured to be included in this list"
+   },
+   "pos": [
+    0.0,
+    325.0
+   ],
+   "size": null,
+   "label": "Message (a held-out row)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "ask",
+   "type": "text.template",
+   "v": 1,
+   "params": {
+    "template": "Classify the emotion of this message. Answer with one word (sadness, joy, love, anger, fear, surprise).\n\nMessage: {{v1}}"
+   },
+   "pos": [
+    380.0,
+    325.0
+   ],
+   "size": null,
+   "label": "Question",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "base_ans",
+   "type": "llm.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "unsloth/Qwen2.5-1.5B-Instruct",
+     "variant": null
+    },
+    "temperature": 0.0,
+    "max_tokens": 120
+   },
+   "pos": [
+    760.0,
+    325.0
+   ],
+   "size": null,
+   "label": "Base Qwen2.5-1.5B",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "tuned_ans",
+   "type": "train.chat_checkpoint",
+   "v": 1,
+   "params": {
+    "max_tokens": 120
+   },
+   "pos": [
+    760.0,
+    600.0
+   ],
+   "size": null,
+   "label": "Chat With Checkpoint",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "cmp",
+   "type": "text.template",
+   "v": 1,
+   "params": {
+    "template": "BASE Qwen2.5-1.5B-Instruct:\n{{v1}}\n\nFINE-TUNED on SetFit/emotion (250 steps):\n{{v2}}"
+   },
+   "pos": [
+    1140.0,
+    325.0
+   ],
+   "size": null,
+   "label": "Side by side",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "cmp_show",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1520.0,
+    325.0
+   ],
+   "size": [
+    460.0,
+    200.0
+   ],
+   "label": "Base vs fine-tuned",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "source": "hub",
+   "source_port": "dataset",
+   "target": "tune",
+   "target_port": "dataset",
+   "kind": "data"
+  },
+  {
+   "id": "e2",
+   "source": "tune",
+   "source_port": "checkpoint",
+   "target": "bench",
+   "target_port": "checkpoint",
+   "kind": "data"
+  },
+  {
+   "id": "e3",
+   "source": "tune",
+   "source_port": "holdout",
+   "target": "bench",
+   "target_port": "dataset",
+   "kind": "data"
+  },
+  {
+   "id": "e4",
+   "source": "bench",
+   "source_port": "score",
+   "target": "score",
+   "target_port": "value",
+   "kind": "data"
+  },
+  {
+   "id": "e5",
+   "source": "msg",
+   "source_port": "text",
+   "target": "ask",
+   "target_port": "values",
+   "kind": "data"
+  },
+  {
+   "id": "e6",
+   "source": "ask",
+   "source_port": "text",
+   "target": "base_ans",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e7",
+   "source": "tune",
+   "source_port": "checkpoint",
+   "target": "tuned_ans",
+   "target_port": "checkpoint",
+   "kind": "data"
+  },
+  {
+   "id": "e8",
+   "source": "ask",
+   "source_port": "text",
+   "target": "tuned_ans",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e9",
+   "source": "base_ans",
+   "source_port": "text",
+   "target": "cmp",
+   "target_port": "values",
+   "kind": "data"
+  },
+  {
+   "id": "e10",
+   "source": "tuned_ans",
+   "source_port": "text",
+   "target": "cmp",
+   "target_port": "values",
+   "kind": "data"
+  },
+  {
+   "id": "e11",
+   "source": "cmp",
+   "source_port": "text",
+   "target": "cmp_show",
+   "target_port": "value",
+   "kind": "data"
+  }
+ ],
+ "groups": [],
+ "notes": [
+  {
+   "id": "about",
+   "text": "**Hub dataset \u2192 Fine-tune \u2192 Benchmark \u2192 compare**\n\nSetFit/emotion (first 2,000 rows) trains Qwen2.5-1.5B-Instruct with LoRA for 80 steps, holding 10% out. Benchmark scores the checkpoint on those held-out rows with the adapter on and off. Bottom: the same question goes (a held-out row) to the base model and the checkpoint through one Template, and a second Template lays the answers side by side.",
+   "rect": [
+    0.0,
+    -300.0,
+    760.0,
+    220.0
+   ],
+   "color": "#fde68a"
+  }
+ ],
+ "assets": [],
+ "editor": {
+  "viewport": {
+   "x": 60,
+   "y": 200,
+   "zoom": 0.6
+  }
+ },
+ "meta": {
+  "tags": [
+   "training",
+   "benchmark",
+   "hub dataset",
+   "showcase"
+  ],
+  "author": "Leo"
+ },
+ "baked": {}
+}

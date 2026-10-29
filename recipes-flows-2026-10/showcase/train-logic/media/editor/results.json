@@ -1,0 +1,142 @@
+{
+ "drag_card": {
+  "before": {
+   "out": {
+    "start_gap": 2.8,
+    "end_gap": 2.8
+   },
+   "in": {
+    "start_gap": 2.8,
+    "end_gap": 2.8
+   }
+  },
+  "during_drag": {
+   "start_gap": 2.7,
+   "end_gap": 2.7
+  },
+  "after": {
+   "out": {
+    "start_gap": 2.8,
+    "end_gap": 2.8
+   },
+   "in": {
+    "start_gap": 2.8,
+    "end_gap": 2.8
+   }
+  },
+  "path_changed": true
+ },
+ "drag_note": {
+  "note_moved_px": [
+   239,
+   37
+  ],
+  "wires_changed": []
+ },
+ "delete_undo_redo": {
+  "start": {
+   "nodes": 12,
+   "edges": 15
+  },
+  "deleted": {
+   "nodes": 11,
+   "edges": 13
+  },
+  "undo": {
+   "nodes": 12,
+   "edges": 15
+  },
+  "undo_wire_fit": {
+   "start_gap": 2.7,
+   "end_gap": 2.7
+  },
+  "redo": {
+   "nodes": 11,
+   "edges": 13
+  },
+  "undo_again": {
+   "nodes": 12,
+   "edges": 15
+  },
+  "title_edge_back": true
+ },
+ "wire_disconnect": {
+  "start": {
+   "nodes": 12,
+   "edges": 15
+  },
+  "drag_off_input": {
+   "edges": 15,
+   "edge_still_there": true,
+   "quick_add_open": 0
+  },
+  "click_delete": {
+   "selected": 1,
+   "edges": 14,
+   "edge_gone": true,
+   "undo_restores": true
+  }
+ },
+ "resize": {
+  "size_before": [
+   108,
+   77
+  ],
+  "size_after": [
+   288,
+   217
+  ],
+  "in_wire_before": {
+   "start_gap": 2.1,
+   "end_gap": 2.1
+  },
+  "in_wire_after": {
+   "start_gap": 2.1,
+   "end_gap": 2.1
+  },
+  "out_wire_after": {
+   "start_gap": 177.6,
+   "end_gap": 2.1
+  },
+  "undo_size": [
+   108,
+   77
+  ]
+ },
+ "snap": {
+  "button_before": [
+   null,
+   null,
+   "focus-visible:border-ring dark:focus-visible:border-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-full border border-transparent text-sm font-medium aria-invalid:ring-[3px] [&_svg:not([class*='size-'])]:size-4 inline-flex items-center justify-center whitespace-nowrap transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none shrink-0 [&_svg]:shrink-0 outline-none group/button select-none cursor-pointer hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground size-8 text-muted-foreground"
+  ],
+  "button_after": [
+   null,
+   null,
+   "focus-visible:border-ring dark:focus-visible:border-ring aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-full border border-transparent text-sm font-medium aria-invalid:ring-[3px] [&_svg:not([class*='size-'])]:size-4 inline-flex items-center justify-center whitespace-nowrap transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none shrink-0 [&_svg]:shrink-0 outline-none group/button select-none cursor-pointer hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground size-8 bg-background text-foreground shadow-sm dark:bg-input/30"
+  ],
+  "start": "translate(0px, 0px)",
+  "after_drag_snap_off": "translate(25px, 50px)",
+  "after_drag_snap_on": "translate(100px, 100px)"
+ },
+ "click_to_place": {
+  "before": {
+   "nodes": 12,
+   "edges": 15
+  },
+  "after": {
+   "nodes": 13,
+   "edges": 15
+  },
+  "placed": [
+   "n_v05rtam08k1"
+  ],
+  "placed_at_screen": [
+   889,
+   189
+  ],
+  "clicked_at": [
+   900,
+   200
+  ]
+ }
+}
