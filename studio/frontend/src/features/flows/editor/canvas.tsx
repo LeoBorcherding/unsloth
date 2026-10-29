@@ -75,11 +75,11 @@ import { columnLook } from "../recipe/recipe-look";
 import { noteRecipeGroup, withRecipeNotes } from "../recipe/recipe-notes";
 import {
   parseSetupId,
+  setupEdges,
   setupLayout,
   withSetupPosition,
 } from "../recipe/recipe-setup";
 import {
-  RecipeSetupEdge,
   RecipeSetupNode,
   SETUP_IN,
   SETUP_OUT,
@@ -106,7 +106,7 @@ const NODE_TYPES = {
   recipeSetup: RecipeSetupNode,
   flowReroute: RerouteNode,
 };
-const EDGE_TYPES = { flowEdge: FlowEdgeView, recipeSetup: RecipeSetupEdge };
+const EDGE_TYPES = { flowEdge: FlowEdgeView };
 const SNAP_GRID: [number, number] = [GRID, GRID];
 // RF draws a dot at its tile corner plus the radius, less `offset`: offset = radius puts dots on multiples of GRID.
 const DOT_SIZE = 1.2;
@@ -288,19 +288,10 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
   }, [derivedNodes, setup, sizes, graph, setupSelected]);
   const edges = useMemo(() => {
     if (!setup.links.length) return derivedEdges;
-    const links: RfEdge[] = setup.links
-      .filter((link) => !graph.nodes[link.target]?.collapsed)
-      .map((link) => ({
-        id: link.id,
-        source: link.source,
-        target: link.target,
-        sourceHandle: SETUP_OUT,
-        targetHandle: SETUP_IN,
-        type: "recipeSetup",
-        selectable: false,
-        deletable: false,
-        focusable: false,
-      }));
+    const links = setupEdges(setup.links, graph, {
+      source: SETUP_OUT,
+      target: SETUP_IN,
+    });
     return [...derivedEdges, ...links];
   }, [derivedEdges, setup, graph]);
 
