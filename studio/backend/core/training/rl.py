@@ -758,23 +758,26 @@ def vllm_rollout_blocker(
     *,
     full_finetuning: bool = False,
     vision: bool = False,
+    audio: bool = False,
     diffusion: bool = False,
     offload_layers: Any = 0,
     gpu_count: int = 1,
-    runtime: Callable[[], Optional[str]] = _vllm_runtime_blocker,
+    runtime: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[str]:
     """Why this GRPO run can't generate with vLLM, or None when it can."""
     if full_finetuning:
         return "vLLM rollouts need LoRA training"
     if vision:
         return "vLLM rollouts cover text-only models"
+    if audio:
+        return "vLLM rollouts cover text-only models, not audio ones"
     if diffusion:
         return "text-diffusion models don't generate through vLLM"
     if offload_layers:
         return "vLLM rollouts can't run with layer offloading"
     if gpu_count > 1:
         return "vLLM rollouts run on a single GPU"
-    return runtime()
+    return (runtime or _vllm_runtime_blocker)()
 
 
 def vllm_fallback_message(reason: str) -> str:

@@ -82,6 +82,7 @@ def test_runtime_blockers_name_the_reason(host, described, expected):
     [
         ({"full_finetuning": True}, "LoRA"),
         ({"vision": True}, "text-only"),
+        ({"audio": True}, "not audio"),
         ({"diffusion": True}, "text-diffusion"),
         ({"offload_layers": "auto"}, "offloading"),
         ({"gpu_count": 2}, "single GPU"),
@@ -198,3 +199,50 @@ def test_resume_lifts_the_stored_vllm_settings():
         reward_specs = [{"name": "r", "weight": 1.0}],
     )
     assert req.grpo_use_vllm is True and req.grpo_vllm_gpu_memory_utilization == 0.6
+
+
+@pytest.mark.parametrize(
+    "shape, expected",
+    [
+        ({"diffusion_lm_profile": "dream"}, "text-diffusion"),
+        ({"_audio_type": "snac"}, "not audio"),
+        ({"is_audio_vlm": True}, "not audio"),
+        ({"model_has_vision": True}, "text-only"),
+    ],
+)
+def test_loader_warns_for_models_whose_branch_skips_vllm(monkeypatch, shape, expected):
+    # These load through their own branch, so the warning has to come from the shared check.
+    from core.training.trainer import UnslothTrainer
+
+    monkeypatch.setattr(rl, "_vllm_runtime_blocker", lambda: None)
+    warnings = []
+    trainer = types.SimpleNamespace(
+        **{
+            "model_has_vision": False,
+            "diffusion_lm_profile": None,
+            "_audio_type": None,
+            "is_audio_vlm": False,
+            "_offload_layers": 0,
+            **shape,
+        },
+        _record_warning = warnings.append,
+    )
+    kwargs = UnslothTrainer._vllm_kwargs_or_warn(trainer, {"fast_inference": True}, False, 1)
+    assert kwargs == {} and len(warnings) == 1 and expected in warnings[0]
+
+
+def test_loader_passes_vllm_kwargs_for_a_plain_text_model(monkeypatch):
+    from core.training.trainer import UnslothTrainer
+
+    monkeypatch.setattr(rl, "_vllm_runtime_blocker", lambda: None)
+    trainer = types.SimpleNamespace(
+        model_has_vision = False,
+        diffusion_lm_profile = None,
+        _audio_type = None,
+        is_audio_vlm = False,
+        _offload_layers = 0,
+        _record_warning = lambda m: pytest.fail(m),
+    )
+    requested = {"fast_inference": True, "max_lora_rank": 64}
+    assert UnslothTrainer._vllm_kwargs_or_warn(trainer, requested, False, 1) == requested
+    assert UnslothTrainer._vllm_kwargs_or_warn(trainer, None, False, 1) == {}

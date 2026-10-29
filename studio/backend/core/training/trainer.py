@@ -870,6 +870,7 @@ class UnslothTrainer:
         blocker = vllm_rollout_blocker(
             full_finetuning = full_finetuning,
             vision = bool(self.model_has_vision),
+            audio = bool(self._audio_type or self.is_audio_vlm),
             diffusion = bool(self.diffusion_lm_profile),
             offload_layers = self._offload_layers,
             gpu_count = gpu_count,
@@ -1508,6 +1509,11 @@ class UnslothTrainer:
             if self._audio_type in _FORCED_16BIT_AUDIO_TYPES:
                 self.load_in_4bit = False
 
+            # Before the loader branches: only the plain text one takes vLLM, the others warn here.
+            vllm_kwargs = self._vllm_kwargs_or_warn(
+                vllm_load_kwargs, full_finetuning, get_visible_gpu_count()
+            )
+
             if self._audio_type == "csm":
                 # Whisper: FastModel, auto_model=WhisperForConditionalGeneration, load_in_4bit=False
                 from unsloth import FastModel
@@ -1698,9 +1704,6 @@ class UnslothTrainer:
                 )
                 logger.info(f"[VLM Diagnostic] Usable as vision processor: {has_image_proc}\n")
             else:
-                vllm_kwargs = self._vllm_kwargs_or_warn(
-                    vllm_load_kwargs, full_finetuning, get_visible_gpu_count()
-                )
 
                 def load_text(**extra):
                     return FastLanguageModel.from_pretrained(
