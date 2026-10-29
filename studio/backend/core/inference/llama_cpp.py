@@ -25997,10 +25997,15 @@ class LlamaCppBackend:
                         )
 
                     def _host_input_bytes_now(weights: int) -> int:
-                        # Only what the host-pinned discount does not already cover (counted
-                        # in full even while it waits on a proved-discrete placement), and
-                        # nothing beside a resident adapter or on a CPU target, as there.
-                        if _target_device_is_cpu or _sidecar_adapter_paths(extra_args):
+                        # Only what the host-pinned discount does not already cover, and only
+                        # where that discount could apply: never on a card not proved discrete
+                        # (its "VRAM" may be the same host pool), beside a resident adapter, or
+                        # on a CPU target.
+                        if (
+                            _target_device_is_cpu
+                            or _sidecar_adapter_paths(extra_args)
+                            or any(i in _unclassified_gpu_ids for i, _f in gpus)
+                        ):
                             return 0
                         if not (
                             gpus
