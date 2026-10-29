@@ -38,6 +38,7 @@ test("font-mono is left on code, JSON and logs only", () => {
     /editor\/param-fields\.tsx: className=\{`\$\{FIELD\} font-mono/, // JSON param editor
     /editor\/flow-node\.tsx: <Badge variant="secondary" className="max-w-full font-mono/, // object keys
     /editor\/trigger-panel\.tsx: <code /, // webhook command
+    /editor\/custom-nodes\.tsx: className="h-56 font-mono text-xs"/, // pasted Python script
   ];
   for (const line of mono)
     assert.ok(allowed.some((rule) => rule.test(line)), `font-mono on a non-code value: ${line}`);

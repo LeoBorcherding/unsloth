@@ -186,6 +186,30 @@ export interface NodeSpec {
   requires?: string[];
   exclusive_gpu?: boolean;
   requires_approval?: string[];
+  /** Custom nodes only (core/flows/custom_nodes.py): run by one shared handler. */
+  handler?: string;
+  code_param?: string;
+  custom?: { hash: string };
+}
+
+/** A script in the account's custom node library. `spec` is null when the stored script no longer parses. */
+export interface CustomNodeEntry {
+  id: string;
+  name: string;
+  source: string;
+  hash: string;
+  spec: NodeSpec | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SandboxLibraries {
+  python: string;
+  packages: { name: string; version: string }[];
+  /** "sandbox": asked inside the sandbox; "studio-python": the probe failed, read from Studio's interpreter. */
+  source: "sandbox" | "studio-python";
+  note: string;
 }
 
 export interface NodeCategory {

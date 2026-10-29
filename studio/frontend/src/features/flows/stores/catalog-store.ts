@@ -9,6 +9,8 @@ export interface CatalogState {
   specs: Record<string, NodeSpec>;
   categories: Record<string, NodeCategory>;
   setCatalog: (catalog: NodeCatalog) => void;
+  /** Custom node specs: kept beside the catalog, never in its palette groups. */
+  addSpecs: (specs: NodeSpec[]) => void;
 }
 
 export const useCatalogStore = create<CatalogState>((set) => ({
@@ -21,6 +23,13 @@ export const useCatalogStore = create<CatalogState>((set) => ({
       specs: Object.fromEntries(catalog.nodes.map((spec) => [spec.type, spec])),
       categories: Object.fromEntries(catalog.categories.map((c) => [c.id, c])),
     }),
+  addSpecs: (specs) =>
+    set((state) => ({
+      specs: {
+        ...state.specs,
+        ...Object.fromEntries(specs.map((spec) => [spec.type, spec])),
+      },
+    })),
 }));
 
 export function getSpec(type: string): NodeSpec | undefined {
