@@ -78,6 +78,7 @@ class NodeContext(Protocol):
         seed: Optional[int] = None,
         stream_port: Optional[str] = "text",
         sampling: Optional[dict] = None,
+        use_adapter: Optional[bool] = None,
     ) -> str: ...
 
     async def llm_json(
