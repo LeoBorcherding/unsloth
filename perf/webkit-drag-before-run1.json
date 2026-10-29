@@ -1,0 +1,11 @@
+{
+ "tag": "webkit-drag-before-run1",
+ "engine": "webkit (headless)",
+ "frames": 102,
+ "median_frame_ms": 33.0,
+ "p95_frame_ms": 35,
+ "max_frame_ms": 35,
+ "frames_over_20ms": 102,
+ "pointer_to_card_px_median": 30,
+ "pointer_to_card_px_p95": 45
+}

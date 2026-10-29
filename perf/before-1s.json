@@ -1,0 +1,107 @@
+{
+ "tag": "before-1s",
+ "refresh_ms": 1000,
+ "idle_30s": {
+  "seconds": 30.0,
+  "requests": {
+   "/api/studio/update-status": {
+    "count": 2,
+    "per_min": 4.0,
+    "median_ms": 22.3,
+    "bytes_per_min": 3879
+   },
+   "/api/system": {
+    "count": 29,
+    "per_min": 58.0,
+    "median_ms": 42.6,
+    "bytes_per_min": 168417
+   },
+   "/api/inference/monitor": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 6.2,
+    "bytes_per_min": 19500
+   },
+   "/api/inference/video/status": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 12.6,
+    "bytes_per_min": 21286
+   },
+   "/api/inference/images/status": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 11.5,
+    "bytes_per_min": 29098
+   },
+   "/api/inference/audio/stt/status": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 37.8,
+    "bytes_per_min": 35217
+   },
+   "/api/settings/embedding-model": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 29.2,
+    "bytes_per_min": 12359
+   },
+   "/api/inference/status": {
+    "count": 6,
+    "per_min": 12.0,
+    "median_ms": 46.6,
+    "bytes_per_min": 149103
+   },
+   "/api/llama/update-status": {
+    "count": 1,
+    "per_min": 2.0,
+    "median_ms": 4708.8,
+    "bytes_per_min": 3245
+   },
+   "/api/hub/active-downloads": {
+    "count": 20,
+    "per_min": 40.0,
+    "median_ms": 6.0,
+    "bytes_per_min": 28478
+   },
+   "/api/export/status": {
+    "count": 1,
+    "per_min": 2.0,
+    "median_ms": 4.4,
+    "bytes_per_min": 1853
+   },
+   "/api/chat/pins": {
+    "count": 1,
+    "per_min": 2.0,
+    "median_ms": 4.3,
+    "bytes_per_min": 1393
+   },
+   "/api/engines": {
+    "count": 1,
+    "per_min": 2.0,
+    "median_ms": 138.3,
+    "bytes_per_min": 3179
+   }
+  },
+  "script_ms": 82.9,
+  "layout_ms": 7.1,
+  "style_ms": 17.8,
+  "layouts": 31,
+  "dom_mutations": 263,
+  "long_tasks": 0
+ },
+ "drag": {
+  "frames": 263,
+  "median_frame_ms": 16.7,
+  "p95_frame_ms": 16.7,
+  "max_frame_ms": 16.8,
+  "frames_over_20ms": 0,
+  "script_ms": 63.0,
+  "layout_ms": 1.4,
+  "style_ms": 48.7,
+  "layouts": 6,
+  "style_recalcs": 245,
+  "dom_mutations": 284,
+  "long_tasks": []
+ }
+}
