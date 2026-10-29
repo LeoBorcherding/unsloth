@@ -828,7 +828,9 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         <SuperCardCombineToolbar readOnly={readOnly} />
         <OpenSuperCards readOnly={readOnly} />
         <SelectedNodeToolbar readOnly={readOnly} />
-        {bus && <WireRouterController scope={flowId ?? ""} />}
+        {bus && (
+          <WireRouterController scope={flowId ?? ""} paused={drag !== null} />
+        )}
       </ReactFlow>
     </div>
   );
