@@ -24,11 +24,13 @@ import { NodeIconTile } from "./node-card";
 import { CATEGORY_TONES } from "./node-tones";
 import { stopPlacement, togglePlacement, usePlacement } from "./placement";
 import { REROUTE_TYPE } from "./reroutes";
+import { PlacementGhost } from "./placement-ghost";
 
 const REROUTE_HINT =
   "Steer a wire by hand: drop it on a wire to split it, or wire into it.";
 
-type Ghost = { body: ReactNode; x: number; y: number };
+// Node rows show the card-to-be at canvas zoom; the Reroute row keeps its own chip.
+type Ghost = { spec: NodeSpec | null; body: ReactNode; x: number; y: number };
 type DropFn = (type: string, x: number, y: number) => void;
 const DRAG_SLOP = 5;
 
@@ -36,7 +38,7 @@ const DRAG_SLOP = 5;
  *  drag, which Tauri's macOS webview eats. */
 function usePlacementPress(
   type: string,
-  ghostBody: () => ReactNode,
+  ghostOf: () => Pick<Ghost, "spec" | "body">,
   onGhost: (ghost: Ghost | null) => void,
   onDrop: DropFn,
 ) {
@@ -59,7 +61,7 @@ function usePlacementPress(
       )
         return;
       p.dragging = true;
-      onGhost({ body: ghostBody(), x: e.clientX, y: e.clientY });
+      onGhost({ ...ghostOf(), x: e.clientX, y: e.clientY });
     },
     onPointerUp: (e: ReactPointerEvent<HTMLButtonElement>) => {
       const p = press.current;
@@ -99,7 +101,7 @@ function PaletteItem({
 }) {
   const handlers = usePlacementPress(
     spec.type,
-    () => <PaletteRowBody spec={spec} color={color} />,
+    () => ({ spec, body: null }),
     onGhost,
     onDrop,
   );
@@ -139,7 +141,7 @@ function RerouteItem({
 }) {
   const handlers = usePlacementPress(
     REROUTE_TYPE,
-    () => <RerouteBody />,
+    () => ({ spec: null, body: <RerouteBody /> }),
     onGhost,
     onDrop,
   );
@@ -296,14 +298,17 @@ function PaletteImpl({
         Click a node, then click the canvas to place it (Esc to stop). Drag
         to drop one, or double-click the canvas to search.
       </p>
-      {ghost && (
-        <div
-          className="pointer-events-none fixed z-[1000] flex w-56 items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-1.5 opacity-90 shadow-md"
-          style={{ left: ghost.x + 8, top: ghost.y + 8 }}
-        >
-          {ghost.body}
-        </div>
-      )}
+      {ghost &&
+        (ghost.spec ? (
+          <PlacementGhost spec={ghost.spec} x={ghost.x} y={ghost.y} />
+        ) : (
+          <div
+            className="pointer-events-none fixed z-[1000] flex w-56 items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-1.5 opacity-90 shadow-md"
+            style={{ left: ghost.x + 8, top: ghost.y + 8 }}
+          >
+            {ghost.body}
+          </div>
+        ))}
     </div>
   );
 }
