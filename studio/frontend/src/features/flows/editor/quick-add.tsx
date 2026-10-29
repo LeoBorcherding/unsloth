@@ -19,7 +19,7 @@ import { compatibleSpecs } from "./connection-rules";
 import { nodeIcon } from "./icons";
 import { NodeIconTile } from "./node-card";
 import { addNodeConnected } from "./node-factory";
-import { REROUTE_TYPE } from "./reroutes";
+import { REROUTE_TYPE, rerouteCanFeed, rerouteTakes } from "./reroutes";
 import { snapPoint } from "./placement";
 import { CATEGORY_TONES } from "./node-tones";
 
@@ -34,7 +34,19 @@ export function QuickAdd() {
     if (!catalog || !quickAdd) return [];
     const addable = catalog.nodes.filter((spec) => !spec.design);
     if (!quickAdd.from) return addable.map((spec) => ({ spec }));
-    const matches = compatibleSpecs(addable, quickAdd.from);
+    const { from } = quickAdd;
+    const graph = useDocStore.getState().graph;
+    // Off a reroute, check against the whole chain, not just its first input's type.
+    const matches =
+      from.kind === "data" && graph.reroutes[from.nodeId]
+        ? addable.flatMap((spec) => {
+            const port =
+              from.side === "out"
+                ? spec.inputs.find((p) => rerouteCanFeed(graph, from.nodeId, p))
+                : spec.outputs.find((p) => rerouteTakes(graph, from.nodeId, p));
+            return port ? [{ spec, port: port.id }] : [];
+          })
+        : compatibleSpecs(addable, from);
     const exactType = quickAdd.from.port?.type;
     return matches.sort((a, b) => {
       const score = (m: { spec: NodeSpec; port: string }) => {

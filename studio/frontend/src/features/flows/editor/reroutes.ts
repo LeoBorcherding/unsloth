@@ -63,21 +63,28 @@ export function wireHandles(
   };
 }
 
-function chainRoot(graph: DocGraph, rerouteId: string): string {
-  let cursor = rerouteId;
-  const seen = new Set<string>();
-  while (!seen.has(cursor)) {
-    seen.add(cursor);
-    const into = wireInto(graph, cursor);
-    if (!into || !graph.reroutes[into.source]) break;
-    cursor = into.source;
-  }
-  return cursor;
+/** Whether a new input `port` could hang off this reroute's output. */
+export function rerouteCanFeed(
+  graph: DocGraph,
+  rerouteId: string,
+  port: PortSpec,
+): boolean {
+  if (port.type === "flow") return false;
+  const source = portSpec(graph, rerouteUpstream(graph, rerouteId), "out");
+  return !source || typesCompatible(source, port);
 }
 
-function typedBy(graph: DocGraph, rerouteId: string): PortSpec | null {
-  const port = reroutePort(graph, rerouteId);
-  return port.type === "any" ? null : port;
+/** Whether output `port` could feed this reroute: it must fit every input the reroute feeds. */
+export function rerouteTakes(
+  graph: DocGraph,
+  rerouteId: string,
+  port: PortSpec,
+): boolean {
+  if (port.type === "flow") return false;
+  return rerouteDownstream(graph, rerouteId).every((ref) => {
+    const input = portSpec(graph, ref, "in");
+    return !input || typesCompatible(port, input);
+  });
 }
 
 export interface RerouteRequest {
@@ -147,10 +154,9 @@ export function checkRerouteConnection(
     if (!port) return { ok: false, reason: "Unknown port" };
     multi = !!port.multi;
   }
-  // An empty reroute chain takes its type from the inputs it already feeds.
-  const source =
-    portSpec(graph, upstream, "out") ??
-    (fromReroute ? typedBy(graph, chainRoot(graph, req.source)) : null);
+  // An empty chain takes any mix of inputs: some outputs are typed `any` (Get JSON's value, a
+  // file) and feed them all. The source is checked against every one once it is wired in.
+  const source = portSpec(graph, upstream, "out");
   const edges = Object.values(graph.edges);
   for (const ref of targets) {
     const port = portSpec(graph, ref, "in");
@@ -160,6 +166,19 @@ export function checkRerouteConnection(
         ok: false,
         reason: `${source.type} cannot connect to ${port.type}`,
       };
+    // A multi input keeps every wire, so the same output through a reroute would arrive twice.
+    if (
+      upstream &&
+      port.multi &&
+      edges.some(
+        (e) =>
+          e.source === upstream.node &&
+          e.source_port === upstream.port &&
+          e.target === ref.node &&
+          e.target_port === ref.port,
+      )
+    )
+      return { ok: false, reason: "Those are already connected" };
     if (upstream && wouldCreateCycle(edges, upstream.node, ref.node, ref.port))
       return {
         ok: false,
