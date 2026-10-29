@@ -46,6 +46,7 @@ import {
 } from "./node-card";
 import { NODE_LOOKS } from "./node-looks";
 import { CATEGORY_TONES } from "./node-tones";
+import { shownOutputIds } from "./value-kinds";
 import { StructuredBadge, isStructuredValue } from "./value-viewers";
 
 /** Below this zoom the text is unreadable anyway; hiding it (layout kept, so handles stay put)
@@ -168,12 +169,9 @@ function OutputValues({
   spec: NodeSpec;
   expanded?: boolean;
 }) {
-  // A Preview node declares no outputs; what it shows is the value it received.
-  const ports = spec.outputs.length
-    ? spec.outputs
-    : Object.keys(outputs).map((id) => ({ id }));
-  for (const port of ports) {
-    const value = outputs[port.id];
+  const ids = shownOutputIds(spec.outputs, outputs);
+  for (const id of ids) {
+    const value = outputs[id];
     if (isMediaValue(value)) {
       return (
         <MediaThumb
@@ -200,8 +198,8 @@ function OutputValues({
       );
     }
   }
-  for (const port of ports) {
-    const value = outputs[port.id];
+  for (const id of ids) {
+    const value = outputs[id];
     if (value === undefined || value === null) continue;
     if (isDatasetValue(value)) return <DatasetOutput value={value} compact />;
     if (isStructuredValue(value)) return <StructuredBadge value={value} />;
