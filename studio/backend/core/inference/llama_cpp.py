@@ -10763,14 +10763,20 @@ class LlamaCppBackend:
         *,
         env: Optional[Mapping[str, str]] = None,
         draft_model: bool = False,
+        proved_discrete: bool = True,
     ) -> int:
-        """Host bytes left after only provable exact-name GPU overrides (regexes not interpreted)."""
+        """Host bytes left after only provable exact-name GPU overrides (regexes not interpreted).
+
+        ``proved_discrete=False``: a destination may be an iGPU whose "VRAM" is host RAM, so keep all.
+        """
         items = self._host_pinned_weight_items(model_path)
         raw = (
             sum(size for _name, size in items)
             if items
             else self._host_pinned_weight_bytes(model_path)
         )
+        if not proved_discrete:
+            return raw
         mappings = self._tensor_override_mappings(
             extra_args,
             env,
@@ -25050,6 +25056,17 @@ class LlamaCppBackend:
                             or self._amd_apu_wants_unified_memory([idx])
                             or self._integrated_cuda_unified_memory([idx])
                         }
+                    # An exact -ot move only leaves RAM when every possible destination is discrete.
+                    _override_dest_proved_discrete = not (
+                        _shared_memory or _shared_gpu_ids or _unclassified_gpu_ids
+                    )
+                    if not _override_dest_proved_discrete:
+                        _host_pinned_floor = self._host_pinned_floor_bytes(
+                            model_path,
+                            extra_args,
+                            env = os.environ,
+                            proved_discrete = False,
+                        )
 
                     def _candidate_targets_proved_discrete(candidate_ids) -> bool:
                         _candidate_ids = {int(idx) for idx in (candidate_ids or ())}
@@ -25505,6 +25522,7 @@ class LlamaCppBackend:
                                     extra_args,
                                     env = os.environ,
                                     draft_model = True,
+                                    proved_discrete = _override_dest_proved_discrete,
                                 )
                                 if self._override_moves_host_pinned(
                                     extra_args,
@@ -25552,7 +25570,7 @@ class LlamaCppBackend:
                             if is_apple_silicon() and self._metal_load_is_mapped(
                                 extra_args,
                                 requested_load_mode = load_mode,
-                                supports_load_mode = bool(server_caps.get("supports_load_mode")),
+                                supports_load_mode = bool(load_mode_support(server_caps)),
                                 settings = _mem_settings,
                                 allow_mlock = True,
                             ):
@@ -26159,7 +26177,9 @@ class LlamaCppBackend:
 
                         _mm_ranked = sorted(
                             _mm_budgeted_gpus,
-                            key = lambda g: _gpu_usable(g, _mm_frac),
+                            key = lambda g: _gpu_rank(
+                                g, _mm_frac, _pipeline_overhead_bytes / (1024 * 1024)
+                            ),
                             reverse = True,
                         )
                         _mm_min_gpus = max(1, min(_layer_min_gpus, len(_mm_ranked)))
@@ -27399,7 +27419,7 @@ class LlamaCppBackend:
                             if self._metal_load_is_mapped(
                                 extra_args,
                                 requested_load_mode = load_mode,
-                                supports_load_mode = bool(server_caps.get("supports_load_mode")),
+                                supports_load_mode = bool(load_mode_support(server_caps)),
                                 settings = _mem_settings,
                                 allow_mlock = True,
                             )

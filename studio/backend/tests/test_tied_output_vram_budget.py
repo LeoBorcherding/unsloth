@@ -1217,6 +1217,42 @@ def test_lazy_overlap_with_the_host_floor_is_matched_by_tensor_name(backend, tmp
     assert instance._lazy_read_in_host_floor(model, 27 * gib, cpu, {}) == 27 * gib
 
 
+def test_an_exact_override_to_an_igpu_keeps_the_table_in_the_host_floor(backend, tmp_path: Path):
+    """An iGPU or unclassified card's "VRAM" is system RAM: an exact -ot onto it frees none."""
+    import inspect
+
+    gib = 1024**3
+    items = (("token_embd.weight", 1 * gib), ("per_layer_token_embd.weight", 27 * gib))
+    instance = object.__new__(backend)
+    instance._host_pinned_weight_items = lambda _path: items
+    model = str(tmp_path / "model.gguf")
+    moved = ["-ot", "per_layer_token_embd.weight=Vulkan1"]
+    assert instance._host_pinned_floor_bytes(model, moved, env = {}) == 1 * gib
+    assert (
+        instance._host_pinned_floor_bytes(model, moved, env = {}, proved_discrete = False)
+        == 28 * gib
+    )
+    draft = ["-otd", "per_layer_token_embd.weight=Vulkan1"]
+    assert (
+        instance._host_pinned_floor_bytes(
+            model, draft, env = {}, draft_model = True, proved_discrete = False
+        )
+        == 28 * gib
+    )
+
+    compact = "".join(inspect.getsource(backend.load_model).split())
+    assert (
+        "_override_dest_proved_discrete=not(_shared_memoryor_shared_gpu_idsor_unclassified_gpu_ids)"
+        "ifnot_override_dest_proved_discrete:_host_pinned_floor=self._host_pinned_floor_bytes("
+        "model_path,extra_args,env=os.environ,proved_discrete=False,)"
+    ) in compact
+    assert "draft_model=True,proved_discrete=_override_dest_proved_discrete,)" in compact
+    # The rebind sits after both sets are built, so it sees the real inventory.
+    assert compact.index("_unclassified_gpu_ids={idx") < compact.index(
+        "_override_dest_proved_discrete=not("
+    )
+
+
 def test_the_load_mode_fit_removes_a_lazy_table_once():
     """A lazy host-pinned table leaves host_only_bytes only, not the device share too."""
     import inspect
