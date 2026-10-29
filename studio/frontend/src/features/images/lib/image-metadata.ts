@@ -1027,6 +1027,8 @@ export const INFO_RECIPE_KEYS = [
   "baked_loras",
   "controlnet",
   "controlnet_guidance",
+  "ip_adapter",
+  "ip_adapter_scale",
   "batch_index",
   "created_at",
   "engine",

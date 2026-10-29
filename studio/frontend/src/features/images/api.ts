@@ -76,6 +76,8 @@ export interface DiffusionStatus {
   // Whether the loaded model + quantisation can apply LoRA adapters (drives the LoRA picker enabled state).
   supports_lora?: boolean;
   supports_controlnet?: boolean;
+  // Whether the loaded model takes an image prompt (IP-Adapter): diffusers SDXL, resident and not compiled.
+  supports_ip_adapter?: boolean;
   supports_negative_prompt?: boolean;
   // Whether the loaded model's inpaint pipeline can crop to the mask (diffusers padding_mask_crop).
   supports_inpaint_only_masked?: boolean;
@@ -243,6 +245,8 @@ export interface DiffusionGenerateRequest {
   localized_edit?: { mode: LocalizedEditMode; image: string };
   loras?: LoraSpecInput[];
   controlnet?: ControlNetSpecInput;
+  // Image prompt (IP-Adapter), text to image only. Rejected (400) when the loaded model cannot take one.
+  ip_adapter?: IpAdapterSpecInput;
   sampler?: string;
   schedule_type?: string;
   // Sent only off their defaults (lib/sd-controls); refused (400) for a model without them.
@@ -267,6 +271,12 @@ export interface DiffusionGenerateRequest {
 export interface LoraSpecInput {
   id: string;
   weight: number;
+}
+
+// The image steers style and subject at `scale` (0..1).
+export interface IpAdapterSpecInput {
+  image: string;
+  scale: number;
 }
 
 export interface ControlNetSpecInput {
@@ -330,6 +340,9 @@ export interface GalleryImage {
   baked_loras?: string[];
   loras?: string[];
   controlnet?: string | null;
+  // The IP-Adapter image itself is not persisted, only its id and scale.
+  ip_adapter?: string | null;
+  ip_adapter_scale?: number | null;
   // Source/mask/reference images are not persisted, only these settings.
   workflow?: string | null;
   strength?: number | null;

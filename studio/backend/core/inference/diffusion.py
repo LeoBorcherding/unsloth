@@ -320,6 +320,7 @@ from .diffusion_compile_config import family_filters_reductions
 from . import diffusion_cond_cache as cond_cache
 from . import diffusion_prompt_cache as prompt_cache
 from . import diffusion_embeddings
+from . import diffusion_ip_adapter
 from . import diffusion_te_release as te_release
 from . import diffusion_gguf_compile as gguf_compile
 from . import diffusion_bg_compile as bg_compile
@@ -12558,6 +12559,76 @@ class DiffusionBackend:
                 self._aux_pipes[class_name] = pipe
         return pipe
 
+    def _ip_adapter_prepare(
+        self,
+        state: _LoadState,
+        workflow: str,
+        ip_adapter: tuple[str, float],
+        cancel: threading.Event,
+    ) -> tuple[Any, Any]:
+        """Validate and decode an image prompt, then load (once) and scale the family's IP-Adapter on the resident
+        pipe. Every refusal is a ValueError raised before any download."""
+        from .diffusion_multigpu import is_split
+
+        image_b64, scale = ip_adapter
+        fam = state.family
+        entry = diffusion_ip_adapter.adapter_for(fam.name)
+        if entry is None:
+            raise ValueError(
+                f"Image prompts (IP-Adapter) are not supported for the "
+                f"'{getattr(fam, 'label', None) or fam.name}' model family."
+            )
+        if workflow != "txt2img":
+            raise ValueError(
+                "An image prompt currently combines with plain text-to-image only, not the "
+                f"{workflow} workflow."
+            )
+        if not diffusion_ip_adapter.supports_ip_adapter(
+            engine = "diffusers",
+            family = fam.name,
+            model_kind = state.kind,
+            transformer_quant = state.transformer_quant,
+            compiled = "compiled" in (getattr(state, "speed_optims", ()) or ()),
+        ):
+            raise ValueError(
+                "Image prompts are not available on this load: it is GGUF, torchao-quantised, or compiled "
+                "(Speed default / max). Load the full model at Speed off to use one."
+            )
+        # A calibrated placement can still be fully resident (SDXL on a 15-16 GB card); the free-memory check below
+        # covers the adapter's weights there.
+        if getattr(state, "offload_policy", None) not in (None, OFFLOAD_NONE) or is_split(state.pipe):
+            raise ValueError(
+                "Image prompts need the model fully on the GPU, and this load streams it from system "
+                "memory. Reload it with a memory mode that keeps it resident, or generate without the "
+                "image prompt."
+            )
+        image = decode_b64_image(image_b64, mode = "RGB")
+        if diffusion_ip_adapter.loaded_id(state.pipe) != entry.id:
+            if cancel.is_set():
+                raise RuntimeError(DIFFUSION_CANCELLED_MSG)
+            free_mib = _free_device_mib(state.device)
+            # Its weights are not in the load's memory plan: refuse here rather than OOM in the denoise.
+            if free_mib is not None and free_mib < entry.approx_mib + 512:
+                raise ValueError(
+                    f"Not enough free GPU memory for the image prompt: its encoder and adapter need about "
+                    f"{entry.approx_mib / 1024:.1f} GiB and {free_mib / 1024:.1f} GiB is free. Load a smaller "
+                    "model or generate without the image prompt."
+                )
+        if diffusion_ip_adapter.apply(
+            state.pipe,
+            entry,
+            scale,
+            denoiser_attr = fam.denoiser_attr,
+            device = state.device,
+            cache_dir = hub_cache_dir(),
+            token = state.hf_token,
+        ):
+            cuda_graph.reset_all(getattr(state, "cuda_graphs", ()))
+            logger.info("diffusion.ip_adapter: loaded %s", entry.id)
+        if cancel.is_set():
+            raise RuntimeError(DIFFUSION_CANCELLED_MSG)
+        return entry, image
+
     def _controlnet_pipe(self, state: _LoadState, resolved_cn: Any, cancel: threading.Event) -> Any:
         """Built from the resident pipe without recasting; ValueError if the family lacks ControlNet
         classes."""
@@ -13202,6 +13273,8 @@ class DiffusionBackend:
         loras: Optional[list[tuple[str, float]]] = None,
         # ControlNet (id, control_image_b64, control_type, strength, guidance_start, guidance_end). None = off.
         controlnet: Optional[tuple[str, str, str, float, float, float]] = None,
+        # IP-Adapter image prompt (image_b64, scale). None or scale 0 = off, and unloads an attached adapter.
+        ip_adapter: Optional[tuple[str, float]] = None,
         # load_identity() of the caller's status() read; refuse rather than run a different load (#9448)
         expected_load: Optional[LoadIdentity] = None,
         allow_oversized: bool = False,
@@ -13298,12 +13371,17 @@ class DiffusionBackend:
                 lora_requested = _has_active_lora(loras)
                 # Stay eager while prior adapters are attached: compiling would bake them in.
                 loras_attached = bool(getattr(state.pipe, "_unsloth_loras", ()))
+                # Same for an image prompt: it swaps the denoiser's attention processors.
+                ip_requested = ip_adapter is not None and float(ip_adapter[1] or 0) > 0
+                ip_attached = diffusion_ip_adapter.loaded_id(state.pipe) is not None
                 if (
                     state.speed_deferred
                     and state.generation_count >= 2
                     and not aux_pass
                     and not lora_requested
                     and not loras_attached
+                    and not ip_requested
+                    and not ip_attached
                 ):
                     try:
                         self._engage_deferred_speed(state)
@@ -13326,6 +13404,13 @@ class DiffusionBackend:
 
                 # Apply/adjust LoRA before picking the workflow pipe; from_pipe pipes share the transformer.
                 self._apply_loras(state, loras, cancel)
+                # Unloaded before any workflow pipe is picked: they share the denoiser, which with the adapter
+                # attached requires image embeds on every call.
+                if not ip_requested and diffusion_ip_adapter.clear(
+                    state.pipe, denoiser_attr = state.family.denoiser_attr
+                ):
+                    cuda_graph.reset_all(getattr(state, "cuda_graphs", ()))
+                    clear_gpu_cache()
 
                 pipe = state.pipe
                 fam = state.family
@@ -13539,6 +13624,10 @@ class DiffusionBackend:
                         cn_scale, cn_gstart, cn_gend = cn_strength, cn_gs, cn_ge
                         # Flux Union CN selects its head by an integer control_mode; map the type.
                         cn_mode = diffusion_controlnet.union_control_mode(cn_id, cn_type)
+                ip_pil = None
+                ip_entry = None
+                if ip_requested:
+                    ip_entry, ip_pil = self._ip_adapter_prepare(state, workflow, ip_adapter, cancel)
                 # Prompt lists batch txt2img only: conditioned workflows take one image per call, else a silent broadcast pairs every prompt with it.
                 if uniform_prompt(jobs) is None and workflow != "txt2img":
                     raise ValueError(
@@ -13724,6 +13813,10 @@ class DiffusionBackend:
                     # Union CN mode index (Flux); only when accepted and the type maps to a mode.
                     if "control_mode" in call_params and cn_mode is not None:
                         kwargs["control_mode"] = cn_mode
+                if ip_pil is not None:
+                    if "ip_adapter_image" not in call_params:
+                        raise ValueError("This pipeline does not accept an image prompt.")
+                    kwargs["ip_adapter_image"] = ip_pil
 
                 # Per-forward chunks: the whole job list in ONE forward by default, bounded by an explicit batch_size
                 # cap; the OOM backoff below halves a failed chunk. Layered: one input per forward (the pipeline's
@@ -14439,6 +14532,8 @@ class DiffusionBackend:
                     "mask_blur": mask_blur_applied,
                     "inpaint_only_masked": True if inpaint_padding_applied is not None else None,
                     "inpaint_padding": inpaint_padding_applied,
+                    "ip_adapter": ip_entry.id if ip_entry is not None else None,
+                    "ip_adapter_scale": float(ip_adapter[1]) if ip_entry is not None else None,
                 }
                 if upscale_model and workflow == "upscale":
                     result["upscale_model"] = upscale_model
@@ -14749,6 +14844,7 @@ class DiffusionBackend:
                 "supports_lora": False,
                 "lora_after_reload": False,
                 "supports_controlnet": False,
+                "supports_ip_adapter": False,
                 "resolved": None,
                 "generation_defaults": None,
             }
@@ -14854,7 +14950,30 @@ class DiffusionBackend:
                 model_kind = state.kind,
                 transformer_quant = state.transformer_quant,
             ),
+            "supports_ip_adapter": diffusion_ip_adapter.supports_ip_adapter(
+                engine = "diffusers",
+                family = state.family.name,
+                model_kind = state.kind,
+                transformer_quant = state.transformer_quant,
+                compiled = compiled,
+            )
+            and getattr(state, "offload_policy", None) in (None, OFFLOAD_NONE),
         }
+
+
+def _free_device_mib(device: Any) -> Optional[int]:
+    """Free plus allocator-cached MiB on a CUDA device; None elsewhere or when unreadable."""
+    try:
+        import torch
+
+        if not str(device).startswith("cuda") or not torch.cuda.is_available():
+            return None
+        dev = torch.device(device)
+        free, _total = torch.cuda.mem_get_info(dev)
+        cached = torch.cuda.memory_reserved(dev) - torch.cuda.memory_allocated(dev)
+        return int((free + max(0, cached)) // (1024 * 1024))
+    except Exception:  # noqa: BLE001 - no reading, no refusal
+        return None
 
 
 def _small_host_int8(pipe: Any) -> bool:

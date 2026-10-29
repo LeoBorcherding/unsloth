@@ -1201,4 +1201,8 @@ def media_adapter_references(request) -> list[str]:
             references.append(
                 (entry.local_path or entry.repo_id) if entry is not None else selection.id
             )
+    ip_adapter = getattr(request, "ip_adapter", None)
+    if ip_adapter is not None and ip_adapter.scale > 0:
+        from core.inference import diffusion_ip_adapter
+        references.extend(diffusion_ip_adapter.adapter_repos())
     return references

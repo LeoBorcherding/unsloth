@@ -324,6 +324,14 @@ import {
 } from "./lib/generation-stop";
 import { drawInfoStamp, infoStampText } from "./lib/info-stamp";
 import { lastSeedOf, reusableSeed } from "./lib/seed-controls";
+import {
+  DEFAULT_IP_ADAPTER_SCALE,
+  ipAdapterCapable,
+  ipAdapterRecipeLabel,
+  ipAdapterRequest,
+  ipAdapterScaleFromRecipe,
+  withIpAdapterInput,
+} from "./lib/ip-adapter";
 import { PasteParametersDialog } from "./paste-parameters-dialog";
 import {
   INPAINT_PADDING_DEFAULT,
@@ -1394,6 +1402,9 @@ function RecipePopover({
             <RecipeRow label="LoRAs" value={image.loras.join(", ")} wrap />
           ) : null}
           {image.controlnet ? <RecipeRow label="ControlNet" value={image.controlnet} wrap /> : null}
+          {image.ip_adapter ? (
+            <RecipeRow label="Image prompt" value={ipAdapterRecipeLabel(image) ?? image.ip_adapter} wrap />
+          ) : null}
           <RecipeRow label="Workflow" value={recipeWorkflowLabel(image.workflow)} />
           {image.strength != null &&
           (image.workflow === "img2img" ||
@@ -1792,6 +1803,9 @@ export function ImagesPage({
   const [controlType, setControlType] = useState<string>("passthrough");
   const [controlStrength, setControlStrength] = useState(0.7);
   const [availableControlNets, setAvailableControlNets] = useState<DiffusionControlNetInfo[]>([]);
+  // IP-Adapter image prompt for the next Create run.
+  const [ipImage, setIpImage] = useState<string | null>(null);
+  const [ipScale, setIpScale] = useState(DEFAULT_IP_ADAPTER_SCALE);
   const [advancedOpen, setAdvancedOpen] = usePersistedToggle(
     "unsloth_images_advanced_open",
   );
@@ -2221,6 +2235,7 @@ export function ImagesPage({
   // What Create sends as a ControlNet run (strength 0 runs plain text-to-image): its SDXL pipeline has no CFG rescale.
   const controlnetEngaged =
     controlnetCapable && Boolean(controlnetId && controlImage) && workflow === "create" && controlStrength > 0;
+  const ipCapable = ipAdapterCapable(status, Boolean(external));
   const negativeCapable = !external && status?.supports_negative_prompt !== false;
   // A model that reads no guidance here runs at its default, which the request and recipe then carry.
   const guidanceFixed = !external && status?.loaded === true && status.supports_guidance === false;
@@ -2859,12 +2874,17 @@ export function ImagesPage({
     if (reopened === "edit") setEditSizing("custom");
     setControlnetId("");
     setControlImage(null);
+    // The image prompt is not persisted: its strength comes back and the toast asks for the image.
+    setIpImage(null);
+    setIpScale(ipAdapterScaleFromRecipe(image) ?? DEFAULT_IP_ADAPTER_SCALE);
     const rescaled =
       restored.width !== base.width || restored.height !== base.height
         ? { description: `Size scaled to ${restored.width} × ${restored.height} to fit the ${MIN_DIM}-${sizeLimits.maxSide} range.` }
         : undefined;
-    const conditioned =
-      restoreInputsNote(image) ?? CONDITIONED_WORKFLOW_INPUTS[image.workflow ?? ""];
+    const conditioned = withIpAdapterInput(
+      restoreInputsNote(image) ?? CONDITIONED_WORKFLOW_INPUTS[image.workflow ?? ""],
+      image,
+    );
     if (via === "vary") return;
     if (conditioned) {
       toast.success(`Settings restored. Add ${conditioned} again to reproduce this image.`, rescaled);
@@ -3036,6 +3056,9 @@ export function ImagesPage({
       if (baked.length > 0) notApplied.unshift(`baked LoRAs ${baked.join(", ")} (load-time)`);
       if (typeof recipe.controlnet === "string" && recipe.controlnet) {
         notApplied.unshift(`ControlNet ${recipe.controlnet}`);
+      }
+      if (typeof recipe.ip_adapter === "string" && recipe.ip_adapter) {
+        notApplied.unshift(`image prompt ${recipe.ip_adapter} (add the image again)`);
       }
       if (status?.loaded && status.supports_lora === false && settings.loras.length > 0) {
         notApplied.unshift("LoRAs");
@@ -5273,6 +5296,7 @@ export function ImagesPage({
                     strength: controlStrength,
                   }
                 : undefined,
+            ip_adapter: ipAdapterRequest(ipCapable, workflow, ipImage, ipScale),
             ...(external && { provider_id: external.providerId, model: external.modelId }),
           }));
         } catch (err) {
@@ -5359,7 +5383,7 @@ export function ImagesPage({
       setGenStep(null);
       setStopping(false);
     }
-  }, [external, allowOversized, livePreview, enhanceOn, upsamplerCapability, prompt, negativePrompt, negativeEngaged, restoredSampler, samplerModelKey, samplerOptions, samplerChoice, sdCaps, sdChoice, shiftControl, shiftValue, width, height, steps, effectiveGuidance, seed, batchSize, count, workflow, initImage, maskImage, strength, maskBlur, inpaintOnlyMasked, inpaintPadding, status?.supports_inpaint_only_masked, extendPct, extendSides, upscaleFactor, upscaleStrength, upscaleModel, upscaleModels, hires, hiresCapability, referenceImages, loras, loraCapable, controlnetCapable, controlnetEngaged, controlnetId, controlImage, controlType, controlStrength, ensureSrc, loadGallery, refreshStatus, unifiedEdit, multiImageEdit, localizedMode, localizedLayer, maxExtras, referenceResolution, conditioning, editSize, editSizing, sizeLimits, detailerOn, detailerReady, detailerOptions]);
+  }, [external, allowOversized, livePreview, enhanceOn, upsamplerCapability, prompt, negativePrompt, negativeEngaged, restoredSampler, samplerModelKey, samplerOptions, samplerChoice, sdCaps, sdChoice, shiftControl, shiftValue, width, height, steps, effectiveGuidance, seed, batchSize, count, workflow, initImage, maskImage, strength, maskBlur, inpaintOnlyMasked, inpaintPadding, status?.supports_inpaint_only_masked, extendPct, extendSides, upscaleFactor, upscaleStrength, upscaleModel, upscaleModels, hires, hiresCapability, referenceImages, loras, loraCapable, controlnetCapable, controlnetEngaged, controlnetId, controlImage, controlType, controlStrength, ipCapable, ipImage, ipScale, ensureSrc, loadGallery, refreshStatus, unifiedEdit, multiImageEdit, localizedMode, localizedLayer, maxExtras, referenceResolution, conditioning, editSize, editSizing, sizeLimits, detailerOn, detailerReady, detailerOptions]);
 
   // Latch FIRST, so a multi-run request stops even if the POST races the finishing run.
   const handleCancelGenerate = useCallback(async () => {
@@ -6740,6 +6764,24 @@ export function ImagesPage({
                       />
                     </>
                   )}
+                </div>
+              </Field>
+            )}
+            {/* Image prompt (IP-Adapter): the image steers style and subject alongside the text, Create only. */}
+            {ipCapable && workflow === "create" && (
+              <Field
+                label="Image prompt"
+                hint="Use an image as a style or subject prompt (IP-Adapter). Higher strength follows the image more and the text less. The adapter downloads on first use."
+              >
+                <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-2">
+                  <ImageDropzone
+                    value={ipImage}
+                    onChange={setIpImage}
+                    label="Click or drop a style or subject image"
+                    removeLabel="Remove image prompt"
+                    cropSubject="Image prompt"
+                  />
+                  <SliderField label="Strength" value={ipScale} min={0} max={1} step={0.05} onChange={setIpScale} />
                 </div>
               </Field>
             )}

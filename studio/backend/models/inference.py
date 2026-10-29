@@ -4986,6 +4986,26 @@ class ControlNetSpec(BaseModel):
         return self
 
 
+class IpAdapterSpec(BaseModel):
+    """An image prompt (IP-Adapter): the image steers style and subject alongside the text prompt.
+
+    The adapter is picked by the loaded family (status `supports_ip_adapter`); the client sends only the image.
+    """
+
+    image: str = Field(
+        ...,
+        min_length = 1,
+        max_length = 32 * 1024 * 1024,
+        description = "Base64/data-URL image prompt",
+    )
+    scale: float = Field(
+        0.6,
+        ge = 0.0,
+        le = 1.0,
+        description = "How strongly the image steers the result; 0 disables it",
+    )
+
+
 class LocalizedEditSpec(BaseModel):
     """A localized edit for the unified-edit workflow (Qwen-Image-2.1). It guides a generative edit;
     unlike inpainting it does not keep the pixels outside the region."""
@@ -5244,6 +5264,12 @@ class DiffusionGenerateRequest(BaseModel):
         "Omitted applies none and behaves exactly as before. Rejected with a clear message when "
         "the loaded model or its quantisation can't apply ControlNet.",
     )
+    ip_adapter: Optional[IpAdapterSpec] = Field(
+        None,
+        description = "Image prompt (IP-Adapter) for this generation: an image plus a 0-1 scale. Omitted "
+        "applies none and behaves exactly as before. Text-to-image only, on models whose status "
+        "`supports_ip_adapter` is true (SDXL); refused with a clear message elsewhere.",
+    )
     sampler: Optional[Literal["default", "euler", "euler_a", "dpmpp_2m", "dpmpp_2m_sde"]] = Field(
         None,
         description = "Sampler for this generation, one of the loaded model's status `samplers` ids. "
@@ -5388,6 +5414,8 @@ class DiffusionGenerateRequest(BaseModel):
         total = len(self.init_image or "") + sum(len(r) for r in self.reference_images or [])
         if self.localized_edit is not None:
             total += len(self.localized_edit.image)
+        if self.ip_adapter is not None:
+            total += len(self.ip_adapter.image)
         if total > _MAX_CONDITION_PAYLOAD:
             raise ValueError(
                 "the input images together must be at most 128 MiB (base64); use smaller images"
@@ -5516,6 +5544,10 @@ class GalleryImage(BaseModel):
     controlnet: Optional[str] = Field(
         None, description = "ControlNet applied, formatted as 'id:control_type:strength'"
     )
+    ip_adapter: Optional[str] = Field(
+        None, description = "IP-Adapter the image prompt ran through; null = no image prompt"
+    )
+    ip_adapter_scale: Optional[float] = Field(None, description = "Image prompt scale")
     # Conditioned-workflow settings. The images themselves are NOT persisted (user uploads with their own lifetime), so these say what ran and let the client ask for them back.
     workflow: Optional[str] = Field(
         None,
@@ -6065,6 +6097,11 @@ class DiffusionStatusResponse(BaseModel):
         description = "Whether the loaded model can apply a ControlNet (drives the ControlNet "
         "picker's enabled state). Diffusers only, for families with a ControlNet pipeline; False "
         "for the native engine, GGUF-via-diffusers, and torchao fp8/int8 dense.",
+    )
+    supports_ip_adapter: bool = Field(
+        False,
+        description = "Whether the loaded model can take an image prompt (`ip_adapter`). Diffusers SDXL "
+        "loaded resident and not compiled; False for every other family and engine.",
     )
     supports_inpaint_only_masked: bool = Field(
         False,
