@@ -320,6 +320,8 @@ export function buildTrainingStartPayload(
     grpo_epsilon_high: objective === "grpo" ? config.grpoEpsilonHigh : null,
     grpo_python_reward_isolation:
       objective === "grpo" ? config.grpoPythonRewardIsolation : "required",
+    grpo_use_vllm: objective === "grpo" && config.grpoUseVllm,
+    grpo_vllm_gpu_memory_utilization: config.grpoVllmGpuMemoryUtilization,
     grpo_rewards: objective === "grpo" ? config.grpoRewards : [],
     finetune_vision_layers: config.finetuneVisionLayers,
     finetune_language_layers: config.finetuneLanguageLayers,

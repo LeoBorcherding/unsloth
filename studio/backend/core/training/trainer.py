@@ -863,6 +863,22 @@ class UnslothTrainer:
                 except Exception as e:
                     logger.error(f"Error in progress callback: {e}")
 
+    def _vllm_kwargs_or_warn(self, requested, full_finetuning, gpu_count) -> dict:
+        if not requested:
+            return {}
+        from core.training.rl import vllm_fallback_message, vllm_rollout_blocker
+        blocker = vllm_rollout_blocker(
+            full_finetuning = full_finetuning,
+            vision = bool(self.model_has_vision),
+            diffusion = bool(self.diffusion_lm_profile),
+            offload_layers = self._offload_layers,
+            gpu_count = gpu_count,
+        )
+        if blocker:
+            self._record_warning(vllm_fallback_message(blocker))
+            return {}
+        return dict(requested)
+
     def _offload_load_kwargs(self, device_map = None) -> dict:
         # Loading the offloaded layers straight into host RAM is what lets a model larger than the card load at all.
         if not self._offload_layers:
@@ -1325,8 +1341,10 @@ class UnslothTrainer:
         offload_layers: Union[int, str] = 0,
         prefetch_depth: Union[int, str] = 2,
         offload_plan_shape: Optional[dict] = None,
+        vllm_load_kwargs: Optional[dict] = None,
     ) -> bool:
-        """Load model for training (supports both text and vision models)"""
+        """Load model for training (supports both text and vision models). vllm_load_kwargs asks
+        for a fast_inference (vLLM) load, which falls back to a plain one with a warning."""
         # Offloading streams frozen base weights, so it has nothing to do in a full finetune.
         self._offload_layers = 0 if full_finetuning else (offload_layers or 0)
         self._prefetch_depth = prefetch_depth or 2
@@ -1683,21 +1701,43 @@ class UnslothTrainer:
                 )
                 logger.info(f"[VLM Diagnostic] Usable as vision processor: {has_image_proc}\n")
             else:
-                self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-                    model_name = lookup_name,
-                    max_seq_length = max_seq_length,
-                    dtype = _auto_dtype,
-                    load_in_4bit = load_in_4bit,
-                    device_map = device_map,
-                    full_finetuning = full_finetuning,
-                    token = hf_token,
-                    trust_remote_code = trust_remote_code,
-                    revision = model_revision,
-                    use_exact_model_name = model_revision is not None,
-                    use_gradient_checkpointing = use_gradient_checkpointing,
-                    on_model_resolved = on_model_resolved,
-                    **self._offload_load_kwargs(device_map),
+                vllm_kwargs = self._vllm_kwargs_or_warn(
+                    vllm_load_kwargs, full_finetuning, get_visible_gpu_count()
                 )
+
+                def load_text(**extra):
+                    return FastLanguageModel.from_pretrained(
+                        model_name = lookup_name,
+                        max_seq_length = max_seq_length,
+                        dtype = _auto_dtype,
+                        load_in_4bit = load_in_4bit,
+                        device_map = device_map,
+                        full_finetuning = full_finetuning,
+                        token = hf_token,
+                        trust_remote_code = trust_remote_code,
+                        revision = model_revision,
+                        use_exact_model_name = model_revision is not None,
+                        use_gradient_checkpointing = use_gradient_checkpointing,
+                        on_model_resolved = on_model_resolved,
+                        **self._offload_load_kwargs(device_map),
+                        **extra,
+                    )
+                try:
+                    self.model, self.tokenizer = load_text(**vllm_kwargs)
+                except Exception as e:
+                    # An architecture vLLM can't serve fails here; the HF load still trains it.
+                    if not vllm_kwargs or self.should_stop or isinstance(e, OSError):
+                        raise
+                    from core.training.rl import vllm_fallback_message
+                    reason = (str(e).strip().splitlines() or [type(e).__name__])[0][:200]
+                    self._record_warning(
+                        vllm_fallback_message(f"vLLM could not load this model ({reason})")
+                    )
+                    self.model = self.tokenizer = None
+                    clear_gpu_cache()
+                    self.model, self.tokenizer = load_text()
+                if getattr(self.model, "vllm_engine", None) is not None:
+                    logger.info("vLLM engine loaded for GRPO rollouts")
                 logger.info("Loaded text model")
                 # The config probe misses a Hub LoRA (no config.json), but core loads a diffusion base through
                 # its diffusion path: train it with its own objective, never next-token SFT.
@@ -1762,6 +1802,7 @@ class UnslothTrainer:
                     offload_layers = offload_layers,
                     prefetch_depth = prefetch_depth,
                     offload_plan_shape = offload_plan_shape,
+                    vllm_load_kwargs = vllm_load_kwargs,
                 )
             error_msg = str(e)
             error_lower = error_msg.lower()

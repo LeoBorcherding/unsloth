@@ -199,6 +199,8 @@ export interface TrainingConfigState {
   grpoMaskTruncatedCompletions: boolean;
   grpoEpsilonHigh: number | null;
   grpoPythonRewardIsolation: GrpoPythonRewardIsolation;
+  grpoUseVllm: boolean;
+  grpoVllmGpuMemoryUtilization: number;
   grpoRewards: GrpoRewardSelection[];
 }
 
@@ -344,6 +346,8 @@ export interface TrainingConfigActions {
   setGrpoMaskTruncatedCompletions: (value: boolean) => void;
   setGrpoPythonRewardIsolation: (value: GrpoPythonRewardIsolation) => void;
   setGrpoEpsilonHigh: (value: number | null) => void;
+  setGrpoUseVllm: (value: boolean) => void;
+  setGrpoVllmGpuMemoryUtilization: (value: number) => void;
   setGrpoRewards: (value: GrpoRewardSelection[]) => void;
   /** Returns the RL objective that was loaded as SFT (Apple Silicon), else null. */
   restoreRunConfig: (

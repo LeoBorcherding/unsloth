@@ -23,6 +23,8 @@ export interface YamlRlSettings {
   grpoEpsilonHigh?: number | null;
   grpoMaskTruncatedCompletions?: boolean;
   grpoPythonRewardIsolation?: GrpoPythonRewardIsolation;
+  grpoUseVllm?: boolean;
+  grpoVllmGpuMemoryUtilization?: number;
   grpoEnableThinking?: boolean;
   grpoSystemPrompt?: string;
   grpoRewards?: GrpoRewardSelection[];
@@ -105,6 +107,17 @@ export function parseRlSection(rl: unknown): YamlRlSettings {
   ) {
     out.grpoPythonRewardIsolation = r.python_reward_isolation;
   }
+  if (typeof r.use_vllm === "boolean") {
+    out.grpoUseVllm = r.use_vllm;
+  }
+  set(
+    "grpoVllmGpuMemoryUtilization",
+    isNum(r.vllm_gpu_memory_utilization) &&
+      r.vllm_gpu_memory_utilization >= 0.1 &&
+      r.vllm_gpu_memory_utilization <= 0.95
+      ? r.vllm_gpu_memory_utilization
+      : undefined,
+  );
   if (typeof r.enable_thinking === "boolean") {
     out.grpoEnableThinking = r.enable_thinking;
   }

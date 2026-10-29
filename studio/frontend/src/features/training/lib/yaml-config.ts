@@ -139,6 +139,8 @@ export function serializeConfigToYaml(
             epsilon_high: state.grpoEpsilonHigh,
             mask_truncated_completions: state.grpoMaskTruncatedCompletions,
             python_reward_isolation: state.grpoPythonRewardIsolation,
+            use_vllm: state.grpoUseVllm,
+            vllm_gpu_memory_utilization: state.grpoVllmGpuMemoryUtilization,
             enable_thinking: state.grpoEnableThinking,
             system_prompt: state.grpoSystemPrompt,
             rewards: state.grpoRewards,

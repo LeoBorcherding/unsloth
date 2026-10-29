@@ -163,6 +163,8 @@ export const DEFAULT_RL_SETTINGS = {
   grpoEpsilonHigh: null as number | null,
   grpoPythonRewardIsolation:
     "required" as import("@/types/training").GrpoPythonRewardIsolation,
+  grpoUseVllm: false,
+  grpoVllmGpuMemoryUtilization: 0.5,
   grpoRewards: [
     { name: "strict-xml-format", weight: 1 },
     { name: "exact-answer", weight: 1 },
