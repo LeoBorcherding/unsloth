@@ -159,6 +159,12 @@ def test_parsing_never_runs_the_script(tmp_path):
             3,
             "finite number",
         ),
+        (
+            "NODE = {'name': 'x', 'outputs': [{'name': 'y', 'type': 'text'}],\n 'params': [\n"
+            "  {'name': 'n', 'type': 'number', 'default': 0x" + "f" * 300 + "}]}\ndef run(i, p): pass\n",
+            3,
+            "finite number",
+        ),
         ("NODE = {'name': 'x', 'category': 'misc', 'outputs': [{'name': 'y', 'type': 'text'}]}\ndef run(i, p): pass\n", 1, "not a Flows category"),
         (MINIMAL + "\nNODE = {}\n", 11, "more than once"),
         ("", None, "empty"),

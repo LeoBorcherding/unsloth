@@ -148,8 +148,12 @@ def _port(entry: dict, field: str, seen: set, reserved: set, line: int) -> dict:
 
 
 def _is_number(value: Any) -> bool:
-    # 1e309 literal_evals to inf, which no JSON response can carry.
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    # 1e309 literal_evals to inf, which no JSON response can carry; ints past 2**53 lose precision in the browser.
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return abs(value) <= 2**53
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _param(entry: dict, seen: set, line: int) -> dict:
@@ -384,7 +388,7 @@ def check_outputs(found_spec: dict, result: Any) -> dict:
         value = result[pid]
         ok = {
             "text": isinstance(value, str),
-            "number": _is_number(value),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
             "bool": isinstance(value, bool),
             "list": isinstance(value, list),
         }.get(kind, True)
