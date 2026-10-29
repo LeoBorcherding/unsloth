@@ -179,6 +179,15 @@ def test_bad_scripts_are_refused_with_the_line(source, line, words):
         assert str(caught.value).startswith(f"Line {line}: ")
 
 
+def test_a_script_that_is_not_utf8_is_refused_not_crashed_on():
+    # The routes' pydantic body already refuses a lone surrogate; a flow document's _script reaches the parser directly.
+    source = MINIMAL + "# \ud800\n"
+    with pytest.raises(custom_nodes.CustomNodeError, match = "UTF-8"):
+        custom_nodes.parse_header(source)
+    with pytest.raises(compiler.CompileError, match = "UTF-8"):
+        compiler.compile_flow(compiler.parse_document(doc([_custom("c", source)]))[0])
+
+
 def test_a_script_over_the_size_limit_is_refused():
     with pytest.raises(custom_nodes.CustomNodeError, match = "KB"):
         custom_nodes.parse_header(MINIMAL + "#" * custom_nodes.MAX_SCRIPT_BYTES)

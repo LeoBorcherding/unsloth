@@ -57,12 +57,17 @@ class CustomNodeError(ValueError):
         self.line = line
 
 
+def _digest(source: str) -> str:
+    # surrogatepass: a document can carry a lone surrogate; it still hashes, and parse_header refuses it.
+    return hashlib.sha256(source.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def script_hash(source: str) -> str:
-    return "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+    return "sha256:" + _digest(source)
 
 
 def node_type(source: str) -> str:
-    return TYPE_PREFIX + hashlib.sha256(source.encode()).hexdigest()[:16]
+    return TYPE_PREFIX + _digest(source)[:16]
 
 
 def is_custom_type(type_: Any) -> bool:
@@ -256,7 +261,11 @@ def parse_header(source: Any) -> dict:
     """The validated header of ``source`` as {name, description, category, inputs, outputs, params} (spec shapes)."""
     if not isinstance(source, str) or not source.strip():
         raise CustomNodeError("The script is empty")
-    if len(source.encode()) > MAX_SCRIPT_BYTES:
+    try:
+        size = len(source.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise CustomNodeError("The script is not valid UTF-8 text") from None
+    if size > MAX_SCRIPT_BYTES:
         raise CustomNodeError(f"The script is over {MAX_SCRIPT_BYTES // 1000} KB")
     if "\x00" in source:
         raise CustomNodeError("The script contains a NUL byte")

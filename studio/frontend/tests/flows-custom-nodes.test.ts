@@ -17,7 +17,7 @@ const { useCatalogStore, getSpec } = await import(
 const { useDocStore } = await import("../src/features/flows/stores/doc-store.ts");
 const C = await import("../src/features/flows/stores/custom-nodes-store.ts");
 const { createNode } = await import("../src/features/flows/editor/node-factory.ts");
-const { portSummary, updateNodesTo } = await import(
+const { paramStillValid, portSummary, updateNodesTo } = await import(
   "../src/features/flows/editor/custom-node-actions.ts"
 );
 
@@ -111,6 +111,31 @@ test("a changed library script is detected and the node updates in place", () =>
   assert.equal(updated.params._script, "new source");
   // The wire from an output the new version dropped goes; the one into a kept input stays.
   assert.deepEqual(Object.keys(useDocStore.getState().graph.edges), ["e1"]);
+});
+
+test("an update drops wires and param values the new version's types rule out", () => {
+  const retyped = customSpec("custom.ncccccccccccccccc", ["text"]);
+  retyped.inputs = [{ id: "text", type: "number", label: "Text", optional: false }];
+  retyped.params = [
+    { id: "times", kind: "select", default: "two", label: "times", options: ["one", "two"] },
+    { id: "limit", kind: "number", default: 3, label: "limit", min: 0, max: 10 },
+  ];
+  useDocStore.getState().load(
+    doc(
+      [
+        node("t", "input.text"),
+        node("c", OLD.type, [0, 0], { times: 5, limit: 50, _script: "old", _script_id: "cn_1", _script_hash: "x" }),
+      ],
+      [edge("e1", "t", "text", "c", "text")],
+    ),
+  );
+  assert.equal(updateNodesTo(entry("cn_1", retyped, "retyped source")), 1);
+  const updated = useDocStore.getState().graph.nodes.c;
+  assert.deepEqual(Object.keys(useDocStore.getState().graph.edges), []);
+  assert.equal(updated.params.times, "two");
+  assert.equal(updated.params.limit, 3);
+  assert.ok(paramStillValid(retyped.params[1], 10) && !paramStillValid(retyped.params[1], 11));
+  assert.ok(paramStillValid(retyped.params[0], "one") && !paramStillValid(retyped.params[0], 1));
 });
 
 test("opening a flow parses scripts the library does not hold", async () => {
