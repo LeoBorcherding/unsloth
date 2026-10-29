@@ -439,8 +439,16 @@ export const BUDGET = {
   // (5,942,150 -> 5,972,134 B raw, 1,836,750 -> 1,847,702 B transfer, ed9857c0c3 -> 39b8a6ce13, Node 24,
   // 85 chunks): its color themes are read by the theme store at startup, and loading its dialog on first
   // open saves 3 KB transfer but adds five startup chunks. Raised by that growth.
-  transferBytes: 1_849_773,
-  rawBytes: 5_989_442,
+  // The per-tool MCP switches at the end of Settings > Agents (#14348) add 4,827 B raw / 1,462 B transfer
+  // (5,977,895 -> 5,982,722 B raw, 1,863,138 -> 1,864,600 B transfer against b80df648bf, one machine and build,
+  // Node 26, 85 chunks both): the Agents panel and its tools dialog are lazy, so the growth is their strings in the
+  // eager English catalog plus the agents-mcp scroll target. Raised by that.
+  // The chat's Unsloth tools preset, its Desktop media links and the tools dialog's chat note (#14349) add
+  // 1,356 B raw / 393 B transfer on top (5,982,722 -> 5,984,078 B raw, 1,864,600 -> 1,864,993 B transfer against
+  // b80df648bf, one machine and build, Node 26, 85 chunks both), in the eager chat chunk and English catalog.
+  // Raised by that.
+  transferBytes: 1_851_628,
+  rawBytes: 5_995_625,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.

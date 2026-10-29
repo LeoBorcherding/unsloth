@@ -36,15 +36,16 @@ import {
 import { CreateKeyForm } from "../components/create-key-form";
 import { KeyRevealCard } from "../components/key-reveal-card";
 import { KeylessApiAccessLink } from "../components/keyless-api-access-link";
-import { McpAccessSection } from "../components/mcp-access-section";
 import { ModelAliasesSection } from "../components/model-aliases-section";
 import { ModelAutoSwitchSection } from "../components/model-auto-switch-section";
 import { ModelMemorySection } from "../components/model-memory-section";
 import { MonitorLink } from "../components/monitor-link";
 import { SettingsSection } from "../components/settings-section";
+import { UnslothStudioMcpRow } from "../components/unsloth-studio-mcp-row";
 import { ApiExamplesPanel } from "../components/api-example-tabs";
 import { useApiTunnelPref } from "../components/usage-examples";
 import { usePublishAccessUrls } from "../hooks/use-publish-access-urls";
+import { useSettingsDialogStore } from "../stores/settings-dialog-store";
 
 function expiryDays(key: ApiKey): number | null {
   if (!key.expires_at) return null;
@@ -64,6 +65,7 @@ export function ApiKeysTab() {
   const [revoking, setRevoking] = useState(false);
   const [regenerate, setRegenerate] = useState(false);
   const [revealed, setRevealed] = useState<string | null>(null);
+  const setNewApiKey = useSettingsDialogStore((s) => s.setNewApiKey);
   const [useTunnel, setUseTunnel] = useApiTunnelPref();
   // Owner-only routes, as the Remote & LAN tab is.
   usePublishAccessUrls(isOwner);
@@ -141,15 +143,19 @@ export function ApiKeysTab() {
     setRevoking(true);
     setActionError(null);
     try {
+      let replacement: string | null = null;
       if (regenerate) {
         // Created before the old one is revoked, so a failed create loses nothing.
         const created = await createApiKey(
           revokeTarget.name,
           expiryDays(revokeTarget),
         );
+        replacement = created.key;
         setRevealed(created.key);
       }
       await revokeApiKey(revokeTarget.id);
+      // Which key the MCP snippet holds is unknown here, so any revoke drops it; a regenerated key replaces it.
+      setNewApiKey(replacement);
       await load();
       setRevokeTarget(null);
     } catch (cause) {
@@ -205,7 +211,10 @@ export function ApiKeysTab() {
             >
               <KeyRevealCard
                 rawKey={revealed}
-                onDone={() => setRevealed(null)}
+                onDone={() => {
+                  setRevealed(null);
+                  setNewApiKey(null);
+                }}
               />
             </motion.div>
           ) : (
@@ -219,6 +228,7 @@ export function ApiKeysTab() {
               <CreateKeyForm
                 onCreated={(raw) => {
                   setRevealed(raw);
+                  setNewApiKey(raw);
                   void load();
                 }}
                 onError={setActionError}
@@ -286,7 +296,7 @@ export function ApiKeysTab() {
 
       {/* Installation-wide, so owner-only routes. */}
       <SettingsSection title="Access & monitoring">
-        {isOwner ? <McpAccessSection apiKey={revealed} /> : null}
+        {isOwner ? <UnslothStudioMcpRow /> : null}
         {isOwner ? <KeylessApiAccessLink /> : null}
         <MonitorLink hideHeading={true} />
       </SettingsSection>
