@@ -39,7 +39,7 @@ def node_needs(spec: dict, params: dict) -> list[tuple[str, str]]:
     found = []
     for cap in spec.get("requires_approval") or []:
         if cap == "python":
-            found.append((cap, code_hash(params.get("code"))))
+            found.append((cap, code_hash(params.get(spec.get("code_param") or "code"))))
         elif cap == "http":
             found.append((cap, url_host(params.get("url")) or ""))
         elif cap == "provider":
@@ -54,7 +54,7 @@ def node_needs(spec: dict, params: dict) -> list[tuple[str, str]]:
 def doc_needs(doc: dict) -> dict:
     """Everything a flow document needs approved, in the shape stored as its approval."""
     from core.flows.engine import param_values
-    from core.flows.specs import SPECS_BY_TYPE
+    from core.flows.custom_nodes import spec_for_node
 
     need: dict[str, Any] = {
         "python": [],
@@ -64,7 +64,7 @@ def doc_needs(doc: dict) -> dict:
         "triggers": False,
     }
     for node in doc.get("nodes") or []:
-        spec = SPECS_BY_TYPE.get(node.get("type"))
+        spec = spec_for_node(node)
         if spec is None or node.get("disabled"):
             continue
         for cap, detail in node_needs(spec, param_values(spec, node)):

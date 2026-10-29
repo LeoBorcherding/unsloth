@@ -19,6 +19,7 @@ from typing import Any, Iterable, Optional
 from pydantic import ValidationError
 
 from core.flows import schema
+from core.flows import custom_nodes
 from core.flows.recipe_compile import RecipeCompileError, compile_recipe, recipe_graph
 from core.flows.recipe_import import COLUMN_TYPE, GENERATE_TYPE
 from core.flows.specs import SPECS_BY_TYPE
@@ -228,9 +229,9 @@ def compile_flow(doc: dict) -> Plan:
         nodes[node["id"]] = node
     specs: dict[str, dict] = {}
     for nid, node in nodes.items():
-        spec = SPECS_BY_TYPE.get(node["type"])
+        spec, why = custom_nodes.spec_or_error(node)
         if spec is None:
-            errors.append(issue(f"Unknown node type {node['type']}", node_id = nid))
+            errors.append(issue(why, node_id = nid))
             continue
         if node.get("v", 1) > spec["v"]:
             errors.append(

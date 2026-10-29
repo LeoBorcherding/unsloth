@@ -7,14 +7,17 @@ import { openStreamResponse } from "@/lib/open-stream-response";
 import { readSseJsonEvents } from "@/lib/sse-json-events";
 import { isStudioMediaUrl } from "./media-url";
 import type {
+  CustomNodeEntry,
   FlowDocument,
   FlowRecord,
   FlowRunSummary,
   FlowSummary,
   MediaValue,
   NodeCatalog,
+  NodeSpec,
   NodeStatus,
   RunEvent,
+  SandboxLibraries,
 } from "./types";
 
 export const FLOWS_API = "/api/flows";
@@ -60,6 +63,41 @@ function json(method: string, body: unknown): RequestInit {
 export const getCatalog = () => request<NodeCatalog>("/nodes");
 
 export const listFlows = () => request<{ flows: FlowSummary[] }>("");
+
+export const listCustomNodes = () =>
+  request<{ nodes: CustomNodeEntry[] }>("/custom-nodes");
+
+/** Reads the script's header on the server with `ast`; nothing in it runs. */
+export const parseCustomNode = (source: string) =>
+  request<{ spec: NodeSpec; hash: string }>(
+    "/custom-nodes/parse",
+    json("POST", { source }),
+  );
+
+export const createCustomNode = (source: string) =>
+  request<CustomNodeEntry>("/custom-nodes", json("POST", { source }));
+
+export const replaceCustomNode = (id: string, source: string) =>
+  request<CustomNodeEntry>(
+    `/custom-nodes/${encodeURIComponent(id)}`,
+    json("PUT", { source }),
+  );
+
+export const deleteCustomNode = (id: string) =>
+  request<void>(`/custom-nodes/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+
+export const getSandboxLibraries = () =>
+  request<SandboxLibraries>("/custom-nodes/libraries");
+
+export async function downloadCustomNodeTemplate(): Promise<Blob> {
+  const response = await transport(`${FLOWS_API}/custom-nodes/template`);
+  if (!response.ok) {
+    throw new FlowsApiError(await readFastApiError(response), response.status);
+  }
+  return response.blob();
+}
 
 export const listExamples = () =>
   request<{ examples: FlowSummary[] }>("/examples");

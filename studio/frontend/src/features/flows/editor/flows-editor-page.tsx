@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import "@xyflow/react/dist/style.css";
+import "./flows-editor.css";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,7 @@ import {
 import { toast } from "sonner";
 import { getFlow } from "../api";
 import { ensureCatalog } from "../stores/catalog-loader";
+import { hydrateCustomSpecs } from "../stores/custom-nodes-store";
 import { needsNewerStudio } from "../stores/catalog-store";
 import { documentSignature, useDocStore } from "../stores/doc-store";
 import { usePinsStore } from "../stores/pins-store";
@@ -186,7 +188,8 @@ export function FlowsEditorPage({ flowId }: { flowId: string }): ReactElement {
     setState({ status: "loading" });
     useUiStore.getState().reset();
     Promise.all([ensureCatalog(), getFlow(flowId)])
-      .then(([, record]) => {
+      .then(async ([, record]) => {
+        await hydrateCustomSpecs(record.doc);
         if (!alive) return;
         useDocStore.getState().load(record.doc);
         usePinsStore.getState().load(record.id);

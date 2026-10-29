@@ -1827,7 +1827,7 @@ class FlowEngine:
             except Exception:
                 key = None
 
-        handler = self._handlers().get(spec["type"])
+        handler = self._handlers().get(spec.get("handler") or spec["type"])
         if handler is None:
             state.error = f"{spec['title']} cannot run in this version of Unsloth Studio"
             env.values[nid] = SKIPPED

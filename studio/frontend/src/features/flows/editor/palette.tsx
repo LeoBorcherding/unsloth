@@ -18,6 +18,7 @@ import {
 import { useCatalogStore } from "../stores/catalog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { NodeSpec } from "../types";
+import { CUSTOM_COLOR, CustomNodesSection } from "./custom-nodes";
 import { Cancel01Icon, Search01Icon } from "./icon-data";
 import { nodeIcon } from "./icons";
 import { NodeIconTile } from "./node-card";
@@ -249,6 +250,18 @@ function PaletteImpl({
         />
       </div>
       <div className="flex-1 overflow-y-auto px-1.5 py-2">
+        <CustomNodesSection
+          query={deferred}
+          renderItem={(spec) => (
+            <PaletteItem
+              spec={spec}
+              color={CUSTOM_COLOR}
+              armed={armed === spec.type}
+              onGhost={setGhost}
+              onDrop={onDrop}
+            />
+          )}
+        />
         {(!deferred || "reroute wire".includes(deferred)) && (
           <RerouteItem
             armed={armed === REROUTE_TYPE}
