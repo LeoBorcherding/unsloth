@@ -24,6 +24,7 @@ function CurvedEdgeImpl({
   sourcePosition,
   targetPosition,
   selected,
+  deletable,
   data,
 }: EdgeProps<RfEdge>) {
   const color =
@@ -70,7 +71,7 @@ function CurvedEdgeImpl({
         id={id}
         x={labelX}
         y={labelY}
-        show={hover || !!selected}
+        show={deletable !== false && (hover || !!selected)}
         onEnter={enter}
         onLeave={leave}
       />
