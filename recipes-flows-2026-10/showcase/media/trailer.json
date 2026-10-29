@@ -1,0 +1,395 @@
+{
+ "format": "unsloth-flow",
+ "version": 1,
+ "id": "showcase-trailer",
+ "name": "Showcase: Five-second movie trailer",
+ "description": "A chat model pitches the opening shot and a trailer line; FLUX.2 paints the first frame, Wan 2.2 animates it, Kokoro reads the line, and Edit Video lays the voice under the clip.",
+ "kind": "pipeline",
+ "seed": 7,
+ "params": [],
+ "requirements": {
+  "models": [
+   {
+    "ref": "writer",
+    "kind": "chat",
+    "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+    "variant": "Q4_K_M",
+    "optional": false,
+    "note": "Writes the shot and the voiceover as JSON."
+   },
+   {
+    "ref": "painter",
+    "kind": "image",
+    "repo": "black-forest-labs/FLUX.2-klein-9B",
+    "variant": null,
+    "optional": false,
+    "note": "Paints the first frame."
+   },
+   {
+    "ref": "director",
+    "kind": "video",
+    "repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    "variant": null,
+    "optional": false,
+    "note": "5B text+image to video."
+   },
+   {
+    "ref": "voice",
+    "kind": "tts",
+    "repo": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+    "variant": null,
+    "optional": false,
+    "note": "82M multi-voice TTS."
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "idea",
+   "type": "input.text",
+   "v": 1,
+   "params": {
+    "value": "A tiny sloth knight in oversized armour rides a tortoise into battle against a dragon, who turns out to be a very sleepy gecko."
+   },
+   "pos": [
+    0.0,
+    0.0
+   ],
+   "size": [
+    300.0,
+    180.0
+   ],
+   "label": "Logline",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "pitch",
+   "type": "llm.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+     "variant": "Q4_K_M"
+    },
+    "system": "You write epic, funny movie trailers. Return JSON: `shot` is a cinematic visual prompt for the opening shot (subject, setting, camera, lighting, film look; no text in the image), `voiceover` is the deep-voiced narrator line that opens the trailer: at most 12 words, it has to fit in a 5 second clip.",
+    "prompt": "Logline: {{prompt}}",
+    "json_schema": {
+     "type": "object",
+     "properties": {
+      "shot": {
+       "type": "string",
+       "description": "Visual prompt for the opening shot, 40-70 words"
+      },
+      "voiceover": {
+       "type": "string",
+       "description": "One dramatic movie-trailer line, 8 to 12 words; it must fit in 5 seconds"
+      }
+     },
+     "required": [
+      "shot",
+      "voiceover"
+     ]
+    },
+    "temperature": 0.9,
+    "max_tokens": 400
+   },
+   "pos": [
+    360.0,
+    0.0
+   ],
+   "size": [
+    320.0,
+    380.0
+   ],
+   "label": "Trailer writer",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "shot",
+   "type": "json.get",
+   "v": 1,
+   "params": {
+    "path": "shot"
+   },
+   "pos": [
+    720.0,
+    -20.0
+   ],
+   "size": null,
+   "label": "Shot",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "line",
+   "type": "json.get",
+   "v": 1,
+   "params": {
+    "path": "voiceover"
+   },
+   "pos": [
+    720.0,
+    520.0
+   ],
+   "size": null,
+   "label": "Voiceover",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "frame",
+   "type": "image.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "black-forest-labs/FLUX.2-klein-9B",
+     "variant": null
+    },
+    "size": "1344x768",
+    "seed": 8,
+    "style": "cinematic film still, anamorphic, 35mm film grain"
+   },
+   "pos": [
+    1080.0,
+    -20.0
+   ],
+   "size": [
+    340.0,
+    470.0
+   ],
+   "label": "First frame (FLUX.2)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "clip",
+   "type": "video.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+     "variant": null
+    },
+    "size": "1280x704",
+    "seconds": 5,
+    "seed": 8
+   },
+   "pos": [
+    1440.0,
+    -20.0
+   ],
+   "size": [
+    340.0,
+    520.0
+   ],
+   "label": "Generate Video (Wan 2.2)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "say",
+   "type": "audio.speak",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+     "variant": null
+    },
+    "voice": "bm_george"
+   },
+   "pos": [
+    1080.0,
+    520.0
+   ],
+   "size": null,
+   "label": "Narrator (Kokoro)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "cut",
+   "type": "video.edit",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1800.0,
+    160.0
+   ],
+   "size": [
+    340.0,
+    440.0
+   ],
+   "label": "Edit Video (add voice)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "show",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    2160.0,
+    100.0
+   ],
+   "size": [
+    560.0,
+    420.0
+   ],
+   "label": "Trailer",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "source": "idea",
+   "source_port": "text",
+   "target": "pitch",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e2",
+   "source": "pitch",
+   "source_port": "json",
+   "target": "shot",
+   "target_port": "json",
+   "kind": "data"
+  },
+  {
+   "id": "e3",
+   "source": "pitch",
+   "source_port": "json",
+   "target": "line",
+   "target_port": "json",
+   "kind": "data"
+  },
+  {
+   "id": "e4",
+   "source": "shot",
+   "source_port": "value",
+   "target": "frame",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e5",
+   "source": "frame",
+   "source_port": "image",
+   "target": "clip",
+   "target_port": "first_frame",
+   "kind": "data"
+  },
+  {
+   "id": "e_rr_shot",
+   "source": "shot",
+   "source_port": "value",
+   "target": "clip",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e7",
+   "source": "line",
+   "source_port": "value",
+   "target": "say",
+   "target_port": "text",
+   "kind": "data"
+  },
+  {
+   "id": "e8",
+   "source": "clip",
+   "source_port": "video",
+   "target": "cut",
+   "target_port": "video",
+   "kind": "data"
+  },
+  {
+   "id": "e9",
+   "source": "say",
+   "source_port": "audio",
+   "target": "cut",
+   "target_port": "audio",
+   "kind": "data"
+  },
+  {
+   "id": "e10",
+   "source": "cut",
+   "source_port": "video",
+   "target": "show",
+   "target_port": "value",
+   "kind": "data"
+  }
+ ],
+ "groups": [],
+ "notes": [
+  {
+   "id": "about",
+   "text": "**Five-second movie trailer**\n\nOne logline → JSON pitch → first frame → image-to-video, while the narrator line goes to TTS. Edit Video joins picture and voice.",
+   "rect": [
+    0.0,
+    240.0,
+    300.0,
+    170.0
+   ],
+   "color": "#fde68a"
+  }
+ ],
+ "assets": [],
+ "baked": {},
+ "editor": {
+  "viewport": {
+   "x": 60,
+   "y": 120,
+   "zoom": 0.7
+  },
+  "reroutes": [
+   {
+    "id": "rr_shot",
+    "pos": [
+     1120.0,
+     470.0
+    ]
+   }
+  ],
+  "reroute_wires": [
+   {
+    "id": "w_rr_shot_in",
+    "source": "shot",
+    "source_port": "value",
+    "target": "rr_shot",
+    "target_port": "in"
+   },
+   {
+    "id": "e_rr_shot",
+    "source": "rr_shot",
+    "source_port": "out",
+    "target": "clip",
+    "target_port": "prompt"
+   }
+  ]
+ },
+ "meta": {
+  "tags": [
+   "video",
+   "audio",
+   "tts",
+   "llm",
+   "showcase"
+  ],
+  "author": "Leo"
+ }
+}

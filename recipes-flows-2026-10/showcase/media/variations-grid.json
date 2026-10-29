@@ -1,0 +1,252 @@
+{
+ "format": "unsloth-flow",
+ "version": 1,
+ "id": "showcase-variations-grid",
+ "name": "Showcase: One prompt, six styles",
+ "description": "A For Each loop paints the same scene in six art styles with one fixed seed, then Compose Grid lays them out as a captioned contact sheet.",
+ "kind": "pipeline",
+ "seed": 7,
+ "params": [],
+ "requirements": {
+  "models": [
+   {
+    "ref": "painter",
+    "kind": "image",
+    "repo": "black-forest-labs/FLUX.2-klein-9B",
+    "variant": null,
+    "optional": false,
+    "note": "FLUX.2 klein 9B; one image per style."
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "styles",
+   "type": "input.list",
+   "v": 1,
+   "params": {
+    "items": [
+     "hand-painted watercolor storybook illustration",
+     "1980s anime cel, film grain",
+     "claymation stop-motion, handmade clay textures",
+     "ukiyo-e woodblock print",
+     "neon cyberpunk photograph, rain, reflections",
+     "Renaissance oil painting, chiaroscuro"
+    ]
+   },
+   "pos": [
+    0.0,
+    40.0
+   ],
+   "size": null,
+   "label": "Styles",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "each",
+   "type": "logic.for_each",
+   "v": 1,
+   "params": {
+    "max_items": 6
+   },
+   "pos": [
+    380.0,
+    40.0
+   ],
+   "size": null,
+   "label": "For Each style",
+   "group": "v_loop",
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "paint",
+   "type": "image.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "black-forest-labs/FLUX.2-klein-9B",
+     "variant": null
+    },
+    "size": "1024x1024",
+    "seed": 4242,
+    "prompt": "A grumpy old cat wizard in a starry robe brewing a glowing green potion in a cluttered tower library, books and candles everywhere, {{prompt}}"
+   },
+   "pos": [
+    740.0,
+    40.0
+   ],
+   "size": [
+    300.0,
+    560.0
+   ],
+   "label": "Generate Image (FLUX.2)",
+   "group": "v_loop",
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "sheet",
+   "type": "image.grid",
+   "v": 1,
+   "params": {
+    "columns": 3,
+    "gap": 12,
+    "caption_style": "subtitle",
+    "cell_size": 512,
+    "background": "#0b0b0f"
+   },
+   "pos": [
+    1140.0,
+    40.0
+   ],
+   "size": [
+    340.0,
+    400.0
+   ],
+   "label": "Compose Grid",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "show",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1520.0,
+    0.0
+   ],
+   "size": [
+    620.0,
+    520.0
+   ],
+   "label": "Contact sheet",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "source": "styles",
+   "source_port": "items",
+   "target": "each",
+   "target_port": "items",
+   "kind": "data"
+  },
+  {
+   "id": "e2",
+   "source": "each",
+   "source_port": "item",
+   "target": "paint",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e3",
+   "source": "paint",
+   "source_port": "image",
+   "target": "each",
+   "target_port": "collect",
+   "kind": "data"
+  },
+  {
+   "id": "e4",
+   "source": "each",
+   "source_port": "results",
+   "target": "sheet",
+   "target_port": "images",
+   "kind": "data"
+  },
+  {
+   "id": "e_rr_caps",
+   "source": "styles",
+   "source_port": "items",
+   "target": "sheet",
+   "target_port": "captions",
+   "kind": "data"
+  },
+  {
+   "id": "e6",
+   "source": "sheet",
+   "source_port": "image",
+   "target": "show",
+   "target_port": "value",
+   "kind": "data"
+  }
+ ],
+ "groups": [
+  {
+   "id": "v_loop",
+   "label": "For each style",
+   "color": "#ec4899",
+   "rect": [
+    350.0,
+    -40.0,
+    740.0,
+    700.0
+   ]
+  }
+ ],
+ "notes": [
+  {
+   "id": "about",
+   "text": "**One prompt, six styles**\n\nSame cat wizard, same seed, six looks. The style list feeds the loop and, through a reroute, the grid captions.",
+   "rect": [
+    0.0,
+    220.0,
+    300.0,
+    160.0
+   ],
+   "color": "#fde68a"
+  }
+ ],
+ "assets": [],
+ "baked": {},
+ "editor": {
+  "viewport": {
+   "x": 60,
+   "y": 120,
+   "zoom": 0.7
+  },
+  "reroutes": [
+   {
+    "id": "rr_caps",
+    "pos": [
+     1100.0,
+     520.0
+    ]
+   }
+  ],
+  "reroute_wires": [
+   {
+    "id": "w_rr_caps_in",
+    "source": "styles",
+    "source_port": "items",
+    "target": "rr_caps",
+    "target_port": "in"
+   },
+   {
+    "id": "e_rr_caps",
+    "source": "rr_caps",
+    "source_port": "out",
+    "target": "sheet",
+    "target_port": "captions"
+   }
+  ]
+ },
+ "meta": {
+  "tags": [
+   "image",
+   "for each",
+   "grid",
+   "showcase"
+  ],
+  "author": "Leo"
+ }
+}
