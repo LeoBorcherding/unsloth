@@ -177,6 +177,36 @@ def test_per_device_budget_follows_the_narrowed_gpu_ids():
     ) == pytest.approx({0: 0.25, 1: 0.5})
 
 
+class _FakeXpu(_FakeCuda):
+    def mem_get_info(self, i):
+        raise AssertionError("XPU caps against props.total_memory, not mem_get_info")
+
+
+def _fake_xpu_torch(totals, current = None, version = "2.11.0+xpu"):
+    no_cuda = SimpleNamespace(is_available = lambda: False)
+    return SimpleNamespace(__version__ = version, cuda = no_cuda, xpu = _FakeXpu(totals, current))
+
+
+def test_budget_caps_each_xpu_device_against_its_total():
+    torch_mod = _fake_xpu_torch([16 * GIB, 24 * GIB], current = {1: 0.5})
+    assert _apply_training_vram_budget(torch_mod, None, [8, 18], None) == pytest.approx(
+        {0: 0.5, 1: 0.5}
+    )
+    assert torch_mod.xpu.set == pytest.approx({0: 0.5, 1: 0.5})
+
+
+def test_budget_on_an_old_xpu_torch_is_skipped_not_raised():
+    torch_mod = _fake_xpu_torch([16 * GIB])
+    torch_mod.xpu.set_per_process_memory_fraction = None
+    torch_mod.xpu.get_per_process_memory_fraction = None
+    assert _apply_training_vram_budget(torch_mod, 8, None, None) == {}
+
+
+def test_budget_without_cuda_or_xpu_does_nothing():
+    no = SimpleNamespace(is_available = lambda: False)
+    assert _apply_training_vram_budget(SimpleNamespace(cuda = no, xpu = no), 8, None, None) == {}
+
+
 def test_worker_routes_both_budgets_through_the_helper():
     import inspect
     from core.training import worker
