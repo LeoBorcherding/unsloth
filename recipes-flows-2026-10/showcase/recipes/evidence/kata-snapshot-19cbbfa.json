@@ -1,0 +1,459 @@
+{
+ "run": {
+  "id": "a5cf965e1e95408c8f4b4eaf7c0fb6b5",
+  "flow_id": "showcase-code-kata",
+  "status": "completed",
+  "error": null,
+  "outputs": {},
+  "started_at": 1793273764409,
+  "finished_at": 1793273780548
+ },
+ "nodes": {
+  "kata_generate": {
+   "status": "done",
+   "outputs": {
+    "dataset": {
+     "kind": "dataset",
+     "source": "local",
+     "ref": "uploads/20b4be5a70c345d1bfcf47f69b26a83d_recipe-322ddb50924c452095d73d2be54486b6.jsonl",
+     "rows": 6,
+     "columns": [
+      "kata",
+      "python_check",
+      "python_solution",
+      "skill",
+      "theme",
+      "typescript_check",
+      "typescript_port"
+     ]
+    },
+    "preview": [
+     {
+      "theme": "dungeon map",
+      "skill": "dates and times",
+      "kata": "**Kata: Dungeon Time Lock**\n\nWrite a function `isDungeonAccessible(dungeonId, currentTime)` that determines if a dungeon is accessible based on a daily reset schedule.\n\n- `dungeonId`: string (e.g., \"Catacombs\", \"VolcanoCave\")\n- `currentTime`: datetime object (e.g., `datetime(2023, 10, 5, 14, 30)`)\n\nEach dungeon resets at 3:00 AM daily. Access is granted if `currentTime` is after the last reset (i.e., after 3:00 AM today).\n\nReturn `True` if accessible, `False` otherwise.\n\n**Examples:**\n```python\nisDungeonAccessible(\"Catacombs\", datetime(2023, 10, 5, 2, 59))  # False\nisDungeonAccessible(\"VolcanoCave\", datetime(2023, 10, 5, 3, 01))  # True\n```",
+      "python_solution": "from datetime import datetime\n\ndef isDungeonAccessible(dungeonId: str, currentTime: datetime) -> bool:\n    \"\"\"\n    Determines if a dungeon is accessible based on daily reset at 3:00 AM.\n    Returns True if current time is after 3:00 AM today, False otherwise.\n    \"\"\"\n    reset_time = currentTime.replace(hour=3, minute=0, second=0, microsecond=0)\n    return currentTime > reset_time\n\n# Examples as asserts\nassert isDungeonAccessible(\"Catacombs\", datetime(2023, 10, 5, 2, 59)) == False\nassert isDungeonAccessible(\"VolcanoCave\", datetime(2023, 10, 5, 3, 01)) == True",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 0,
+       "python_linter_severity": "warning",
+       "python_linter_messages": [
+        {
+         "type": "warning",
+         "symbol": "invalid-syntax",
+         "line": 13,
+         "column": 68,
+         "message": "Invalid decimal integer literal"
+        }
+       ]
+      },
+      "typescript_port": "export function isDungeonAccessible(dungeonId: string, currentTime: Date): boolean {\n    const resetTime = new Date(currentTime);\n    resetTime.setHours(3, 0, 0, 0);\n    return currentTime > resetTime;\n}\n\n// Examples as asserts\n// assert isDungeonAccessible(\"Catacombs\", new Date(2023, 9, 5, 2, 59)) === false;\n// assert isDungeonAccessible(\"VolcanoCave\", new Date(2023, 9, 5, 3, 1)) === true;",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "dungeon map",
+      "skill": "two pointers",
+      "kata": "**Kata: Dungeon Pathfinder**  \n*Function:* `shortestSafePath(dungeon: string[][]): number`  \n*Inputs:*  \n- `dungeon`: 2D grid of chars, where `'.'` = safe tile, `'#'` = wall, `'S'` = start, `'E'` = exit  \n*Output:*  \n- Minimum number of steps from `'S'` to `'E'` using only `'.'` tiles. Return `-1` if unreachable.  \n*Constraint:* Use two pointers to simulate BFS-like traversal through the grid efficiently.  \n\n*Examples:*  \n```ts\nshortestSafePath([\n  ['S', '.', '#'],\n  ['.', '.', '.'],\n  ['#', '.', 'E']\n]) // returns 4  \nshortestSafePath([\n  ['S', '#'],\n  ['#', 'E']\n]) // returns -1\n```",
+      "python_solution": "from typing import List, Tuple\nfrom collections import deque\n\ndef shortestSafePath(dungeon: List[List[str]]) -> int:\n    \"\"\"\n    Find the shortest path from 'S' to 'E' in a dungeon grid using BFS with two pointers.\n    Only '.' tiles are traversable. Returns -1 if no path exists.\n    \"\"\"\n    if not dungeon or not dungeon[0]:\n        return -1\n    \n    rows, cols = len(dungeon), len(dungeon[0])\n    start_row, start_col = -1, -1\n    exit_row, exit_col = -1, -1\n    \n    # Find start and exit positions\n    for i in range(rows):\n        for j in range(cols):\n            if dungeon[i][j] == 'S':\n                start_row, start_col = i, j\n            elif dungeon[i][j] == 'E':\n                exit_row, exit_col = i, j\n    \n    # If start or exit not found, return -1\n    if start_row == -1 or exit_row == -1:\n        return -1\n    \n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n    \n    # Use two-pointer BFS approach: current_level and next_level\n    # current_level: positions at current distance\n    # next_level: positions to be processed in next step\n    current_level = [(start_row, start_col)]\n    visited = set()\n    visited.add((start_row, start_col))\n    steps = 0\n    \n    while current_level:\n        next_level = []\n        \n        for row, col in current_level:\n            # Check if reached exit\n            if row == exit_row and col == exit_col:\n                return steps\n            \n            # Explore neighbors\n            for dr, dc in directions:\n                new_row, new_col = row + dr, col + dc\n                \n                # Check bounds and if tile is safe and not visited\n                if (0 <= new_row < rows and \n                    0 <= new_col < cols and \n                    dungeon[new_row][new_col] == '.' and \n                    (new_row, new_col) not in visited):\n                    \n                    visited.add((new_row, new_col))\n                    next_level.append((new_row, new_col))\n        \n        current_level = next_level\n        steps += 1\n    \n    return -1\n\n# Test cases\nassert shortestSafePath([\n    ['S', '.', '#'],\n    ['.', '.', '.'],\n    ['#', '.', 'E']\n]) == 4\n\nassert shortestSafePath([\n    ['S', '#'],\n    ['#', 'E']\n]) == -1",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 9.72972972972973,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 70,
+         "column": 7,
+         "message": "Magic value used in comparison, consider replacing `4` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "type Position = [number, number];\n\nfunction shortestSafePath(dungeon: string[][]): number {\n    if (!dungeon || !dungeon.length || !dungeon[0].length) {\n        return -1;\n    }\n\n    const rows = dungeon.length;\n    const cols = dungeon[0].length;\n    let startRow = -1;\n    let startCol = -1;\n    let exitRow = -1;\n    let exitCol = -1;\n\n    // Find start and exit positions\n    for (let i = 0; i < rows; i++) {\n        for (let j = 0; j < cols; j++) {\n            if (dungeon[i][j] === 'S') {\n                startRow = i;\n                startCol = j;\n            } else if (dungeon[i][j] === 'E') {\n                exitRow = i;\n                exitCol = j;\n            }\n        }\n    }\n\n    // If start or exit not found, return -1\n    if (startRow === -1 || exitRow === -1) {\n        return -1;\n    }\n\n    // Directions: up, down, left, right\n    const directions: Position[] = [[-1, 0], [1, 0], [0, -1], [0, 1]];\n\n    // Use two-pointer BFS approach: currentLevel and nextLevel\n    // currentLevel: positions at current distance\n    // nextLevel: positions to be processed in next step\n    let currentLevel: Position[] = [[startRow, startCol]];\n    const visited = new Set<string>();\n    visited.add(`${startRow},${startCol}`);\n    let steps = 0;\n\n    while (currentLevel.length > 0) {\n        const nextLevel: Position[] = [];\n\n        for (const [row, col] of currentLevel) {\n            // Check if reached exit\n            if (row === exitRow && col === exitCol) {\n                return steps;\n            }\n\n            // Explore neighbors\n            for (const [dr, dc] of directions) {\n                const newRow = row + dr;\n                const newCol = col + dc;\n\n                // Check bounds and if tile is safe and not visited\n                if (\n                    newRow >= 0 &&\n                    newRow < rows &&\n                    newCol >= 0 &&\n                    newCol < cols &&\n                    dungeon[newRow][newCol] === '.' &&\n                    !visited.has(`${newRow},${newCol}`)\n                ) {\n                    visited.add(`${newRow},${newCol}`);\n                    nextLevel.push([newRow, newCol]);\n                }\n            }\n        }\n\n        currentLevel = nextLevel;\n        steps++;\n    }\n\n    return -1;\n}\n\nexport { shortestSafePath };",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "space station inventory",
+      "skill": "string parsing",
+      "kata": "**Kata: Space Station Inventory Parser**  \nWrite a function `parseInventory` that takes a single string input: a multiline log of inventory items from a space station, where each line is formatted as `\"ITEM:QTY:LOCATION\"`.  \n\nReturn a dictionary mapping each item name to its quantity and location.  \n\nExample 1:  \n`parseInventory(\"Oxygen:12:Module A\\nWater:5:Module B\")` \u2192 `{\"Oxygen\": {\"qty\": 12, \"location\": \"Module A\"}, \"Water\": {\"qty\": 5, \"location\": \"Module B\"}}`  \n\nExample 2:  \n`parseInventory(\"Tool:3:Lab 2\\nBattery:20:Hangar\")` \u2192 `{\"Tool\": {\"qty\": 3, \"location\": \"Lab 2\"}, \"Battery\": {\"qty\": 20, \"location\": \"Hangar\"}}`",
+      "python_solution": "def parseInventory(log: str) -> dict[str, dict[str, str | int]]:\n    \"\"\"\n    Parse a multiline inventory log into a dictionary of items with their quantity and location.\n    Each line is formatted as \"ITEM:QTY:LOCATION\".\n    \"\"\"\n    result = {}\n    for line in log.strip().splitlines():\n        item, qty, location = line.split(\":\")\n        result[item] = {\"qty\": int(qty), \"location\": location}\n    return result\n\n# Example tests\nassert parseInventory(\"Oxygen:12:Module A\\nWater:5:Module B\") == {\n    \"Oxygen\": {\"qty\": 12, \"location\": \"Module A\"},\n    \"Water\": {\"qty\": 5, \"location\": \"Module B\"}\n}\nassert parseInventory(\"Tool:3:Lab 2\\nBattery:20:Hangar\") == {\n    \"Tool\": {\"qty\": 3, \"location\": \"Lab 2\"},\n    \"Battery\": {\"qty\": 20, \"location\": \"Hangar\"}\n}",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 10.0,
+       "python_linter_severity": "none",
+       "python_linter_messages": []
+      },
+      "typescript_port": "export function parseInventory(log: string): Record<string, { qty: number; location: string }> {\n  const result: Record<string, { qty: number; location: string }> = {};\n  for (const line of log.trim().split('\\n')) {\n    const [item, qty, location] = line.split(':');\n    result[item] = { qty: parseInt(qty, 10), location };\n  }\n  return result;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "pizza delivery routes",
+      "skill": "two pointers",
+      "kata": "**Kata: Optimal Pizza Route**  \nWrite `minimizeDeliveryTime(pizzas: [(Int, Int)], maxDistance: Int) -> Int`  \nGiven a list of pizza orders with `(deliveryTime, distance)` pairs and a max allowed delivery distance, use two pointers to find the shortest contiguous route where all deliveries are within `maxDistance` of the starting point.  \n\nReturn the minimum number of deliveries possible under the constraint.  \n\n**Example 1:**  \n`minimizeDeliveryTime([(1,2), (3,1), (5,3)], 4)` \u2192 `2`  \n\n**Example 2:**  \n`minimizeDeliveryTime([(1,5), (2,6), (3,2)], 4)` \u2192 `1`",
+      "python_solution": "def minimizeDeliveryTime(pizzas: list[tuple[int, int]], maxDistance: int) -> int:\n    \"\"\"\n    Find the minimum number of deliveries in a contiguous route where all deliveries\n    are within maxDistance of the starting point using two pointers.\n    \"\"\"\n    min_deliveries = float('inf')\n    left = 0\n    \n    for right in range(len(pizzas)):\n        # Expand window to include current pizza\n        # Check if current pizza is within maxDistance\n        while pizzas[right][1] > maxDistance:\n            right += 1\n            if right >= len(pizzas):\n                break\n        \n        # Shrink window from left while maintaining constraint\n        while left <= right and pizzas[left][1] > maxDistance:\n            left += 1\n        \n        # If current window is valid, update minimum\n        if left <= right:\n            min_deliveries = min(min_deliveries, right - left + 1)\n    \n    return min_deliveries if min_deliveries != float('inf') else 0\n\n# Example tests\nassert minimizeDeliveryTime([(1, 2), (3, 1), (5, 3)], 4) == 2\nassert minimizeDeliveryTime([(1, 5), (2, 6), (3, 2)], 4) == 1",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.75,
+       "python_linter_severity": "warning",
+       "python_linter_messages": [
+        {
+         "type": "warning",
+         "symbol": "PLW2901",
+         "line": 13,
+         "column": 13,
+         "message": "`for` loop variable `right` overwritten by assignment target"
+        },
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 28,
+         "column": 61,
+         "message": "Magic value used in comparison, consider replacing `2` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "export function minimizeDeliveryTime(pizzas: Array<[number, number]>, maxDistance: number): number {\n    let minDeliveries = Infinity;\n    let left = 0;\n    \n    for (let right = 0; right < pizzas.length; right++) {\n        // Expand window to include current pizza\n        // Check if current pizza is within maxDistance\n        while (pizzas[right][1] > maxDistance) {\n            right++;\n            if (right >= pizzas.length) {\n                break;\n            }\n        }\n        \n        // Shrink window from left while maintaining constraint\n        while (left <= right && pizzas[left][1] > maxDistance) {\n            left++;\n        }\n        \n        // If current window is valid, update minimum\n        if (left <= right) {\n            minDeliveries = Math.min(minDeliveries, right - left + 1);\n        }\n    }\n    \n    return minDeliveries !== Infinity ? minDeliveries : 0;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "space station inventory",
+      "skill": "two pointers",
+      "kata": "**Kata: Space Station Inventory Balance**\n\nWrite a function `balanceInventory` that takes two sorted arrays of integers: `supplies` (current stock) and `orders` (pending requests). Return the number of orders that can be fulfilled without exceeding available supplies, using the two-pointer technique.\n\nEach order must be matched with exactly one supply item of equal or greater value.\n\n**Inputs:**  \n- `supplies`: sorted array of available inventory items (e.g., [1, 3, 5, 7])  \n- `orders`: sorted array of requested items (e.g., [2, 4, 6])\n\n**Output:**  \n- Integer: number of orders fulfilled\n\n**Example calls:**  \n`balanceInventory([1, 3, 5, 7], [2, 4, 6])` \u2192 `2`  \n`balanceInventory([1, 2, 3], [1, 2, 3])` \u2192 `3`",
+      "python_solution": "def balanceInventory(supplies: list[int], orders: list[int]) -> int:\n    \"\"\"\n    Calculate the number of orders that can be fulfilled using available supplies.\n    Uses two-pointer technique to match orders with supplies of equal or greater value.\n    \"\"\"\n    i, j = 0, 0\n    fulfilled = 0\n    \n    while i < len(supplies) and j < len(orders):\n        if supplies[i] >= orders[j]:\n            fulfilled += 1\n            j += 1\n        i += 1\n    \n    return fulfilled\n\n# Example tests\nassert balanceInventory([1, 3, 5, 7], [2, 4, 6]) == 2\nassert balanceInventory([1, 2, 3], [1, 2, 3]) == 3",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.333333333333334,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 18,
+         "column": 53,
+         "message": "Magic value used in comparison, consider replacing `2` with a constant variable"
+        },
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 19,
+         "column": 50,
+         "message": "Magic value used in comparison, consider replacing `3` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "export function balanceInventory(supplies: number[], orders: number[]): number {\n    let i = 0;\n    let j = 0;\n    let fulfilled = 0;\n    \n    while (i < supplies.length && j < orders.length) {\n        if (supplies[i] >= orders[j]) {\n            fulfilled++;\n            j++;\n        }\n        i++;\n    }\n    \n    return fulfilled;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "music playlist shuffling",
+      "skill": "sorting with a custom key",
+      "kata": "**Kata: Shuffle with Mood**\n\nWrite a function `shuffle_playlist` that takes a list of songs (each a dict with `\"title\"`, `\"artist\"`, and `\"mood\"` keys) and a `seed` integer. Return a new list of songs shuffled such that songs are sorted by mood (ascending), then by artist (alphabetically), then by title (reverse alphabetical) \u2014 all using the seed for consistent randomness within the sort order.\n\nExample calls:  \n`shuffle_playlist([{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}], 42)` \u2192 `[{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}]`  \n`shuffle_playlist([{\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}, {\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}], 100)` \u2192 `[{\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}, {\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}]`",
+      "python_solution": "from typing import List, Dict\nimport random\n\ndef shuffle_playlist(songs: List[Dict[str, str]], seed: int) -> List[Dict[str, str]]:\n    \"\"\"\n    Shuffle a playlist by sorting songs first by mood, then by artist (alphabetically),\n    then by title (reverse alphabetical), using the seed for consistent randomness.\n    \"\"\"\n    # Set the seed for consistent random behavior\n    random.seed(seed)\n    \n    # Sort by mood (ascending), then by artist (alphabetically), then by title (reverse)\n    sorted_songs = sorted(songs, key=lambda song: (song[\"mood\"], song[\"artist\"], -ord(song[\"title\"][0]) if song[\"title\"] else 0))\n    \n    # Shuffle within each group defined by the sort order to introduce randomness\n    # We need to group by the sort keys and shuffle within each group\n    groups = {}\n    for song in sorted_songs:\n        key = (song[\"mood\"], song[\"artist\"])\n        if key not in groups:\n            groups[key] = []\n        groups[key].append(song)\n    \n    # Shuffle each group using the seed\n    shuffled_songs = []\n    for key in sorted(groups.keys()):\n        group = groups[key]\n        random.shuffle(group)\n        shuffled_songs.extend(group)\n    \n    return shuffled_songs\n\n# Example tests\nassert shuffle_playlist([{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}], 42) == [{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}]\nassert shuffle_playlist([{\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}, {\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}], 100) == [{\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}, {\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}]",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.5,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 13,
+         "column": 101,
+         "message": "Line too long (129 > 100)"
+        },
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 34,
+         "column": 101,
+         "message": "Line too long (175 > 100)"
+        },
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 35,
+         "column": 101,
+         "message": "Line too long (266 > 100)"
+        }
+       ]
+      },
+      "typescript_port": "interface Song {\n  title: string;\n  artist: string;\n  mood: string;\n}\n\nfunction shufflePlaylist(songs: Song[], seed: number): Song[] {\n  // Set the seed for consistent random behavior\n  const random = new Random(seed);\n  \n  // Sort by mood (ascending), then by artist (alphabetically), then by title (reverse alphabetical)\n  const sortedSongs = [...songs].sort((a, b) => {\n    if (a.mood !== b.mood) return a.mood.localeCompare(b.mood);\n    if (a.artist !== b.artist) return a.artist.localeCompare(b.artist);\n    // Reverse alphabetical by first letter of title\n    const aFirstChar = a.title.length > 0 ? a.title[0].toUpperCase() : '';\n    const bFirstChar = b.title.length > 0 ? b.title[0].toUpperCase() : '';\n    return bFirstChar.localeCompare(aFirstChar);\n  });\n  \n  // Group by mood and artist\n  const groups: Map<string, Song[]> = new Map();\n  for (const song of sortedSongs) {\n    const key = `${song.mood}|${song.artist}`;\n    if (!groups.has(key)) {\n      groups.set(key, []);\n    }\n    groups.get(key)!.push(song);\n  }\n  \n  // Shuffle each group using the seed\n  const shuffledSongs: Song[] = [];\n  const sortedKeys = Array.from(groups.keys()).sort();\n  \n  for (const key of sortedKeys) {\n    const group = groups.get(key)!;\n    // Shuffle the group using the seeded random\n    for (let i = group.length - 1; i > 0; i--) {\n      const j = random.nextInt(i + 1);\n      [group[i], group[j]] = [group[j], group[i]];\n    }\n    shuffledSongs.push(...group);\n  }\n  \n  return shuffledSongs;\n}\n\n// Simple seeded random number generator\nclass Random {\n  private seed: number;\n  \n  constructor(seed: number) {\n    this.seed = seed;\n  }\n  \n  private next(): number {\n    this.seed = (this.seed * 9301 + 49297) % 233280;\n    return this.seed / 233280;\n  }\n  \n  public nextInt(max: number): number {\n    return Math.floor(this.next() * max);\n  }\n}\n\n// Example tests\n// assert shufflePlaylist([{ title: \"Bohemian Rhapsody\", artist: \"Queen\", mood: \"dramatic\" }], 42) === [{ title: \"Bohemian Rhapsody\", artist: \"Queen\", mood: \"dramatic\" }];\n// assert shufflePlaylist([\n//   { title: \"Happy\", artist: \"Pharrell\", mood: \"happy\" },\n//   { title: \"Sad Song\", artist: \"Adele\", mood: \"sad\" }\n// ], 100) === [\n//   { title: \"Sad Song\", artist: \"Adele\", mood: \"sad\" },\n//   { title: \"Happy\", artist: \"Pharrell\", mood: \"happy\" }\n// ];",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     }
+    ]
+   },
+   "progress": {
+    "fraction": 1.0,
+    "phase": "completed"
+   }
+  },
+  "rows": {
+   "status": "done",
+   "outputs": {
+    "value": [
+     {
+      "theme": "dungeon map",
+      "skill": "dates and times",
+      "kata": "**Kata: Dungeon Time Lock**\n\nWrite a function `isDungeonAccessible(dungeonId, currentTime)` that determines if a dungeon is accessible based on a daily reset schedule.\n\n- `dungeonId`: string (e.g., \"Catacombs\", \"VolcanoCave\")\n- `currentTime`: datetime object (e.g., `datetime(2023, 10, 5, 14, 30)`)\n\nEach dungeon resets at 3:00 AM daily. Access is granted if `currentTime` is after the last reset (i.e., after 3:00 AM today).\n\nReturn `True` if accessible, `False` otherwise.\n\n**Examples:**\n```python\nisDungeonAccessible(\"Catacombs\", datetime(2023, 10, 5, 2, 59))  # False\nisDungeonAccessible(\"VolcanoCave\", datetime(2023, 10, 5, 3, 01))  # True\n```",
+      "python_solution": "from datetime import datetime\n\ndef isDungeonAccessible(dungeonId: str, currentTime: datetime) -> bool:\n    \"\"\"\n    Determines if a dungeon is accessible based on daily reset at 3:00 AM.\n    Returns True if current time is after 3:00 AM today, False otherwise.\n    \"\"\"\n    reset_time = currentTime.replace(hour=3, minute=0, second=0, microsecond=0)\n    return currentTime > reset_time\n\n# Examples as asserts\nassert isDungeonAccessible(\"Catacombs\", datetime(2023, 10, 5, 2, 59)) == False\nassert isDungeonAccessible(\"VolcanoCave\", datetime(2023, 10, 5, 3, 01)) == True",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 0,
+       "python_linter_severity": "warning",
+       "python_linter_messages": [
+        {
+         "type": "warning",
+         "symbol": "invalid-syntax",
+         "line": 13,
+         "column": 68,
+         "message": "Invalid decimal integer literal"
+        }
+       ]
+      },
+      "typescript_port": "export function isDungeonAccessible(dungeonId: string, currentTime: Date): boolean {\n    const resetTime = new Date(currentTime);\n    resetTime.setHours(3, 0, 0, 0);\n    return currentTime > resetTime;\n}\n\n// Examples as asserts\n// assert isDungeonAccessible(\"Catacombs\", new Date(2023, 9, 5, 2, 59)) === false;\n// assert isDungeonAccessible(\"VolcanoCave\", new Date(2023, 9, 5, 3, 1)) === true;",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "dungeon map",
+      "skill": "two pointers",
+      "kata": "**Kata: Dungeon Pathfinder**  \n*Function:* `shortestSafePath(dungeon: string[][]): number`  \n*Inputs:*  \n- `dungeon`: 2D grid of chars, where `'.'` = safe tile, `'#'` = wall, `'S'` = start, `'E'` = exit  \n*Output:*  \n- Minimum number of steps from `'S'` to `'E'` using only `'.'` tiles. Return `-1` if unreachable.  \n*Constraint:* Use two pointers to simulate BFS-like traversal through the grid efficiently.  \n\n*Examples:*  \n```ts\nshortestSafePath([\n  ['S', '.', '#'],\n  ['.', '.', '.'],\n  ['#', '.', 'E']\n]) // returns 4  \nshortestSafePath([\n  ['S', '#'],\n  ['#', 'E']\n]) // returns -1\n```",
+      "python_solution": "from typing import List, Tuple\nfrom collections import deque\n\ndef shortestSafePath(dungeon: List[List[str]]) -> int:\n    \"\"\"\n    Find the shortest path from 'S' to 'E' in a dungeon grid using BFS with two pointers.\n    Only '.' tiles are traversable. Returns -1 if no path exists.\n    \"\"\"\n    if not dungeon or not dungeon[0]:\n        return -1\n    \n    rows, cols = len(dungeon), len(dungeon[0])\n    start_row, start_col = -1, -1\n    exit_row, exit_col = -1, -1\n    \n    # Find start and exit positions\n    for i in range(rows):\n        for j in range(cols):\n            if dungeon[i][j] == 'S':\n                start_row, start_col = i, j\n            elif dungeon[i][j] == 'E':\n                exit_row, exit_col = i, j\n    \n    # If start or exit not found, return -1\n    if start_row == -1 or exit_row == -1:\n        return -1\n    \n    # Directions: up, down, left, right\n    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]\n    \n    # Use two-pointer BFS approach: current_level and next_level\n    # current_level: positions at current distance\n    # next_level: positions to be processed in next step\n    current_level = [(start_row, start_col)]\n    visited = set()\n    visited.add((start_row, start_col))\n    steps = 0\n    \n    while current_level:\n        next_level = []\n        \n        for row, col in current_level:\n            # Check if reached exit\n            if row == exit_row and col == exit_col:\n                return steps\n            \n            # Explore neighbors\n            for dr, dc in directions:\n                new_row, new_col = row + dr, col + dc\n                \n                # Check bounds and if tile is safe and not visited\n                if (0 <= new_row < rows and \n                    0 <= new_col < cols and \n                    dungeon[new_row][new_col] == '.' and \n                    (new_row, new_col) not in visited):\n                    \n                    visited.add((new_row, new_col))\n                    next_level.append((new_row, new_col))\n        \n        current_level = next_level\n        steps += 1\n    \n    return -1\n\n# Test cases\nassert shortestSafePath([\n    ['S', '.', '#'],\n    ['.', '.', '.'],\n    ['#', '.', 'E']\n]) == 4\n\nassert shortestSafePath([\n    ['S', '#'],\n    ['#', 'E']\n]) == -1",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 9.72972972972973,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 70,
+         "column": 7,
+         "message": "Magic value used in comparison, consider replacing `4` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "type Position = [number, number];\n\nfunction shortestSafePath(dungeon: string[][]): number {\n    if (!dungeon || !dungeon.length || !dungeon[0].length) {\n        return -1;\n    }\n\n    const rows = dungeon.length;\n    const cols = dungeon[0].length;\n    let startRow = -1;\n    let startCol = -1;\n    let exitRow = -1;\n    let exitCol = -1;\n\n    // Find start and exit positions\n    for (let i = 0; i < rows; i++) {\n        for (let j = 0; j < cols; j++) {\n            if (dungeon[i][j] === 'S') {\n                startRow = i;\n                startCol = j;\n            } else if (dungeon[i][j] === 'E') {\n                exitRow = i;\n                exitCol = j;\n            }\n        }\n    }\n\n    // If start or exit not found, return -1\n    if (startRow === -1 || exitRow === -1) {\n        return -1;\n    }\n\n    // Directions: up, down, left, right\n    const directions: Position[] = [[-1, 0], [1, 0], [0, -1], [0, 1]];\n\n    // Use two-pointer BFS approach: currentLevel and nextLevel\n    // currentLevel: positions at current distance\n    // nextLevel: positions to be processed in next step\n    let currentLevel: Position[] = [[startRow, startCol]];\n    const visited = new Set<string>();\n    visited.add(`${startRow},${startCol}`);\n    let steps = 0;\n\n    while (currentLevel.length > 0) {\n        const nextLevel: Position[] = [];\n\n        for (const [row, col] of currentLevel) {\n            // Check if reached exit\n            if (row === exitRow && col === exitCol) {\n                return steps;\n            }\n\n            // Explore neighbors\n            for (const [dr, dc] of directions) {\n                const newRow = row + dr;\n                const newCol = col + dc;\n\n                // Check bounds and if tile is safe and not visited\n                if (\n                    newRow >= 0 &&\n                    newRow < rows &&\n                    newCol >= 0 &&\n                    newCol < cols &&\n                    dungeon[newRow][newCol] === '.' &&\n                    !visited.has(`${newRow},${newCol}`)\n                ) {\n                    visited.add(`${newRow},${newCol}`);\n                    nextLevel.push([newRow, newCol]);\n                }\n            }\n        }\n\n        currentLevel = nextLevel;\n        steps++;\n    }\n\n    return -1;\n}\n\nexport { shortestSafePath };",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "space station inventory",
+      "skill": "string parsing",
+      "kata": "**Kata: Space Station Inventory Parser**  \nWrite a function `parseInventory` that takes a single string input: a multiline log of inventory items from a space station, where each line is formatted as `\"ITEM:QTY:LOCATION\"`.  \n\nReturn a dictionary mapping each item name to its quantity and location.  \n\nExample 1:  \n`parseInventory(\"Oxygen:12:Module A\\nWater:5:Module B\")` \u2192 `{\"Oxygen\": {\"qty\": 12, \"location\": \"Module A\"}, \"Water\": {\"qty\": 5, \"location\": \"Module B\"}}`  \n\nExample 2:  \n`parseInventory(\"Tool:3:Lab 2\\nBattery:20:Hangar\")` \u2192 `{\"Tool\": {\"qty\": 3, \"location\": \"Lab 2\"}, \"Battery\": {\"qty\": 20, \"location\": \"Hangar\"}}`",
+      "python_solution": "def parseInventory(log: str) -> dict[str, dict[str, str | int]]:\n    \"\"\"\n    Parse a multiline inventory log into a dictionary of items with their quantity and location.\n    Each line is formatted as \"ITEM:QTY:LOCATION\".\n    \"\"\"\n    result = {}\n    for line in log.strip().splitlines():\n        item, qty, location = line.split(\":\")\n        result[item] = {\"qty\": int(qty), \"location\": location}\n    return result\n\n# Example tests\nassert parseInventory(\"Oxygen:12:Module A\\nWater:5:Module B\") == {\n    \"Oxygen\": {\"qty\": 12, \"location\": \"Module A\"},\n    \"Water\": {\"qty\": 5, \"location\": \"Module B\"}\n}\nassert parseInventory(\"Tool:3:Lab 2\\nBattery:20:Hangar\") == {\n    \"Tool\": {\"qty\": 3, \"location\": \"Lab 2\"},\n    \"Battery\": {\"qty\": 20, \"location\": \"Hangar\"}\n}",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 10.0,
+       "python_linter_severity": "none",
+       "python_linter_messages": []
+      },
+      "typescript_port": "export function parseInventory(log: string): Record<string, { qty: number; location: string }> {\n  const result: Record<string, { qty: number; location: string }> = {};\n  for (const line of log.trim().split('\\n')) {\n    const [item, qty, location] = line.split(':');\n    result[item] = { qty: parseInt(qty, 10), location };\n  }\n  return result;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "pizza delivery routes",
+      "skill": "two pointers",
+      "kata": "**Kata: Optimal Pizza Route**  \nWrite `minimizeDeliveryTime(pizzas: [(Int, Int)], maxDistance: Int) -> Int`  \nGiven a list of pizza orders with `(deliveryTime, distance)` pairs and a max allowed delivery distance, use two pointers to find the shortest contiguous route where all deliveries are within `maxDistance` of the starting point.  \n\nReturn the minimum number of deliveries possible under the constraint.  \n\n**Example 1:**  \n`minimizeDeliveryTime([(1,2), (3,1), (5,3)], 4)` \u2192 `2`  \n\n**Example 2:**  \n`minimizeDeliveryTime([(1,5), (2,6), (3,2)], 4)` \u2192 `1`",
+      "python_solution": "def minimizeDeliveryTime(pizzas: list[tuple[int, int]], maxDistance: int) -> int:\n    \"\"\"\n    Find the minimum number of deliveries in a contiguous route where all deliveries\n    are within maxDistance of the starting point using two pointers.\n    \"\"\"\n    min_deliveries = float('inf')\n    left = 0\n    \n    for right in range(len(pizzas)):\n        # Expand window to include current pizza\n        # Check if current pizza is within maxDistance\n        while pizzas[right][1] > maxDistance:\n            right += 1\n            if right >= len(pizzas):\n                break\n        \n        # Shrink window from left while maintaining constraint\n        while left <= right and pizzas[left][1] > maxDistance:\n            left += 1\n        \n        # If current window is valid, update minimum\n        if left <= right:\n            min_deliveries = min(min_deliveries, right - left + 1)\n    \n    return min_deliveries if min_deliveries != float('inf') else 0\n\n# Example tests\nassert minimizeDeliveryTime([(1, 2), (3, 1), (5, 3)], 4) == 2\nassert minimizeDeliveryTime([(1, 5), (2, 6), (3, 2)], 4) == 1",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.75,
+       "python_linter_severity": "warning",
+       "python_linter_messages": [
+        {
+         "type": "warning",
+         "symbol": "PLW2901",
+         "line": 13,
+         "column": 13,
+         "message": "`for` loop variable `right` overwritten by assignment target"
+        },
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 28,
+         "column": 61,
+         "message": "Magic value used in comparison, consider replacing `2` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "export function minimizeDeliveryTime(pizzas: Array<[number, number]>, maxDistance: number): number {\n    let minDeliveries = Infinity;\n    let left = 0;\n    \n    for (let right = 0; right < pizzas.length; right++) {\n        // Expand window to include current pizza\n        // Check if current pizza is within maxDistance\n        while (pizzas[right][1] > maxDistance) {\n            right++;\n            if (right >= pizzas.length) {\n                break;\n            }\n        }\n        \n        // Shrink window from left while maintaining constraint\n        while (left <= right && pizzas[left][1] > maxDistance) {\n            left++;\n        }\n        \n        // If current window is valid, update minimum\n        if (left <= right) {\n            minDeliveries = Math.min(minDeliveries, right - left + 1);\n        }\n    }\n    \n    return minDeliveries !== Infinity ? minDeliveries : 0;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "space station inventory",
+      "skill": "two pointers",
+      "kata": "**Kata: Space Station Inventory Balance**\n\nWrite a function `balanceInventory` that takes two sorted arrays of integers: `supplies` (current stock) and `orders` (pending requests). Return the number of orders that can be fulfilled without exceeding available supplies, using the two-pointer technique.\n\nEach order must be matched with exactly one supply item of equal or greater value.\n\n**Inputs:**  \n- `supplies`: sorted array of available inventory items (e.g., [1, 3, 5, 7])  \n- `orders`: sorted array of requested items (e.g., [2, 4, 6])\n\n**Output:**  \n- Integer: number of orders fulfilled\n\n**Example calls:**  \n`balanceInventory([1, 3, 5, 7], [2, 4, 6])` \u2192 `2`  \n`balanceInventory([1, 2, 3], [1, 2, 3])` \u2192 `3`",
+      "python_solution": "def balanceInventory(supplies: list[int], orders: list[int]) -> int:\n    \"\"\"\n    Calculate the number of orders that can be fulfilled using available supplies.\n    Uses two-pointer technique to match orders with supplies of equal or greater value.\n    \"\"\"\n    i, j = 0, 0\n    fulfilled = 0\n    \n    while i < len(supplies) and j < len(orders):\n        if supplies[i] >= orders[j]:\n            fulfilled += 1\n            j += 1\n        i += 1\n    \n    return fulfilled\n\n# Example tests\nassert balanceInventory([1, 3, 5, 7], [2, 4, 6]) == 2\nassert balanceInventory([1, 2, 3], [1, 2, 3]) == 3",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.333333333333334,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 18,
+         "column": 53,
+         "message": "Magic value used in comparison, consider replacing `2` with a constant variable"
+        },
+        {
+         "type": "refactor",
+         "symbol": "PLR2004",
+         "line": 19,
+         "column": 50,
+         "message": "Magic value used in comparison, consider replacing `3` with a constant variable"
+        }
+       ]
+      },
+      "typescript_port": "export function balanceInventory(supplies: number[], orders: number[]): number {\n    let i = 0;\n    let j = 0;\n    let fulfilled = 0;\n    \n    while (i < supplies.length && j < orders.length) {\n        if (supplies[i] >= orders[j]) {\n            fulfilled++;\n            j++;\n        }\n        i++;\n    }\n    \n    return fulfilled;\n}",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     },
+     {
+      "theme": "music playlist shuffling",
+      "skill": "sorting with a custom key",
+      "kata": "**Kata: Shuffle with Mood**\n\nWrite a function `shuffle_playlist` that takes a list of songs (each a dict with `\"title\"`, `\"artist\"`, and `\"mood\"` keys) and a `seed` integer. Return a new list of songs shuffled such that songs are sorted by mood (ascending), then by artist (alphabetically), then by title (reverse alphabetical) \u2014 all using the seed for consistent randomness within the sort order.\n\nExample calls:  \n`shuffle_playlist([{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}], 42)` \u2192 `[{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}]`  \n`shuffle_playlist([{\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}, {\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}], 100)` \u2192 `[{\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}, {\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}]`",
+      "python_solution": "from typing import List, Dict\nimport random\n\ndef shuffle_playlist(songs: List[Dict[str, str]], seed: int) -> List[Dict[str, str]]:\n    \"\"\"\n    Shuffle a playlist by sorting songs first by mood, then by artist (alphabetically),\n    then by title (reverse alphabetical), using the seed for consistent randomness.\n    \"\"\"\n    # Set the seed for consistent random behavior\n    random.seed(seed)\n    \n    # Sort by mood (ascending), then by artist (alphabetically), then by title (reverse)\n    sorted_songs = sorted(songs, key=lambda song: (song[\"mood\"], song[\"artist\"], -ord(song[\"title\"][0]) if song[\"title\"] else 0))\n    \n    # Shuffle within each group defined by the sort order to introduce randomness\n    # We need to group by the sort keys and shuffle within each group\n    groups = {}\n    for song in sorted_songs:\n        key = (song[\"mood\"], song[\"artist\"])\n        if key not in groups:\n            groups[key] = []\n        groups[key].append(song)\n    \n    # Shuffle each group using the seed\n    shuffled_songs = []\n    for key in sorted(groups.keys()):\n        group = groups[key]\n        random.shuffle(group)\n        shuffled_songs.extend(group)\n    \n    return shuffled_songs\n\n# Example tests\nassert shuffle_playlist([{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}], 42) == [{\"title\": \"Bohemian Rhapsody\", \"artist\": \"Queen\", \"mood\": \"dramatic\"}]\nassert shuffle_playlist([{\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}, {\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}], 100) == [{\"title\": \"Sad Song\", \"artist\": \"Adele\", \"mood\": \"sad\"}, {\"title\": \"Happy\", \"artist\": \"Pharrell\", \"mood\": \"happy\"}]",
+      "python_check": {
+       "is_valid": true,
+       "python_linter_score": 8.5,
+       "python_linter_severity": "refactor",
+       "python_linter_messages": [
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 13,
+         "column": 101,
+         "message": "Line too long (129 > 100)"
+        },
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 34,
+         "column": 101,
+         "message": "Line too long (175 > 100)"
+        },
+        {
+         "type": "refactor",
+         "symbol": "E501",
+         "line": 35,
+         "column": 101,
+         "message": "Line too long (266 > 100)"
+        }
+       ]
+      },
+      "typescript_port": "interface Song {\n  title: string;\n  artist: string;\n  mood: string;\n}\n\nfunction shufflePlaylist(songs: Song[], seed: number): Song[] {\n  // Set the seed for consistent random behavior\n  const random = new Random(seed);\n  \n  // Sort by mood (ascending), then by artist (alphabetically), then by title (reverse alphabetical)\n  const sortedSongs = [...songs].sort((a, b) => {\n    if (a.mood !== b.mood) return a.mood.localeCompare(b.mood);\n    if (a.artist !== b.artist) return a.artist.localeCompare(b.artist);\n    // Reverse alphabetical by first letter of title\n    const aFirstChar = a.title.length > 0 ? a.title[0].toUpperCase() : '';\n    const bFirstChar = b.title.length > 0 ? b.title[0].toUpperCase() : '';\n    return bFirstChar.localeCompare(aFirstChar);\n  });\n  \n  // Group by mood and artist\n  const groups: Map<string, Song[]> = new Map();\n  for (const song of sortedSongs) {\n    const key = `${song.mood}|${song.artist}`;\n    if (!groups.has(key)) {\n      groups.set(key, []);\n    }\n    groups.get(key)!.push(song);\n  }\n  \n  // Shuffle each group using the seed\n  const shuffledSongs: Song[] = [];\n  const sortedKeys = Array.from(groups.keys()).sort();\n  \n  for (const key of sortedKeys) {\n    const group = groups.get(key)!;\n    // Shuffle the group using the seeded random\n    for (let i = group.length - 1; i > 0; i--) {\n      const j = random.nextInt(i + 1);\n      [group[i], group[j]] = [group[j], group[i]];\n    }\n    shuffledSongs.push(...group);\n  }\n  \n  return shuffledSongs;\n}\n\n// Simple seeded random number generator\nclass Random {\n  private seed: number;\n  \n  constructor(seed: number) {\n    this.seed = seed;\n  }\n  \n  private next(): number {\n    this.seed = (this.seed * 9301 + 49297) % 233280;\n    return this.seed / 233280;\n  }\n  \n  public nextInt(max: number): number {\n    return Math.floor(this.next() * max);\n  }\n}\n\n// Example tests\n// assert shufflePlaylist([{ title: \"Bohemian Rhapsody\", artist: \"Queen\", mood: \"dramatic\" }], 42) === [{ title: \"Bohemian Rhapsody\", artist: \"Queen\", mood: \"dramatic\" }];\n// assert shufflePlaylist([\n//   { title: \"Happy\", artist: \"Pharrell\", mood: \"happy\" },\n//   { title: \"Sad Song\", artist: \"Adele\", mood: \"sad\" }\n// ], 100) === [\n//   { title: \"Sad Song\", artist: \"Adele\", mood: \"sad\" },\n//   { title: \"Happy\", artist: \"Pharrell\", mood: \"happy\" }\n// ];",
+      "typescript_check": {
+       "is_valid": true,
+       "error_count": 0,
+       "error_message": "",
+       "severity": null,
+       "code": null,
+       "labels": [],
+       "codeframe": null,
+       "warning_count": 0
+      }
+     }
+    ]
+   }
+  }
+ },
+ "last_seq": 16
+}
