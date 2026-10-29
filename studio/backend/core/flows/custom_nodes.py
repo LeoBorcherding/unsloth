@@ -16,6 +16,7 @@ import base64
 import functools
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import textwrap
@@ -147,7 +148,8 @@ def _port(entry: dict, field: str, seen: set, reserved: set, line: int) -> dict:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    # 1e309 literal_evals to inf, which no JSON response can carry.
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _param(entry: dict, seen: set, line: int) -> dict:
@@ -176,7 +178,7 @@ def _param(entry: dict, seen: set, line: int) -> dict:
         default = entry.get("default", 0)
         for key in ("default", "min", "max"):
             if key in entry and not _is_number(entry[key]):
-                raise CustomNodeError(f'"{key}" of number param {name!r} must be a number', line)
+                raise CustomNodeError(f'"{key}" of number param {name!r} must be a finite number', line)
         for key in ("min", "max"):
             if key in entry:
                 extra[key] = entry[key]

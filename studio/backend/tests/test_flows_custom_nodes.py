@@ -147,6 +147,18 @@ def test_parsing_never_runs_the_script(tmp_path):
             3,
             "reserved",
         ),
+        (
+            "NODE = {'name': 'x', 'outputs': [{'name': 'y', 'type': 'text'}],\n 'params': [\n"
+            "  {'name': 'n', 'type': 'number', 'default': 1e309}]}\ndef run(i, p): pass\n",
+            3,
+            "finite number",
+        ),
+        (
+            "NODE = {'name': 'x', 'outputs': [{'name': 'y', 'type': 'text'}],\n 'params': [\n"
+            "  {'name': 'n', 'type': 'number', 'max': -1e400}]}\ndef run(i, p): pass\n",
+            3,
+            "finite number",
+        ),
         ("NODE = {'name': 'x', 'category': 'misc', 'outputs': [{'name': 'y', 'type': 'text'}]}\ndef run(i, p): pass\n", 1, "not a Flows category"),
         (MINIMAL + "\nNODE = {}\n", 11, "more than once"),
         ("", None, "empty"),
@@ -295,6 +307,10 @@ def client(monkeypatch, ran):
 def test_library_upload_replace_delete(client):
     bad = client.post("/api/flows/custom-nodes", json = {"source": "NODE = {\n 'name': 1}\n"})
     assert bad.status_code == 400 and bad.json()["detail"]["line"] == 2
+    huge = MINIMAL.replace('"outputs"', '"params": [{"name": "n", "type": "number", "default": 1e309}],\n    "outputs"')
+    refused = client.post("/api/flows/custom-nodes", json = {"source": huge})
+    assert refused.status_code == 400 and "finite" in refused.json()["detail"]["message"]
+    assert client.get("/api/flows/custom-nodes").json()["nodes"] == []
     made = client.post("/api/flows/custom-nodes", json = {"source": TEMPLATE}).json()
     assert made["name"] == "Repeat text" and made["spec"]["type"] == custom_nodes.node_type(TEMPLATE)
     assert made["hash"] == custom_nodes.script_hash(TEMPLATE)
