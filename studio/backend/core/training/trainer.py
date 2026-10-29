@@ -880,6 +880,16 @@ class UnslothTrainer:
             return {}
         return dict(requested)
 
+    def _check_vllm_engine(self, requested: bool) -> None:
+        if getattr(self.model, "vllm_engine", None) is not None:
+            logger.info("vLLM engine loaded for GRPO rollouts")
+        elif requested:
+            # Unsloth drops fast_inference without raising for some models and GPUs.
+            from core.training.rl import vllm_fallback_message
+            self._record_warning(
+                vllm_fallback_message("Unsloth loaded this model without vLLM on this GPU")
+            )
+
     def _offload_load_kwargs(self, device_map = None) -> dict:
         # Loading the offloaded layers straight into host RAM is what lets a model larger than the card load at all.
         if not self._offload_layers:
@@ -1735,9 +1745,9 @@ class UnslothTrainer:
                     )
                     self.model = self.tokenizer = None
                     clear_gpu_cache()
+                    vllm_kwargs = {}
                     self.model, self.tokenizer = load_text()
-                if getattr(self.model, "vllm_engine", None) is not None:
-                    logger.info("vLLM engine loaded for GRPO rollouts")
+                self._check_vllm_engine(bool(vllm_kwargs))
                 logger.info("Loaded text model")
                 # The config probe misses a Hub LoRA (no config.json), but core loads a diffusion base through
                 # its diffusion path: train it with its own objective, never next-token SFT.

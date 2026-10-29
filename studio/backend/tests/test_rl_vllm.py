@@ -246,3 +246,20 @@ def test_loader_passes_vllm_kwargs_for_a_plain_text_model(monkeypatch):
     requested = {"fast_inference": True, "max_lora_rank": 64}
     assert UnslothTrainer._vllm_kwargs_or_warn(trainer, requested, False, 1) == requested
     assert UnslothTrainer._vllm_kwargs_or_warn(trainer, None, False, 1) == {}
+
+
+@pytest.mark.parametrize(
+    "requested, engine, warned",
+    [(True, True, False), (True, False, True), (False, False, False)],
+)
+def test_a_load_that_comes_back_without_an_engine_warns(requested, engine, warned):
+    # Unsloth turns fast_inference off for some models and GPUs and returns a plain model.
+    from core.training.trainer import UnslothTrainer
+
+    warnings = []
+    model = types.SimpleNamespace(vllm_engine = object()) if engine else types.SimpleNamespace()
+    trainer = types.SimpleNamespace(model = model, _record_warning = warnings.append)
+    UnslothTrainer._check_vllm_engine(trainer, requested)
+    assert bool(warnings) == warned
+    if warned:
+        assert warnings[0].startswith("vLLM rollouts are off: Unsloth loaded this model without vLLM")
