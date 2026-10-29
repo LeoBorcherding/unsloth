@@ -99,7 +99,11 @@ async def finetune(ctx: NodeContext) -> dict:
     memory_fields(params, config, objective)
     if params.get("dataset_streaming") and objective == "sft":
         config["dataset_streaming"] = True
-    if params.get("drafter_enabled") and objective == "sft" and config["training_type"] != TRAINING_TYPES["cpt"]:
+    if (
+        params.get("drafter_enabled")
+        and objective == "sft"
+        and config["training_type"] != TRAINING_TYPES["cpt"]
+    ):
         config["drafter"] = drafter_request(params)
     mapping = ctx.params.get("custom_format_mapping")
     prompt_col = str(ctx.params.get("prompt_column") or "").strip()
@@ -122,6 +126,7 @@ async def finetune(ctx: NodeContext) -> dict:
     for key, value in TRAIN_PAGE_BATCH.items():
         config.setdefault(key, value)
     holdout = None
+    source = dataset
     percent = int(ctx.params.get("holdout_percent") or 0)
     if percent > 0:
         dataset, holdout = await holdout_split(
@@ -130,6 +135,16 @@ async def finetune(ctx: NodeContext) -> dict:
         # The split already covers only the sliced rows; slicing the train half again would shrink it.
         config.pop("dataset_slice_start", None)
         config.pop("dataset_slice_end", None)
+        eval_split = str(ctx.params.get("eval_split") or "").strip()
+        train_split = source.get("split") or "train"
+        if (
+            source.get("source") == "hf"
+            and eval_split not in ("", train_split)
+            and config["eval_steps"] > 0
+        ):
+            # The train half is now a local upload, so the Hub eval split has to travel the same way.
+            # The training split itself means "carve eval from the training rows", which the trainer still does.
+            config["local_eval_datasets"] = [await hub_eval_upload(ctx, source, eval_split)]
     if dataset.get("source") == "hf":
         config["hf_dataset"] = dataset["ref"]
         if dataset.get("subset"):
@@ -261,7 +276,8 @@ def method_fields(params: dict, config: dict) -> None:
         # Full trains in 16-bit; CPT loads 4-bit only for a pre-quantized checkpoint, like the Train page.
         config["load_in_4bit"] = method == "cpt" and "4bit" in config["model_name"].lower()
     config["max_seq_length"] = int(params.get("max_seq_length") or 2048)
-    config["learning_rate"] = str(params.get("learning_rate") or "2e-4")
+    lr = params.get("learning_rate")
+    config["learning_rate"] = "2e-4" if lr in (None, "") else str(lr)
     if method == "cpt" and params.get("embedding_learning_rate") not in (None, ""):
         config["embedding_learning_rate"] = float(params["embedding_learning_rate"])
 
@@ -277,7 +293,9 @@ def lora_fields(params: dict, config: dict) -> None:
     for name in LORA_VARIANTS:
         config[f"use_{name}"] = adapter and variant == name
     modules = [str(m).strip() for m in params.get("target_modules") or [] if str(m).strip()]
-    if config["training_type"] == TRAINING_TYPES["cpt"] and not set(CPT_EMBEDDING_MODULES) & set(modules):
+    if config["training_type"] == TRAINING_TYPES["cpt"] and not set(CPT_EMBEDDING_MODULES) & set(
+        modules
+    ):
         modules += CPT_EMBEDDING_MODULES
     config["target_modules"] = modules if adapter else []
     for key in VISION_LORA:
@@ -295,7 +313,9 @@ def schedule_fields(params: dict, config: dict, flow_seed: int) -> None:
     eval_steps = float(params.get("eval_steps") or 0)
     config["eval_steps"] = eval_steps
     # Patience needs evaluation, and the Train page sends 0 without it.
-    config["early_stopping_patience"] = int(params.get("early_stopping_patience") or 0) if eval_steps > 0 else 0
+    config["early_stopping_patience"] = (
+        int(params.get("early_stopping_patience") or 0) if eval_steps > 0 else 0
+    )
     seed = params.get("random_seed")
     config["random_seed"] = int(seed) if seed not in (None, "") else flow_seed % (2**31)
 
@@ -352,7 +372,10 @@ def rl_roles(params: dict, objective: str) -> dict:
     else:
         named["chosen"] = params.get("chosen_column")
         named["rejected"] = params.get("rejected_column")
-    return {str(col).strip(): role for role, col in named.items() if str(col or "").strip()}
+    roles = {role: str(col).strip() for role, col in named.items() if str(col or "").strip()}
+    if len(set(roles.values())) < len(roles):
+        raise FlowNodeError("Each role needs its own column")
+    return {col: role for role, col in roles.items()}
 
 
 def rl_config(params: dict, objective: str, config: dict) -> list[dict]:
@@ -480,40 +503,59 @@ def holdout_row_ids(total: int, percent: int, seed: int) -> list[int]:
     return sorted(order[:count])
 
 
-def _too_many(rows: int) -> FlowNodeError:
+def _too_many(rows: Any) -> FlowNodeError:
     return FlowNodeError(
         f"{rows} rows is too many to hold out from here; set Hold out % to 0 or use a smaller slice"
     )
 
 
-def _hub_rows(dataset: dict, token: Any, end: Optional[int]) -> Any:
+def _hub_rows(dataset: dict, token: Any, start: int, end: Optional[int]) -> Any:
     """A Hub split, without downloading more than the hold-out can use: a slice streams just its
-    rows, and a split the Hub says is over the cap is refused before anything is fetched."""
+    rows, a split the Hub says is over the cap is refused before anything is fetched, and one of
+    unknown size streams at most the cap plus one row."""
     from datasets import Dataset, load_dataset, load_dataset_builder
 
     ref, subset = str(dataset["ref"]), dataset.get("subset") or None
     split = dataset.get("split") or "train"
-    if end is not None:
-        if end + 1 > HOLDOUT_MAX_ROWS:
-            raise _too_many(end + 1)
+
+    def stream(count: int) -> Any:
         streamed = load_dataset(ref, subset, split = split, token = token, streaming = True)
-        return Dataset.from_list(list(streamed.take(end + 1)))
+        rows = list((streamed.skip(start) if start else streamed).take(count))
+        if len(rows) > HOLDOUT_MAX_ROWS:
+            raise _too_many(f"More than {HOLDOUT_MAX_ROWS}")
+        return Dataset.from_list(rows)
+
+    if end is not None:
+        count = end + 1 - start
+        if count > HOLDOUT_MAX_ROWS:
+            raise _too_many(count)
+        return stream(max(count, 0))
     try:
         known = load_dataset_builder(ref, subset, token = token).info.splits[split].num_examples
     except Exception:
         known = None
-    if known and known > HOLDOUT_MAX_ROWS:
+    if not known or start:
+        if known and known - start > HOLDOUT_MAX_ROWS:
+            raise _too_many(known - start)
+        return stream(HOLDOUT_MAX_ROWS + 1)
+    if known > HOLDOUT_MAX_ROWS:
         raise _too_many(known)
     return load_dataset(ref, subset, split = split, token = token)
 
 
-def _load_rows(dataset: dict, token: Any, end: Optional[int]) -> list[dict]:
+def _load_rows(
+    dataset: dict,
+    token: Any,
+    end: Optional[int],
+    start: int = 0,
+) -> list[dict]:
+    """Rows start..end (inclusive) of the dataset, already sliced."""
     from datasets import load_dataset
 
     from core.flows.nodes.data import local_seed_path
 
     if dataset.get("source") == "hf":
-        loaded = _hub_rows(dataset, token, end)
+        loaded = _hub_rows(dataset, token, start, end)
     else:
         path = local_seed_path(dataset.get("ref"))
         builder = next((b for ext, b in LOADERS.items() if path.endswith(ext)), None)
@@ -522,8 +564,9 @@ def _load_rows(dataset: dict, token: Any, end: Optional[int]) -> list[dict]:
                 "Hold-out works on Parquet, CSV or JSON datasets; set Hold out % to 0 for this one"
             )
         loaded = load_dataset(builder, data_files = path, split = "train")
-    if end is not None:
-        loaded = loaded.select(range(min(len(loaded), end + 1)))
+        stop = len(loaded) if end is None else min(len(loaded), end + 1)
+        if start or end is not None:
+            loaded = loaded.select(range(min(start, stop), stop))
     if len(loaded) > HOLDOUT_MAX_ROWS:
         raise _too_many(len(loaded))
     # Timestamps and decimals in unused columns would stop the JSONL upload; NaN and inf become null.
@@ -548,22 +591,20 @@ async def holdout_split(
     # Same train split start/end slice the trainer would apply, so the split is of the configured range.
     end = ctx.params.get("dataset_slice_end")
     end = None if end in (None, "") else int(end)
+    start = ctx.params.get("dataset_slice_start")
+    start = 0 if start in (None, "") else int(start)
     if dataset.get("source") == "recipe" and not recipe_artifact(dataset.get("ref")):
         rows = await recipe_rows(ctx, str(dataset["ref"]))
-        if end is not None:
-            rows = rows[: end + 1]
+        rows = rows[start : None if end is None else end + 1]
     else:
         # The request's own Hub token, as /api/train/start gets it; managed accounts never borrow the server's.
         token = account_hf_token(getattr(ctx.caller, "hf_token", None))
         try:
-            rows = await asyncio.to_thread(_load_rows, dataset, token, end)
+            rows = await asyncio.to_thread(_load_rows, dataset, token, end, start)
         except FlowNodeError:
             raise
         except Exception as exc:
             raise FlowNodeError(f"Could not read the dataset to hold rows out: {exc}") from None
-    start = ctx.params.get("dataset_slice_start")
-    if start not in (None, ""):
-        rows = rows[int(start) :]
     held_ids = holdout_row_ids(len(rows), percent, seed)
     if not held_ids:
         raise FlowNodeError(f"{len(rows)} row(s) is too few to hold any out; set Hold out % to 0")
@@ -574,6 +615,21 @@ async def holdout_split(
     holdout = await upload_rows(ctx, [rows[i] for i in held_ids], f"{tag}-holdout")
     holdout.update({"percent": percent, "seed": seed, "row_ids": held_ids, "of_rows": len(rows)})
     return train, holdout
+
+
+async def hub_eval_upload(ctx: NodeContext, dataset: dict, split: str) -> str:
+    from core.flows.nodes.data import upload_rows
+    from core.training.account_jobs import account_hf_token
+
+    token = account_hf_token(getattr(ctx.caller, "hf_token", None))
+    try:
+        rows = await asyncio.to_thread(_load_rows, {**dataset, "split": split}, token, None)
+    except FlowNodeError:
+        raise
+    except Exception as exc:
+        raise FlowNodeError(f"Could not read the evaluation split {split!r}: {exc}") from None
+    name = str(dataset.get("ref") or "dataset").replace("/", "-")
+    return (await upload_rows(ctx, rows, f"{name}-{split}-eval"))["ref"]
 
 
 @handler("train.export")
