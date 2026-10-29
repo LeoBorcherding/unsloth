@@ -51,6 +51,7 @@ import {
   type RfNode,
   type WireInfo,
 } from "./derive-rf";
+import { useWireReconnect } from "./use-wire-reconnect";
 import { addFileNodes } from "./file-drop";
 import {
   SuperCardSelectionToolbar,
@@ -209,6 +210,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     );
     return first ? `${s.flowId}:${first}` : null;
   });
+  const wireReconnect = useWireReconnect(!readOnly);
 
   const deriver = useRef<RfDeriver | null>(null);
   deriver.current ??= new RfDeriver();
@@ -776,6 +778,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
         onDelete={onDelete}
+        {...wireReconnect}
         onNodeDoubleClick={onNodeDoubleClick}
         onEdgeDoubleClick={onEdgeDoubleClick}
         onNodeMouseEnter={bus ? onNodeMouseEnter : undefined}
