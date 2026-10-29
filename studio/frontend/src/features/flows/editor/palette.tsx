@@ -152,7 +152,7 @@ function RerouteItem({
       aria-pressed={armed}
       title={REROUTE_HINT}
       data-testid="palette-reroute"
-      className={`mb-1.5 flex w-full touch-none select-none items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] ${armed ? "bg-muted text-white" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`}
+      className={`mb-1.5 flex w-full touch-none select-none items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-12p5 ${armed ? "bg-muted text-white" : "text-zinc-300 hover:bg-white/5 hover:text-white"}`}
     >
       <RerouteBody />
     </button>
