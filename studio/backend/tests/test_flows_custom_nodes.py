@@ -355,3 +355,18 @@ def test_an_exported_flow_carries_the_script():
     scrubbed = package.scrub(d)
     assert scrubbed["nodes"][0]["params"]["_script"] == TEMPLATE
     assert custom_nodes.spec_for_node(scrubbed["nodes"][0])["title"] == "Repeat text"
+
+
+def test_the_library_probe_fits_a_large_env_under_the_tool_output_limit():
+    import base64
+    import json
+    import zlib
+
+    packages = [[f"package-{i}", f"{i}.0.{i % 7}"] for i in range(900)]
+    body = json.dumps({"python": "3.13", "packages": packages})
+    line = custom_nodes._LIBS_MARKER + base64.b64encode(zlib.compress(body.encode(), 9)).decode()
+    assert len(line) < 16000
+    found = custom_nodes._parse_probe(line + "\n")
+    assert found["python"] == "3.13" and len(found["packages"]) == 900
+    # Cut mid-line (the tool truncates long output): no list rather than a wrong one.
+    assert custom_nodes._parse_probe(line[: len(line) // 2]) is None

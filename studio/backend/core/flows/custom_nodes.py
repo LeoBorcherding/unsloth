@@ -12,6 +12,7 @@ came from, so the editor can tell when the library copy changed."""
 from __future__ import annotations
 
 import ast
+import base64
 import functools
 import hashlib
 import json
@@ -21,6 +22,7 @@ import textwrap
 import threading
 import time
 import uuid
+import zlib
 from typing import Any, Optional
 
 from core.flows import schema
@@ -489,15 +491,16 @@ def delete_node(node_id: str) -> bool:
 # --- What the sandbox can import. ---------------------------------------------------------------------------------
 
 _LIBS_MARKER = "<<FLOW_LIBRARIES>>"
+# Compressed: the tool cuts output past its result limit (16k chars by default), and a Studio env has ~800 packages.
 _LIBS_PROBE = (
-    "import importlib.metadata as m, json, sys\n"
+    "import base64, importlib.metadata as m, json, sys, zlib\n"
     "found = {}\n"
     "for d in m.distributions():\n"
     "    name = (d.metadata.get('Name') or '').strip()\n"
     "    if name:\n"
     "        found[name.lower()] = (name, d.version)\n"
-    f"print({_LIBS_MARKER!r} + json.dumps({{'python': sys.version.split()[0], "
-    "'packages': [list(v) for _, v in sorted(found.items())]}))\n"
+    "body = json.dumps({'python': sys.version.split()[0], 'packages': [list(v) for _, v in sorted(found.items())]})\n"
+    f"print({_LIBS_MARKER!r} + base64.b64encode(zlib.compress(body.encode(), 9)).decode())\n"
 )
 _libs_lock = threading.Lock()
 _libs_cache: Optional[dict] = None
@@ -508,8 +511,8 @@ def _parse_probe(output: str) -> Optional[dict]:
     if not marker:
         return None
     try:
-        found = json.loads(tail.split("\n", 1)[0])
-    except ValueError:
+        found = json.loads(zlib.decompress(base64.b64decode(tail.split("\n", 1)[0].strip())))
+    except (ValueError, zlib.error):
         return None
     if not isinstance(found, dict) or not isinstance(found.get("packages"), list):
         return None
