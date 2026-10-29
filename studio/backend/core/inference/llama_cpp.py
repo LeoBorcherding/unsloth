@@ -24873,10 +24873,11 @@ class LlamaCppBackend:
                         extra_args, os.environ
                     ):
                         # Output lands in token_embd's buffer context, where llama.cpp
-                        # reuses the tensor instead of duplicating it; a GPU override
-                        # can move token_embd out of it.
-                        weights_size -= _tied_output_charge
-                        _tied_output_charge = 0
+                        # reuses the tensor unless a CPU repack buffer takes the output
+                        # (as for a CPU drafter); a GPU override can move token_embd out.
+                        _cpu_tied_charge = self._tied_output_cpu_bytes(model_path)
+                        weights_size -= _tied_output_charge - _cpu_tied_charge
+                        _tied_output_charge = _cpu_tied_charge
                     _host_pinned = (
                         0 if (_shared_memory or _target_device_is_cpu) else _host_pinned_candidate
                     )

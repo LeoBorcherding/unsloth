@@ -1039,18 +1039,34 @@ def test_a_cpu_pinned_drafter_is_charged_the_duplicate_a_repack_allocates(
     assert tied - untied == (duplicate if charged else 0)
 
 
-def test_a_cpu_device_target_is_not_charged_the_tied_duplicate(backend):
+def test_a_cpu_device_target_is_charged_only_a_repacked_tied_duplicate(backend):
     """--device none keeps output in token_embd's CPU buffer context, where llama.cpp
-    reuses the tensor (llama-model-loader.cpp, TENSOR_DUPLICATED), the same reuse the
-    CPU-pinned drafter above gets. Source-checked for the reason given above."""
+    reuses the tensor (llama-model-loader.cpp, TENSOR_DUPLICATED) unless a CPU repack
+    buffer takes the output, the same rule the CPU-pinned drafter above gets."""
     import inspect
 
     src = inspect.getsource(backend.load_model)
     cpu = src.index("if _target_device_is_cpu and not self._override_moves_host_pinned(")
     assert src.index("_target_device_is_cpu = _device_selection_is_cpu(") < cpu
     branch = src[cpu : src.index("_model_weight_vram_bytes = max(0, weights_size - _host_pinned)")]
-    assert "weights_size -= _tied_output_charge" in branch
-    assert "_tied_output_charge = 0" in branch
+    assert "_cpu_tied_charge = self._tied_output_cpu_bytes(model_path)" in branch
+    assert "weights_size -= _tied_output_charge - _cpu_tied_charge" in branch
+    assert "_tied_output_charge = _cpu_tied_charge" in branch
+
+
+@pytest.mark.parametrize(
+    "ggml_type, charged", [(_TYPE_Q4_K, True), (_TYPE_F32, True), (_TYPE_F16, False)]
+)
+def test_the_cpu_target_tied_charge_follows_the_repack_types(backend, tmp_path, ggml_type, charged):
+    tied = _write_gguf(
+        tmp_path / "tied.gguf",
+        [("token_embd.weight", (256, 1024)), ("blk.0.attn_q.weight", (256, 8))],
+        ggml_type = ggml_type,
+    )
+    instance = object.__new__(backend)
+    duplicate = backend._tied_output_bytes(str(tied))
+    assert duplicate > 0
+    assert instance._tied_output_cpu_bytes(str(tied)) == (duplicate if charged else 0)
 
 
 def test_a_gpu_override_keeps_the_cpu_target_tied_charge(backend):
