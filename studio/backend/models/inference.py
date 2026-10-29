@@ -5694,6 +5694,58 @@ class MaskSegmentRequest(BaseModel):
     )
 
 
+class RemoveBackgroundRequest(BaseModel):
+    """Cut the subject out of an image with SAM 3: what ``prompt`` names stays, the rest turns transparent."""
+
+    image: Optional[str] = Field(
+        None,
+        min_length = 1,
+        max_length = 32 * 1024 * 1024,
+        description = "Base64/data-URL source image; send this or image_id",
+    )
+    image_id: Optional[str] = Field(
+        None,
+        min_length = 1,
+        max_length = 128,
+        description = "Gallery image to cut out instead of an upload; its recipe carries over to the saved copy",
+    )
+    prompt: Optional[str] = Field(
+        None,
+        max_length = 2000,
+        description = "What to keep, in the segment route's syntax (e.g. 'car', 'dog:2, person'); "
+        "empty = 'the main subject'",
+    )
+    threshold: Optional[float] = Field(
+        None,
+        ge = 0.0,
+        le = 1.0,
+        description = "Detection score threshold; null = 0.5 for a named prompt, and with no prompt the best "
+        "match is kept whatever its score",
+    )
+    grow: int = Field(
+        0, ge = -64, le = 64, description = "Widen (or, negative, shrink) the kept area by this many px"
+    )
+    feather: int = Field(0, ge = 0, le = 64, description = "Blur radius (px) for a soft edge")
+    trim: bool = Field(False, description = "Crop to the kept area")
+    save: bool = Field(True, description = "Save the cut-out to the gallery")
+
+
+class RemoveBackgroundResponse(BaseModel):
+    image: Optional[GalleryImage] = Field(None, description = "The saved gallery record, when save")
+    b64_png: Optional[str] = Field(
+        None, description = "The cut-out as a PNG data URL with alpha, when not saved"
+    )
+    mask: str = Field(..., description = "The alpha it was cut with (PNG data URL, cut-out size)")
+    width: int = Field(..., description = "Cut-out width")
+    height: int = Field(..., description = "Cut-out height")
+    prompt: str = Field(..., description = "What was kept")
+    instances: list[dict] = Field(
+        default_factory = list, description = "Each kept detection: prompt, score, box (source px)"
+    )
+    device: str = Field(..., description = "Where SAM 3 ran")
+    elapsed_ms: float = Field(..., description = "Segmentation time")
+
+
 class PromptUpsamplerPreviewRequest(BaseModel):
     """Enhance one prompt with the FLUX.3 prompt upsampler without generating."""
 

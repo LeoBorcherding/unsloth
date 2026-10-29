@@ -3392,6 +3392,8 @@ from models.inference import (
     DiffusionGenerateResponse,
     MaskSegmentRequest,
     MaskSegmenterDownloadRequest,
+    RemoveBackgroundRequest,
+    RemoveBackgroundResponse,
     PromptUpsamplerDownloadRequest,
     PromptUpsamplerPreviewRequest,
     PromptUpsamplerPreviewResponse,
@@ -50078,6 +50080,107 @@ async def mask_segment(
         logger.error("images.segment_failed: %s", exc, exc_info = True)
         raise HTTPException(status_code = 500, detail = "Making the mask failed.")
     return JSONResponse(content = body)
+
+
+def _png_data_url(image: Any) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format = "PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+@studio_router.post("/images/remove-background", response_model = RemoveBackgroundResponse)
+@account_access.gpu_busy_route
+async def remove_background(
+    request: RemoveBackgroundRequest, current_subject: str = Depends(get_current_subject)
+):
+    """Cut out what ``prompt`` names (default the main subject) with SAM 3 and make the rest transparent: a PNG with
+    alpha, saved to the gallery unless ``save`` is false. 404 for an unknown image_id, 422 when nothing matches, the
+    segment route's 409 / 501 otherwise."""
+    from core.inference import diffusion_segment as seg
+    from core.inference import image_gallery
+    from core.inference.diffusion import decode_b64_image
+
+    # Checked here, not in the model: a validation error would echo a 32 MiB upload back.
+    if (request.image is None) == (request.image_id is None):
+        raise HTTPException(status_code = 422, detail = "Send exactly one of image or image_id.")
+    account_access.require_idle_other_accounts()
+    recipe: Optional[dict] = None
+    try:
+        if request.image_id is not None:
+            owned = await asyncio.to_thread(image_gallery.owned_image, request.image_id)
+            if owned is None:
+                raise HTTPException(status_code = 404, detail = "Image not found.")
+            path, recipe = owned
+
+            def _open() -> Any:
+                from PIL import Image
+                with Image.open(path) as im:
+                    return im.convert("RGBA")
+
+            source = await asyncio.to_thread(_open)
+        else:
+            source = await asyncio.to_thread(decode_b64_image, request.image, mode = "RGBA")
+    except ValueError as exc:
+        raise HTTPException(status_code = 400, detail = str(exc))
+    allow_gpu = not _training_is_active()
+    admission = _diffusion_training_admission() if allow_gpu else nullcontext()
+    try:
+        with account_access.media_generation("diffusion"), admission:
+            cutout, alpha, result = await asyncio.to_thread(
+                functools.partial(
+                    seg.remove_background,
+                    source,
+                    request.prompt,
+                    threshold = request.threshold,
+                    grow = request.grow,
+                    feather = request.feather,
+                    trim = request.trim,
+                    allow_gpu = allow_gpu,
+                )
+            )
+    except seg.NothingFoundError as exc:
+        raise HTTPException(status_code = 422, detail = str(exc))
+    except seg.SegmenterNotDownloadedError as exc:
+        raise HTTPException(status_code = 409, detail = str(exc))
+    except seg.SegmenterUnavailableError as exc:
+        raise HTTPException(status_code = 501, detail = str(exc))
+    except seg.SegmenterBusyError as exc:
+        raise HTTPException(status_code = 409, detail = f"{exc} Try again when it finishes.")
+    except ValueError as exc:
+        raise HTTPException(status_code = 400, detail = str(exc))
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ == "TrainingActiveError":
+            raise HTTPException(status_code = 409, detail = str(exc))
+        logger.error("images.remove_background_failed: %s", exc, exc_info = True)
+        raise HTTPException(status_code = 500, detail = "Removing the background failed.")
+    body = result.to_json()
+    response = {
+        "mask": await asyncio.to_thread(_png_data_url, alpha),
+        "width": cutout.width,
+        "height": cutout.height,
+        "prompt": ", ".join(p["text"] for p in body["prompts"]),
+        "instances": body["instances"],
+        "device": body["device"],
+        "elapsed_ms": body["elapsed_ms"],
+    }
+    if not request.save:
+        return RemoveBackgroundResponse(
+            b64_png = await asyncio.to_thread(_png_data_url, cutout), **response
+        )
+    # A gallery source keeps its recipe (prompt, model, seed), so the cut-out still says what made it.
+    meta = {
+        **(recipe or {"prompt": "", "steps": 0, "guidance": 0.0, "seed": 0}),
+        "width": cutout.width,
+        "height": cutout.height,
+        "workflow": "remove_background",
+        "created_at": time.time(),
+    }
+    try:
+        record = await asyncio.to_thread(image_gallery.save, cutout, meta)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("images.remove_background_persist_failed: %s", exc)
+        raise HTTPException(status_code = 500, detail = "Failed to save the cut-out.")
+    return RemoveBackgroundResponse(image = GalleryImage(**record), **response)
 
 
 # ──────────────────────────────────────────────────────────────────────────

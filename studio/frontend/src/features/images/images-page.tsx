@@ -24,6 +24,7 @@ import {
   ArrowUpDownIcon,
   Delete02Icon,
   Download01Icon,
+  BackgroundIcon,
   Edit03Icon,
   FolderAddIcon,
   Image03Icon,
@@ -269,6 +270,8 @@ import { LocalizedEditCanvas } from "./localized-edit-canvas";
 import type { AppliedMask } from "./lib/mask-from-text";
 import { applyMaskToLayer } from "./mask-apply";
 import { MaskFromTextPanel } from "./mask-from-text-panel";
+import { removeBackground, startSegmenterDownload } from "./mask-segment-api";
+import { REMOVE_BACKGROUND_LABEL, segmenterMissing } from "./lib/remove-background";
 import { DetailerField, useDetailerSegmenter } from "./detailer-field";
 import {
   detailerAvailable,
@@ -3896,11 +3899,59 @@ export function ImagesPage({
     editRequest.current += 1;
     applyEditSource(dataUrl);
   }, [pendingLibraryEdit, capabilitiesKnown, applyEditSource]);
+  // One cut-out at a time per image: a second click while it runs would save a duplicate.
+  const removingBackground = useRef(new Set<string>());
+  const removeGalleryBackground = useCallback(
+    async (image: GalleryImage) => {
+      if (removingBackground.current.has(image.id)) return;
+      removingBackground.current.add(image.id);
+      const toastId = `remove-background-${image.id}`;
+      toast.loading("Removing the background...", { id: toastId });
+      try {
+        const saved = await removeBackground({ image_id: image.id });
+        if (!isMounted.current) return;
+        stripEpoch.current += 1;
+        setImages((prev) => mergeGenerated(prev, [saved]));
+        setSelectedId(saved.id);
+        void ensureSrc(saved);
+        toast.success("Background removed", { id: toastId, description: "Saved as a new image." });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error("Could not remove the background", {
+          id: toastId,
+          description: message,
+          // The segmenter is fetched on first use, as Mask from text fetches it.
+          action: segmenterMissing(message)
+            ? {
+                label: "Download",
+                onClick: () =>
+                  void startSegmenterDownload(hfApiToken(getHfToken())).then(
+                    () => toast.info("Downloading the segmenter. Try again when it finishes."),
+                    (err: unknown) =>
+                      toast.error("Could not download the segmenter", {
+                        description: err instanceof Error ? err.message : undefined,
+                      }),
+                  ),
+              }
+            : undefined,
+        });
+      } finally {
+        removingBackground.current.delete(image.id);
+      }
+    },
+    [ensureSrc],
+  );
   const editImageItem = (image: GalleryImage) => (
-    <DropdownMenuItem onClick={() => void editGalleryImage(image)}>
-      <HugeiconsIcon icon={Edit03Icon} strokeWidth={1.75} className="size-icon" />
-      Edit image
-    </DropdownMenuItem>
+    <>
+      <DropdownMenuItem onClick={() => void editGalleryImage(image)}>
+        <HugeiconsIcon icon={Edit03Icon} strokeWidth={1.75} className="size-icon" />
+        Edit image
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void removeGalleryBackground(image)}>
+        <HugeiconsIcon icon={BackgroundIcon} strokeWidth={1.75} className="size-icon" />
+        {REMOVE_BACKGROUND_LABEL}
+      </DropdownMenuItem>
+    </>
   );
   const { openCrop: openInpaintCrop, cropDialog: inpaintCropDialog } = useImageCrop(
     initImage,

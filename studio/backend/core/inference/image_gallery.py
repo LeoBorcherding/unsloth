@@ -339,6 +339,13 @@ def owned_image_path(image_id: str) -> Optional[Path]:
     return path
 
 
+def owned_image(image_id: str) -> Optional[tuple[Path, dict[str, Any]]]:
+    """(PNG path, recipe) for an Unsloth-owned image, else None."""
+    path = image_path(image_id)
+    meta = _read_meta(path) if path is not None else None
+    return None if meta is None else (path, meta)
+
+
 def thumbnail(path: Path, size: int) -> bytes:
     """Return a WebP thumbnail with its longest side at most ``size`` pixels."""
     import io
