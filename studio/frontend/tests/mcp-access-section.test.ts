@@ -30,13 +30,14 @@ const TUNNEL_PREF = readSrc(
 );
 
 const DIALOG_STORE = readSrc("features/settings/stores/settings-dialog-store.ts");
+const FRESH_KEY_STORE = readSrc("features/settings/stores/fresh-api-key-store.ts");
 
 const LOCALES = { ar, de, en, es, fr, he, hi, it, ja, ko, ptBR, ru, sv, zhCN };
 
 test("it ends the Agents tab, the API tab's access group links there for the owner, and settings search finds it", () => {
   assert.match(
     AGENTS_TAB,
-    /<CommandBlock command=\{shellCommands\.dryRun\} \/>\s*<\/div>\s*<\/SettingsSection>\s*<SettingsSection title=\{t\("settings\.mcp\.title"\)\}>\s*<McpAccessSection apiKey=\{newApiKey\} \/>/,
+    /<CommandBlock command=\{shellCommands\.dryRun\} \/>\s*<\/div>\s*<\/SettingsSection>\s*<SettingsSection title=\{t\("settings\.mcp\.title"\)\}>\s*<McpAccessSection apiKey=\{freshApiKey\} \/>/,
   );
   assert.doesNotMatch(API_TAB, /McpAccessSection/);
   assert.match(
@@ -143,18 +144,15 @@ test("the setup snippet shows only while on, targets the usage examples' address
 });
 
 test("a key just created on the API tab fills the Agents tab snippet and is kept out of reload snapshots", () => {
-  // Memory only: set on create, cleared when the key card is dismissed or the dialog closes.
-  assert.match(API_TAB, /setRevealed\(raw\);\s*setNewApiKey\(raw\);/);
-  assert.match(API_TAB, /setRevealed\(null\);\s*setNewApiKey\(null\);/);
-  // A revoked key must not stay in the Agents tab's MCP snippet; a regenerated one replaces it.
-  assert.match(API_TAB, /let replacement: string \| null = null;[\s\S]*?replacement = created\.key;/);
+  // Memory only, through the fresh-key store the API tab writes and a revoke clears.
+  assert.match(API_TAB, /useFreshApiKeyStore\.getState\(\)\.setKey\(raw\)/);
   assert.match(
     API_TAB,
-    /await revokeApiKey\(revokeTarget\.id\);[^}]*setNewApiKey\(replacement\);/,
+    /await revokeApiKey\(revokeTarget\.id\);\s*useFreshApiKeyStore\.getState\(\)\.forgetIfRevoked\(revokeTarget\.key_prefix\);/,
   );
-  assert.match(AGENTS_TAB, /useSettingsDialogStore\(\(s\) => s\.newApiKey\)/);
-  assert.match(DIALOG_STORE, /closeDialog: \(\) =>\s*set\(\{[\s\S]*?newApiKey: null,[\s\S]*?\}\)/);
-  assert.doesNotMatch(DIALOG_STORE, /persist\(/);
+  assert.match(AGENTS_TAB, /const freshApiKey = useFreshApiKeyStore\(\(s\) => s\.key\);/);
+  assert.doesNotMatch(DIALOG_STORE, /newApiKey/);
+  assert.doesNotMatch(FRESH_KEY_STORE, /persist\(/);
   assert.match(SECTION, /apiKey = null,/);
   assert.match(SECTION, /buildMcpSnippet\(agent, base, os, apiKey\)/);
   assert.match(

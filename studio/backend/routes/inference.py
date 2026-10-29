@@ -147,6 +147,7 @@ from core.inference.memory_contract import (
 from core.inference.stream_errors import (
     KV_STARVATION_MESSAGE,
     LlamaStreamError,
+    error_message_from_chunk,
     is_kv_starvation,
 )
 from core.inference.orchestrator import (
@@ -314,6 +315,7 @@ _LOST_CONNECTION_MSG = (
 _OVERSIZE_TOKENS_RE = _re.compile(
     r"request \((\d+) tokens?\) exceeds the available context size \((\d+) tokens?\)"
 )
+_LLAMA_CLIENT_ERROR_RE = _re.compile(r"llama-server returned 4\d\d: (.*)", _re.DOTALL)
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -353,6 +355,14 @@ def _friendly_error(exc: Exception) -> str:
     # After the token-count regex, before the catch-all, so stream failures keep their cause.
     if isinstance(exc, LlamaStreamError):
         return exc.friendly
+    client_error = _LLAMA_CLIENT_ERROR_RE.match(msg)
+    if client_error:
+        body = client_error.group(1)
+        try:
+            body = error_message_from_chunk(json.loads(body)) or body
+        except ValueError:
+            pass
+        return _friendly_upstream_error(body[:500])
     return "An internal error occurred"
 
 
@@ -38826,9 +38836,11 @@ class _ResponsesStreamTranslator:
         self.healer = healer
         self.healed_tc_index = 0
         self.terminated = False
+        self.sequence_number = 0
 
-    @staticmethod
-    def sse(event_name: str, payload: dict) -> str:
+    def sse(self, event_name: str, payload: dict) -> str:
+        payload = {**payload, "sequence_number": self.sequence_number}
+        self.sequence_number += 1
         return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
 
     def _healed_tc(self, call: dict):
@@ -39863,6 +39875,7 @@ async def _responses_stream(
             + json.dumps(
                 {
                     "type": "response.failed",
+                    "sequence_number": 0,
                     "response": {
                         "id": resp_id,
                         "object": "response",
@@ -48254,25 +48267,27 @@ async def _external_image_generation(
         created_at = time.time()
 
         def _persist() -> list[dict]:
-            return [
-                image_gallery.save(
-                    image,
-                    {
-                        "prompt": body.prompt,
-                        "width": image.width,
-                        "height": image.height,
-                        "steps": body.steps,
-                        "guidance": body.guidance,
-                        "seed": body.seed or 0,
-                        "batch_index": index,
-                        "batch_size": body.batch_size,
-                        "model": external_model,
-                        "model_kind": "connection",
-                        "created_at": created_at,
-                    },
+            return list(
+                image_gallery.save_many(
+                    (
+                        image,
+                        {
+                            "prompt": body.prompt,
+                            "width": image.width,
+                            "height": image.height,
+                            "steps": body.steps,
+                            "guidance": body.guidance,
+                            "seed": body.seed or 0,
+                            "batch_index": index,
+                            "batch_size": body.batch_size,
+                            "model": external_model,
+                            "model_kind": "connection",
+                            "created_at": created_at,
+                        },
+                    )
+                    for index, image in enumerate(images)
                 )
-                for index, image in enumerate(images)
-            ]
+            )
 
         try:
             records = await asyncio.to_thread(_persist)
@@ -48554,7 +48569,7 @@ async def _generate_diffusion_image_run(
     list_driven = bool(request.prompts or request.seeds)
 
     def _persist() -> list[dict]:
-        records = []
+        items = []
         for index, image in enumerate(result["images"]):
             seed = (
                 per_image_seeds[index]
@@ -48567,8 +48582,8 @@ async def _generate_diffusion_image_run(
                 if request.prompts and index < len(request.prompts)
                 else request.prompt
             )
-            records.append(
-                image_gallery.save(
+            items.append(
+                (
                     image,
                     {
                         "prompt": typed_prompt,
@@ -48668,7 +48683,7 @@ async def _generate_diffusion_image_run(
                     },
                 )
             )
-        return records
+        return list(image_gallery.save_many(items))
 
     # Hold generate-progress "active" across the persist so a reload mount probe cannot refresh the gallery before these records exist.
     _diffusion_persist_active += 1
@@ -50539,6 +50554,7 @@ async def _generate_openai_images(
 
     def _persist() -> list[ImageGenerationData]:
         items: list[ImageGenerationData] = []
+        saves = []
         for index, image in enumerate(result["images"]):
             seed = (
                 per_image_seeds[index]
@@ -50546,10 +50562,13 @@ async def _generate_openai_images(
                 else result["seed"]
             )
             # batch_seed is the base the native engine derives per-image seeds from, so restore does not double-advance.
-            record = image_gallery.save(
-                image,
-                {**recipe, "batch_index": index, "seed": seed, "batch_seed": result["seed"]},
+            saves.append(
+                (
+                    image,
+                    {**recipe, "batch_index": index, "seed": seed, "batch_seed": result["seed"]},
+                )
             )
+        for record in image_gallery.save_many(saves):
             if want_b64:
                 encoded = image_gallery.image_b64(record["id"])
                 if encoded is None:  # vanished between write and read — fail the call

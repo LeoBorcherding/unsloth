@@ -45,7 +45,7 @@ import { UnslothStudioMcpRow } from "../components/unsloth-studio-mcp-row";
 import { ApiExamplesPanel } from "../components/api-example-tabs";
 import { useApiTunnelPref } from "../components/usage-examples";
 import { usePublishAccessUrls } from "../hooks/use-publish-access-urls";
-import { useSettingsDialogStore } from "../stores/settings-dialog-store";
+import { useFreshApiKeyStore } from "../stores/fresh-api-key-store";
 
 function expiryDays(key: ApiKey): number | null {
   if (!key.expires_at) return null;
@@ -65,7 +65,12 @@ export function ApiKeysTab() {
   const [revoking, setRevoking] = useState(false);
   const [regenerate, setRegenerate] = useState(false);
   const [revealed, setRevealed] = useState<string | null>(null);
-  const setNewApiKey = useSettingsDialogStore((s) => s.setNewApiKey);
+  // The examples read the store, not `revealed`: that dies with this tab and on Done.
+  const freshKey = useFreshApiKeyStore((s) => s.key);
+  const reveal = (raw: string) => {
+    setRevealed(raw);
+    useFreshApiKeyStore.getState().setKey(raw);
+  };
   const [useTunnel, setUseTunnel] = useApiTunnelPref();
   // Owner-only routes, as the Remote & LAN tab is.
   usePublishAccessUrls(isOwner);
@@ -143,19 +148,16 @@ export function ApiKeysTab() {
     setRevoking(true);
     setActionError(null);
     try {
-      let replacement: string | null = null;
       if (regenerate) {
         // Created before the old one is revoked, so a failed create loses nothing.
         const created = await createApiKey(
           revokeTarget.name,
           expiryDays(revokeTarget),
         );
-        replacement = created.key;
-        setRevealed(created.key);
+        reveal(created.key);
       }
       await revokeApiKey(revokeTarget.id);
-      // Which key the MCP snippet holds is unknown here, so any revoke drops it; a regenerated key replaces it.
-      setNewApiKey(replacement);
+      useFreshApiKeyStore.getState().forgetIfRevoked(revokeTarget.key_prefix);
       await load();
       setRevokeTarget(null);
     } catch (cause) {
@@ -211,10 +213,7 @@ export function ApiKeysTab() {
             >
               <KeyRevealCard
                 rawKey={revealed}
-                onDone={() => {
-                  setRevealed(null);
-                  setNewApiKey(null);
-                }}
+                onDone={() => setRevealed(null)}
               />
             </motion.div>
           ) : (
@@ -227,8 +226,7 @@ export function ApiKeysTab() {
             >
               <CreateKeyForm
                 onCreated={(raw) => {
-                  setRevealed(raw);
-                  setNewApiKey(raw);
+                  reveal(raw);
                   void load();
                 }}
                 onError={setActionError}
@@ -286,7 +284,7 @@ export function ApiKeysTab() {
       </section>
 
       <ApiExamplesPanel
-        apiKey={revealed}
+        apiKey={freshKey}
         useTunnel={useTunnel}
         onUseTunnelChange={setUseTunnel}
         keylessScope={keyless.scope}

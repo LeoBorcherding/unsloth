@@ -95,10 +95,6 @@ interface SettingsDialogState {
   audioApiRequested: AudioApiRequest | null;
   decisionTryRequested: string | null;
   mediaApiRequested: MediaApiRequest | null;
-  // A key just created on the API tab, so the Agents tab's MCP snippet can use it. Memory
-  // only; cleared when the key card is dismissed or the dialog closes.
-  newApiKey: string | null;
-  setNewApiKey: (key: string | null) => void;
   openDialog: (tab?: SettingsTab, options?: OpenDialogOptions) => void;
   openArchivedChats: () => void;
   openArchivedMedia: (shelf: Exclude<ArchivedShelf, "chats">) => void;
@@ -247,8 +243,6 @@ export const useSettingsDialogStore = create<SettingsDialogState>((set) => ({
   audioApiRequested: null,
   decisionTryRequested: null,
   mediaApiRequested: null,
-  newApiKey: null,
-  setNewApiKey: (key) => set({ newApiKey: key }),
   openDialog: (requestedTab, options) =>
     set((state) => {
       const { tab, target } = resolveScrollRequest(requestedTab, options?.scrollTarget);
@@ -376,7 +370,6 @@ export const useSettingsDialogStore = create<SettingsDialogState>((set) => ({
       audioApiRequested: null,
       decisionTryRequested: null,
       mediaApiRequested: null,
-      newApiKey: null,
     }),
   setActiveTab: (tab) => {
     try {
