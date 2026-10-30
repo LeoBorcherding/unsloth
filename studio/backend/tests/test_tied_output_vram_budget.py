@@ -1229,8 +1229,7 @@ def test_an_exact_override_to_an_igpu_keeps_the_table_in_the_host_floor(backend,
     moved = ["-ot", "per_layer_token_embd.weight=Vulkan1"]
     assert instance._host_pinned_floor_bytes(model, moved, env = {}) == 1 * gib
     assert (
-        instance._host_pinned_floor_bytes(model, moved, env = {}, proved_discrete = False)
-        == 28 * gib
+        instance._host_pinned_floor_bytes(model, moved, env = {}, proved_discrete = False) == 28 * gib
     )
     draft = ["-otd", "per_layer_token_embd.weight=Vulkan1"]
     assert (

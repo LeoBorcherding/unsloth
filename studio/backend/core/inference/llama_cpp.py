@@ -26721,18 +26721,6 @@ class LlamaCppBackend:
                         _shared_pool_mmproj = max(0, _shared_pool_mmproj - _projector_change)
                         return _target_change, _draft_change, _projector_change
 
-                    def _subset_model_size(n_gpus: int, subset = None) -> int:
-                        size = model_size_fit + max(0, n_gpus - 1) * _pipeline_overhead_bytes
-                        if subset:
-                            _subset_ids = [idx for idx, _free in subset]
-                            size -= _candidate_host_pinned_delta(_subset_ids)
-                            # One projector relief, whichever proves the subset keeps it off the pool.
-                            size -= max(
-                                _candidate_shared_pool_mmproj_delta(_subset_ids),
-                                _discrete_host_only(subset),
-                            )
-                        return size
-
                     def _discrete_host_only(subset = None) -> int:
                         # The shared-pool projector charge a discrete tier drops: only when
                         # every discrete total is known, and none for a subset holding an
@@ -26748,6 +26736,18 @@ class LlamaCppBackend:
                         ):
                             return _shared_pool_mmproj
                         return 0
+
+                    def _subset_model_size(n_gpus: int, subset = None) -> int:
+                        size = model_size_fit + max(0, n_gpus - 1) * _pipeline_overhead_bytes
+                        if subset:
+                            _subset_ids = [idx for idx, _free in subset]
+                            size -= _candidate_host_pinned_delta(_subset_ids)
+                            # One projector relief, whichever proves the subset keeps it off the pool.
+                            size -= max(
+                                _candidate_shared_pool_mmproj_delta(_subset_ids),
+                                _discrete_host_only(subset),
+                            )
+                        return size
 
                     # Unified-memory budget (0 off Apple Silicon) for the no-GPU Metal cap below.
                     _apple_budget_mib = self._apple_metal_memory_budget_bytes() // (1024 * 1024)
