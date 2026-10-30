@@ -140,6 +140,11 @@ export const ja = {
     more: "その他",
     addressPlaceholder: "検索または URL を入力",
     local: "ローカル",
+    browserUse: {
+      label: "ブラウザ操作",
+      description: "モデルに内蔵ブラウザを操作させる",
+      unavailable: "ブラウザを使わせるには、ツールを呼び出せるモデルを読み込んでください。",
+    },
     suggested: "おすすめ",
     suggestedMenu: {
       open: "開く",
@@ -625,6 +630,36 @@ export const ja = {
     compactEmpty: "まだ圧縮する内容がありません",
     compactUnsupported: "会話の圧縮にはツール対応のGGUFまたはMLXモデルが必要です",
   },
+  halloween: {
+    navLabel: "トリック・オア・トリート…",
+    title: "トリック・オア・トリート？！",
+    description: "Unslothに少しだけ怖い仕掛けを用意しました。10月いっぱいお楽しみください。",
+    chooseTheme: "怖いテーマを選ぶ",
+    spookyGreetings: "怖いあいさつ",
+    spookyGreetingsDescription: "新しいチャットでナマケモノが驚かせます。",
+    decorations: "クモとコウモリ",
+    decorationsDescription:
+      "ハロウィンテーマの間、隅にクモの巣が張られ、ときどきクモやコウモリが現れます。",
+    surprise: "トリック・オア・トリート！",
+    surpriseDescription: "ナマケモノにテーマを選んでもらいましょう。",
+    themesTitle: "怖いテーマ",
+    back: "戻る",
+    footer: "Unslothは11月1日の午前0時に元に戻ります。",
+    removeNow: "今すぐ解除",
+    hideFromSidebar: "サイドバーから非表示",
+    greeting: {
+      pumpkins: "かぼちゃのランタンができました。次は何をしましょう？",
+      brewing: "さあ、魔法の薬を作ろう",
+      trickOrTreat: "トリック・オア・トリート？",
+      manor: "屋敷へようこそ",
+      manorName: "{name}さん、屋敷へようこそ",
+      happyHalloween: "ハッピーハロウィン",
+      happyHalloweenName: "{name}さん、ハッピーハロウィン",
+      spirits: "精霊たちが耳を澄ませています…",
+      mysteries: "今夜はどんな謎を解き明かしましょう？",
+      conjure: "どんな魔法をかけましょうか？",
+    },
+  },
   welcome: {
     goodToSeeYou: "お会いできてうれしいです",
     goodToSeeYouName: "{name}さん、お会いできてうれしいです",
@@ -786,6 +821,8 @@ export const ja = {
       guidedTour: "ガイドツアー",
       help: "ヘルプ",
       logOut: "ログアウト",
+      logOutNeedsPassword: "ログアウトする前に、設定 > リモートアクセスでパスワードを設定してください。再びサインインするために必要です。",
+      logOutFailed: "安全にログアウトできませんでした。しばらくしてからもう一度お試しください。",
       shutdown: "シャットダウン",
     },
     commandPalette: {
@@ -930,6 +967,11 @@ export const ja = {
   },
   settings: {
     accounts: {
+      signsInAs: "{username} としてサインイン",
+      signsInAsOwner: "{alias} または {username} としてサインイン",
+      signInName: "サインイン名",
+      signInNameDescription: "このインストールに複数のアカウントがあるときにサインインで入力する名前です。unsloth も常に使えます。空欄にすると unsloth のみになります。",
+      signInNameSave: "名前を保存",
       title: "アカウント",
       description: "個別の Unsloth アカウントを作成します。新しいユーザーは一度きりのセットアップコードでサインインし、パスワードを設定します。",
       username: "ユーザー名",
@@ -1070,7 +1112,7 @@ export const ja = {
       lastVisited: "前回開いたタブ",
     },
     tabs: {
-      sandbox: "サンドボックス",
+      sandbox: "セキュリティ",
       accounts: "アカウント",
       general: "一般",
       profile: "プロフィール",
@@ -1354,7 +1396,7 @@ export const ja = {
       },
     },
     sandbox: {
-      title: "サンドボックス",
+      title: "セキュリティ",
       description: "このコンピューターで Python とターミナルのツール呼び出しを OS サンドボックス内で実行するかどうか。",
       docs: "ドキュメント",
       docsLabel: "サンドボックスのドキュメントを開く",
@@ -1409,17 +1451,17 @@ export const ja = {
       installingRuntime: "インストール中…",
       installRuntimeFailed: "ランタイムのインストールに失敗しました。",
       installRuntimeError: "ランタイムのインストールを開始できませんでした。",
-      unsupportedArch: "Windows サンドボックス (MXC) は x64 版 Windows でのみ動作するため、この PC では使用できません。",
+      unsupportedArch: "Windows サンドボックス (MXC) は x64 版および ARM64 版 Windows でのみ動作するため、この PC では使用できません。",
       builtinNeedsUpdate:
         "Windows の組み込みコンテナーにはビルド {required} 以降が必要ですが、この PC は {current} です。管理者の手順なしで使うには最新の Windows Update をインストールするか、下のフォールバック サンドボックスをオンにしてください。",
       unsupportedBuild: "Windows サンドボックス (MXC) には Windows 11 24H2 (ビルド 26100) 以降が必要なため、この PC では使用できません。",
-      permissionsIntro: "ツールが先に確認するタイミングと、Python とターミナルを OS サンドボックス内でも実行するかを選びます。",
       permissionLabel: "ツールの権限",
+      levelRowLabel: "サンドボックスのレベル",
       levelPickerTitle: "コードをどのように隔離しますか？",
       levelOff: "無効",
       levelOffShort: "フルアクセスではサンドボックスがオフになります",
-      levelHighDetail: "OS サンドボックス。Python とターミナルは、ソフトウェアの保護に加えて OS サンドボックス (bubblewrap、Seatbelt または MXC) 内で実行されます。OS サンドボックスが動作しない場合、危険な呼び出しは先に確認します。",
-      levelLowDetail: "ソフトウェア サンドボックス。Python とターミナルはソフトウェアの保護のみで、OS サンドボックスの外で実行されます。フルアクセス以外では、危険な呼び出しは先に確認します。",
+      levelHighDetail: "Python とターミナルは、ソフトウェアの保護に加えて OS サンドボックス (bubblewrap、Seatbelt または MXC) 内で実行されます。OS サンドボックスが動作しない場合、危険な呼び出しは先に確認します。",
+      levelLowDetail: "Python とターミナルはソフトウェアの保護のみで、OS サンドボックスの外で実行されます。フルアクセス以外では、危険な呼び出しは先に確認します。",
       levelLabel: "サンドボックス",
       levelHigh: "高",
       levelLow: "低",
@@ -1430,6 +1472,7 @@ export const ja = {
       managedNote: "OS サンドボックスは、この Unsloth サーバーの所有者が設定します。",
     },
     debugging: {
+      description: "アプリを離れずに Unsloth のログを確認できます。",
       logSection: "ログファイル",
       source: "ログファイル",
       sourceHint: "モデルランナーはそれぞれ独自のログを書き出すため、読み込みや生成の失敗の理由は、サーバーログではなくそちらに記録されていることがよくあります。",
@@ -2033,13 +2076,13 @@ export const ja = {
         },
         details: {
           ask:
-            "ターミナルや Python のコード、ウェブ検索、ファイル編集、MCP ツールを含め、すべてのツール呼び出しの前に確認します。外部プロバイダーが実行するツールは一時停止されません。各ステップを確認したいときに最適です。",
+            "ターミナルや Python のコード、ウェブ検索、ファイル編集、MCP ツールを含め、すべてのツール呼び出しの前に確認します。外部プロバイダーが実行するツールは一時停止されません。",
           auto:
             "通常のツール呼び出しは自動で実行し、認証情報の読み取り、権限昇格、破壊的なコマンドなど、危険そうな操作のときだけ確認します。",
           off:
-            "すべてのツール呼び出しを確認なしで実行します。Python とターミナルのコードは引き続きサンドボックス内で実行され、コンピューター上でアクセスできるファイルが制限されます。このコンピューターで OS サンドボックスが動作しない場合、危険な Python とターミナルの呼び出しは先に確認します。",
+            "すべてのツール呼び出しを確認なしで実行します。Python とターミナルのコードは引き続きサンドボックス内で実行され、コンピューター上でアクセスできるファイルが制限されます。OS サンドボックスが動作しない場合、危険な呼び出しは先に確認します。",
           full:
-            "すべてのツール呼び出しを確認なしで実行し、コードサンドボックスをオフにします。Python とターミナルのコードは、アカウントがアクセスできる任意のファイルを読み取り、変更できます。サンドボックスの外で作業する必要がある、信頼できるタスクに最適です。",
+            "すべてのツール呼び出しを確認なしで実行し、コードサンドボックスをオフにします。Python とターミナルのコードは、アカウントがアクセスできる任意のファイルを読み取り、変更できます。",
         },
       },
     },
@@ -2054,8 +2097,8 @@ export const ja = {
       avatarShape: "プロフィール写真の形状",
       avatarShapeCircle: "円形",
       avatarShapeRounded: "角丸",
-      greetingSloth: "挨拶にナマケモノを表示",
-      greetingSlothDescription: "チャットの挨拶にナマケモノを表示します。",
+      greetingSloth: "あいさつ",
+      greetingSlothDescription: "新しいチャットにあいさつを表示します。",
       chooseSloth: "またはナマケモノのプロフィール画像を選択",
       noPicture: "プロフィール画像なし",
       noneLabel: "なし",
@@ -2157,6 +2200,12 @@ export const ja = {
         classic: "クラシック",
         minimal: "ミニマル",
         moreThemes: "その他のテーマ",
+        halloween: "ハロウィン",
+      },
+      trickOrTreat: {
+        label: "トリック・オア・トリート",
+        description:
+          "11月1日まで、ハロウィンのテーマと怖いあいさつを楽しめます。",
       },
       custom: {
         chatWidth: {
@@ -2286,10 +2335,12 @@ export const ja = {
       description: "この Unsloth サーバーのハードウェアとストレージを監視します。",
       liveUpdates: "リアルタイム更新",
       floatingWindow: "フローティングウィンドウ",
-      disableOverlay: "オーバーレイを無効化",
+      showFloatingWindow: "フローティングウィンドウを表示",
+      showFloatingWindowDescription: "CPU・RAM・GPU の使用状況を Unsloth の上に表示し続けます。",
       liveMonitor: {
         title: "リアルタイムモニター",
         apiTitle: "API モニター",
+        apiDescription: "他のアプリがこのサーバーの API に送る内容を、届いたそばから確認できます。",
         summary: "処理中のリクエスト、エラー、トークン使用量",
         status: "処理中 {active} 件 · 最近 {recent} 件 · {model}",
         noModelLoaded: "モデル未読み込み",
@@ -2309,7 +2360,7 @@ export const ja = {
         gpuUnusableDetail: "検出されましたが、PyTorch から利用できません",
         detailedView: "詳細表示",
         detailedViewDescription:
-          "フローティングウィンドウとここに、CPU 負荷と各 GPU の負荷、温度、消費電力を表示します。",
+          "フローティングウィンドウに、CPU 負荷と各 GPU の負荷、温度、消費電力を表示します。",
         cpuLoad: "CPU 負荷",
         gpuLoad: "GPU 負荷",
         temperature: "温度",
@@ -2343,6 +2394,10 @@ export const ja = {
         used: "{value} 使用中",
         free: "{value} 空き",
         total: "{value} 合計",
+        usedOf: "{total} 中 {used} 使用中",
+        segmentUsed: "GPU が使用中",
+        segmentSystem: "システムが使用中",
+        segmentAvailable: "使用可能",
       },
       llamaBackend: {
         title: "GGUF 推論エンジン",
@@ -2472,6 +2527,10 @@ export const ja = {
           hideDetailsAction: "詳細を隠す",
           clearAction: "キャッシュを削除",
           clearOneAction: "削除",
+          showFolders: "フォルダを表示",
+          hideFolders: "フォルダを非表示",
+          previousLocations: "以前の場所も含みます。メインの削除ボタンは現在のキャッシュフォルダが対象です。モデルのボタンは選択したコピーのみを削除します。",
+          clearModelDescription: "このキャッシュ済みコピーのみを削除します。必要になったときに再度ダウンロードされます。",
           clearingAction: "削除しています...",
           confirmTitle: "キャッシュファイルを削除しますか?",
           confirmDescription: "約{size}の空き容量ができます。",
@@ -2529,6 +2588,8 @@ export const ja = {
         python: "Python",
         torch: "Torch",
         transformers: "Transformers",
+        mlxLm: "mlx-lm",
+        mlxVlm: "mlx-vlm",
         uptime: "稼働時間",
         processMemory: "プロセスメモリ",
         notInstalled: "未インストール",
@@ -2720,11 +2781,6 @@ export const ja = {
       autoScrollManual: "手動",
       autoScrollKeywords:
         "スクロール 自動スクロール 追従 下 ジャンプ ストリーミング 生成 固定 scroll autoscroll follow",
-      scrollToBottomButton: "一番下へスクロールボタン",
-      scrollToBottomButtonDescription:
-        "上にスクロールしたときに、最新のメッセージへ戻るボタンを表示します。",
-      scrollToBottomButtonKeywords:
-        "スクロール 一番下 最新 矢印 ボタン 非表示 scroll bottom button",
       replyNotification: "応答完了時に通知",
       replyNotificationDescription:
         "Unsloth が最小化またはバックグラウンドにあるときに応答が完了すると、システム通知を表示します。",
@@ -2746,8 +2802,8 @@ export const ja = {
         "詳細 速度 トークン 統計 レイヤー オフロード verbose developer stats speed tok/s prefill decode layers offload vram experts",
       inlineEditResponse: "応答に応答の編集を表示",
       inlineEditResponseDescription: "応答の編集を「その他」メニューではなく、各応答に表示します。",
-      modelDisclaimer: "モデルの免責事項を表示",
-      modelDisclaimerDescription: 'チャットボックスの下に "LLMs can make mistakes" と表示します。',
+      composerAtBottom: "入力欄を下に表示",
+      composerAtBottomDescription: "新しいチャットで入力欄を中央ではなくページ下部に表示します。",
       projectAttachments: "プロジェクト全体でファイルを共有",
       projectAttachmentsDescription:
         "新しく添付したファイルをプロジェクト内のすべてのチャットで利用できるようにします。",
@@ -3104,6 +3160,7 @@ export const ja = {
       readDocs: "API ドキュメントを読む",
       noAccess: "アクセストークンはまだありません。",
       accessTokens: "アクセストークン",
+      quickstartTitle: "クイックスタート",
       columnName: "名前",
       columnToken: "トークン",
       columnCreated: "作成",
@@ -3240,8 +3297,9 @@ export const ja = {
         loadError: "判定 API の設定を読み込めませんでした。",
         sendsTo: "リクエストは {provider} に送信されます。",
         connectionMissing: "この接続は存在しないか、判定モデルがありません。別のモデルを選んでください。",
-        addConnection: "ホスト型の判定モデルを使うには、接続で TypeSafe、Liquid AI、OpenRouter のいずれかを追加してください。",
-        openConnections: "接続を開く",
+        addConnection: "ホスト型の判定モデルを使うには、",
+        connectionsLink: "接続",
+        addConnectionSuffix: "で追加してください。",
       },
       mcp: {
         title: "エージェントアクセス (MCP)",
@@ -3268,6 +3326,7 @@ export const ja = {
       desktopAppVersionUnavailable: "利用できません",
       llamaCppVersion: "llama.cpp バージョン",
       audioCppVersion: "audio.cpp バージョン",
+      mlxVersion: "MLX バージョン",
       whisperCppVersion: "whisper.cpp バージョン",
       engines: {
         title: "エンジン",
@@ -3374,6 +3433,8 @@ export const ja = {
   },
   studio: {
     goToLibrary: "ライブラリへ移動",
+    imageTraining: "画像トレーニング",
+    goToImageTraining: "画像 LoRA をトレーニング",
     routeTitle: "トレーニング",
     wizard: {
       modelTitle: "モデル",
@@ -4133,7 +4194,6 @@ export const ja = {
       terminalStart: "> unsloth トレーニングを開始します...",
       preparingResources: "> モデルとデータセットを準備中...",
       gettingReady: "> 実行の準備を整えています...",
-      waitingForFirstStep: "> {message} | 最初のステップを待機中... ({step})",
       resumingTraining: "トレーニングを再開しています...",
       startingTraining: "トレーニングを開始しています...",
       dataset: "データセット",
@@ -4498,6 +4558,7 @@ export const ja = {
       modelsTitle: "ファインチューニング済みモデルはまだありません",
       modelsDescription: "Unsloth でトレーニングまたはエクスポートしたモデルがここに表示されます。",
       createFolder: "フォルダを作成",
+      generateImage: "画像を生成",
       generateVideo: "動画を生成",
       generateAudio: "音声を生成",
       trainModel: "モデルをトレーニング",

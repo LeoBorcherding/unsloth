@@ -139,6 +139,11 @@ export const fr = {
     more: "Plus",
     addressPlaceholder: "Rechercher ou saisir une URL",
     local: "Local",
+    browserUse: {
+      label: "Utilisation du navigateur",
+      description: "Laisser les modèles contrôler le navigateur intégré",
+      unavailable: "Chargez un modèle capable d'appeler des outils pour qu'il utilise le navigateur.",
+    },
     suggested: "Suggestions",
     suggestedMenu: {
       open: "Ouvrir",
@@ -624,6 +629,38 @@ export const fr = {
     compactEmpty: "Rien à compacter pour le moment",
     compactUnsupported: "Le compactage nécessite un modèle GGUF ou MLX prenant en charge les outils",
   },
+  halloween: {
+    navLabel: "Un bonbon ou un sort…",
+    title: "Un bonbon ou un sort ?!",
+    description:
+      "Nous avons concocté quelques frayeurs pour Unsloth, jusqu’à la fin d’octobre.",
+    chooseTheme: "Choisissez un thème effrayant",
+    spookyGreetings: "Salutations effrayantes",
+    spookyGreetingsDescription:
+      "Le paresseux accueille les nouvelles discussions avec une frayeur.",
+    decorations: "Araignées et chauves-souris",
+    decorationsDescription:
+      "Des toiles dans les coins, et de temps en temps une araignée ou une chauve-souris avec un thème d’Halloween.",
+    surprise: "Un bonbon ou un sort !",
+    surpriseDescription: "Laissez le paresseux choisir un thème pour vous.",
+    themesTitle: "Thèmes effrayants",
+    back: "Retour",
+    footer: "Unsloth redevient normal à minuit le 1er novembre.",
+    removeNow: "Retirer maintenant",
+    hideFromSidebar: "Masquer de la barre latérale",
+    greeting: {
+      pumpkins: "Les citrouilles sont sculptées. Et ensuite ?",
+      brewing: "Préparons la potion",
+      trickOrTreat: "Un bonbon ou un sort ?",
+      manor: "Bienvenue au manoir",
+      manorName: "Bienvenue au manoir, {name}",
+      happyHalloween: "Joyeux Halloween",
+      happyHalloweenName: "Joyeux Halloween, {name}",
+      spirits: "Les esprits écoutent…",
+      mysteries: "Quels mystères allons-nous percer ce soir ?",
+      conjure: "Que puis-je faire apparaître pour vous ?",
+    },
+  },
   welcome: {
     goodToSeeYou: "Ravi de vous voir",
     goodToSeeYouName: "Ravi de vous voir, {name}",
@@ -788,6 +825,8 @@ export const fr = {
       guidedTour: "Visite guidée",
       help: "Aide",
       logOut: "Se déconnecter",
+      logOutNeedsPassword: "Définissez un mot de passe dans Paramètres > Accès à distance avant de vous déconnecter, pour pouvoir vous reconnecter.",
+      logOutFailed: "Impossible de se déconnecter en toute sécurité. Réessayez dans un instant.",
       shutdown: "Arrêter",
     },
     commandPalette: {
@@ -933,6 +972,11 @@ export const fr = {
   },
   settings: {
     accounts: {
+      signsInAs: "Se connecte en tant que {username}",
+      signsInAsOwner: "Se connecte en tant que {alias} ou {username}",
+      signInName: "Votre nom de connexion",
+      signInNameDescription: "Le nom à saisir pour vous connecter quand cette installation compte plusieurs comptes. unsloth fonctionne toujours aussi. Laissez vide pour n'utiliser que unsloth.",
+      signInNameSave: "Enregistrer le nom",
       title: "Comptes",
       description: "Créez des comptes Unsloth privés. Les nouveaux utilisateurs se connectent avec un code de configuration à usage unique et choisissent un mot de passe.",
       username: "Nom d'utilisateur",
@@ -1073,7 +1117,7 @@ export const fr = {
       lastVisited: "Dernier visité",
     },
     tabs: {
-      sandbox: "Sandbox",
+      sandbox: "Sécurité",
       accounts: "Comptes",
       general: "Général",
       profile: "Profil",
@@ -1357,7 +1401,7 @@ export const fr = {
       },
     },
     sandbox: {
-      title: "Sandbox",
+      title: "Sécurité",
       description: "Indique si les appels d'outils Python et Terminal s'exécutent dans un bac à sable du système sur cet ordinateur.",
       docs: "Documentation",
       docsLabel: "Ouvrir la documentation du sandbox",
@@ -1412,16 +1456,16 @@ export const fr = {
       installingRuntime: "Installation…",
       installRuntimeFailed: "L'installation du runtime a échoué.",
       installRuntimeError: "Impossible de lancer l'installation du runtime.",
-      unsupportedArch: "Le bac à sable Windows (MXC) ne fonctionne que sous Windows x64, il n'est donc pas disponible sur ce PC.",
+      unsupportedArch: "Le bac à sable Windows (MXC) ne fonctionne que sous Windows x64 et ARM64, il n'est donc pas disponible sur ce PC.",
       builtinNeedsUpdate: "Le conteneur intégré de Windows nécessite la build {required} ou plus récente, et ce PC exécute {current}. Installez la dernière mise à jour de Windows pour l'utiliser sans étape administrateur, ou activez le sandbox de secours ci-dessous.",
       unsupportedBuild: "Le bac à sable Windows (MXC) nécessite Windows 11 24H2 (build 26100) ou plus récent, il n'est donc pas disponible sur ce PC.",
-      permissionsIntro: "Choisissez quand les outils demandent d'abord, et si Python et le Terminal s'exécutent aussi dans le bac à sable du système.",
       permissionLabel: "Autorisations des outils",
+      levelRowLabel: "Niveau de sandbox",
       levelPickerTitle: "Comment isoler le code ?",
       levelOff: "Désactivé",
       levelOffShort: "L'Accès complet désactive le bac à sable",
-      levelHighDetail: "Bac à sable du système. Python et le Terminal s'exécutent dans le bac à sable du système (bubblewrap, Seatbelt ou MXC) en plus des protections logicielles. Sans bac à sable du système fonctionnel, les appels risqués demandent d'abord.",
-      levelLowDetail: "Bac à sable logiciel. Python et le Terminal s'exécutent avec les seules protections logicielles, hors du bac à sable du système. Les appels risqués demandent d'abord, sauf en Accès complet.",
+      levelHighDetail: "Python et le Terminal s'exécutent dans le bac à sable du système (bubblewrap, Seatbelt ou MXC) en plus des protections logicielles. Sans bac à sable du système fonctionnel, les appels risqués demandent d'abord.",
+      levelLowDetail: "Python et le Terminal s'exécutent avec les seules protections logicielles, hors du bac à sable du système. Les appels risqués demandent d'abord, sauf en Accès complet.",
       levelLabel: "Sandbox",
       levelHigh: "Élevé",
       levelLow: "Faible",
@@ -1432,6 +1476,7 @@ export const fr = {
       managedNote: "Le propriétaire de ce serveur Unsloth configure le bac à sable du système.",
     },
     debugging: {
+      description: "Consultez les journaux d'Unsloth sans quitter l'application.",
       logSection: "Fichier journal",
       source: "Fichier journal",
       sourceHint: "Les exécuteurs de modèles écrivent leurs propres journaux : un chargement ou une génération en échec y est donc souvent expliqué plutôt que dans le journal du serveur.",
@@ -2075,13 +2120,13 @@ export const fr = {
         },
         details: {
           ask:
-            "Demande votre accord avant chaque appel d'outil, y compris le code terminal et Python, les recherches web, les modifications de fichiers et les outils MCP. Les outils exécutés par un fournisseur externe ne sont pas mis en pause. Idéal pour vérifier chaque étape.",
+            "Demande votre accord avant chaque appel d'outil, y compris le code terminal et Python, les recherches web, les modifications de fichiers et les outils MCP. Les outils exécutés par un fournisseur externe ne sont pas mis en pause.",
           auto:
             "Exécute seul les appels d'outils courants et ne demande votre accord que lorsqu'une action semble risquée, comme lire des identifiants, élever des privilèges ou lancer des commandes destructrices.",
           off:
-            "Exécute chaque appel d'outil sans demander. Le code Python et terminal reste exécuté dans le bac à sable, qui limite les fichiers auxquels il peut accéder sur votre ordinateur. Si cet ordinateur n'a pas de bac à sable système fonctionnel, les appels Python et terminal risqués demandent d'abord.",
+            "Exécute chaque appel d'outil sans demander. Le code Python et terminal reste exécuté dans le bac à sable, qui limite les fichiers auxquels il peut accéder sur votre ordinateur. Sans bac à sable du système fonctionnel, les appels risqués demandent d'abord.",
           full:
-            "Exécute chaque appel d'outil sans demander et désactive le bac à sable du code : le code Python et terminal peut lire et modifier tout fichier accessible à votre compte. Idéal pour les tâches de confiance qui doivent travailler hors du bac à sable.",
+            "Exécute chaque appel d'outil sans demander et désactive le bac à sable du code : le code Python et terminal peut lire et modifier tout fichier accessible à votre compte.",
         },
       },
     },
@@ -2110,9 +2155,8 @@ export const fr = {
       uploadPhoto: "Importer une photo",
       removePhoto: "Retirer",
       pictureOptions: "Options de la photo de profil",
-      greetingSloth: "Paresseux dans le message d'accueil",
-      greetingSlothDescription:
-        "Afficher le paresseux dans le message d'accueil de la discussion.",
+      greetingSloth: "Message d'accueil",
+      greetingSlothDescription: "Afficher le message d'accueil dans les nouvelles discussions.",
       noPicture: "Aucune photo de profil",
       noneLabel: "Aucun",
       stats: {
@@ -2202,6 +2246,12 @@ export const fr = {
         classic: "Classique",
         minimal: "Minimale",
         moreThemes: "Plus de thèmes",
+        halloween: "Halloween",
+      },
+      trickOrTreat: {
+        label: "Un bonbon ou un sort",
+        description:
+          "Thèmes d’Halloween et salutations effrayantes, jusqu’au 1er novembre.",
       },
       custom: {
         chatWidth: {
@@ -2335,10 +2385,12 @@ export const fr = {
         "Surveillez le matériel et le stockage de ce serveur Unsloth.",
       liveUpdates: "Mises à jour en direct",
       floatingWindow: "Fenêtre flottante",
-      disableOverlay: "Désactiver la superposition",
+      showFloatingWindow: "Afficher la fenêtre flottante",
+      showFloatingWindowDescription: "Garde l'utilisation du CPU, de la RAM et du GPU visible par-dessus Unsloth.",
       liveMonitor: {
         title: "Moniteur en direct",
         apiTitle: "Moniteur d’API",
+        apiDescription: "Voyez ce que les autres applications envoient à l'API de ce serveur dès son arrivée.",
         summary: "Requêtes en cours, erreurs et utilisation des jetons",
         status: "{active} actives · {recent} récentes · {model}",
         noModelLoaded: "aucun modèle chargé",
@@ -2358,7 +2410,7 @@ export const fr = {
         gpuUnusableDetail: "Détecté, mais PyTorch ne peut pas l'utiliser",
         detailedView: "Vue détaillée",
         detailedViewDescription:
-          "Affiche la charge du CPU ainsi que la charge, la température et la consommation de chaque GPU dans la fenêtre flottante et ici.",
+          "Affiche la charge du CPU ainsi que la charge, la température et la consommation de chaque GPU dans la fenêtre flottante.",
         cpuLoad: "Charge CPU",
         gpuLoad: "Charge GPU",
         temperature: "Température",
@@ -2392,6 +2444,10 @@ export const fr = {
         used: "Utilisé : {value}",
         free: "Disponible : {value}",
         total: "{value} au total",
+        usedOf: "{used} utilisés sur {total}",
+        segmentUsed: "Utilisée par le GPU",
+        segmentSystem: "Utilisée par le système",
+        segmentAvailable: "Disponible",
       },
       llamaBackend: {
         title: "Moteur d'inférence GGUF",
@@ -2521,6 +2577,10 @@ export const fr = {
           hideDetailsAction: "Masquer les détails",
           clearAction: "Vider les caches",
           clearOneAction: "Vider",
+          showFolders: "Afficher les dossiers",
+          hideFolders: "Masquer les dossiers",
+          previousLocations: "Inclut les emplacements précédents. Le bouton Vider principal concerne le dossier de cache actuel. Les boutons de modèle ne vident que la copie sélectionnée.",
+          clearModelDescription: "Cela supprime uniquement cette copie en cache. Elle sera téléchargée à nouveau si nécessaire.",
           clearingAction: "Vidage en cours...",
           confirmTitle: "Vider les fichiers en cache ?",
           confirmDescription: "Cela libère environ {size}.",
@@ -2579,6 +2639,8 @@ export const fr = {
         python: "Python",
         torch: "Torch",
         transformers: "Transformers",
+        mlxLm: "mlx-lm",
+        mlxVlm: "mlx-vlm",
         uptime: "Temps de fonctionnement",
         processMemory: "Mémoire du processus",
         notInstalled: "Non installé",
@@ -2772,11 +2834,6 @@ export const fr = {
       autoScrollManual: "Manuel",
       autoScrollKeywords:
         "défilement défiler automatique suivre bas sauter diffusion génération vue verrouiller scroll autoscroll follow",
-      scrollToBottomButton: "Bouton « Défiler vers le bas »",
-      scrollToBottomButtonDescription:
-        "Afficher un bouton pour revenir au dernier message après avoir fait défiler vers le haut.",
-      scrollToBottomButtonKeywords:
-        "défiler bas sauter dernier flèche bouton masquer scroll bottom button",
       replyNotification: "Notifier quand une réponse est terminée",
       replyNotificationDescription:
         "Affiche une notification système quand une réponse se termine alors qu'Unsloth est réduit ou en arrière-plan.",
@@ -2798,9 +2855,8 @@ export const fr = {
         "détails vitesse jetons statistiques couches déchargement verbose developer stats speed tok/s prefill decode layers offload vram experts",
       inlineEditResponse: "Modifier la réponse sur les réponses",
       inlineEditResponseDescription: "Afficher Modifier la réponse sur chaque réponse, plutôt que dans le menu Plus.",
-      modelDisclaimer: "Afficher l'avertissement du modèle",
-      modelDisclaimerDescription:
-        'Afficher "Les LLM peuvent faire des erreurs" sous la zone de discussion.',
+      composerAtBottom: "Zone de saisie en bas",
+      composerAtBottomDescription: "Commencer les nouvelles discussions avec la zone de saisie en bas de la page plutôt qu'au centre.",
       projectAttachments: "Partager les fichiers dans tout le projet",
       projectAttachmentsDescription:
         "Rend les nouvelles pièces jointes accessibles à toutes les discussions du projet.",
@@ -3176,6 +3232,7 @@ export const fr = {
       readDocs: "Lire la documentation de l'API",
       noAccess: "Aucun accès API pour le moment.",
       accessTokens: "Jetons d’accès",
+      quickstartTitle: "Démarrage rapide",
       columnName: "Nom",
       columnToken: "Jeton",
       columnCreated: "Créé",
@@ -3316,8 +3373,9 @@ export const fr = {
         loadError: "Impossible de charger les réglages de l'API de décision.",
         sendsTo: "Les requêtes sont envoyées à {provider}.",
         connectionMissing: "Cette connexion n'existe plus ou n'a pas de modèle de décision. Choisissez un autre modèle.",
-        addConnection: "Pour utiliser un modèle de décision hébergé, ajoutez TypeSafe, Liquid AI ou OpenRouter dans Connexions.",
-        openConnections: "Ouvrir Connexions",
+        addConnection: "Pour utiliser un modèle de décision hébergé, ajoutez-le dans ",
+        connectionsLink: "Connexions",
+        addConnectionSuffix: ".",
       },
       mcp: {
         title: "Accès des agents (MCP)",
@@ -3345,6 +3403,7 @@ export const fr = {
       desktopAppVersionUnavailable: "Indisponible",
       llamaCppVersion: "Version de llama.cpp",
       audioCppVersion: "Version d'audio.cpp",
+      mlxVersion: "Version de MLX",
       whisperCppVersion: "Version de whisper.cpp",
       engines: {
         title: "Moteurs",
@@ -3458,6 +3517,8 @@ export const fr = {
   },
   studio: {
     goToLibrary: "Aller à la Bibliothèque",
+    imageTraining: "Entraînement d'image",
+    goToImageTraining: "Entraîner des LoRA d'image",
     routeTitle: "Entraîner",
     wizard: {
       modelTitle: "Modèle",
@@ -4268,8 +4329,6 @@ export const fr = {
       terminalStart: "> l'entraînement unsloth démarre...",
       preparingResources: "> Préparation du modèle et du jeu de données...",
       gettingReady: "> Nous préparons tout pour votre entraînement...",
-      waitingForFirstStep:
-        "> {message} | en attente de la première étape... ({step})",
       resumingTraining: "Reprise de l'entraînement...",
       startingTraining: "démarrage de l'entraînement...",
       dataset: "Jeu de données",
@@ -4634,6 +4693,7 @@ export const fr = {
       modelsTitle: "Aucun modèle affiné pour l'instant",
       modelsDescription: "Les modèles que vous entraînez ou exportez dans Unsloth apparaissent ici.",
       createFolder: "Créer un dossier",
+      generateImage: "Générer une image",
       generateVideo: "Générer une vidéo",
       generateAudio: "Générer de l'audio",
       trainModel: "Entraîner un modèle",

@@ -138,6 +138,11 @@ export const it = {
     more: "Altro",
     addressPlaceholder: "Cerca o inserisci un URL",
     local: "Locale",
+    browserUse: {
+      label: "Uso del browser",
+      description: "Consenti ai modelli di controllare il browser integrato",
+      unavailable: "Carica un modello in grado di chiamare strumenti per fargli usare il browser.",
+    },
     suggested: "Suggeriti",
     suggestedMenu: {
       open: "Apri",
@@ -689,6 +694,8 @@ export const it = {
       guidedTour: "Tour guidato",
       help: "Aiuto",
       logOut: "Esci",
+      logOutNeedsPassword: "Imposta una password in Impostazioni > Accesso remoto prima di uscire, così potrai accedere di nuovo.",
+      logOutFailed: "Impossibile uscire in modo sicuro. Riprova tra un momento.",
       shutdown: "Arresta",
     },
     commandPalette: {
@@ -834,6 +841,11 @@ export const it = {
   },
   settings: {
     accounts: {
+      signsInAs: "Accede come {username}",
+      signsInAsOwner: "Accede come {alias} o {username}",
+      signInName: "Il tuo nome di accesso",
+      signInNameDescription: "Il nome da digitare per accedere quando questa installazione ha più di un account. Anche unsloth funziona sempre. Lascia vuoto per usare solo unsloth.",
+      signInNameSave: "Salva nome",
       title: "Account",
       description: "Crea account Unsloth privati. I nuovi utenti accedono con un codice di configurazione monouso e scelgono una password.",
       username: "Nome utente",
@@ -974,7 +986,7 @@ export const it = {
       lastVisited: "Ultima visitata",
     },
     tabs: {
-      sandbox: "Sandbox",
+      sandbox: "Sicurezza",
       accounts: "Account",
       general: "Generali",
       profile: "Profilo",
@@ -1258,7 +1270,7 @@ export const it = {
       },
     },
     sandbox: {
-      title: "Sandbox",
+      title: "Sicurezza",
       description: "Indica se le chiamate agli strumenti Python e Terminale vengono eseguite in una sandbox del sistema su questo computer.",
       docs: "Documentazione",
       docsLabel: "Apri la documentazione della sandbox",
@@ -1313,16 +1325,16 @@ export const it = {
       installingRuntime: "Installazione…",
       installRuntimeFailed: "Installazione del runtime non riuscita.",
       installRuntimeError: "Impossibile avviare l'installazione del runtime.",
-      unsupportedArch: "La sandbox di Windows (MXC) funziona solo su Windows x64, quindi non è disponibile su questo PC.",
+      unsupportedArch: "La sandbox di Windows (MXC) funziona solo su Windows x64 e ARM64, quindi non è disponibile su questo PC.",
       builtinNeedsUpdate: "Il container integrato di Windows richiede la build {required} o successiva, e questo PC esegue {current}. Installa l'ultimo aggiornamento di Windows per usarlo senza un passaggio da amministratore, oppure attiva la sandbox di riserva qui sotto.",
       unsupportedBuild: "La sandbox di Windows (MXC) richiede Windows 11 24H2 (build 26100) o successivo, quindi non è disponibile su questo PC.",
-      permissionsIntro: "Scegli quando gli strumenti chiedono prima e se Python e Terminale vengono eseguiti anche nella sandbox del sistema.",
       permissionLabel: "Autorizzazioni strumenti",
+      levelRowLabel: "Livello sandbox",
       levelPickerTitle: "Come isolare il codice?",
       levelOff: "Disattivato",
       levelOffShort: "Accesso completo disattiva la sandbox",
-      levelHighDetail: "Sandbox del sistema. Python e Terminale vengono eseguiti nella sandbox del sistema (bubblewrap, Seatbelt o MXC) oltre alle protezioni software. Senza una sandbox del sistema funzionante, le chiamate rischiose chiedono prima.",
-      levelLowDetail: "Sandbox software. Python e Terminale vengono eseguiti solo con le protezioni software, fuori dalla sandbox del sistema. Le chiamate rischiose chiedono prima, tranne con Accesso completo.",
+      levelHighDetail: "Python e Terminale vengono eseguiti nella sandbox del sistema (bubblewrap, Seatbelt o MXC) oltre alle protezioni software. Senza una sandbox del sistema funzionante, le chiamate rischiose chiedono prima.",
+      levelLowDetail: "Python e Terminale vengono eseguiti solo con le protezioni software, fuori dalla sandbox del sistema. Le chiamate rischiose chiedono prima, tranne con Accesso completo.",
       levelLabel: "Sandbox",
       levelHigh: "Alto",
       levelLow: "Basso",
@@ -1333,6 +1345,7 @@ export const it = {
       managedNote: "Il proprietario di questo server Unsloth configura la sandbox del sistema.",
     },
     debugging: {
+      description: "Leggi i log di Unsloth senza uscire dall'app.",
       logSection: "File di log",
       source: "File di log",
       sourceHint: "I runner dei modelli scrivono i propri log, quindi un caricamento o una generazione non riusciti sono spesso spiegati lì anziché nel log del server.",
@@ -1772,13 +1785,13 @@ export const it = {
         },
         details: {
           ask:
-            "Chiede conferma prima di ogni chiamata agli strumenti, compresi codice da terminale e Python, ricerche web, modifiche ai file e strumenti MCP. Gli strumenti eseguiti da un provider esterno non vengono messi in pausa. Ideale se vuoi controllare ogni passaggio.",
+            "Chiede conferma prima di ogni chiamata agli strumenti, compresi codice da terminale e Python, ricerche web, modifiche ai file e strumenti MCP. Gli strumenti eseguiti da un provider esterno non vengono messi in pausa.",
           auto:
             "Esegue da solo le chiamate abituali e chiede conferma solo quando un'azione sembra rischiosa, come leggere credenziali, aumentare i privilegi o eseguire comandi distruttivi.",
           off:
-            "Esegue ogni chiamata agli strumenti senza chiedere. Il codice Python e da terminale viene comunque eseguito nella sandbox, che limita i file del tuo computer a cui può accedere. Se questo computer non ha una sandbox del sistema funzionante, le chiamate rischiose di Python e terminale chiedono prima.",
+            "Esegue ogni chiamata agli strumenti senza chiedere. Il codice Python e da terminale viene comunque eseguito nella sandbox, che limita i file del tuo computer a cui può accedere. Senza una sandbox del sistema funzionante, le chiamate rischiose chiedono prima.",
           full:
-            "Esegue ogni chiamata agli strumenti senza chiedere e disattiva la sandbox del codice, così il codice Python e da terminale può leggere e modificare qualsiasi file accessibile al tuo account. Ideale per attività affidabili che devono lavorare fuori dalla sandbox.",
+            "Esegue ogni chiamata agli strumenti senza chiedere e disattiva la sandbox del codice, così il codice Python e da terminale può leggere e modificare qualsiasi file accessibile al tuo account.",
         },
       },
       notifications: {
@@ -2003,8 +2016,8 @@ export const it = {
       avatarShape: "Forma dell'avatar",
       avatarShapeCircle: "Circolare",
       avatarShapeRounded: "Arrotondata",
-      greetingSloth: "Bradipo nel saluto",
-      greetingSlothDescription: "Mostra il bradipo nel saluto della chat.",
+      greetingSloth: "Saluto",
+      greetingSlothDescription: "Mostra il saluto nelle nuove chat.",
       chooseSloth: "Oppure scegli un bradipo",
       noPicture: "Nessuna immagine del profilo",
       noneLabel: "Nessuna",
@@ -2105,6 +2118,12 @@ export const it = {
         classic: "Classica",
         minimal: "Minimale",
         moreThemes: "Altri temi",
+        halloween: "Halloween",
+      },
+      trickOrTreat: {
+        label: "Dolcetto o scherzetto",
+        description:
+          "Temi di Halloween e saluti spaventosi, fino al 1° novembre.",
       },
       custom: {
         chatWidth: {
@@ -2240,10 +2259,12 @@ export const it = {
         "Monitora hardware e archiviazione di questo server Unsloth.",
       liveUpdates: "Aggiornamenti in tempo reale",
       floatingWindow: "Finestra mobile",
-      disableOverlay: "Disattiva la sovrapposizione",
+      showFloatingWindow: "Mostra finestra mobile",
+      showFloatingWindowDescription: "Mantieni visibile l'uso di CPU, RAM e GPU sopra Unsloth.",
       liveMonitor: {
         title: "Monitor in tempo reale",
         apiTitle: "Monitor API",
+        apiDescription: "Guarda cosa inviano le altre app all'API di questo server non appena arriva.",
         summary: "Richieste attive, errori e utilizzo dei token",
         status: "{active} attive · {recent} recenti · {model}",
         noModelLoaded: "nessun modello caricato",
@@ -2263,7 +2284,7 @@ export const it = {
         gpuUnusableDetail: "Rilevata, ma PyTorch non può usarla",
         detailedView: "Vista dettagliata",
         detailedViewDescription:
-          "Mostra il carico della CPU e carico, temperatura e consumo di ogni GPU nella finestra mobile e qui.",
+          "Mostra il carico della CPU e carico, temperatura e consumo di ogni GPU nella finestra mobile.",
         cpuLoad: "Carico CPU",
         gpuLoad: "Carico GPU",
         temperature: "Temperatura",
@@ -2297,6 +2318,10 @@ export const it = {
         used: "In uso: {value}",
         free: "Disponibili: {value}",
         total: "Totale: {value}",
+        usedOf: "{used} in uso su {total}",
+        segmentUsed: "In uso dalla GPU",
+        segmentSystem: "In uso dal sistema",
+        segmentAvailable: "Disponibile",
       },
       llamaBackend: {
         title: "Motore di inferenza GGUF",
@@ -2437,6 +2462,10 @@ export const it = {
           hideDetailsAction: "Nascondi dettagli",
           clearAction: "Svuota le cache",
           clearOneAction: "Svuota",
+          showFolders: "Mostra cartelle",
+          hideFolders: "Nascondi cartelle",
+          previousLocations: "Include le posizioni precedenti. Il pulsante Svuota principale riguarda la cartella cache attuale. I pulsanti dei modelli svuotano solo la copia selezionata.",
+          clearModelDescription: "Rimuove solo questa copia nella cache. Verrà scaricata di nuovo quando servirà.",
           clearingAction: "Svuotamento in corso...",
           confirmTitle: "Svuotare i file nella cache?",
           confirmDescription: "Libera circa {size}.",
@@ -2484,6 +2513,8 @@ export const it = {
         python: "Python",
         torch: "Torch",
         transformers: "Transformers",
+        mlxLm: "mlx-lm",
+        mlxVlm: "mlx-vlm",
         uptime: "Tempo di attività",
         processMemory: "Memoria del processo",
         notInstalled: "Non installato",
@@ -2677,11 +2708,6 @@ export const it = {
       autoScrollManual: "Manuale",
       autoScrollKeywords:
         "scorrimento scorrere automatico seguire fondo saltare streaming generazione vista bloccare scroll autoscroll follow",
-      scrollToBottomButton: "Pulsante per scorrere in fondo",
-      scrollToBottomButtonDescription:
-        "Mostra un pulsante per tornare all'ultimo messaggio dopo aver scorso verso l'alto.",
-      scrollToBottomButtonKeywords:
-        "scorrere fondo saltare ultimo freccia pulsante nascondere scroll bottom button",
       replyNotification: "Avvisa quando una risposta è finita",
       replyNotificationDescription:
         "Mostra una notifica di sistema quando una risposta finisce mentre Unsloth è ridotto a icona o in background.",
@@ -2703,9 +2729,8 @@ export const it = {
         "dettagli velocità token statistiche livelli scaricamento verbose developer stats speed tok/s prefill decode layers offload vram experts",
       inlineEditResponse: "Modifica risposta nelle risposte",
       inlineEditResponseDescription: "Mostra Modifica risposta su ogni risposta, invece che nel menu Altro.",
-      modelDisclaimer: "Mostra l'avviso sul modello",
-      modelDisclaimerDescription:
-        "Mostra «Gli LLM possono commettere errori» sotto il campo della chat.",
+      composerAtBottom: "Casella di testo in basso",
+      composerAtBottomDescription: "Avvia le nuove chat con la casella di testo in fondo alla pagina invece che al centro.",
       projectAttachments: "Condividi i file nel progetto",
       projectAttachmentsDescription:
         "Rende i nuovi allegati disponibili in tutte le chat del progetto.",
@@ -3076,6 +3101,7 @@ export const it = {
       readDocs: "Leggi la documentazione delle API",
       noAccess: "Nessun accesso API configurato.",
       accessTokens: "Token di accesso",
+      quickstartTitle: "Avvio rapido",
       columnName: "Nome",
       columnToken: "Token",
       columnCreated: "Creato",
@@ -3218,8 +3244,9 @@ export const it = {
         loadError: "Impossibile caricare le impostazioni dell'API decisionale.",
         sendsTo: "Le richieste vengono inviate a {provider}.",
         connectionMissing: "Questa connessione non esiste più o non ha modelli decisionali. Scegli un altro modello.",
-        addConnection: "Per usare un modello decisionale ospitato, aggiungi TypeSafe, Liquid AI o OpenRouter in Connessioni.",
-        openConnections: "Apri Connessioni",
+        addConnection: "Per usare un modello decisionale ospitato, aggiungilo in ",
+        connectionsLink: "Connessioni",
+        addConnectionSuffix: ".",
       },
       mcp: {
         title: "Accesso degli agenti (MCP)",
@@ -3245,6 +3272,7 @@ export const it = {
       packageVersion: "Versione del pacchetto",
       llamaCppVersion: "Versione di llama.cpp",
       audioCppVersion: "Versione di audio.cpp",
+      mlxVersion: "Versione di MLX",
       whisperCppVersion: "Versione di whisper.cpp",
       engines: {
         title: "Motori",
@@ -3395,6 +3423,38 @@ export const it = {
     compactEmpty: "Ancora niente da compattare",
     compactUnsupported: "La compattazione richiede un modello GGUF o MLX con supporto per gli strumenti",
   },
+  halloween: {
+    navLabel: "Dolcetto o scherzetto…",
+    title: "Dolcetto o scherzetto?!",
+    description:
+      "Abbiamo preparato qualche spavento per Unsloth, fino alla fine di ottobre.",
+    chooseTheme: "Scegli un tema da brivido",
+    spookyGreetings: "Saluti da brivido",
+    spookyGreetingsDescription:
+      "Il bradipo accoglie le nuove chat con uno spavento.",
+    decorations: "Ragni e pipistrelli",
+    decorationsDescription:
+      "Ragnatele negli angoli e ogni tanto un ragno o un pipistrello con un tema di Halloween.",
+    surprise: "Dolcetto o scherzetto!",
+    surpriseDescription: "Lascia che il bradipo scelga un tema per te.",
+    themesTitle: "Temi da brivido",
+    back: "Indietro",
+    footer: "Unsloth torna alla normalità alla mezzanotte del 1° novembre.",
+    removeNow: "Rimuovi ora",
+    hideFromSidebar: "Nascondi dalla barra laterale",
+    greeting: {
+      pumpkins: "Le zucche sono intagliate. E adesso?",
+      brewing: "Prepariamo la pozione",
+      trickOrTreat: "Dolcetto o scherzetto?",
+      manor: "Ti diamo il benvenuto nel maniero",
+      manorName: "Ti diamo il benvenuto nel maniero, {name}",
+      happyHalloween: "Buon Halloween",
+      happyHalloweenName: "Buon Halloween, {name}",
+      spirits: "Gli spiriti ci ascoltano…",
+      mysteries: "Quali misteri sveleremo stanotte?",
+      conjure: "Cosa posso evocare per te?",
+    },
+  },
   welcome: {
     goodToSeeYou: "Che piacere vederti",
     goodToSeeYouName: "Che piacere vederti, {name}",
@@ -3456,6 +3516,8 @@ export const it = {
   },
   studio: {
     goToLibrary: "Vai alla Libreria",
+    imageTraining: "Addestramento immagini",
+    goToImageTraining: "Addestra LoRA per immagini",
     routeTitle: "Addestra",
     wizard: {
       modelTitle: "Modello",
@@ -4258,7 +4320,6 @@ export const it = {
       terminalStart: "> avvio dell'addestramento con Unsloth...",
       preparingResources: "> Preparazione del modello e del dataset...",
       gettingReady: "> Stiamo preparando tutto per il tuo run...",
-      waitingForFirstStep: "> {message} | in attesa del primo step... ({step})",
       resumingTraining: "Ripresa dell'addestramento...",
       startingTraining: "avvio dell'addestramento...",
       dataset: "Dataset",
@@ -4623,6 +4684,7 @@ export const it = {
       modelsTitle: "Ancora nessun modello con fine-tuning",
       modelsDescription: "I modelli che addestri o esporti in Unsloth compaiono qui.",
       createFolder: "Crea cartella",
+      generateImage: "Genera un'immagine",
       generateVideo: "Genera un video",
       generateAudio: "Genera audio",
       trainModel: "Addestra un modello",
