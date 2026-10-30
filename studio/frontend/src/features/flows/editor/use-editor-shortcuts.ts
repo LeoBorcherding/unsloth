@@ -15,6 +15,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { FlowEdge, FlowNode } from "../types";
 import { addFileNodes } from "./file-drop";
 import { runFlow } from "./run-controller";
+import { historyAction } from "./history-keys";
 import { flushSave } from "./use-autosave";
 
 const CLIPBOARD_KIND = "unsloth-flow-fragment";
@@ -126,13 +127,22 @@ export function useEditorShortcuts(active: boolean): void {
         [],
       );
     };
+    const onHistoryKey = (event: KeyboardEvent) => {
+      const action = historyAction(event);
+      if (!action || isTyping(event.target)) return;
+      event.preventDefault();
+      useDocStore.getState()[action]();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (key === "escape") {
         const ui = useUiStore.getState();
         if (ui.quickAdd) ui.setQuickAdd(null);
-        else if (!isTyping(event.target)) ui.setSelection([], []);
+        else if (!isTyping(event.target)) {
+          ui.setSelection([], []);
+          ui.openInspector(null);
+        }
         return;
       }
       if (mod && key === "s") {
@@ -151,13 +161,7 @@ export function useEditorShortcuts(active: boolean): void {
       }
       if (isTyping(event.target)) return;
       const doc = useDocStore.getState();
-      if (mod && key === "z" && !event.shiftKey) {
-        event.preventDefault();
-        doc.undo();
-      } else if (mod && ((key === "z" && event.shiftKey) || key === "y")) {
-        event.preventDefault();
-        doc.redo();
-      } else if (mod && key === "c") {
+      if (mod && key === "c") {
         if (copySelection()) event.preventDefault();
       } else if (mod && key === "x") {
         if (copySelection()) {
@@ -213,9 +217,12 @@ export function useEditorShortcuts(active: boolean): void {
     };
     window.addEventListener("pointermove", onPointerMove, { passive: true });
     window.addEventListener("keydown", onKeyDown);
+    // Undo/redo in the capture phase, so a focused card or control cannot swallow them.
+    window.addEventListener("keydown", onHistoryKey, true);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onHistoryKey, true);
     };
   }, [active, fitView, screenToFlowPosition]);
 }

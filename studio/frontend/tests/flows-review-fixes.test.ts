@@ -130,11 +130,17 @@ test("dialogue written while the reader is mid-scene is kept for the next visit"
   assert.ok(visit > 0 && visit < src.indexOf("!requested.current.has(key)"));
 });
 
-test("leaving the editor waits for a successful save", () => {
+test("leaving the editor any way waits for a successful save, or an explicit Leave anyway", () => {
   const src = readSrc("features/flows/editor/flows-editor-page.tsx");
-  const back = src.slice(src.indexOf("onBack={"), src.indexOf("onPlay={"));
-  assert.match(back, /flushSave\(\)\.then\(\(saved\) => \{\s*if \(saved\) void navigate/);
-  assert.ok(!back.includes(".finally("));
+  assert.match(src, /useBlocker\(\{ shouldBlockFn: stayUnlessSaved/);
+  const leave = src.slice(src.indexOf("function stayUnlessSaved"), src.indexOf("type LoadState"));
+  assert.match(leave, /flushSave\(\)[\s\S]*?if \(saved === true\) return false;/);
+  assert.match(leave, /label: "Leave anyway", onClick: \(\) => resolve\(false\)/);
+  assert.match(leave, /onDismiss: \(\) => resolve\(true\)/);
+  assert.ok(!leave.includes(".finally("));
+  // The window's back arrow leaves; the toolbar has no back button of its own.
+  const bar = readSrc("features/flows/editor/toolbar.tsx");
+  assert.doesNotMatch(bar, /ArrowLeft01Icon|onBack|All flows/);
 });
 
 test("a second Run click while the first start request is pending is ignored", () => {
@@ -149,4 +155,23 @@ test("the inspector shows a Preview block's value, not an empty Output section",
   const src = readSrc("features/flows/editor/inspector.tsx");
   const outputs = src.slice(src.indexOf("function NodeOutputs"), src.indexOf("function ParamRow"));
   assert.match(outputs, /spec\.outputs\.length === 0 &&[\s\S]*?Object\.entries\(runtime\.outputs/);
+});
+
+test("a read-only flow's toolbar cannot edit the document", () => {
+  const page = readSrc("features/flows/editor/flows-editor-page.tsx");
+  assert.match(page, /<Toolbar readOnly=\{readOnly\} \/>/);
+  const bar = readSrc("features/flows/editor/toolbar.tsx");
+  assert.match(bar, /<input\s+value=\{name\}\s+readOnly=\{readOnly\}/);
+  for (const label of ["Undo", "Redo", "Tidy up layout", "Group selection", "Add note"]) {
+    const at = bar.indexOf(`label="${label}`);
+    assert.ok(at > 0, label);
+    assert.match(bar.slice(at, bar.indexOf("/>", at)), /disabled=\{readOnly( \|\||\})/, label);
+  }
+});
+
+test("the Reroute palette row takes the theme's text colours", () => {
+  const src = readSrc("features/flows/editor/palette.tsx");
+  const reroute = src.slice(src.indexOf("function RerouteBody"), src.indexOf("function PaletteRowBody"));
+  assert.doesNotMatch(reroute, /zinc-|text-white|bg-white/);
+  assert.match(reroute, /text-muted-foreground hover:bg-muted\/35 hover:text-foreground/);
 });

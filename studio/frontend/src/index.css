@@ -5482,6 +5482,9 @@ html.force-reduced-motion .sidebar-section-drop-line {
 
 /* Radix hides it (the viewport is the scroller so corners stay rounded); Firefox uses the inline
    scrollbar-width. */
+/* Radix hides the select viewport scrollbar (the viewport is the scroller
+   so menu corners stay rounded); restore the app's thin one. The inline
+   scrollbar-width on the viewport handles Firefox. */
 [data-slot="select-content"] [data-radix-select-viewport]::-webkit-scrollbar {
 	display: block !important;
 	width: 8px;

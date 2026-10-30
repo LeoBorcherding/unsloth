@@ -3,6 +3,7 @@
 
 import type { Edge, Node } from "@xyflow/react";
 import { type DocGraph, GROUP_KEY, NOTE_KEY } from "../stores/doc-store";
+import type { FlowReroute, RerouteWire } from "../stores/reroute-graph";
 import type {
   EdgeKind,
   FlowEdge,
@@ -11,21 +12,67 @@ import type {
   FlowNote,
 } from "../types";
 import { edgeHandles } from "./connection-rules";
+import { wireHandles } from "./reroutes";
 
 export type FlowNodeData = { nodeId: string };
 /** Dashes a Loop's feeds-the-next-round wire in either wire style. */
 const FEEDBACK_EDGE_CLASS = "[&_path]:[stroke-dasharray:7_5]";
-export type FlowEdgeData = { kind: EdgeKind; portType: string };
+export type FlowEdgeData = {
+  kind: EdgeKind;
+  portType: string;
+  /** Cards this drawn segment belongs to, through any reroutes, for hover emphasis. */
+  ends?: string[];
+};
 
 export type RfNode = Node<
-  FlowNodeData | { groupId: string } | { noteId: string }
+  | FlowNodeData
+  | { groupId: string }
+  | { noteId: string }
+  | { rerouteId: string }
 >;
+
+export interface WireInfo {
+  portType: string;
+  ends: string[];
+}
 export type RfEdge = Edge<FlowEdgeData>;
 
 export const GROUP_PREFIX = GROUP_KEY;
 export const NOTE_PREFIX = NOTE_KEY;
 
 type Positions = Record<string, { x: number; y: number }>;
+/** A size set live by a resize handle, before it is committed on release. */
+export type Boxes = Record<string, { width: number; height: number }>;
+
+/**
+ * How many frames enclose each frame. Frames sit under the cards, nested ones above the frames
+ * around them, so an outer frame drawn later never covers an inner frame's header.
+ */
+export function groupDepths(graph: DocGraph): Map<string, number> {
+  const depths = new Map<string, number>();
+  for (const id of graph.groupOrder) {
+    const [x, y, w, h] = graph.groups[id].rect;
+    let depth = 0;
+    for (const other of graph.groupOrder) {
+      if (other === id) continue;
+      const [ox, oy, ow, oh] = graph.groups[other].rect;
+      const inside = ox <= x && oy <= y && ox + ow >= x + w && oy + oh >= y + h;
+      const same = ox === x && oy === y && ow === w && oh === h;
+      // Identical frames stack in document order.
+      if (
+        inside &&
+        (!same ||
+          graph.groupOrder.indexOf(other) < graph.groupOrder.indexOf(id))
+      )
+        depth += 1;
+    }
+    depths.set(id, depth);
+  }
+  return depths;
+}
+
+// Below a card even when selected: React Flow lifts a selected node by 1000.
+export const GROUP_Z = -2000;
 
 export class RfDeriver {
   private nodeCache = new Map<
@@ -36,6 +83,7 @@ export class RfDeriver {
       x: number;
       y: number;
       size: { width: number; height: number } | undefined;
+      box: unknown;
       rf: RfNode;
     }
   >();
@@ -48,6 +96,7 @@ export class RfDeriver {
       x: number;
       y: number;
       size: unknown;
+      box: unknown;
       rf: RfNode;
     }
   >();
@@ -59,12 +108,21 @@ export class RfDeriver {
       x: number;
       y: number;
       size: unknown;
+      box: unknown;
       rf: RfNode;
     }
+  >();
+  private rerouteCache = new Map<
+    string,
+    { source: FlowReroute; selected: boolean; x: number; y: number; rf: RfNode }
   >();
   private edgeCache = new Map<
     string,
     { source: FlowEdge; selected: boolean; portType: string; rf: RfEdge }
+  >();
+  private wireCache = new Map<
+    string,
+    { source: RerouteWire; selected: boolean; key: string; rf: RfEdge }
   >();
   private lastNodes: RfNode[] = [];
   private lastEdges: RfEdge[] = [];
@@ -74,10 +132,12 @@ export class RfDeriver {
     selected: ReadonlySet<string>,
     drag: Positions | null,
     sizes?: ReadonlyMap<string, { width: number; height: number }>,
+    boxes?: Boxes | null,
   ): RfNode[] {
     const next: RfNode[] = [];
     let changed = false;
     const seen = new Set<string>();
+    const depths = graph.groupOrder.length > 1 ? groupDepths(graph) : undefined;
     for (const groupId of graph.groupOrder) {
       const group = graph.groups[groupId];
       const rfId = GROUP_PREFIX + groupId;
@@ -85,14 +145,18 @@ export class RfDeriver {
       const pos = drag?.[rfId] ?? { x: group.rect[0], y: group.rect[1] };
       const isSelected = selected.has(rfId);
       const size = sizes?.get(rfId);
+      const box = boxes?.[rfId];
+      const zIndex = GROUP_Z + (depths?.get(groupId) ?? 0);
       const cached = this.groupCache.get(groupId);
       if (
         cached &&
+        cached.rf.zIndex === zIndex &&
         cached.source === group &&
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -104,8 +168,12 @@ export class RfDeriver {
         position: pos,
         data: { groupId },
         selected: isSelected,
-        style: { width: group.rect[2], height: group.rect[3] },
-        zIndex: -1,
+        // Only the header and resize handles take the pointer; the body pans, clicks and box-selects like bare canvas.
+        style: {
+          ...(box ?? { width: group.rect[2], height: group.rect[3] }),
+          pointerEvents: "none",
+        },
+        zIndex,
         dragHandle: ".flow-group-drag",
         ...(size ? { measured: size } : {}),
       };
@@ -115,6 +183,7 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
         rf,
       });
       next.push(rf);
@@ -126,6 +195,7 @@ export class RfDeriver {
       const pos = drag?.[rfId] ?? { x: note.rect[0], y: note.rect[1] };
       const isSelected = selected.has(rfId);
       const size = sizes?.get(rfId);
+      const box = boxes?.[rfId];
       const cached = this.noteCache.get(noteId);
       if (
         cached &&
@@ -133,7 +203,8 @@ export class RfDeriver {
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -145,7 +216,7 @@ export class RfDeriver {
         position: pos,
         data: { noteId },
         selected: isSelected,
-        style: { width: note.rect[2], height: note.rect[3] },
+        style: box ?? { width: note.rect[2], height: note.rect[3] },
         ...(size ? { measured: size } : {}),
       };
       this.noteCache.set(noteId, {
@@ -154,6 +225,7 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
         rf,
       });
       next.push(rf);
@@ -164,6 +236,7 @@ export class RfDeriver {
       const pos = drag?.[id] ?? { x: node.pos[0], y: node.pos[1] };
       const isSelected = selected.has(id);
       const size = sizes?.get(id);
+      const box = boxes?.[id];
       const cached = this.nodeCache.get(id);
       if (
         cached &&
@@ -171,7 +244,8 @@ export class RfDeriver {
         cached.selected === isSelected &&
         cached.x === pos.x &&
         cached.y === pos.y &&
-        cached.size === size
+        cached.size === size &&
+        cached.box === box
       ) {
         next.push(cached.rf);
         continue;
@@ -188,7 +262,12 @@ export class RfDeriver {
         position: pos,
         data,
         selected: isSelected,
-        dragHandle: ".flow-node-drag",
+        // The whole card drags; its controls opt out with `nodrag`.
+        ...(box || (node.size && !node.collapsed)
+          ? {
+              style: box ?? { width: node.size?.[0], height: node.size?.[1] },
+            }
+          : {}),
         ...(size ? { measured: size } : {}),
       };
       this.nodeCache.set(id, {
@@ -197,6 +276,40 @@ export class RfDeriver {
         x: pos.x,
         y: pos.y,
         size,
+        box,
+        rf,
+      });
+      next.push(rf);
+    }
+    for (const id of graph.rerouteOrder) {
+      const reroute = graph.reroutes[id];
+      seen.add(id);
+      const pos = drag?.[id] ?? { x: reroute.pos[0], y: reroute.pos[1] };
+      const isSelected = selected.has(id);
+      const cached = this.rerouteCache.get(id);
+      if (
+        cached &&
+        cached.source === reroute &&
+        cached.selected === isSelected &&
+        cached.x === pos.x &&
+        cached.y === pos.y
+      ) {
+        next.push(cached.rf);
+        continue;
+      }
+      changed = true;
+      const rf: RfNode = {
+        id,
+        type: "flowReroute",
+        position: pos,
+        data: { rerouteId: id },
+        selected: isSelected,
+      };
+      this.rerouteCache.set(id, {
+        source: reroute,
+        selected: isSelected,
+        x: pos.x,
+        y: pos.y,
         rf,
       });
       next.push(rf);
@@ -208,6 +321,8 @@ export class RfDeriver {
     ) {
       return this.lastNodes;
     }
+    for (const key of this.rerouteCache.keys())
+      if (!seen.has(key)) this.rerouteCache.delete(key);
     for (const key of this.nodeCache.keys())
       if (!seen.has(key)) {
         this.nodeCache.delete(key);
@@ -225,10 +340,13 @@ export class RfDeriver {
     graph: DocGraph,
     selected: ReadonlySet<string>,
     portTypeOf: (edge: FlowEdge) => string,
+    wireInfo?: (wire: RerouteWire) => WireInfo,
   ): RfEdge[] {
     const next: RfEdge[] = [];
     let changed = false;
     for (const id of graph.edgeOrder) {
+      // Drawn as its segments below.
+      if (graph.wires[id]) continue;
       const edge = graph.edges[id];
       const isSelected = selected.has(id);
       const cached = this.edgeCache.get(id);
@@ -259,6 +377,39 @@ export class RfDeriver {
       });
       next.push(rf);
     }
+    for (const id of graph.wireOrder) {
+      const wire = graph.wires[id];
+      const isSelected = selected.has(id);
+      const info = wireInfo?.(wire) ?? {
+        portType: "any",
+        ends: [wire.source, wire.target],
+      };
+      const key = `${info.portType}|${info.ends.join(",")}`;
+      const cached = this.wireCache.get(id);
+      if (
+        cached &&
+        cached.source === wire &&
+        cached.selected === isSelected &&
+        cached.key === key
+      ) {
+        next.push(cached.rf);
+        continue;
+      }
+      changed = true;
+      const rf: RfEdge = {
+        id,
+        source: wire.source,
+        target: wire.target,
+        ...wireHandles(graph, wire),
+        type: "flowEdge",
+        selected: isSelected,
+        // A segment through a reroute moves by moving the reroute, not its end.
+        reconnectable: false,
+        data: { kind: "data", portType: info.portType, ends: info.ends },
+      };
+      this.wireCache.set(id, { source: wire, selected: isSelected, key, rf });
+      next.push(rf);
+    }
     if (
       !changed &&
       next.length === this.lastEdges.length &&
@@ -269,6 +420,8 @@ export class RfDeriver {
     const live = new Set(graph.edgeOrder);
     for (const key of this.edgeCache.keys())
       if (!live.has(key)) this.edgeCache.delete(key);
+    for (const key of this.wireCache.keys())
+      if (!graph.wires[key]) this.wireCache.delete(key);
     this.lastEdges = next;
     return next;
   }
