@@ -1565,7 +1565,7 @@ def test_explicit_load_keeps_a_saved_empty_extra_args_clear(monkeypatch):
 
 def test_explicit_load_drops_the_engine_implied_4bit_with_the_engine(monkeypatch):
     _mock_override_store(monkeypatch)
-    monkeypatch.setattr(resolver, "local_target_is_gguf", lambda *args, **kwargs: False)
+    monkeypatch.setattr(resolver, "local_target_format", lambda *args, **kwargs: False)
     _put("unsloth/Qwen3-1.7B", engine = "vllm")
     body = {"model_path": "unsloth/Qwen3-1.7B"}
     saved = _explicit_load(monkeypatch, body)
@@ -1573,6 +1573,29 @@ def test_explicit_load_drops_the_engine_implied_4bit_with_the_engine(monkeypatch
     auto = _explicit_load(monkeypatch, {**body, "engine": "auto"})
     assert auto.engine == "auto"
     assert "load_in_4bit" not in auto.model_fields_set
+
+
+def test_explicit_load_asks_the_hub_for_a_saved_repo_not_downloaded_yet(monkeypatch):
+    # An unindexed id reads as GGUF locally, which would drop a saved safetensors engine.
+    from utils.models import model_config
+
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "_snapshot", lambda: (0.0, {}))
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    asked = []
+
+    def _remote(repo_id, hf_token = None):
+        asked.append(repo_id)
+        return None
+
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _remote)
+    saved = _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"})
+    assert asked == ["unsloth/Qwen3-1.7B"]
+    assert (saved.engine, saved.load_in_4bit) == ("vllm", False)
+    monkeypatch.setattr(
+        model_config, "detect_gguf_model_remote", lambda *a, **k: "Qwen3-1.7B-Q4_K_M.gguf"
+    )
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
 
 
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):

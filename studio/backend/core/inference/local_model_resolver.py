@@ -1334,8 +1334,8 @@ def local_gguf_withheld(requested: str) -> bool:
     return wanted in entry.withheld or _names_missing_build(entry, wanted)
 
 
-def local_target_is_gguf(load_path: Optional[str], loader_id: Optional[str] = None) -> bool:
-    """Reads the weights the load opens so a rebuild cannot flip it; falls back to the indexed entry, then True; call off the event loop."""
+def local_target_format(load_path: Optional[str], loader_id: Optional[str] = None) -> Optional[bool]:
+    """Whether the weights the load opens, else the indexed entry, are GGUF; None when this machine knows neither; call off the event loop."""
     from pathlib import Path
     from types import SimpleNamespace
 
@@ -1346,9 +1346,15 @@ def local_target_is_gguf(load_path: Optional[str], loader_id: Optional[str] = No
         except OSError:
             pass
     if not isinstance(loader_id, str) or not loader_id.strip():
-        return True
+        return None
     entry = _snapshot()[1].get(loader_id.strip().lower())
-    return entry.is_gguf if entry is not None else True
+    return entry.is_gguf if entry is not None else None
+
+
+def local_target_is_gguf(load_path: Optional[str], loader_id: Optional[str] = None) -> bool:
+    """Reads the weights the load opens so a rebuild cannot flip it; falls back to the indexed entry, then True; call off the event loop."""
+    known = local_target_format(load_path, loader_id)
+    return True if known is None else known
 
 
 MISS_MODEL_NOT_FOUND = "model_not_found"

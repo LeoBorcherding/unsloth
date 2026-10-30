@@ -17351,7 +17351,6 @@ async def _run_tracked_load_model_impl(
 
 async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     """The model's saved Run settings, as /models/load applies them, for fields the caller left out."""
-    from core.inference.local_model_resolver import local_target_is_gguf
     from utils.openai_auto_switch_settings import (
         model_override_load_kwargs,
         resolve_override_for_load,
@@ -17362,9 +17361,7 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     _, override = resolve_override_for_load(request.model_path, alias, request.gguf_variant)
     if not override:
         return
-    is_gguf = bool(request.gguf_variant) or await asyncio.to_thread(
-        local_target_is_gguf, request.model_path, alias or request.model_path
-    )
+    is_gguf = await _explicit_load_is_gguf(request, alias or request.model_path)
     kwargs = model_override_load_kwargs(override, is_gguf = is_gguf)
     sent = set(request.model_fields_set)
     # Halves of one choice: a caller sending either keeps the saved other half out.
@@ -17395,6 +17392,26 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     # A saved [] is a clear, not a gap: it stops the load inheriting the last same-model flags.
     if extras is not None and "llama_extra_args" not in sent:
         request.llama_extra_args = _strip_preset_extras(request, extras)
+
+
+async def _explicit_load_is_gguf(request: LoadRequest, loader_id: str) -> bool:
+    if request.gguf_variant:
+        return True
+    from core.inference.local_model_resolver import local_target_format
+
+    known = await asyncio.to_thread(local_target_format, request.model_path, loader_id)
+    if known is not None:
+        return known
+    # Not downloaded yet: an unknown id would read as GGUF, so ask the Hub what the load will fetch.
+    from utils.models.model_config import detect_gguf_model_remote
+
+    try:
+        remote = await asyncio.to_thread(
+            detect_gguf_model_remote, request.model_path, request.hf_token
+        )
+    except Exception:
+        return True
+    return remote is not None
 
 
 def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:
