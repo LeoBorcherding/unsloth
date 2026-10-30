@@ -299,7 +299,8 @@ def _nvidia_gpu_present() -> bool:
             if any(line.startswith("GPU ") for line in (out.stdout or "").splitlines()):
                 return True
         except (OSError, subprocess.SubprocessError):
-            pass
+            # Hung or couldn't start: unknown, keep the CPU build. A listing with no GPU is absence.
+            return True
     try:
         return sys.platform.startswith("linux") and bool(os.listdir("/proc/driver/nvidia/gpus"))
     except OSError:

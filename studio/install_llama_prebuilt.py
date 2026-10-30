@@ -3007,6 +3007,8 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
     visible_device_tokens = parse_cuda_visible_devices(visible_cuda_devices)
     has_physical_nvidia = False
     has_usable_nvidia = False
+    # `nvidia-smi -L` hung or couldn't start: unknown, so the Vulkan rules stay off as before.
+    nvidia_listing_unknown = False
     if nvidia_smi:
         # Require `nvidia-smi -L` to list a GPU: the banner prints even when the driver is unreachable.
         try:
@@ -3016,7 +3018,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
                 has_physical_nvidia = True
                 has_usable_nvidia = visible_device_tokens != []
         except Exception:
-            pass
+            nvidia_listing_unknown = True
 
         try:
             result = run_capture([nvidia_smi], timeout = 20)
@@ -3283,7 +3285,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
         rocm_gfx_target = rocm_gfx_target,
         rocm_gfx_targets = rocm_gfx_targets,
         macos_version = macos_version,
-        nvidia_gpu_seen = has_physical_nvidia,
+        nvidia_gpu_seen = has_physical_nvidia or nvidia_listing_unknown,
     )
 
 

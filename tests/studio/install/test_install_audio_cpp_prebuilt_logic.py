@@ -2050,6 +2050,18 @@ def test_linux_amd_gpu_is_detected_as_vulkan(monkeypatch, tmp_path, host, expect
     assert M.detect_accelerator() == expected
 
 
+def test_a_hung_nvidia_smi_listing_keeps_the_cpu_build(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(M.shutil, "which", lambda name: "C:/Windows/System32/nvidia-smi.exe")
+
+    def hung(*a, **k):
+        raise subprocess.TimeoutExpired("nvidia-smi", 15)
+
+    monkeypatch.setattr(M.subprocess, "run", hung)
+    assert M._nvidia_gpu_present() is True
+
+
 def test_windows_amd_gpu_is_detected_from_the_registry(monkeypatch):
     import types
 
