@@ -176,6 +176,17 @@ def test_image_paths_are_found_anywhere_in_a_text_column():
     assert tmod._image_columns(Dataset.from_dict({"prompt": ["see figure.pdf"]})) == []
 
 
+def test_rows_left_out_of_a_capped_dataset_are_not_scanned():
+    from datasets import Dataset
+
+    texts = ["plain"] * 50 + ["cat.png"]
+    dataset = Dataset.from_dict({"asset": texts})
+    assert tmod._image_columns(dataset) == ["asset"]
+    # Non-contiguous, so datasets keeps an indices mapping instead of slicing the table.
+    assert tmod._image_columns(dataset.select(range(0, 50, 2))) == []
+    assert tmod._image_columns(dataset.select([50, 0])) == ["asset"]
+
+
 @pytest.mark.parametrize("objective", ["grpo", "dpo"])
 def test_rl_is_refused_for_an_audio_model_without_the_audio_flag(trainer, tmp_path, objective):
     path = tmp_path / "rows.jsonl"
@@ -262,3 +273,33 @@ def test_grpo_runs_without_loss_based_early_stopping(trainer):
     trainer._attach_early_stopping({"early_stopping_patience": 2})
     assert trainer._early_stopping is None
     assert any("Early stopping is off for GRPO" in w for w in trainer.training_progress.warnings)
+
+
+def test_images_late_in_a_chat_column_are_found():
+    from datasets import Dataset
+
+    text = [{"role": "user", "content": [{"type": "text", "text": "q", "image": None}]}]
+    blocks = [
+        {"type": "image", "image": "cat.png"},
+        {"type": "image", "image": "https://example.com/render?id=7"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/render?id=7"}},
+        {"type": "input_image", "image_url": "https://example.com/render?id=7"},
+    ]
+    for block in blocks:
+        image = [{"role": "user", "content": [{"text": None, **block}]}]
+        dataset = Dataset.from_dict({"messages": [text] * 150 + [image]})
+        assert tmod._image_columns(dataset) == ["messages"], block
+        assert tmod._image_columns(dataset.select(range(150))) == []
+        # One message per cell instead of a list of them.
+        cells = Dataset.from_dict({"chosen": [text[0]] * 150 + [image[0]]})
+        assert tmod._image_columns(cells) == ["chosen"], block
+    late_bytes = [b"plain"] * 150 + [b"\x89PNG\r\n"]
+    assert tmod._image_columns(Dataset.from_dict({"blob": late_bytes})) == ["blob"]
+
+
+def test_a_numeric_or_audio_column_is_not_an_image_column():
+    from datasets import Audio, Dataset
+    dataset = Dataset.from_dict(
+        {"score": [[1.0, 2.0]] * 3, "clip": [{"bytes": b"RIFF", "path": None}] * 3}
+    ).cast_column("clip", Audio(decode = False))
+    assert tmod._image_columns(dataset) == []
