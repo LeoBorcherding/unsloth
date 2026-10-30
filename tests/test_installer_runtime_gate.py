@@ -36,7 +36,7 @@ def _gate_module():
 
 
 def _gate_functions() -> str:
-    source = INSTALL_SH.read_text()
+    source = INSTALL_SH.read_text(encoding = "utf-8")
     blocks = []
     for name in ("_take_studio_runtime_gate", "_release_studio_runtime_gate"):
         match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", source, re.S | re.M)
@@ -164,7 +164,7 @@ def test_a_handed_down_gate_is_not_taken_again(tmp_path):
 
 
 def test_the_gate_spans_the_venv_replacement_and_setup_but_not_the_launch():
-    source = INSTALL_SH.read_text()
+    source = INSTALL_SH.read_text(encoding = "utf-8")
 
     def at(needle: str) -> int:
         index = source.find(needle)
