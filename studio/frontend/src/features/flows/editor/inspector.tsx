@@ -40,6 +40,7 @@ import { NODE_LOOKS } from "./node-looks";
 import { NodeHistory } from "./node-history";
 import { rerollNode, runToNode } from "./node-actions";
 import { CopyTextButton } from "./copy-text";
+import { FlowHfDatasetFields, HF_DATASET_NODE } from "./dataset-picker-field";
 import { OutputValue } from "./output-value";
 import { ParamField } from "./param-fields";
 import { paramVisible } from "./param-visible";
@@ -152,6 +153,16 @@ function InspectorImpl() {
           { [paramId]: value },
           `param:${nodeId}:${paramId}`,
         );
+    },
+    [nodeId],
+  );
+
+  const setParams = useCallback(
+    (patch: Record<string, unknown>) => {
+      if (!nodeId) return;
+      useDocStore
+        .getState()
+        .updateParams(nodeId, patch, `param:${nodeId}:dataset`);
     },
     [nodeId],
   );
@@ -301,21 +312,25 @@ function InspectorImpl() {
               This node has no settings.
             </p>
           )}
-          {spec.params
-            .filter(
-              (param) =>
-                !param.advanced &&
-                paramVisible(param, node.params, spec.params),
-            )
-            .map((param) => (
-              <ParamRow
-                key={param.id}
-                param={param}
-                bound={param.bindable === true && boundParams.has(param.id)}
-                value={node.params[param.id]}
-                onChange={(value) => setParam(param.id, value)}
-              />
-            ))}
+          {spec.type === HF_DATASET_NODE ? (
+            <FlowHfDatasetFields params={node.params} onChange={setParams} />
+          ) : (
+            spec.params
+              .filter(
+                (param) =>
+                  !param.advanced &&
+                  paramVisible(param, node.params, spec.params),
+              )
+              .map((param) => (
+                <ParamRow
+                  key={param.id}
+                  param={param}
+                  bound={param.bindable === true && boundParams.has(param.id)}
+                  value={node.params[param.id]}
+                  onChange={(value) => setParam(param.id, value)}
+                />
+              ))
+          )}
           {spec.params.some((param) => param.advanced) && (
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
               <CollapsibleTrigger asChild={true}>
