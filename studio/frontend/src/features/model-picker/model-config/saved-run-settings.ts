@@ -500,40 +500,53 @@ export function adoptLegacyRunSettings(
   }
   let changed = false;
   const map = readMap();
+  let left: StoredEntry[] = [];
   if (from in map) {
     const kept = entriesFor(map, to);
     const room = SAVED_RUN_SETTINGS_PER_MODEL_MAX - kept.length;
-    const moved = entriesFor(map, from)
-      .filter(
-        (entry) =>
-          typeof entry?.name === "string" &&
-          !kept.some((own) => named(own, entry.name)),
-      )
-      .slice(0, Math.max(0, room));
+    const candidates = entriesFor(map, from).filter(
+      (entry) =>
+        typeof entry?.name === "string" &&
+        !kept.some((own) => named(own, entry.name)),
+    );
+    const moved = candidates.slice(0, Math.max(0, room));
+    // Sets past the cap stay where they are, the only copy, until the repo has room.
+    left = candidates.slice(moved.length);
     if (moved.length > 0) {
       map[to] = [...kept, ...moved];
     }
-    delete map[from];
+    if (left.length > 0) {
+      map[from] = left;
+    } else {
+      delete map[from];
+    }
     changed = writeMap(map) || changed;
   }
-  // A set past the cap was not moved; a reference to it would name nothing.
   const survivors = entriesFor(map, to);
-  const listed = (name: unknown) =>
-    name === null ||
-    (typeof name === "string" && survivors.some((entry) => named(entry, name)));
+  const inList = (list: readonly StoredEntry[], name: unknown) =>
+    typeof name === "string" && list.some((entry) => named(entry, name));
+  // A reference follows its set: moved with it, left with it, or dropped with a set that is gone.
+  const place = (name: unknown): "move" | "stay" | "drop" =>
+    name === null || inList(survivors, name)
+      ? "move"
+      : inList(left, name)
+        ? "stay"
+        : "drop";
   const prefix = selectionPrefix(legacyModelId);
   const rekey = (key: string) =>
     `${selectionPrefix(modelId)}${key.slice(prefix.length)}`;
   const move = <T>(
     read: () => Record<string, T>,
     storageKey: string,
-    keep: (value: T) => boolean = () => true,
+    where: (value: T) => "move" | "stay" | "drop" = () => "move",
   ) => {
     const entries = read();
     let touched = false;
     for (const key of Object.keys(entries)) {
       if (!key.startsWith(prefix)) continue;
-      if (!(rekey(key) in entries) && keep(entries[key])) {
+      const fate = where(entries[key]);
+      if (fate === "stay") continue;
+      if (fate === "move" && !(rekey(key) in entries)) {
         entries[rekey(key)] = entries[key];
       }
       delete entries[key];
@@ -541,13 +554,13 @@ export function adoptLegacyRunSettings(
     }
     if (touched) changed = writeJson(storageKey, entries) || changed;
   };
-  move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY, listed);
+  move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY, place);
   move(readSelectedVariants, SELECTED_VARIANTS_STORAGE_KEY);
-  move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY, listed);
+  move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY, place);
   move(
     () => readJson<LoadedOnceMap>(LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY),
     LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY,
-    (entry) => listed(entry?.name),
+    (entry) => place(entry?.name),
   );
   return changed;
 }

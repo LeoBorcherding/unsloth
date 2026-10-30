@@ -372,10 +372,11 @@ test("the sidebar moves path-keyed settings after commit, not while rendering th
   assert.match(sidebar, /if \(adopted !== adoptKey\) return null;/);
 });
 
-test("a path-keyed selection is not carried over to a set the cap left behind", async () => {
+test("a set the cap left behind keeps its only copy and its selection until there is room", async () => {
   store.clear();
   const {
     SAVED_RUN_SETTINGS_PER_MODEL_MAX,
+    deleteSavedRunSettings,
     getPinnedRunSettings,
     getSelectedRunSettings,
     listSavedRunSettings,
@@ -394,9 +395,20 @@ test("a path-keyed selection is not carried over to a set the cap left behind", 
 
   adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
 
+  // Not carried over to a name the repo does not list, and not deleted either.
   assert.equal(listSavedRunSettings(repo).length, SAVED_RUN_SETTINGS_PER_MODEL_MAX);
   assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), undefined);
   assert.equal(getPinnedRunSettings(repo, "Q4_K_M"), null);
+  assert.deepEqual(listSavedRunSettings(snapshot).map((set) => set.name), ["overflow"]);
+  assert.equal(getSelectedRunSettings(snapshot, "Q4_K_M"), "overflow");
+
+  assert.ok(deleteSavedRunSettings(repo, "set 0"));
+  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
+
+  assert.ok(listSavedRunSettings(repo).some((set) => set.name === "overflow"));
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "overflow");
+  assert.equal(getPinnedRunSettings(repo, "Q4_K_M"), "overflow");
+  assert.equal(listSavedRunSettings(snapshot).length, 0);
 });
 
 test("submitting a cached handoff adopts legacy path-keyed settings", () => {
