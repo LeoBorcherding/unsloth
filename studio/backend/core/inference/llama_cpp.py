@@ -10905,8 +10905,8 @@ class LlamaCppBackend:
     # GGML types some CPU extra buffer accepts for MUL_MAT but not GET_ROWS, so a tied
     # output on the CPU gets its own (repacked) copy while token_embd stays plain CPU.
     # Union over b5178 / b10472 / b11541 / master: ggml-cpu repack.cpp (aarch64 at
-    # b5178), kleidiai repack(), amx qtype_has_amx_kernels, spacemit ime.
-    _CPU_REPACK_GGML_TYPES = frozenset({0, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 20, 23, 39, 41})
+    # b5178), kleidiai repack(), amx supports_op (F16 too), spacemit ime.
+    _CPU_REPACK_GGML_TYPES = frozenset({0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 20, 23, 39, 41})
 
     @staticmethod
     def _gguf_tensor_type(path: str, tensor_name: bytes) -> Optional[int]:

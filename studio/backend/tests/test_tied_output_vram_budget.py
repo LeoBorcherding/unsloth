@@ -996,6 +996,7 @@ def test_the_emitters_do_not_agree_on_pinning_the_drafter(monkeypatch, tmp_path)
 
 
 _TYPE_F16 = 1
+_TYPE_BF16 = 30
 
 
 @pytest.mark.parametrize(
@@ -1006,8 +1007,10 @@ _TYPE_F16 = 1
         (_TYPE_Q4_K, True),
         # KleidiAI repacks F32 weights too.
         (_TYPE_F32, True),
-        # No CPU extra buffer accepts F16: input and output share one CPU tensor.
-        (_TYPE_F16, False),
+        # AMX accepts F16 for MUL_MAT (amx.cpp supports_op).
+        (_TYPE_F16, True),
+        # No CPU extra buffer accepts BF16: input and output share one CPU tensor.
+        (_TYPE_BF16, False),
     ],
 )
 def test_a_cpu_pinned_drafter_is_charged_the_duplicate_a_repack_allocates(
@@ -1055,7 +1058,8 @@ def test_a_cpu_device_target_is_charged_only_a_repacked_tied_duplicate(backend):
 
 
 @pytest.mark.parametrize(
-    "ggml_type, charged", [(_TYPE_Q4_K, True), (_TYPE_F32, True), (_TYPE_F16, False)]
+    "ggml_type, charged",
+    [(_TYPE_Q4_K, True), (_TYPE_F32, True), (_TYPE_F16, True), (_TYPE_BF16, False)],
 )
 def test_the_cpu_target_tied_charge_follows_the_repack_types(backend, tmp_path, ggml_type, charged):
     tied = _write_gguf(
