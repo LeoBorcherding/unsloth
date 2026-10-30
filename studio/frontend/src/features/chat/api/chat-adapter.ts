@@ -2854,7 +2854,7 @@ function applyAutoLoadRuntimeState(
 }
 
 /** Whether a cache row is chattable. Every field is optional so an older backend keeps trying. */
-function isChattableCachedRepo(repo: {
+export function isChattableCachedRepo(repo: {
   partial?: boolean;
   task?: string | null;
   model_format?: string | null;

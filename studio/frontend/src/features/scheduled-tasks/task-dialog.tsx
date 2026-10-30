@@ -36,6 +36,7 @@ import {
   useChatRuntimeStore,
   useExternalProvidersStore,
 } from "@/features/chat";
+import { isChattableCachedRepo } from "@/features/chat/api/chat-adapter";
 import { useDeviceInventorySources } from "@/features/hub";
 import { type TranslationKey, useLocale, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
@@ -170,9 +171,9 @@ function useModelChoices(current: string | null) {
   const connectionsEnabled = useExternalProvidersStore((state) => state.connectionsEnabled);
   return useMemo(() => {
     const local = chatLocalModelOptions(inventory.localModels.rows).map(({ id, name }) => ({ id, name }));
-    // GGUF only: a run switches back afterwards only to a GGUF.
+    // GGUF only: a run switches back afterwards only to a GGUF. Image and speech repos cannot answer a prompt.
     for (const repo of inventory.cachedGguf.rows) {
-      if (!local.some((option) => option.id === repo.repo_id)) {
+      if (isChattableCachedRepo(repo) && !local.some((option) => option.id === repo.repo_id)) {
         local.push({ id: repo.repo_id, name: repo.repo_id });
       }
     }
