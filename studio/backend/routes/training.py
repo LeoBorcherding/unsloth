@@ -2277,6 +2277,8 @@ async def _admit_training_request(
             "system_prompt": _rl_system_prompt(request.rl_system_prompt),
             "mask_truncated_completions": request.grpo_mask_truncated_completions,
             "epsilon_high": request.grpo_epsilon_high,
+            "use_vllm": request.objective == "grpo" and request.grpo_use_vllm,
+            "vllm_gpu_memory_utilization": request.grpo_vllm_gpu_memory_utilization,
         },
         "reward_specs": reward_specs,
         "finetune_vision_layers": request.finetune_vision_layers,

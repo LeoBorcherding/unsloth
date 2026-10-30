@@ -21,6 +21,8 @@ export interface YamlRlSettings {
   grpoTemperature?: number;
   grpoEpsilonHigh?: number | null;
   grpoMaskTruncatedCompletions?: boolean;
+  grpoUseVllm?: boolean;
+  grpoVllmGpuMemoryUtilization?: number;
   grpoEnableThinking?: boolean;
   grpoSystemPrompt?: string;
   grpoRewards?: GrpoRewardSelection[];
@@ -97,6 +99,17 @@ export function parseRlSection(rl: unknown): YamlRlSettings {
   if (typeof r.mask_truncated_completions === "boolean") {
     out.grpoMaskTruncatedCompletions = r.mask_truncated_completions;
   }
+  if (typeof r.use_vllm === "boolean") {
+    out.grpoUseVllm = r.use_vllm;
+  }
+  set(
+    "grpoVllmGpuMemoryUtilization",
+    isNum(r.vllm_gpu_memory_utilization) &&
+      r.vllm_gpu_memory_utilization >= 0.1 &&
+      r.vllm_gpu_memory_utilization <= 0.95
+      ? r.vllm_gpu_memory_utilization
+      : undefined,
+  );
   if (typeof r.enable_thinking === "boolean") {
     out.grpoEnableThinking = r.enable_thinking;
   }

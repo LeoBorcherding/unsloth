@@ -110,6 +110,8 @@ export function RlParamsSection({
       grpoVariant: state.grpoVariant,
       grpoMaskTruncatedCompletions: state.grpoMaskTruncatedCompletions,
       grpoEpsilonHigh: state.grpoEpsilonHigh,
+      grpoUseVllm: state.grpoUseVllm,
+      grpoVllmGpuMemoryUtilization: state.grpoVllmGpuMemoryUtilization,
       setRlBeta: state.setRlBeta,
       setRlMaxPromptLength: state.setRlMaxPromptLength,
       setGrpoNumGenerations: state.setGrpoNumGenerations,
@@ -118,6 +120,8 @@ export function RlParamsSection({
       setGrpoVariant: state.setGrpoVariant,
       setGrpoMaskTruncatedCompletions: state.setGrpoMaskTruncatedCompletions,
       setGrpoEpsilonHigh: state.setGrpoEpsilonHigh,
+      setGrpoUseVllm: state.setGrpoUseVllm,
+      setGrpoVllmGpuMemoryUtilization: state.setGrpoVllmGpuMemoryUtilization,
     })),
   );
   const auto = t("rl.params.auto");
@@ -216,6 +220,29 @@ export function RlParamsSection({
               onCheckedChange={s.setGrpoMaskTruncatedCompletions}
             />
           </ParamsRow>
+          <ParamsRow
+            label={t("rl.params.useVllm")}
+            tooltip={t("rl.params.useVllmHint")}
+          >
+            <Switch
+              checked={s.grpoUseVllm}
+              onCheckedChange={s.setGrpoUseVllm}
+            />
+          </ParamsRow>
+          {s.grpoUseVllm && (
+            <ParamsRow
+              label={t("rl.params.vllmMemory")}
+              tooltip={t("rl.params.vllmMemoryHint")}
+            >
+              <NumberField
+                min={0.1}
+                max={0.95}
+                step={0.05}
+                value={s.grpoVllmGpuMemoryUtilization}
+                onChange={(v) => s.setGrpoVllmGpuMemoryUtilization(v ?? 0.5)}
+              />
+            </ParamsRow>
+          )}
         </>
       )}
       <ParamsRow

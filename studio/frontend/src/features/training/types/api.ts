@@ -85,6 +85,8 @@ export interface TrainingStartRequest {
   grpo_variant: GrpoVariant;
   grpo_mask_truncated_completions: boolean;
   grpo_epsilon_high: number | null;
+  grpo_use_vllm: boolean;
+  grpo_vllm_gpu_memory_utilization: number;
   grpo_rewards: GrpoRewardSelection[];
   finetune_vision_layers: boolean;
   finetune_language_layers: boolean;

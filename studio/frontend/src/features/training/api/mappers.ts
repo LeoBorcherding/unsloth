@@ -317,6 +317,8 @@ export function buildTrainingStartPayload(
     grpo_mask_truncated_completions:
       objective === "grpo" && config.grpoMaskTruncatedCompletions,
     grpo_epsilon_high: objective === "grpo" ? config.grpoEpsilonHigh : null,
+    grpo_use_vllm: objective === "grpo" && config.grpoUseVllm,
+    grpo_vllm_gpu_memory_utilization: config.grpoVllmGpuMemoryUtilization,
     grpo_rewards: objective === "grpo" ? config.grpoRewards : [],
     finetune_vision_layers: config.finetuneVisionLayers,
     finetune_language_layers: config.finetuneLanguageLayers,
