@@ -666,7 +666,9 @@ def detect_multimodal_dataset(dataset):
         multimodal_columns = [c for c in multimodal_columns if c not in audio_set]
 
     # Video trains on the vision path too; a {"bytes","path"} video cell would otherwise read as an image.
-    video_columns = [c for c in detect_video_columns(sample) if c not in set(audio_columns)]
+    # A column named video wins over the audio match a .webm path gets.
+    video_columns = detect_video_columns(sample)
+    audio_columns = [c for c in audio_columns if c not in video_columns]
     if video_columns:
         multimodal_columns = [c for c in multimodal_columns if c not in video_columns]
         multimodal_columns += video_columns
@@ -788,19 +790,19 @@ _AUDIO_EXTENSIONS = (
 )
 
 
-# .webm stays audio (_AUDIO_EXTENSIONS); a video column holding .webm is matched by its name instead.
+# .webm is also an audio container, so it counts as video only in a column named video.
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg")
 _VIDEO_TEXT_KEYWORDS = ("answer", "text", "caption", "description", "output", "response", "label")
 _VIDEO_QUESTION_KEYWORDS = ("question", "prompt", "instruction", "query")
 
 
-def _is_video_value(value) -> bool:
+def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
     """A video file path or URL, or an undecoded {"path": ...} cell naming one."""
     if isinstance(value, dict):
         value = value.get("path")
     if not isinstance(value, str) or len(value) >= 1000:
         return False
-    return value.strip().lower().split("?")[0].endswith(_VIDEO_EXTENSIONS)
+    return value.strip().lower().split("?")[0].endswith(extensions)
 
 
 def video_parts(messages) -> list:
@@ -822,7 +824,10 @@ def detect_video_columns(sample: dict) -> list:
     for col_name, value in sample.items():
         if _is_video_value(value) or video_parts(value):
             columns.append(col_name)
-        elif _keyword_in_column("video", col_name) and isinstance(value, dict) and "path" in value:
+        elif _keyword_in_column("video", col_name) and (
+            _is_video_value(value, _VIDEO_EXTENSIONS + (".webm",))
+            or (isinstance(value, dict) and "path" in value)
+        ):
             columns.append(col_name)
     return columns
 

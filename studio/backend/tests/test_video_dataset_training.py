@@ -87,6 +87,15 @@ def test_flat_video_rows_become_video_messages():
         assert assistant["content"] == [{"type": "text", "text": answer}]
 
 
+@pytest.mark.parametrize("clip", ["clips/a.webm", {"bytes": None, "path": "clips/a.webm"}], ids = ["str", "dict"])
+def test_webm_in_a_video_column_is_video_not_audio(clip):
+    ds = Dataset.from_list([{"video": clip, "answer": "red moves left"}] * 2)
+    result = check_dataset_format(ds, is_vlm = True)
+    assert result["is_image"] is True
+    assert result["is_audio"] is False
+    assert result["detected_format"] == "video_text"
+
+
 def test_text_columns_named_like_video_stay_text():
     ds = Dataset.from_dict(
         {"video_id": ["abc", "def"], "video title": ["Cooking", "Hiking"], "text": ["a", "b"]}

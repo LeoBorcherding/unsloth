@@ -511,7 +511,8 @@ def detect_multimodal_dataset(dataset):
             modality_types.add("audio")
     if audio_columns:
         multimodal_columns = [col for col in multimodal_columns if col not in set(audio_columns)]
-    video_columns = [col for col in detect_video_columns(sample) if col not in set(audio_columns)]
+    video_columns = detect_video_columns(sample)
+    audio_columns = [col for col in audio_columns if col not in video_columns]
     if video_columns:
         multimodal_columns = [col for col in multimodal_columns if col not in video_columns]
         multimodal_columns += video_columns
