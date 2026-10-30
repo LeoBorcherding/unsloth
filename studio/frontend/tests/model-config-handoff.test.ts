@@ -402,8 +402,8 @@ test("a set the cap left behind keeps its only copy and its selection until ther
   assert.deepEqual(listSavedRunSettings(snapshot).map((set) => set.name), ["overflow"]);
   assert.equal(getSelectedRunSettings(snapshot, "Q4_K_M"), "overflow");
 
+  // Freeing a slot brings it in at once, with no sidebar remount or handoff to re-run adoption.
   assert.ok(deleteSavedRunSettings(repo, "set 0"));
-  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
 
   assert.ok(listSavedRunSettings(repo).some((set) => set.name === "overflow"));
   assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "overflow");

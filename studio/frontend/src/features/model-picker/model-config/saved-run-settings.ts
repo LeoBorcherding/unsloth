@@ -5,7 +5,7 @@
 // mirrored into the per-model record, which is what a load (and the API) applies.
 
 import { useSyncExternalStore } from "react";
-import { normalizeModelIdentity } from "./model-identity";
+import { cachedRepoConfigId, normalizeModelIdentity } from "./model-identity";
 import {
   type PerModelConfig,
   deletePerModelConfigsForOverrideKeys,
@@ -306,7 +306,20 @@ export function deleteSavedRunSettings(modelId: string, name: string): boolean {
   for (const selected of dropped) {
     selections[selected] = null;
   }
-  return dropped.length === 0 || writeSelections(selections);
+  const written = dropped.length === 0 || writeSelections(selections);
+  adoptLeftBehind(modelId);
+  return written;
+}
+
+// A freed slot brings in a set the cap left under one of the repo's snapshot paths.
+function adoptLeftBehind(modelId: string): void {
+  const to = modelKey(modelId);
+  for (const key of Object.keys(readMap())) {
+    const repo = key === to ? null : cachedRepoConfigId(key, null);
+    if (repo && modelKey(repo) === to) {
+      adoptLegacyRunSettings(modelId, key);
+    }
+  }
 }
 
 /** The quants of this model that load with the set ("" is a model without quants). */
@@ -512,15 +525,17 @@ export function adoptLegacyRunSettings(
     const moved = candidates.slice(0, Math.max(0, room));
     // Sets past the cap stay where they are, the only copy, until the repo has room.
     left = candidates.slice(moved.length);
-    if (moved.length > 0) {
-      map[to] = [...kept, ...moved];
+    if (left.length < entriesFor(map, from).length) {
+      if (moved.length > 0) {
+        map[to] = [...kept, ...moved];
+      }
+      if (left.length > 0) {
+        map[from] = left;
+      } else {
+        delete map[from];
+      }
+      changed = writeMap(map) || changed;
     }
-    if (left.length > 0) {
-      map[from] = left;
-    } else {
-      delete map[from];
-    }
-    changed = writeMap(map) || changed;
   }
   const survivors = entriesFor(map, to);
   const inList = (list: readonly StoredEntry[], name: unknown) =>
