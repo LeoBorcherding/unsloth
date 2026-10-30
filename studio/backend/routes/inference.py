@@ -17403,15 +17403,26 @@ async def _explicit_load_is_gguf(request: LoadRequest, loader_id: str) -> bool:
     if known is not None:
         return known
     # Not downloaded yet: an unknown id would read as GGUF, so ask the Hub what the load will fetch.
-    from utils.models.model_config import detect_gguf_model_remote
-
     try:
-        remote = await asyncio.to_thread(
-            detect_gguf_model_remote, request.model_path, request.hf_token
-        )
+        listed = await asyncio.to_thread(_hub_lists_gguf, request.model_path, request.hf_token)
     except Exception:
+        listed = None
+    return True if listed is None else listed
+
+
+def _hub_lists_gguf(repo_id: str, hf_token: Optional[str]) -> Optional[bool]:
+    """None when the listing could not be read: a failed lookup is not 'no GGUF files'."""
+    from utils.models import model_config
+
+    failures: list[Exception] = []
+    token = model_config._gguf_remote_detect_failure.set(failures)
+    try:
+        found = model_config.detect_gguf_model_remote(repo_id, hf_token)
+    finally:
+        model_config._gguf_remote_detect_failure.reset(token)
+    if found:
         return True
-    return remote is not None
+    return None if failures or model_config._env_offline() else False
 
 
 def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:

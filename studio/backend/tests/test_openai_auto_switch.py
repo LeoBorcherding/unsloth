@@ -1597,6 +1597,14 @@ def test_explicit_load_asks_the_hub_for_a_saved_repo_not_downloaded_yet(monkeypa
     )
     assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
 
+    def _unreachable(repo_id, hf_token = None):
+        model_config._note_gguf_remote_detect_failure(TimeoutError("hub"))
+        return None
+
+    # A listing that failed says nothing about the format, so the old GGUF reading stands.
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _unreachable)
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
+
 
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
     _mock_override_store(monkeypatch)
