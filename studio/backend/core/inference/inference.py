@@ -2319,8 +2319,8 @@ class InferenceBackend:
                 protocol_source = processor,
                 # The text-only fallback did not use the processor template; pass tools to match the render.
                 reasoning_channel_markers = detect_reasoning_channel_markers(processor, tools = tools)
-                # Any attached image: no markers here would leak native reasoning as visible answer text.
-                if attached
+                # Any attached image or video: no markers here would leak native reasoning as visible answer text.
+                if attached or videos
                 else None,
                 reasoning_channel_markers_resolved = True,
                 prompt = prompt_text,

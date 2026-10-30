@@ -77,3 +77,14 @@ def test_worker_sees_videos_on_the_transformers_backend():
     from core.inference.worker import _backend_declares
 
     assert _backend_declares(InferenceBackend, "videos")
+
+
+def test_video_only_turn_resolves_reasoning_markers():
+    """A video-only turn renders through the processor template like an image turn, so its reasoning must be split."""
+    import inspect
+
+    from core.inference import inference as inference_module
+
+    body = inspect.getsource(inference_module.InferenceBackend._generate_vision_response)
+    call = body.index("detect_reasoning_channel_markers(processor")
+    assert "if attached or videos" in body[call : call + 400]
