@@ -22,6 +22,8 @@ export type FlowEdgeData = {
   portType: string;
   /** Cards this drawn segment belongs to, through any reroutes, for hover emphasis. */
   ends?: string[];
+  /** A wire pinned to one style, whatever the toolbar says. */
+  wireStyle?: "bus" | "curved";
 };
 
 export type RfNode = Node<
@@ -406,7 +408,12 @@ export class RfDeriver {
         selected: isSelected,
         // A segment through a reroute moves by moving the reroute, not its end.
         reconnectable: false,
-        data: { kind: "data", portType: info.portType, ends: info.ends },
+        data: {
+          kind: "data",
+          portType: info.portType,
+          ends: info.ends,
+          ...(wire.style ? { wireStyle: wire.style } : {}),
+        },
       };
       this.wireCache.set(id, { source: wire, selected: isSelected, key, rf });
       next.push(rf);
