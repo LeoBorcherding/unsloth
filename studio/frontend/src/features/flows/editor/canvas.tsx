@@ -58,6 +58,7 @@ import { watchRewiredOutputs } from "./stale-outputs";
 import { useWireReconnect } from "./use-wire-reconnect";
 import { wheelScrollsInside } from "./wheel-scroll";
 import { addFileNodes } from "./file-drop";
+import { rememberSizes } from "./layout";
 import {
   OpenSuperCards,
   SuperCardCombineToolbar,
@@ -274,6 +275,10 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
   const connectStart = useRef<OnConnectStartParams | null>(null);
   const sizesRef = useRef(sizes);
   sizesRef.current = sizes;
+  useEffect(() => {
+    rememberSizes(sizes);
+    return () => rememberSizes(new Map());
+  }, [sizes]);
   const dragRef = useRef<Positions | null>(null);
   dragRef.current = drag;
   // Sizes under a resize handle, drawn live and committed by the card on release.

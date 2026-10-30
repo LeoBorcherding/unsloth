@@ -122,6 +122,24 @@ function fitCards(
   return out;
 }
 
+// A closed card's blocks leave React Flow, so it no longer knows their sizes; layout reads the
+// mounted canvas's own size map, so it folds the same notes the card does.
+let remembered: ReadonlyMap<string, { width: number; height: number }> =
+  new Map();
+
+export function rememberSizes(
+  sizes: ReadonlyMap<string, { width: number; height: number }>,
+): void {
+  remembered = sizes;
+}
+
+export function sizeLookup(
+  getInternalNode: (id: string) => InternalNode | undefined,
+): (id: string) => { width?: number; height?: number } | undefined {
+  return (id) => getInternalNode(id)?.measured ?? remembered.get(id);
+}
+
+
 /** Tidy up: fit cards to their output, lay out cards and groups, then move notes and put reroutes back. Frames and notes keep their sizes. */
 export async function autoLayout(
   getInternalNode: (id: string) => InternalNode | undefined,
@@ -168,9 +186,7 @@ export async function autoLayout(
       return handle ? handle.y + handle.height / 2 : undefined;
     },
   };
-  const fold = foldLayout(tidyRequest(ctx), state, (key) =>
-    getInternalNode(key)?.measured,
-  );
+  const fold = foldLayout(tidyRequest(ctx), state, sizeLookup(getInternalNode));
   const result = fold.unfold(await runLayout(fold.request));
   const patch = tidyPatch(ctx, result, sizes);
   // Frames and notes folded into a super card moved with it.
