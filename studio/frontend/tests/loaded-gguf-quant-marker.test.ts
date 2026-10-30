@@ -52,10 +52,10 @@ test("a loaded row is selected, picked and ejected by its checkpoint, not its la
 });
 
 test("settings opened from a loaded row use the same key as other entry points", () => {
-  // A cached HF snapshot by its repo id, still loading the snapshot.
+  // A cached HF snapshot by its repo id, quant or not, still loading the snapshot.
   assert.match(
     picker,
-    /const snapshotRepoId = cachedRepoConfigId\(checkpoint, quant\);[\s\S]*?\[snapshotRepoId, \{ \.\.\.selectMeta, source: "hub", loadId: checkpoint \}\]/,
+    /const snapshotRepoId = cachedRepoConfigId\(checkpoint, null\);[\s\S]*?\[snapshotRepoId, \{ \.\.\.selectMeta, source: "hub", loadId: checkpoint \}\]/,
   );
   // A standalone .gguf by its bare path.
   assert.match(

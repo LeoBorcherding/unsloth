@@ -5,7 +5,7 @@
 // mirrored into the per-model record, which is what a load (and the API) applies.
 
 import { useSyncExternalStore } from "react";
-import { normalizeModelIdentity } from "./model-identity";
+import { cachedRepoConfigId, normalizeModelIdentity } from "./model-identity";
 import {
   type PerModelConfig,
   deletePerModelConfigsForOverrideKeys,
@@ -306,7 +306,20 @@ export function deleteSavedRunSettings(modelId: string, name: string): boolean {
   for (const selected of dropped) {
     selections[selected] = null;
   }
-  return dropped.length === 0 || writeSelections(selections);
+  const written = dropped.length === 0 || writeSelections(selections);
+  adoptLeftBehind(modelId);
+  return written;
+}
+
+// A freed slot brings in a set the cap left under one of the repo's snapshot paths.
+function adoptLeftBehind(modelId: string): void {
+  const to = modelKey(modelId);
+  for (const key of Object.keys(readMap())) {
+    const repo = key === to ? null : cachedRepoConfigId(key, null);
+    if (repo && modelKey(repo) === to) {
+      adoptLegacyRunSettings(modelId, key);
+    }
+  }
 }
 
 /** The quants of this model that load with the set ("" is a model without quants). */
@@ -486,6 +499,85 @@ function withSuffix(base: string, suffix: string): string {
   return normalizeSavedRunSettingsName(
     `${normalizeSavedRunSettingsName(base).slice(0, SAVED_RUN_SETTINGS_NAME_MAX - suffix.length)}${suffix}`,
   );
+}
+
+/** Moves sets, selections, pins and one-time loads saved under legacyModelId to modelId; what modelId already has wins. */
+export function adoptLegacyRunSettings(
+  modelId: string,
+  legacyModelId: string,
+): boolean {
+  const from = modelKey(legacyModelId);
+  const to = modelKey(modelId);
+  if (!from || from === to) {
+    return false;
+  }
+  let changed = false;
+  const map = readMap();
+  let left: StoredEntry[] = [];
+  if (from in map) {
+    const kept = entriesFor(map, to);
+    const room = SAVED_RUN_SETTINGS_PER_MODEL_MAX - kept.length;
+    const candidates = entriesFor(map, from).filter(
+      (entry) =>
+        typeof entry?.name === "string" &&
+        !kept.some((own) => named(own, entry.name)),
+    );
+    const moved = candidates.slice(0, Math.max(0, room));
+    // Sets past the cap stay where they are, the only copy, until the repo has room.
+    left = candidates.slice(moved.length);
+    if (left.length < entriesFor(map, from).length) {
+      if (moved.length > 0) {
+        map[to] = [...kept, ...moved];
+      }
+      if (left.length > 0) {
+        map[from] = left;
+      } else {
+        delete map[from];
+      }
+      changed = writeMap(map) || changed;
+    }
+  }
+  const survivors = entriesFor(map, to);
+  const inList = (list: readonly StoredEntry[], name: unknown) =>
+    typeof name === "string" && list.some((entry) => named(entry, name));
+  // A reference follows its set: moved with it, left with it, or dropped with a set that is gone.
+  const place = (name: unknown): "move" | "stay" | "drop" =>
+    name === null || inList(survivors, name)
+      ? "move"
+      : inList(left, name)
+        ? "stay"
+        : "drop";
+  const prefix = selectionPrefix(legacyModelId);
+  const rekey = (key: string) =>
+    `${selectionPrefix(modelId)}${key.slice(prefix.length)}`;
+  const move = <T>(
+    read: () => Record<string, T>,
+    storageKey: string,
+    where: (value: T) => "move" | "stay" | "drop" = () => "move",
+  ) => {
+    const entries = read();
+    let touched = false;
+    for (const key of Object.keys(entries)) {
+      if (!key.startsWith(prefix)) continue;
+      const fate = where(entries[key]);
+      if (fate === "stay") continue;
+      if (fate === "move" && !(rekey(key) in entries)) {
+        entries[rekey(key)] = entries[key];
+      }
+      delete entries[key];
+      touched = true;
+    }
+    if (touched) changed = writeJson(storageKey, entries) || changed;
+  };
+  move(readSelections, SELECTED_RUN_SETTINGS_STORAGE_KEY, place);
+  move(readSelectedVariants, SELECTED_VARIANTS_STORAGE_KEY);
+  move(readPins, PINNED_RUN_SETTINGS_STORAGE_KEY, place);
+  move(
+    () => readJson<LoadedOnceMap>(LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY),
+    LOADED_ONCE_RUN_SETTINGS_STORAGE_KEY,
+    (entry) => place(entry?.name),
+  );
+  return changed;
 }
 
 /** Remembered settings saved before named sets existed: list them as a set and select it. Returns its name. */

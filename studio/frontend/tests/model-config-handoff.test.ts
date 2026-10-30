@@ -7,6 +7,7 @@ import test from "node:test";
 import type { ModelConfigHandoffRequest } from "../src/features/model-picker/model-config/model-config-handoff.ts";
 import {
   installLocalStorageFake,
+  readSrc,
   registerBundlerResolver,
 } from "./helpers/kit.ts";
 
@@ -22,6 +23,7 @@ const {
   modelConfigTargetMatchesSelection,
   requestModelConfigHandoff,
   residentModelConfigTarget,
+  adoptResidentSnapshotSettings,
   useModelConfigHandoffStore,
 } = await import(
   "../src/features/model-picker/model-config/model-config-handoff.ts"
@@ -282,7 +284,7 @@ test("non-GGUF weights mirror their settings, a LoRA adapter does not", () => {
   );
 });
 
-test("the resident settings key a cached non-GGUF repo by its repo id", () => {
+test("the resident settings key a cached repo by its repo id, GGUF quants included", () => {
   const snapshot =
     "/hf/models--mlx-community--Qwen3.5-9B-MLX-8bit/snapshots/abc";
   const resident = (overrides: {
@@ -304,8 +306,14 @@ test("the resident settings key a cached non-GGUF repo by its repo id", () => {
   assert.equal(mlx.id, snapshot);
   assert.equal(mlx.configId, "mlx-community/Qwen3.5-9B-MLX-8bit");
   assert.equal(mlx.apiLoadable, true);
-  const gguf = resident({ isGguf: true, ggufVariant: "Q4_K_M" });
-  assert.equal(gguf.configId, undefined);
+  const gguf = resident({
+    modelId: "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc",
+    isGguf: true,
+    ggufVariant: "Q4_K_M",
+  });
+  // The auto-switch loads a quant by snapshot path; its saved run settings sit under the repo id.
+  assert.equal(gguf.configId, "unsloth/Qwen3-1.7B-GGUF");
+  assert.equal(gguf.ggufVariant, "Q4_K_M");
   assert.equal(gguf.apiLoadable, true);
   const file = resident({
     modelId: `${snapshot}/model-Q4_K_M.gguf`,
@@ -321,6 +329,86 @@ test("the resident settings key a cached non-GGUF repo by its repo id", () => {
       .apiLoadable,
     false,
   );
+});
+
+test("a GGUF snapshot's path-keyed settings and sets follow it to the repo id", async () => {
+  store.clear();
+  const {
+    getRunSettingsLoadedOnce,
+    getSelectedRunSettings,
+    listSavedRunSettings,
+    noteRunSettingsLoadedOnce,
+    saveRunSettings,
+    setSelectedRunSettings,
+  } = await import("../src/features/model-picker/model-config/saved-run-settings.ts");
+  const snapshot = "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc";
+  const repo = "unsloth/Qwen3-1.7B-GGUF";
+  const small = { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 4096 };
+  // What the sidebar saved before it keyed the quant by repo id.
+  savePerModelConfig(snapshot, "Q4_K_M", small);
+  assert.ok(saveRunSettings(snapshot, "small", small));
+  assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "small"));
+  noteRunSettingsLoadedOnce(snapshot, "Q4_K_M", { name: null, sent: small });
+  saveRunSettings(repo, "ctx8k", { ...DEFAULT_PER_MODEL_CONFIG, maxSeqLength: 8192 });
+
+  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
+
+  assert.deepEqual(listSavedRunSettings(repo).map((set) => set.name), ["ctx8k", "small"]);
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "small");
+  assert.equal(listSavedRunSettings(snapshot).length, 0);
+  assert.equal(getRunSettingsLoadedOnce(repo, "Q4_K_M")?.sent.maxSeqLength, 4096);
+  assert.equal(getRunSettingsLoadedOnce(snapshot, "Q4_K_M"), null);
+  const resolved = resolveInitialConfig(repo, "Q4_K_M");
+  assert.equal(resolved.remembered, true);
+  assert.equal(resolved.config.maxSeqLength, 4096);
+});
+
+test("the sidebar moves path-keyed settings after commit, not while rendering the target", () => {
+  const sidebar = readSrc("features/model-picker/components/sidebar-model-config.tsx");
+  assert.match(
+    sidebar,
+    /useLayoutEffect\(\(\) => \{[\s\S]*?adoptResidentSnapshotSettings\(modelId, target\.ggufVariant\);[\s\S]*?setAdopted\(adoptKey\);/,
+  );
+  assert.match(sidebar, /if \(adopted !== adoptKey\) return null;/);
+});
+
+test("a set the cap left behind keeps its only copy and its selection until there is room", async () => {
+  store.clear();
+  const {
+    SAVED_RUN_SETTINGS_PER_MODEL_MAX,
+    deleteSavedRunSettings,
+    getPinnedRunSettings,
+    getSelectedRunSettings,
+    listSavedRunSettings,
+    saveRunSettings,
+    setPinnedRunSettings,
+    setSelectedRunSettings,
+  } = await import("../src/features/model-picker/model-config/saved-run-settings.ts");
+  const snapshot = "/hf/models--unsloth--Qwen3-1.7B-GGUF/snapshots/abc";
+  const repo = "unsloth/Qwen3-1.7B-GGUF";
+  for (let i = 0; i < SAVED_RUN_SETTINGS_PER_MODEL_MAX; i++) {
+    assert.ok(saveRunSettings(repo, `set ${i}`, DEFAULT_PER_MODEL_CONFIG));
+  }
+  assert.ok(saveRunSettings(snapshot, "overflow", DEFAULT_PER_MODEL_CONFIG));
+  assert.ok(setSelectedRunSettings(snapshot, "Q4_K_M", "overflow"));
+  assert.ok(setPinnedRunSettings(snapshot, "Q4_K_M", "overflow"));
+
+  adoptResidentSnapshotSettings(snapshot, "Q4_K_M");
+
+  // Not carried over to a name the repo does not list, and not deleted either.
+  assert.equal(listSavedRunSettings(repo).length, SAVED_RUN_SETTINGS_PER_MODEL_MAX);
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), undefined);
+  assert.equal(getPinnedRunSettings(repo, "Q4_K_M"), null);
+  assert.deepEqual(listSavedRunSettings(snapshot).map((set) => set.name), ["overflow"]);
+  assert.equal(getSelectedRunSettings(snapshot, "Q4_K_M"), "overflow");
+
+  // Freeing a slot brings it in at once, with no sidebar remount or handoff to re-run adoption.
+  assert.ok(deleteSavedRunSettings(repo, "set 0"));
+
+  assert.ok(listSavedRunSettings(repo).some((set) => set.name === "overflow"));
+  assert.equal(getSelectedRunSettings(repo, "Q4_K_M"), "overflow");
+  assert.equal(getPinnedRunSettings(repo, "Q4_K_M"), "overflow");
+  assert.equal(listSavedRunSettings(snapshot).length, 0);
 });
 
 test("submitting a cached handoff adopts legacy path-keyed settings", () => {

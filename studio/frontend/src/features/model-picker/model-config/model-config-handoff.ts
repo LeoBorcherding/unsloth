@@ -16,6 +16,7 @@ import {
   residentModelIdMatches,
 } from "./model-identity";
 import { adoptLegacyConfigKey } from "./per-model-config";
+import { adoptLegacyRunSettings } from "./saved-run-settings";
 
 export interface ModelConfigHandoffRequest {
   requestId: string;
@@ -93,6 +94,17 @@ function leafName(id: string): string {
   return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
 }
 
+/** Moves what older builds saved under a GGUF snapshot path to its repo id. Not for render: it fires storage events. */
+export function adoptResidentSnapshotSettings(
+  modelId: string,
+  ggufVariant: string | null | undefined,
+): void {
+  const repoId = cachedRepoConfigId(modelId, null);
+  if (!repoId || !ggufVariant) return;
+  adoptLegacyConfigKey(repoId, modelId, ggufVariant);
+  adoptLegacyRunSettings(repoId, modelId);
+}
+
 export function residentModelConfigTarget({
   modelId,
   ggufVariant,
@@ -111,7 +123,8 @@ export function residentModelConfigTarget({
     ? null
     : ggufVariant;
   const leaf = leafName(modelId);
-  const repoId = cachedRepoConfigId(modelId, settingsGgufVariant);
+  // An API auto-switch reports a GGUF by its snapshot path too; presets and settings key the repo id.
+  const repoId = cachedRepoConfigId(modelId, null);
   return {
     id: modelId,
     displayName: ggufVariant ? `${leaf} · ${ggufVariant}` : leaf,
@@ -220,6 +233,7 @@ export function requestModelConfigHandoff(
       request.meta.loadId,
       request.meta.ggufVariant,
     );
+    adoptLegacyRunSettings(request.id, request.meta.loadId);
   }
   useModelConfigHandoffStore.getState().submit(request);
 }
