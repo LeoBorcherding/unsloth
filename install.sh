@@ -3960,9 +3960,43 @@ fi
 
 _configure_uv_cache
 
+# The flock Unsloth Desktop and the CLI take before touching this venv (unsloth_cli/_studio_runtime_gate.py).
+# Held from here, a Desktop opened mid-install waits instead of repairing over this install, and a second
+# installer stops instead of moving the same venv aside. install.ps1 holds the Windows mutex the same way.
+# fd 9 stays open until setup is done (or exit, after the rollback trap), so the lock outlives each child.
+_STUDIO_RUNTIME_GATE_OPEN=false
+_take_studio_runtime_gate() {
+    # A parent holding the gate (Desktop's update, `unsloth studio update`) hands it down.
+    [ "${_UNSLOTH_STUDIO_RUNTIME_GATE_HANDOFF:-}" = 1 ] && return 0
+    _gate_file="$STUDIO_HOME/.studio-runtime.lock"
+    # touch first: a failed redirection on exec ends a POSIX sh. Unopenable means unlocked, as before.
+    touch "$_gate_file" 2>/dev/null || return 0
+    exec 9>>"$_gate_file"
+    _STUDIO_RUNTIME_GATE_OPEN=true
+    _gate_rc=0
+    if command -v flock >/dev/null 2>&1; then
+        flock -n 9 || _gate_rc=$?
+    elif command -v perl >/dev/null 2>&1; then
+        # macOS has no flock(1). The lock belongs to the open file, so it outlives perl.
+        perl -MFcntl=:flock -e 'open(my $fh, ">&=", 9) or exit 2; flock($fh, LOCK_EX | LOCK_NB) and exit 0; exit($!{EWOULDBLOCK} ? 1 : 2)' || _gate_rc=$?
+    fi
+    [ "$_gate_rc" -eq 1 ] || return 0
+    tauri_log "ERROR" "Another Unsloth install or repair is already running in $STUDIO_HOME"
+    step "error" "another Unsloth install or repair is already running" "$C_ERR"
+    substep "It is changing $STUDIO_HOME (an install in another terminal, or Unsloth Desktop repairing)."
+    substep "Let it finish, then run this installer again."
+    exit 1
+}
+_release_studio_runtime_gate() {
+    [ "$_STUDIO_RUNTIME_GATE_OPEN" = true ] || return 0
+    exec 9>&-
+    _STUDIO_RUNTIME_GATE_OPEN=false
+}
+
 # ── Create venv (migrate old layout if possible, otherwise fresh) ──
 tauri_log "STEP" "Creating virtual environment"
 mkdir -p "$STUDIO_HOME"
+_take_studio_runtime_gate
 
 _MIGRATED=false
 _PREV_TORCH_VER=""
@@ -8491,6 +8525,8 @@ if [ "$_SETUP_EXIT" -ne 0 ]; then
     echo ""
     exit "$_SETUP_EXIT"
 fi
+# Before the service and the launch below, which take the gate themselves.
+_release_studio_runtime_gate
 
 # ── Tauri mode: done, skip shortcuts and auto-launch ──
 if [ "$TAURI_MODE" = true ]; then
