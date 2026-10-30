@@ -8,7 +8,8 @@ import {
   BaseNode,
   BaseNodeContent,
 } from "@/features/recipe-studio/components/rf-ui/base-node";
-import { type NodeProps, NodeResizer } from "@xyflow/react";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { type NodeProps, NodeResizer, useReactFlow } from "@xyflow/react";
 import { Suspense, lazy, memo, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -18,6 +19,7 @@ import {
 } from "../recipe/recipe-group-actions";
 import { useDocStore } from "../stores/doc-store";
 import type { RfNode } from "./derive-rf";
+import { Delete02Icon } from "./icon-data";
 import { portInk, studioInk } from "./theme-colors";
 import { runToNode } from "./node-actions";
 
@@ -99,7 +101,36 @@ function RecipeFrameActions({ groupId }: { groupId: string }) {
   );
 }
 
-function GroupFrameImpl({ data, selected }: NodeProps<RfNode>) {
+/** Top-right trash, shown on hover or selection; goes through the canvas delete, so it is one undo step. */
+function FrameDelete({
+  id,
+  label,
+  className,
+}: {
+  id: string;
+  label: string;
+  className?: string;
+}) {
+  const { deleteElements } = useReactFlow();
+  return (
+    <button
+      type="button"
+      title={`${label} (Delete)`}
+      aria-label={label}
+      data-testid="frame-delete"
+      className={`nodrag flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-destructive focus-visible:opacity-100 group-hover/frame:opacity-100 group-data-[selected]/frame:opacity-100 ${className ?? ""}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        void deleteElements({ nodes: [{ id }] });
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <HugeiconsIcon icon={Delete02Icon} size={14} />
+    </button>
+  );
+}
+
+function GroupFrameImpl({ id, data, selected }: NodeProps<RfNode>) {
   const groupId = (data as { groupId: string }).groupId;
   const group = useDocStore((s) => s.graph.groups[groupId]);
   const upsertGroup = useDocStore((s) => s.upsertGroup);
@@ -109,7 +140,8 @@ function GroupFrameImpl({ data, selected }: NodeProps<RfNode>) {
   const color = group.color ?? "#8b5cf6";
   return (
     <div
-      className="corner-squircle h-full w-full rounded-2xl border"
+      className="group/frame corner-squircle h-full w-full rounded-2xl border"
+      data-selected={selected || undefined}
       style={{
         borderColor: selected ? "var(--ring-select)" : GROUP_EDGE,
       }}
@@ -157,13 +189,19 @@ function GroupFrameImpl({ data, selected }: NodeProps<RfNode>) {
           </span>
         )}
         {group.kind === "recipe" && <RecipeFrameActions groupId={group.id} />}
+        {/* Its blocks stay on the canvas; only the frame goes. */}
+        <FrameDelete
+          id={id}
+          label="Delete group (its blocks stay)"
+          className={group.kind === "recipe" ? "-my-1" : "-my-1 ml-auto"}
+        />
       </div>
     </div>
   );
 }
 
 /** Recipe Studio's markdown note: rendered when idle, double-click to edit. */
-function NoteFrameImpl({ data }: NodeProps<RfNode>) {
+function NoteFrameImpl({ id, data, selected }: NodeProps<RfNode>) {
   const noteId = (data as { noteId: string }).noteId;
   const note = useDocStore((s) => s.graph.notes[noteId]);
   const upsertNote = useDocStore((s) => s.upsertNote);
@@ -175,7 +213,8 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
   const showEditor = editing;
   return (
     <BaseNode
-      className="corner-squircle h-full w-full min-w-0 overflow-hidden rounded-xl border-border/60 shadow-sm"
+      className="group/frame corner-squircle h-full w-full min-w-0 overflow-hidden rounded-xl border-border/60 shadow-sm"
+      data-selected={selected || undefined}
       style={
         color
           ? { background: tint(color, 35), borderColor: tint(color, 55) }
@@ -200,6 +239,13 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
           })
         }
       />
+      {!showEditor && (
+        <FrameDelete
+          id={id}
+          label="Delete note"
+          className="absolute top-1 right-1 z-10"
+        />
+      )}
       {showEditor ? (
         <Textarea
           fieldSizing="fixed"
