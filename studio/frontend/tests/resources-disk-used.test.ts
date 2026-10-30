@@ -19,9 +19,12 @@ test("older backends without used_gb still get total - free", () => {
   assert.equal(diskUsedGb(null), 0);
 });
 
-test("Resources sizes the storage bar to used + free", () => {
+test("Resources keeps the percent and the bar on the total it shows", () => {
   assert.match(resourcesTab, /diskUsedGb\(systemInfo\.disk\)/);
   assert.match(resourcesTab, /diskUsedGb\(modelsDisk\)/);
-  assert.match(resourcesTab, /totalBytes=\{metrics\.diskUsable\}/);
+  // The tile reads "used / total" beside the percent, so both use the same denominator.
+  assert.match(resourcesTab, /diskPercent = diskTotal > 0 \? \(diskUsed \/ diskTotal\) \* 100/);
+  assert.match(resourcesTab, /\(modelsDiskUsed \/ modelsDisk\.total_gb\) \* 100/);
+  assert.match(resourcesTab, /totalBytes=\{metrics\.diskTotal\}/);
   assert.doesNotMatch(resourcesTab, /Math\.max\(0, diskTotal - diskFree\)/);
 });

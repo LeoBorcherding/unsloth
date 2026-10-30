@@ -380,14 +380,14 @@ export function ResourcesTab() {
     const diskTotal = systemInfo.disk?.total_gb ?? 0;
     const diskFree = systemInfo.disk?.free_gb ?? 0;
     const diskUsed = diskUsedGb(systemInfo.disk);
-    // Over what files can use, as psutil's percent: reserved blocks are neither used nor free.
-    const diskUsable = diskUsed + diskFree;
-    const diskPercent = diskUsable > 0 ? (diskUsed / diskUsable) * 100 : 0;
+    // Over the total shown beside it; reserved blocks count as neither used nor free.
+    const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
     const modelsDisk = systemInfo.models_disk ?? null;
     const modelsDiskUsed = modelsDisk ? diskUsedGb(modelsDisk) : 0;
-    const modelsDiskUsable = modelsDisk ? modelsDiskUsed + modelsDisk.free_gb : 0;
     const modelsDiskPercent =
-      modelsDiskUsable > 0 ? (modelsDiskUsed / modelsDiskUsable) * 100 : 0;
+      modelsDisk && modelsDisk.total_gb > 0
+        ? (modelsDiskUsed / modelsDisk.total_gb) * 100
+        : 0;
     const display = gpuMemoryDisplay(displayedGpu);
     const usageDevices = display.usageDevices;
     const gpuMemoryTotals = gpuMemoryTotalsGb(usageDevices);
@@ -422,7 +422,6 @@ export function ResourcesTab() {
       diskTotal,
       diskFree,
       diskUsed,
-      diskUsable,
       diskPercent,
       modelsDisk,
       modelsDiskUsed,
@@ -1175,7 +1174,7 @@ export function ResourcesTab() {
               {t("settings.resources.storage.refreshAction")}
             </Button>
           }
-          totalBytes={metrics.diskUsable}
+          totalBytes={metrics.diskTotal}
           segments={storageSegments}
           footer={
             metrics.modelsDisk
