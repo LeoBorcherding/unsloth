@@ -439,9 +439,14 @@ export const BUDGET = {
   // (5,942,150 -> 5,972,134 B raw, 1,836,750 -> 1,847,702 B transfer, ed9857c0c3 -> 39b8a6ce13, Node 24,
   // 85 chunks): its color themes are read by the theme store at startup, and loading its dialog on first
   // open saves 3 KB transfer but adds five startup chunks. Raised by that growth.
-  // Flows (#14730): shared startup chunks grow; the editor and player stay lazy. Measured below.
-  transferBytes: 1_856_073,
-  rawBytes: 6_001_674,
+  // The GPU rendering setting (#15482) adds 1,948 B raw / 637 B transfer (5,977,895 -> 5,979,843 B raw,
+  // 1,849,311 -> 1,849,948 B transfer against b80df648bf, one machine and build, Node 22, 85 chunks both): the app
+  // provider reports a ready renderer through the setting's API module at startup, plus the setting's strings in
+  // the eager English catalog and its search rows. Raised by that.
+  // Flows (#14730): +12,232 B raw / +6,300 B transfer in shared startup chunks, measured over 1610b38cc4; the
+  // editor and players stay lazy. Raised by that.
+  transferBytes: 1_856_710,
+  rawBytes: 6_003_622,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.

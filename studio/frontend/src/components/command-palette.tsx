@@ -35,7 +35,6 @@ import {
   FlowConnectionIcon,
   DashboardCircleIcon,
   FlimSlateIcon,
-  Folder01Icon,
   Image01Icon,
   LibrariesIcon,
   Message01Icon,
@@ -51,6 +50,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { AiSpeechIcon } from "@/lib/hugeicons-derived";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { ProjectIcon } from "@/lib/project-icon";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { Command as CommandPrimitive } from "cmdk";
 import { type ComponentProps, useEffect, useState } from "react";
@@ -94,7 +94,7 @@ const WORKSPACES: {
   },
   {
     id: "switchToProjects",
-    icon: Folder01Icon,
+    icon: ProjectIcon,
     labelKey: "shell.navigation.projects",
   },
   {
