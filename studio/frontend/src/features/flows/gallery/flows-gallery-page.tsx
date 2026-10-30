@@ -144,7 +144,7 @@ function FlowCard({
               {flow.name}
             </span>
             <span
-              className={`rounded px-1.5 py-0.5 text-[10.5px] ${kind.className}`}
+              className={`rounded px-1.5 py-0.5 text-ui-10p5 ${kind.className}`}
             >
               {kind.label}
             </span>
@@ -156,13 +156,13 @@ function FlowCard({
           )}
           {flow.example && needsLine(flow.needs) && (
             <p
-              className="text-[11px] text-foreground/70"
+              className="text-ui-11 text-foreground/70"
               data-testid="flows-card-needs"
             >
               {needsLine(flow.needs)}
             </p>
           )}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-ui-11 text-muted-foreground">
             {flow.nodeCount} nodes
             {flow.updatedAt && !flow.example
               ? ` · ${relativeTime(flow.updatedAt)}`
@@ -566,7 +566,7 @@ export function FlowsGalleryPage(): ReactElement {
                 onClick={() => setCategory(chip.id)}
                 className={`rounded-full border px-3 py-1 text-xs transition-colors ${
                   category === chip.id
-                    ? "border-foreground/30 bg-foreground text-background"
+                    ? "border-foreground bg-foreground text-background"
                     : "text-muted-foreground hover:bg-muted"
                 }`}
                 data-testid="flows-category"

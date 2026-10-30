@@ -47,6 +47,7 @@ export type SharedConfigKey = Exclude<
   | "maxSeqLength"
   | "mlxKvQuant"
   | "mlxInt8Prefill"
+  | "mlxAnePrefill"
   | "mlxPleOffload"
   | "mlxExpertOffload"
   | "engine"
@@ -147,7 +148,10 @@ export const SHARED_CONFIG_FIELDS: Record<SharedConfigKey, Field> = {
   },
   selectedGpuIndexKind: {
     label: "GPU device index type",
-    valid: nullable((value) => value === "physical" || value === "vulkan"),
+    valid: nullable(
+      (value) =>
+        value === "physical" || value === "vulkan" || value === "cuda_device",
+    ),
   },
 };
 

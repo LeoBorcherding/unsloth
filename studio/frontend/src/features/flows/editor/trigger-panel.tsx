@@ -43,11 +43,11 @@ export function TriggerPanel({
     : null;
   return (
     <section
-      className="flex flex-col gap-2 border-t border-white/5 px-4 py-3 text-[12px] text-zinc-400"
+      className="flex flex-col gap-2 border-t border-white/5 px-4 py-3 text-ui-12 text-zinc-400"
       data-testid="flows-trigger-panel"
     >
       <p>
-        Runs only while Unsloth Studio is open; a time missed while it was
+        Runs only while Unsloth is open; a time missed while it was
         closed is not made up. It starts on its own once you approve triggers
         for this flow.
       </p>
@@ -60,7 +60,7 @@ export function TriggerPanel({
           <span className="font-medium text-zinc-300">
             POST a JSON body to:
           </span>
-          <code className="break-all rounded bg-black/40 px-2 py-1 text-[11px] text-zinc-200">
+          <code className="break-all rounded bg-black/40 px-2 py-1 text-ui-11 text-zinc-200">
             {url}
           </code>
           <div className="flex gap-2">

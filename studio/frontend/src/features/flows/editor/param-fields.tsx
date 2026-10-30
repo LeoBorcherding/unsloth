@@ -12,7 +12,7 @@ import { MediaThumb, isMediaValue } from "./media";
 import { pickOptions } from "./remote-options";
 
 const FIELD =
-  "w-full rounded-md border border-white/10 bg-zinc-900 px-2 py-1.5 text-[13px] text-zinc-100 outline-none focus:border-sky-500/60";
+  "w-full rounded-md border border-white/10 bg-zinc-900 px-2 py-1.5 text-ui-13 text-zinc-100 outline-none focus:border-sky-500/60";
 
 export interface FieldProps {
   spec: ParamSpec;
@@ -67,9 +67,9 @@ function JsonField({
             setError(err instanceof Error ? err.message : "Invalid JSON");
           }
         }}
-        className={`${FIELD} font-mono text-[12px] leading-snug`}
+        className={`${FIELD} font-mono text-ui-12 leading-snug`}
       />
-      {error && <p className="text-[11px] text-red-300">{error}</p>}
+      {error && <p className="text-ui-11 text-red-300">{error}</p>}
     </div>
   );
 }
@@ -108,7 +108,7 @@ function ModelField({ spec, value, onChange }: FieldProps) {
   }, []);
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="flex items-center gap-2 text-[12px] text-zinc-400">
+      <label className="flex items-center gap-2 text-ui-12 text-zinc-400">
         <input
           type="checkbox"
           checked={choice === null}
@@ -177,7 +177,7 @@ function AssetField({ spec, value, onChange }: FieldProps) {
         />
       )}
       {docName !== null && (
-        <p className="truncate rounded-md border border-white/10 px-2 py-1.5 text-[12px] text-zinc-300">
+        <p className="truncate rounded-md border border-white/10 px-2 py-1.5 text-ui-12 text-zinc-300">
           {docName}
         </p>
       )}
@@ -186,7 +186,7 @@ function AssetField({ spec, value, onChange }: FieldProps) {
           type="button"
           disabled={busy}
           onClick={() => inputRef.current?.click()}
-          className="flex items-center gap-1.5 rounded-md border border-white/10 px-2 py-1 text-[12px] text-zinc-300 hover:bg-white/5 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-md border border-white/10 px-2 py-1 text-ui-12 text-zinc-300 hover:bg-white/5 disabled:opacity-50"
         >
           <HugeiconsIcon icon={Upload01Icon} size={13} />
           {busy ? "Uploading…" : hasValue ? "Replace" : "Upload"}
@@ -195,7 +195,7 @@ function AssetField({ spec, value, onChange }: FieldProps) {
           <button
             type="button"
             onClick={() => onChange(null)}
-            className="text-[12px] text-zinc-500 hover:text-zinc-300"
+            className="text-ui-12 text-zinc-500 hover:text-zinc-300"
           >
             Clear
           </button>
@@ -354,7 +354,7 @@ function LoraListField({ spec, value, onChange }: FieldProps) {
         <button
           type="button"
           onClick={() => onChange([...rows, { id: "", weight: 1 }])}
-          className="self-start rounded-md border border-white/10 px-2 py-1 text-[12px] text-zinc-300 hover:bg-white/5"
+          className="self-start rounded-md border border-white/10 px-2 py-1 text-ui-12 text-zinc-300 hover:bg-white/5"
         >
           Add LoRA
         </button>
@@ -389,7 +389,7 @@ function ParamFieldImpl({ spec, value, onChange }: FieldProps) {
             className={`${FIELD} leading-snug`}
           />
           {spec.id.includes("prompt") || spec.id === "template" ? (
-            <p className="text-[10.5px] text-zinc-500">
+            <p className="text-ui-10p5 text-zinc-500">
               Use <code className="text-zinc-400">{"{{name}}"}</code> to insert
               a connected input or flow input.
             </p>
@@ -500,7 +500,7 @@ function ParamFieldImpl({ spec, value, onChange }: FieldProps) {
       return (
         <div className="flex flex-col gap-1">
           <JsonField value={value} onChange={onChange} rows={4} />
-          <p className="text-[10.5px] leading-snug text-zinc-500">
+          <p className="text-ui-10p5 leading-snug text-zinc-500">
             {'{"op": ">", "args": [{"var": "courage"}, 2]}'} · ops: == != &lt;
             &gt; and or not + - * / min max len contains dice
           </p>

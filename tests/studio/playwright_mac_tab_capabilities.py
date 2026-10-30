@@ -57,6 +57,7 @@ TABS = [
     ("/library", "library", "Library"),
     ("/images", "images", "Images"),
     ("/studio", "train", "Train"),
+    ("/flows", "flows", "Flows"),
     ("/video", "video", "Video"),
     ("/export", "export", "Export"),
 ]
@@ -65,7 +66,7 @@ _SIGNED_OUT_PATHS = ("/login", "/change-password")
 
 # Only rows pinned by default (SIDEBAR_NAV_DEFAULT_PINNED, appearance-custom-store.ts) carry a
 # data-testid. test_inline_row_ids_match_the_frontends_default_pinned_set keeps this in sync.
-INLINE_ROW_IDS = ("hub", "projects", "library", "images", "train")
+INLINE_ROW_IDS = ("hub", "projects", "library", "images", "train", "flows")
 # The Projects row yields to the Projects section once projects load (app-sidebar.tsx).
 ROW_STAND_INS = {"projects": '[data-sidebar-section="projects"]'}
 GATED_ROW_ID = "train"
@@ -586,6 +587,19 @@ def stand_in_shown(page, row_id: str) -> bool:
     return stand_in.count() > 0 and stand_in.first.is_visible()
 
 
+SHELL_TIMEOUT_MS = 30_000
+# Every pinned row renders in one pass, so any of them proves the sidebar has mounted.
+_SHELL_JS = """() => document.querySelector('[data-testid^="nav-row-"]') !== null"""
+
+
+def wait_for_sidebar_shell(page, timeout_ms = SHELL_TIMEOUT_MS) -> bool:
+    try:
+        page.wait_for_function(_SHELL_JS, timeout = timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
 def drive_tabs(page) -> None:
     for route, row_id, name in TABS:
         step(f"open {name} ({route})")
@@ -611,6 +625,12 @@ def drive_tabs(page) -> None:
             else:
                 info(f"{name}: redirected to {landed} after a measured verdict (allowed)")
 
+        # A full navigation boots the app again: on a slow runner it can still show its "Loading..."
+        # screen after the fixed wait, with no sidebar at all. Judge rows only once the shell is up.
+        shell_up = wait_for_sidebar_shell(page)
+        if not shell_up:
+            info(f"{name}: no sidebar nav row mounted within {SHELL_TIMEOUT_MS} ms of {route}")
+
         try:
             _rows_seen.update(rid for rid, got in row_states(page).items() if got)
             _rows_seen.update(rid for rid in ROW_STAND_INS if stand_in_shown(page, rid))
@@ -630,7 +650,10 @@ def drive_tabs(page) -> None:
                     f"{name}: nav row {row_id} stands down while its section shows; reached by route instead"
                 )
             elif row_id in INLINE_ROW_IDS:
-                fail(f"{name}: nav row {row_id} is pinned inline by default but did not render")
+                fail(
+                    f"{name}: nav row {row_id} is pinned inline by default but did not render "
+                    f"(shell mounted: {shell_up}; rows: {row_states(page)})"
+                )
             else:
                 # Video and Export live under "More", which renders no test id.
                 info(f"{name}: nav row not pinned inline; reached by route instead")

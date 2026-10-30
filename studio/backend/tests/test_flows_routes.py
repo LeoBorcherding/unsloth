@@ -334,7 +334,14 @@ def test_reconnecting_to_a_run_a_restart_interrupted_ends(client):
 
     client.post("/api/flows", json = {"doc": _simple()})
     run_id = client.post("/api/flows/flow1/runs", json = {}).json()["run_id"]
-    snap = _wait_terminal(client, run_id)
+    _wait_terminal(client, run_id)
+    # The status turns terminal before the run's teardown emits and persists run.completed.
+    rs = engine_mod.ENGINE.live(run_id)
+    for _ in range(100):
+        if rs is None or rs.task is None or rs.task.done():
+            break
+        time.sleep(0.05)
+    snap = client.get(f"/api/flows/runs/{run_id}").json()
     engine_mod.ENGINE.runs.clear()
     token = bind_account(OWNER)
     try:

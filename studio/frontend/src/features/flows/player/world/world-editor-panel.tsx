@@ -96,7 +96,7 @@ export default function WorldEditorPanel({
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-sm">Edit scene</h3>
         <span
-          className="text-[11px] text-white/50"
+          className="text-ui-11 text-white/50"
           data-testid="world-editor-status"
         >
           {status}
@@ -104,7 +104,7 @@ export default function WorldEditorPanel({
       </div>
 
       <div>
-        <p className="mb-1.5 text-[11px] text-white/45 uppercase tracking-wide">
+        <p className="mb-1.5 text-ui-11 text-white/45 uppercase tracking-wide">
           Add
         </p>
         <div className="grid grid-cols-3 gap-1">
@@ -155,7 +155,7 @@ export default function WorldEditorPanel({
             void describe();
           }}
         >
-          <p className="text-[11px] text-white/45 uppercase tracking-wide">
+          <p className="text-ui-11 text-white/45 uppercase tracking-wide">
             Describe a place
           </p>
           <div className="flex gap-1">
@@ -177,7 +177,7 @@ export default function WorldEditorPanel({
             </button>
           </div>
           {placeNote ? (
-            <p className="text-[11px] text-white/55">{placeNote}</p>
+            <p className="text-ui-11 text-white/55">{placeNote}</p>
           ) : null}
         </form>
       ) : null}

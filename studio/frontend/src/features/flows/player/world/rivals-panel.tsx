@@ -299,7 +299,7 @@ export function RivalsPanel({
                     {rel ? (
                       <span
                         className={cn(
-                          "rounded-full px-1.5 text-[10px]",
+                          "rounded-full px-1.5 text-ui-10",
                           rel === "war" && "bg-rose-500/30 text-rose-100",
                           rel === "ally" &&
                             "bg-emerald-500/30 text-emerald-100",
@@ -533,7 +533,7 @@ export function RivalsPanel({
           ) : null}
           {note ? <div className="text-amber-200 text-xs">{note}</div> : null}
           <div
-            className="flex flex-col gap-0.5 text-[11px] text-white/60"
+            className="flex flex-col gap-0.5 text-ui-11 text-white/60"
             data-testid="rivals-log"
           >
             {s.log

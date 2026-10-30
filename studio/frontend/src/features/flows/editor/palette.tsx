@@ -25,7 +25,7 @@ function PaletteItem({
       onClick={() => onAdd(spec.type)}
       title={spec.description}
       data-testid={`palette-${spec.type}`}
-      className="group flex w-full cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] text-zinc-300 hover:bg-white/5 hover:text-white active:cursor-grabbing"
+      className="group flex w-full cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui-12p5 text-zinc-300 hover:bg-white/5 hover:text-white active:cursor-grabbing"
     >
       <HugeiconsIcon
         icon={nodeIcon(spec.icon)}
@@ -35,7 +35,7 @@ function PaletteItem({
       />
       <span className="flex-1 truncate">{spec.title}</span>
       {spec.lane === "gpu" && (
-        <span className="text-[9px] uppercase text-zinc-600 group-hover:text-zinc-400">
+        <span className="text-ui-9 uppercase text-zinc-600 group-hover:text-zinc-400">
           gpu
         </span>
       )}
@@ -89,7 +89,7 @@ function PaletteImpl({ onAdd }: { onAdd: (type: string) => void }) {
             <div key={category.id} className="mb-1.5">
               <button
                 type="button"
-                className="flex w-full items-center gap-2 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+                className="flex w-full items-center gap-2 px-2 py-1 text-ui-10p5 font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
                 onClick={() =>
                   setCollapsed((c) => ({
                     ...c,
@@ -117,7 +117,7 @@ function PaletteImpl({ onAdd }: { onAdd: (type: string) => void }) {
           );
         })}
       </div>
-      <p className="border-white/10 border-t px-3 py-2 text-[10.5px] leading-snug text-zinc-600">
+      <p className="border-white/10 border-t px-3 py-2 text-ui-10p5 leading-snug text-zinc-600">
         Drag onto the canvas, or double-click the canvas to search.
       </p>
     </div>

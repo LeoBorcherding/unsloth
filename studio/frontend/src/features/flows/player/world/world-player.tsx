@@ -1816,7 +1816,7 @@ export function WorldPlayer({
               >
                 <Icon className="size-4" />
                 {id === "inventory" && ws.inventory.length ? (
-                  <span className="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-300 font-bold text-[10px] text-black">
+                  <span className="absolute -top-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-amber-300 font-bold text-ui-10 text-black">
                     {ws.inventory.length}
                   </span>
                 ) : null}
@@ -1979,7 +1979,7 @@ export function WorldPlayer({
               <div key={q.id} className="rounded-xl bg-white/5 p-3">
                 <div className="font-medium text-sm">{q.title}</div>
                 <div className="text-white/60 text-xs">{q.description}</div>
-                <div className="mt-1 text-[11px] text-emerald-200/80">
+                <div className="mt-1 text-ui-11 text-emerald-200/80">
                   From {npcById.get(q.giver)?.name}
                 </div>
                 {raceNote(q.id, q.requires_item) ? (
@@ -2123,7 +2123,7 @@ export function WorldPlayer({
                 </div>
               ) : null}
               {ws.following?.includes(talkNpc.id) ? (
-                <div className="text-[11px] text-emerald-200/80">
+                <div className="text-ui-11 text-emerald-200/80">
                   Following you
                 </div>
               ) : null}
@@ -2135,7 +2135,7 @@ export function WorldPlayer({
                   {NEEDS.map((n) => (
                     <div
                       key={n}
-                      className="flex items-center gap-1.5 text-[10px] text-white/55"
+                      className="flex items-center gap-1.5 text-ui-10 text-white/55"
                       title={`${n} ${Math.round(talkNeeds[n])}`}
                     >
                       <span className="w-9 capitalize">{n}</span>
@@ -2153,7 +2153,7 @@ export function WorldPlayer({
                     </div>
                   ))}
                   {talkDoing ? (
-                    <div className="text-center text-[10px] text-white/45">
+                    <div className="text-center text-ui-10 text-white/45">
                       {talkDoing}
                     </div>
                   ) : null}

@@ -156,21 +156,21 @@ export function ModelRequirementList({ models }: { models: PlanModel[] }) {
           key={`${model.kind}:${model.repo}:${model.variant ?? ""}`}
           className="flex items-center gap-3 px-3 py-2 text-sm"
         >
-          <span className="w-16 shrink-0 rounded bg-muted px-1.5 py-0.5 text-center text-[11px] uppercase">
+          <span className="w-16 shrink-0 rounded bg-muted px-1.5 py-0.5 text-center text-ui-11 uppercase">
             {model.kind}
           </span>
           <span
-            className="min-w-0 flex-1 truncate font-mono text-[12px]"
+            className="min-w-0 flex-1 truncate font-mono text-ui-12"
             title={model.repo}
           >
             {model.repo}
             {model.variant ? ` · ${model.variant}` : ""}
           </span>
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-ui-11 text-muted-foreground">
             {formatBytes(model.size_bytes)}
           </span>
           <span
-            className={`text-[11px] ${
+            className={`text-ui-11 ${
               model.loaded
                 ? "text-emerald-500"
                 : model.downloaded

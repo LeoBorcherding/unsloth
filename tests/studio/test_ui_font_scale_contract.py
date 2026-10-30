@@ -22,13 +22,15 @@ FONTSIZE_PROP_ALLOWED_DIRS = (
 FONTSIZE_STYLE_ALLOWLIST = {
     # Offscreen textarea; 12pt+ suppresses the iOS focus zoom. Never rendered.
     "lib/copy-to-clipboard.ts",
+    # Phaser canvas text in world pixels; it scales with the map zoom, and a canvas cannot read a CSS variable.
+    "features/flows/player/world/phaser-game.ts",
 }
 
 # Sizes a container query's em breakpoint, not text (--ui-space-scale derives
 # from --ui-font-scale); children reset to the 1rem they would inherit.
 CSS_FONTSIZE_LAYOUT_RULES = {
-    (".browser-panel", "font-size: calc(1rem * var(--ui-space-scale, 1));"),
-    (".browser-panel > *", "font-size: 1rem;"),
+    (".browser-panel-body", "font-size: calc(1rem * var(--ui-space-scale, 1));"),
+    (".browser-panel-body > *", "font-size: 1rem;"),
 }
 
 

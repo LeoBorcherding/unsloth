@@ -88,7 +88,7 @@ export function QuickAdd() {
                 );
                 setQuickAdd(null);
               }}
-              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[13px] aria-selected:bg-white/10"
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-ui-13 aria-selected:bg-white/10"
             >
               <HugeiconsIcon
                 icon={nodeIcon(spec.icon)}
@@ -97,7 +97,7 @@ export function QuickAdd() {
                 style={{ color: categories[spec.category]?.color }}
               />
               <span className="flex-1 truncate">{spec.title}</span>
-              <span className="text-[10px] text-zinc-500">
+              <span className="text-ui-10 text-zinc-500">
                 {categories[spec.category]?.title ?? spec.category}
               </span>
             </Command.Item>

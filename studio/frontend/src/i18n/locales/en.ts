@@ -136,6 +136,11 @@ export const en = {
     more: "More",
     addressPlaceholder: "Search or enter a URL",
     local: "Local",
+    browserUse: {
+      label: "Browser use",
+      description: "Let models control the in-built browser",
+      unavailable: "Load a model that can call tools to let it use the browser.",
+    },
     suggested: "Suggested",
     suggestedMenu: {
       open: "Open",
@@ -564,7 +569,7 @@ export const en = {
     startError: "Failed to start the sandbox setup",
     checkFailed: "Could not check the sandbox on this computer.",
     retry: "Retry",
-    keepsRunning: "Closing this does not stop the setup. Its result shows in Settings > Sandbox.",
+    keepsRunning: "Closing this does not stop the setup. Its result shows in Settings > Security.",
   },
   composerSettings: {
     title: "Composer",
@@ -677,6 +682,38 @@ export const en = {
     compactEmpty: "Nothing to compact yet",
     compactUnsupported: "Compaction requires a GGUF or MLX model with tool support",
   },
+  // The sidebar's October "Trick or treat" row, its dialog, and the spooky chat greetings.
+  halloween: {
+    navLabel: "Trick or treat…",
+    title: "Trick or Treat?!",
+    description:
+      "We’ve been brewing a few frights for Unsloth, here for the rest of October.",
+    chooseTheme: "Choose a frightful theme",
+    spookyGreetings: "Spooky greetings",
+    spookyGreetingsDescription: "The sloth greets new chats with a scare.",
+    decorations: "Spiders and bats",
+    decorationsDescription:
+      "Webs, plus the odd spider or bat.",
+    surprise: "Trick or treat!",
+    surpriseDescription: "Let the sloth pick a theme for you.",
+    themesTitle: "Frightful themes",
+    back: "Back",
+    footer: "Unsloth returns to normal at midnight on November 1.",
+    removeNow: "Remove now",
+    hideFromSidebar: "Hide from sidebar",
+    greeting: {
+      pumpkins: "The pumpkins are carved. What’s next?",
+      brewing: "Let’s get brewing",
+      trickOrTreat: "Trick or treat?",
+      manor: "Welcome to the manor",
+      manorName: "Welcome to the manor, {name}",
+      happyHalloween: "Happy Halloween",
+      happyHalloweenName: "Happy Halloween, {name}",
+      spirits: "The spirits are listening…",
+      mysteries: "What mysteries shall we uncover tonight?",
+      conjure: "What can I conjure up for you?",
+    },
+  },
   // The empty chat's greeting; {name} is the user's nickname or first name.
   welcome: {
     goodToSeeYou: "Good to see you",
@@ -753,7 +790,6 @@ export const en = {
     shutdown: "Shutdown",
   },
   shell: {
-    // The Help submenu of the account menu, and the desktop app's Help menu.
     helpMenu: {
       documentation: "Documentation",
       keyboardShortcuts: "Keyboard Shortcuts",
@@ -822,20 +858,17 @@ export const en = {
       trainChecking: "Checking this machine for training support...",
       videoChecking: "Checking this machine for video support...",
       more: "More",
-      // Last entry of the More flyout; opens Settings -> Appearance.
       customizeSidebar: "Customize sidebar",
-      // Rendered uppercase in a pill beside a recently shipped tab.
+      // Rendered uppercase in a pill.
       newBadge: "New",
       export: "Export",
       recents: "Recents",
       noChatsYet: "No chats yet",
-      // Shown under an empty project folder in the sidebar.
       noChats: "No chats",
-      // Shown in the Projects section when every project is pinned, so it has no rows.
+      // Every project is pinned, so the section has no rows.
       allProjectsPinned: "All projects pinned",
-      // Same, when some of them are filed in custom sections instead.
+      // Same, when some are filed in custom sections instead.
       allProjectsFiled: "All projects are pinned or in sections",
-      // Shown in the Projects section when there are no projects yet.
       noProjects: "No projects",
       showMore: "Show more",
       showLess: "Show less",
@@ -846,6 +879,8 @@ export const en = {
       guidedTour: "Guided Tour",
       help: "Help",
       logOut: "Log out",
+      logOutNeedsPassword: "Set a password in Settings > Remote & LAN before logging out, so you can sign back in.",
+      logOutFailed: "Couldn't log out safely. Try again in a moment.",
       shutdown: "Shutdown",
     },
     commandPalette: {
@@ -900,7 +935,6 @@ export const en = {
       description: "{path} does not exist.",
       backToChat: "Back to chat",
     },
-    // Bulk actions on a multi-row selection.
     selection: {
       pinProjects: "Pin projects",
       unpinProjects: "Unpin projects",
@@ -925,7 +959,6 @@ export const en = {
       deleteChatFilesDescription:
         "This chat's own sandbox folder is removed from disk. Files it wrote inside a project stay in that project's workspace.",
     },
-    // Sidebar list headers: how chats are grouped and ordered.
     organize: {
       sidebarHeading: "Organize sidebar",
       byProject: "By project",
@@ -938,11 +971,9 @@ export const en = {
       organizeChats: "Organize chats",
       organizeProjects: "Organize projects",
       sortPinnedChats: "Sort pinned chats",
-      // Header of the menu's section-visibility toggles.
       show: "Show",
       newSection: "New section",
     },
-    // User-made sidebar sections that group chats and projects.
     sections: {
       createTitle: "New section",
       createDescription: "Group chats and projects however you like",
@@ -953,16 +984,14 @@ export const en = {
       edit: "Edit",
       remove: "Remove section",
       markAllRead: "Mark all as read",
-      // The row menu's one submenu for projects and sections, and its headings.
       moveTo: "Move to",
       section: "Section",
       sectionsHeading: "Sections",
       removeFromProject: "Remove from project",
       newSection: "New section",
       removeFromSection: "Remove from section",
-      // Names the project or section the row leaves; the two above are for when it is not one.
+      // Names the project or section the row leaves.
       removeFrom: "Remove from {name}",
-      // Shown in a section with nothing filed in it yet.
       empty: "Drag chats or projects here",
       sectionOptions: "Section options",
       newChatInSection: "New chat in {name}",
@@ -997,6 +1026,11 @@ export const en = {
   },
   settings: {
     accounts: {
+      signsInAs: "Signs in as {username}",
+      signsInAsOwner: "Signs in as {alias} or {username}",
+      signInName: "Your sign-in name",
+      signInNameDescription: "The name you type to sign in when this installation has more than one account. unsloth always works too. Leave empty to use only unsloth.",
+      signInNameSave: "Save name",
       title: "Accounts",
       description: "Create private Unsloth accounts. New users sign in with a one-time setup code and choose a password.",
       username: "Username",
@@ -1137,7 +1171,7 @@ export const en = {
       lastVisited: "Last visited",
     },
     tabs: {
-      sandbox: "Sandbox",
+      sandbox: "Security",
       accounts: "Accounts",
       general: "General",
       profile: "Profile",
@@ -1421,7 +1455,7 @@ export const en = {
       },
     },
     sandbox: {
-      title: "Sandbox",
+      title: "Security",
       description: "Whether Python and Terminal tool calls run inside an OS sandbox on this computer.",
       docs: "Docs",
       docsLabel: "Open the sandbox docs",
@@ -1476,16 +1510,16 @@ export const en = {
       installingRuntime: "Installing…",
       installRuntimeFailed: "The runtime install failed.",
       installRuntimeError: "Could not start the runtime install.",
-      unsupportedArch: "The Windows sandbox (MXC) only runs on x64 Windows, so it is not available on this PC.",
+      unsupportedArch: "The Windows sandbox (MXC) only runs on x64 and ARM64 Windows, so it is not available on this PC.",
       builtinNeedsUpdate: "Windows' built-in container needs build {required} or newer, and this PC runs {current}. Install the latest Windows update to use it without an administrator step, or turn on the fallback below.",
       unsupportedBuild: "The Windows sandbox (MXC) needs Windows 11 24H2 (build 26100) or newer, so it is not available on this PC.",
-      permissionsIntro: "Choose when tools ask first, and whether Python and Terminal also run inside the OS sandbox.",
       permissionLabel: "Tool permissions",
+      levelRowLabel: "Sandbox level",
       levelPickerTitle: "How should code be sandboxed?",
       levelOff: "Disabled",
       levelOffShort: "Full access turns the sandbox off",
-      levelHighDetail: "OS sandboxing. Python and Terminal run inside the OS sandbox (bubblewrap, Seatbelt or MXC) on top of software sandboxing. Without a working OS sandbox, risky calls ask first.",
-      levelLowDetail: "Software sandboxing. Python and Terminal run with software sandboxing only, outside the OS sandbox. Risky calls ask first unless you chose Full access.",
+      levelHighDetail: "Python and Terminal run inside the OS sandbox (bubblewrap, Seatbelt or MXC) on top of software sandboxing. Without a working OS sandbox, risky calls ask first.",
+      levelLowDetail: "Python and Terminal run with software sandboxing only, outside the OS sandbox. Risky calls ask first unless you chose Full access.",
       levelLabel: "Sandbox",
       levelHigh: "High",
       levelLow: "Low",
@@ -1496,6 +1530,7 @@ export const en = {
       managedNote: "The owner of this Unsloth server sets up the OS sandbox.",
     },
     debugging: {
+      description: "Read the Unsloth logs without leaving the app.",
       logSection: "Log file",
       source: "Log file",
       sourceHint: "The model runners write their own logs, so a failed load or generation is often explained there rather than in the server log.",
@@ -1539,7 +1574,7 @@ export const en = {
       exportFailed: "Could not download the logs.",
       exportTooOld: "Running Unsloth backend is too old to export logs. Update that backend and restart.",
       exportForbidden: "Downloading all logs needs a signed-in Unsloth session. An API key is not enough.",
-      // Not rendered: extra terms the settings search matches this tab on.
+      // Not rendered: extra settings-search terms.
       keywords: "debug debugging log logs error errors crash traceback stack trace troubleshoot diagnostics failed",
     },
     voice: {
@@ -1849,10 +1884,10 @@ export const en = {
         idleSecondsAriaLabel: "Idle auto-unload seconds",
         mediaEnable: "Switch image and video model by request",
         mediaEnableDescription:
-          "Load a downloaded image or video model named in an API request before generating. Its own setting: the one above covers the chat model only. Off by default.",
+          "Load a downloaded image or video model named in an API request before generating. Separate from the chat model switch. Off by default.",
         mediaIdleUnload: "Idle auto-unload for image and video",
         mediaIdleUnloadDescription:
-          "Free VRAM by unloading the image and video models after this many idle seconds. Its own setting: the one above covers the chat model only. 0 keeps them loaded, minimum 60.",
+          "Free VRAM by unloading the image and video models after this many idle seconds. Separate from the chat model switch. 0 keeps them loaded, minimum 60.",
         mediaIdleSecondsAriaLabel: "Image and video idle auto-unload seconds",
         mediaIdlePaused: "Paused while Keep model in GPU memory is on.",
         idleNeedsEnable: "Turn on Switch model by request first.",
@@ -1920,13 +1955,13 @@ export const en = {
         },
         details: {
           ask:
-            "Asks before every tool call, including terminal and Python code, web searches, file edits and MCP tools. Tools run by an external provider are not paused. Best when you want to review each step.",
+            "Asks before every tool call, including terminal and Python code, web searches, file edits and MCP tools. Tools run by an external provider are not paused.",
           auto:
             "Runs routine tool calls on its own and only asks when an action looks risky, such as reading credentials, escalating privileges or running destructive commands.",
           off:
-            "Runs every tool call without asking. Python and terminal code still run in the sandbox, which limits which files they can reach on your computer. If this computer has no working OS sandbox, risky Python and terminal calls ask first.",
+            "Runs every tool call without asking. Python and terminal code still run in the sandbox, which limits which files they can reach on your computer. Without a working OS sandbox, risky calls ask first.",
           full:
-            "Runs every tool call without asking and turns off the code sandbox, so Python and terminal code can read and change any file your account can access. Best for trusted tasks that need to work outside the sandbox.",
+            "Runs every tool call without asking and turns off the code sandbox, so Python and terminal code can read and change any file your account can access.",
         },
       },
       notifications: {
@@ -2146,8 +2181,8 @@ export const en = {
       avatarShape: "Avatar shape",
       avatarShapeCircle: "Circle",
       avatarShapeRounded: "Rounded",
-      greetingSloth: "Sloth in greeting",
-      greetingSlothDescription: "Show the sloth in the chat greeting.",
+      greetingSloth: "Greeting",
+      greetingSlothDescription: "Show the greeting on new chats.",
       chooseSloth: "Or pick a sloth",
       noPicture: "No profile picture",
       noneLabel: "None",
@@ -2233,6 +2268,26 @@ export const en = {
     appearance: {
       title: "Appearance",
       description: "How Unsloth looks on this device.",
+      gpuRendering: {
+        sectionTitle: "Rendering",
+        label: "GPU rendering",
+        description: "Draw Unsloth with your graphics card. Auto uses it where it is known to work. Changes apply after Unsloth restarts.",
+        auto: "Auto",
+        on: "On",
+        off: "Off",
+        oldWebkitWarning: "WebKitGTK {version} on Wayland: GPU rendering can crash at launch on NVIDIA with fractional scaling (WebKit bug 280210). If it does, Unsloth switches back to CPU rendering on its own. On WebKitGTK 2.50.4 it gave no measured speedup (8 fps either way), so On is not recommended here.",
+        oldDriverWarning:
+          "NVIDIA driver {version} on X11: Unsloth keeps GPU rendering off until the driver is 610 or newer. Older drivers leak a file descriptor per frame, and the window stops drawing within minutes.",
+        fallbackNote: "GPU rendering crashed at launch on this system, so Unsloth is using CPU rendering.",
+        tryAgain: "Try GPU again",
+        envOverride: "Set by the {name} environment variable. This setting has no effect until it is removed.",
+        macNote: "macOS always renders with the GPU. WebKit has no supported switch to turn it off.",
+        restartPending: "Restart Unsloth to apply.",
+        restartNow: "Restart now",
+        loadError: "Couldn't load the GPU rendering setting.",
+        saveError: "Couldn't save the GPU rendering setting.",
+        restartError: "Couldn't restart Unsloth.",
+      },
       theme: {
         title: "Visual style",
         label: "Mode",
@@ -2248,6 +2303,12 @@ export const en = {
         classic: "Classic",
         minimal: "Minimal",
         moreThemes: "More themes",
+        halloween: "Halloween",
+      },
+      trickOrTreat: {
+        label: "Trick or treat",
+        description:
+          "Halloween themes and spooky greetings, until November 1.",
       },
       custom: {
         chatWidth: {
@@ -2350,6 +2411,8 @@ export const en = {
         label: "Display language",
         description: "The language used by Unsloth.",
         autoDetect: "Auto detect",
+        search: "Search languages",
+        noResults: "No matching languages",
         spellCheck: "Spell check",
         spellCheckDescription: "Underline misspelled words as you type.",
       },
@@ -2380,10 +2443,12 @@ export const en = {
       description: "Monitor this Unsloth server's hardware and storage.",
       liveUpdates: "Live updates",
       floatingWindow: "Floating window",
-      disableOverlay: "Disable overlay",
+      showFloatingWindow: "Show floating window",
+      showFloatingWindowDescription: "Keep CPU, RAM and GPU usage on screen over Unsloth.",
       liveMonitor: {
         title: "Live monitor",
         apiTitle: "API monitor",
+        apiDescription: "See what other apps send to this server's API as it arrives.",
         summary: "Live requests, errors, and token usage",
         status: "{active} active · {recent} recent · {model}",
         noModelLoaded: "no model loaded",
@@ -2402,7 +2467,7 @@ export const en = {
         gpuUnusableDetail: "Detected, but PyTorch cannot use it",
         detailedView: "Detailed view",
         detailedViewDescription:
-          "Show CPU load and each GPU's load, temperature and power in the floating window and here.",
+          "Show CPU load and each GPU's load, temperature and power in the floating window.",
         cpuLoad: "CPU load",
         gpuLoad: "GPU load",
         temperature: "Temperature",
@@ -2435,6 +2500,10 @@ export const en = {
         used: "{value} used",
         free: "{value} free",
         total: "{value} total",
+        usedOf: "{used} used of {total}",
+        segmentUsed: "Used by GPU",
+        segmentSystem: "Used by system",
+        segmentAvailable: "Available",
       },
       llamaBackend: {
         title: "GGUF inference engine",
@@ -2486,7 +2555,7 @@ export const en = {
           updateChecksDisabled:
             "Update checks are disabled (UNSLOTH_DISABLE_UPDATE_CHECK=1), so the available backends are not looked up.",
         },
-        // Not rendered: extra terms the settings search matches these rows on.
+        // Not rendered: extra settings-search terms.
         llamaBackendKeywords:
           "llama.cpp backend gguf inference cuda rocm hip vulkan metal cpu gpu accelerator prebuilt switch engine custom path folder directory llama-server executable binary",
       },
@@ -2499,6 +2568,7 @@ export const en = {
         noRamReserveDescription: "Reduce host RAM held for model weights.",
         noRamReserveHint: "Skips memory-mapped loading on supported Windows builds when the model is fully offloaded to the GPU, so its pages are not held resident. Otherwise keeps memory-mapped loading. Required CPU buffers can still use RAM. Drops --no-mmap and --mlock.",
         multiModel: "Keep multiple models loaded",
+        openSystemSettings: "Open in System",
         multiModelOff: "Off",
         multiModelFit: "When they fit",
         multiModelAlways: "Always",
@@ -2507,7 +2577,7 @@ export const en = {
           "Loading a model keeps the others when they fit. When they don't, it unloads the ones not in use first, then the active one.",
         multiModelDescriptionAlways:
           "Loading a model never unloads another. A model that does not fit is not loaded. Idle auto-unload and training still free memory.",
-        multiModelHint: "Covers chat, speech, image and video models. Each loaded chat model answers the requests that name it. With several GPUs, Unsloth tries to place a new model on a GPU no other model uses. “When they fit” leaves about 1 GB spare. “When they fit” and “Always” never unload a model on another GPU.",
+        multiModelHint: "Covers chat, speech, image and video models. Each loaded chat model answers the requests that name it. With several GPUs, Unsloth tries to place a new model on a GPU no other model uses. “When they fit” leaves about 1 GB spare. A model loaded beside others gets the memory they leave free, so it may start with a shorter context. “When they fit” and “Always” never unload a model on another GPU.",
         allowOversizedLoad: "Allow oversized model loads",
         allowOversizedLoadDescription: "Load image and video models even when the memory check says they will not fit.",
         allowOversizedLoadHint: "Applies where the CPU and GPU share one memory pool (Apple Silicon, integrated GPUs). Unsloth refuses a load when its estimate of the model weights is larger than the memory left after reserving room for the operating system. With this on, those loads are attempted anyway. The estimate can be wrong either way: an oversized load can fail, use up all memory, make the computer swap heavily or stop responding, or stop Unsloth. Off by default.",
@@ -2519,7 +2589,7 @@ export const en = {
         reloadRequired: "Reload the model to apply the new memory flags.",
         loadError: "Failed to load model memory settings",
         saveError: "Failed to save model memory settings",
-        // Not rendered: extra terms the settings search matches these rows on.
+        // Not rendered: extra settings-search terms.
         modelMemoryKeywords:
           "mlock memlock ulimit vram gpu memory ram resident residency pin pinned page lock locked keep loaded unload idle mmap no-mmap load-mode swap paging",
         multiModelKeywords:
@@ -2543,7 +2613,7 @@ export const en = {
         modelsFolder: "Models folder",
         modelsFolderDescription: "Where downloaded models are stored.",
         modelsFolderHint: "Where downloaded models are stored. Change it to keep models off your system drive. Applies to new downloads only. Models you already have stay where they are.",
-        // Not rendered: extra terms the settings search matches this row on.
+        // Not rendered: extra settings-search terms.
         modelsFolderKeywords:
           "models folder directory path location download downloads cache storage disk drive move relocate hugging face",
         futureDownloads: "New downloads only",
@@ -2565,7 +2635,7 @@ export const en = {
           label: "Cache files",
           description: "{size} in caches, of which {reclaimable} can be cleared now.",
           hint: "Package downloads, compiled kernels and transfer caches that Unsloth rebuilds when it needs them. Downloaded models, projects, chats, settings and your Hugging Face token are never cleared here.",
-          // Not rendered: extra terms the settings search matches this row on.
+          // Not rendered: extra settings-search terms.
           keywords:
             "cache caches purge prune clear clean free space disk uv pip npm bun triton inductor cuda numba matplotlib vllm compiled xet temporary",
           measuring: "Measuring cache sizes...",
@@ -2574,6 +2644,10 @@ export const en = {
           detailsAction: "Details",
           recheckAction: "Recheck",
           hideDetailsAction: "Hide details",
+          showFolders: "Show folders",
+          hideFolders: "Hide folders",
+          previousLocations: "Includes previous locations. The main Clear button affects the current cache folder. Model buttons clear only the selected copy.",
+          clearModelDescription: "This removes only this cached copy. It will be downloaded again when needed.",
           clearAction: "Clear caches",
           clearOneAction: "Clear",
           clearingAction: "Clearing...",
@@ -2622,6 +2696,8 @@ export const en = {
         python: "Python",
         torch: "Torch",
         transformers: "Transformers",
+        mlxLm: "mlx-lm",
+        mlxVlm: "mlx-vlm",
         uptime: "Uptime",
         processMemory: "Process memory",
         notInstalled: "Not installed",
@@ -2806,11 +2882,6 @@ export const en = {
       autoScrollManual: "Manual",
       autoScrollKeywords:
         "scroll autoscroll auto-scroll follow stick bottom jump streaming generating viewport lock hold auto manual",
-      scrollToBottomButton: "Scroll to bottom button",
-      scrollToBottomButtonDescription:
-        "Show a button to jump back to the latest message after you scroll up.",
-      scrollToBottomButtonKeywords:
-        "scroll bottom jump latest newest arrow down button floating hide show",
       replyNotification: "Notify when a reply finishes",
       replyNotificationDescription:
         "Show a system notification when a reply finishes while Unsloth is minimized or in the background.",
@@ -2833,9 +2904,8 @@ export const en = {
       inlineEditResponse: "Edit response on responses",
       inlineEditResponseDescription:
         "Keep Edit response on every response, instead of in the More menu.",
-      modelDisclaimer: "Model disclaimer",
-      modelDisclaimerDescription:
-        'Show "LLMs can make mistakes" under the chat box.',
+      composerAtBottom: "Composer at the bottom",
+      composerAtBottomDescription: "Start new chats with the composer at the bottom of the page instead of the middle.",
       projectAttachments: "Share files across a project",
       projectAttachmentsDescription:
         "Make new chat attachments available to every chat in the project.",
@@ -3199,19 +3269,29 @@ export const en = {
       readDocs: "Read the API docs",
       noAccess: "No API access yet.",
       accessTokens: "Access tokens",
+      quickstartTitle: "Quickstart",
+      columnName: "Name",
+      columnToken: "Token",
+      columnCreated: "Created",
+      columnLastUsed: "Last used",
+      columnExpires: "Expires",
       loadError: "Couldn't load API access.",
       createError: "Couldn't create access token.",
       revokeError: "Couldn't revoke access token.",
       never: "Never",
-      tokenNamePlaceholder: "Token name (e.g. production)",
+      tokenNamePlaceholder: "Token name",
       newAccessTokenName: "New access token name",
       createToken: "Create token",
+      neverExpiresHint: "Never expires",
+      expiresInDaysHint: "Expires in {n} days",
+      createTokenHint: 'Create a token named "{name}"',
+      defaultTokenName: "New Token {n}",
       creating: "Creating...",
       newTokenCreated: "New access token created",
       accessTokenCopied: "Access token copied",
       copyAccessToken: "Copy access token",
       copyNow: "Copy now - this won't be shown again.",
-      usageExamples: "Usage examples",
+      usageExamples: "Chat API",
       usageNoModel:
         "Load or download a model to see runnable examples. This server has no model to name yet.",
       usageTools: "Tools",
@@ -3241,13 +3321,16 @@ export const en = {
       expired: "expired",
       expiredStatus: "Expired",
       today: "today",
-      created: "Created {value}",
-      used: "Used {value}",
-      expires: "Expires {value}",
       actionsFor: "Actions for {name}",
       copyPrefix: "Copy prefix",
       copyFailed: "Could not copy",
       revokeToken: "Revoke token",
+      regenerateToken: "Regenerate token",
+      regenerateTitle: 'Regenerate access token "{name}"?',
+      regenerateDescription: "A new token with the same name and expiry period replaces this one. Apps using the current token lose access immediately.",
+      regenerateAction: "Regenerate",
+      regenerating: "Regenerating...",
+      regenerateError: "Couldn't regenerate access token.",
       revokeTitle: 'Revoke access token "{name}"?',
       revokeDescription:
         "Apps using this token immediately lose access. This cannot be undone.",
@@ -3271,12 +3354,22 @@ export const en = {
         useViaApi: "Use via API",
       },
       mediaApi: {
-        title: "Image and video API",
+        title: "Images / Video API",
         description: "Generate images and videos from your own code with the OpenAI-compatible endpoints.",
         images: "Images",
         video: "Video",
         placeholderModel: "The model shown is an example. Load a model on the Images or Video page and open this from its API button to fill it in.",
         autoSwitchOff: "Media auto-switch is off, so requests run on the model the page has loaded, whatever they name.",
+      },
+      trainingApi: {
+        title: "Training API",
+        description: "Fine-tune models from your own code with the OpenAI-compatible fine-tuning endpoints: upload a JSONL file, create a job, follow its events, then chat with the trained model.",
+        placeholder: "The model and settings shown are an example. Open this from the API button on the Train page to fill in your current setup.",
+        hubDataset: "Your Train page uses a Hugging Face or S3 dataset. The API trains on uploaded files, so save the dataset as JSONL and upload that.",
+        batching: "Compatible jobs waiting in the queue train together automatically.",
+        chatNote: "Chatting with the trained model by name needs Model auto-switch on, or load it on the Chat page first.",
+        cancelTitle: "Cancel a job",
+        cancelDescription: "Stops a queued or running job. Not part of the example above.",
       },
       decisionApi: {
         title: "Decision API",
@@ -3329,8 +3422,9 @@ export const en = {
         loadError: "Couldn't load Decision API settings.",
         sendsTo: "Requests are sent to {provider}.",
         connectionMissing: "This connection is gone or has no decision models. Pick another model.",
-        addConnection: "To use a hosted decision model, add TypeSafe, Liquid AI or OpenRouter in Connections.",
-        openConnections: "Open Connections",
+        addConnection: "To use a cloud hosted decision model, add one in ",
+        connectionsLink: "Connections",
+        addConnectionSuffix: ".",
       },
       mcp: {
         title: "Agent access (MCP)",
@@ -3355,6 +3449,7 @@ export const en = {
       desktopAppVersionUnavailable: "Unavailable",
       llamaCppVersion: "llama.cpp Version",
       audioCppVersion: "audio.cpp Version",
+      mlxVersion: "MLX Version",
       whisperCppVersion: "whisper.cpp Version",
       engines: {
         title: "Engines",
@@ -3490,7 +3585,7 @@ export const en = {
       datasetLabel: "Dataset",
       datasetTooltip: "The training data used to fine-tune the model.",
       hfTokenDescription: "Required for gated or private models and datasets.",
-      uploadLocalLabel: "Or upload a local file",
+      uploadLocalLabel: "Upload a local file",
       sourceBrowse: "Browse",
       releaseToUpload: "Release to upload",
       loadYaml: "Load YAML",
@@ -3658,6 +3753,8 @@ export const en = {
       history: "History",
     },
     goToLibrary: "Go to Library",
+    imageTraining: "Image training",
+    goToImageTraining: "Train image LoRAs",
     loadingRuntime: "Loading training runtime...",
     checkingSupport: "Checking this machine for training support...",
     backToHistory: "Back to history",
@@ -3904,11 +4001,11 @@ export const en = {
       attentionModules: "Attention modules",
       mlpModules: "MLP modules",
       targetModules: "Target Modules",
-      enableLora: "Enable LoRA",
+      enableLora: "LoRA",
       trainWithLora: "Train with LoRA",
-      stableRank: "Stable Rank",
-      memoryEfficient: "Memory Efficient",
-      weightDecomposed: "Weight-Decomposed",
+      stableRank: "Rank-stabilized LoRA",
+      memoryEfficient: "SVD-initialized LoRA",
+      weightDecomposed: "LoRA with multipliers",
       notSupportedAppleSilicon: "Not supported on Apple Silicon",
       doraNeedsVisionLayersOff: "Turn off vision layer training to use DoRA",
       optimization: "Optimization",
@@ -3919,7 +4016,7 @@ export const en = {
         "Optimization algorithm. 8-bit variants reduce memory usage. Fused is recommended for vision models.",
       optimizerTooltipMlx:
         "Optimization algorithm. AdamW is the default. Lion uses less memory but usually needs a lower learning rate.",
-      lrScheduler: "LR scheduler",
+      lrScheduler: "LR Scheduler",
       lrSchedulerTooltip:
         "How the learning rate changes over training. Linear decays steadily; cosine decays in a curve.",
       optimizerOptions: {
@@ -3936,7 +4033,7 @@ export const en = {
       },
       batchSize: "Batch Size",
       batchSizeTooltip: "Samples processed per step. Higher uses more VRAM.",
-      gradAccum: "Grad Accum",
+      gradAccum: "Grad Accum Steps",
       gradAccumTooltip: "Simulates larger batch sizes without extra VRAM.",
       weightDecay: "Weight Decay",
       weightDecayTooltip: "L2 regularization to prevent overfitting.",
@@ -3980,7 +4077,7 @@ export const en = {
       offloadPanelSweepNote: "The moving window shows the order layers are fetched in, slowed down to be visible; the numbers are measured on the last step.",
       offloadPanelCard: "GPU {index}",
       offloadPanelCardUnknown: "Unknown card",
-      gradCheckpoint: "Grad Checkpoint",
+      gradCheckpoint: "Grad Checkpointing",
       gradCheckpointTooltip:
         "Trade compute for memory by recomputing activations.",
       none: "None",
@@ -4234,7 +4331,6 @@ export const en = {
       terminalStart: "> unsloth training starts...",
       preparingResources: "> Preparing model and dataset...",
       gettingReady: "> We are getting everything ready for your run...",
-      waitingForFirstStep: "> {message} | waiting for first step... ({step})",
       resumingTraining: "Resuming training...",
       startingTraining: "starting training...",
       dataset: "Dataset",
@@ -4247,7 +4343,7 @@ export const en = {
       "Weights {model} + context {context} = {total} of {budget} usable VRAM",
     readoutWithSpec:
       "Weights {model} + KV {kv} + MTP draft {spec} = {total} of {budget} usable VRAM",
-    // Measured against llama.cpp: the cache is allocated at context creation, sized to n_ctx.
+    // The cache is allocated at context creation, sized to n_ctx.
     kvRate: "KV reserved, ~{rate}/token",
     oomLikely: "With current settings OOM likely",
     tooLarge: "Larger than VRAM, will offload to CPU. A smaller quantization runs faster",
@@ -4334,7 +4430,7 @@ export const en = {
   // The Scheduled page: prompts that run on a schedule, each run answered in a new chat.
   scheduledTasks: {
     title: "Scheduled",
-    description: "Run prompts on a schedule with your loaded model.",
+    description: "Run prompts on a schedule with any of your models.",
     newTask: "New task",
     upcoming: "Upcoming",
     // Column headers over the list, and the Repeats value of a monthly task.
@@ -4413,6 +4509,21 @@ export const en = {
       archiveSuccessful: "Archive successful runs",
       project: "Project",
       projectNone: "None",
+      model: "Model",
+      modelLoaded: "Whichever model is loaded",
+      modelOnDevice: "On this device",
+      modelNote: "If this model isn't loaded when the task runs, Unsloth asks first.",
+      modelNoteAllowed: "Loads this model only while you're away from Unsloth, then puts back what you had.",
+      modelEmpty: "Download a model in Model hub or add a connection to choose another.",
+      modelMissing: "{model} (not on this device)",
+      allowLoad: "Switch automatically when I'm away",
+      allowLoadHint:
+        "When this task is due and you haven't used Unsloth for 5 minutes, it loads this model without asking, runs the task, then switches back to the model you had. If you're using Unsloth or training at that time, the run is skipped and your model is left alone. Off, Unsloth asks before loading.",
+      reasoning: "Thinking effort",
+      reasoningDefault: "Default",
+      reasoningOff: "Off",
+      reasoningLowest: "Lowest",
+      reasoningHighest: "Highest",
       create: "Create",
     },
     deleteDialog: {
@@ -4421,6 +4532,10 @@ export const en = {
     },
     errors: {
       noModel: "No model was loaded. Load a model in Chat, then run the task again.",
+      modelNotLoaded: "The task's model wasn't loaded. Load it in Chat, then run the task again.",
+      modelLoadFailed: "Couldn't load the task's model. Make sure it's still downloaded in Model hub.",
+      modelBusy: "Skipped while you were using Unsloth, so your model was left alone.",
+      connectionUnavailable: "The task's connection is missing or turned off. Check it in Connections.",
       timeout: "The model took too long to answer.",
       cancelled: "The run was stopped before it finished.",
       interrupted: "Unsloth closed before the run finished.",
@@ -4430,6 +4545,14 @@ export const en = {
       updateFailed: "Could not update the task",
       deleteFailed: "Could not delete the task",
       runFailed: "Could not start the task",
+    },
+    // Asked when a task's model is not loaded: loading it replaces the model in Chat.
+    loadPrompt: {
+      title: "Load {model}?",
+      description: "“{title}” runs on {model}, which isn't loaded. Running it loads {model} until it finishes, then puts back what you had.",
+      always: "Don't ask again. Switch only while I'm away from Unsloth.",
+      notNow: "Not now",
+      load: "Load and run",
     },
     toast: {
       finished: "“{title}” is ready",
@@ -4454,7 +4577,6 @@ export const en = {
       all: "All",
       chats: "Chats",
     },
-    // The Chats tab: conversations and projects, kept apart from every file tab.
     chats: {
       sections: {
         chats: "Chats",
@@ -4522,8 +4644,6 @@ export const en = {
       empty: {
         chatsTitle: "No chats yet",
         chatsDescription: "Your conversations show up here, kept apart from your files.",
-        projectsTitle: "No projects yet",
-        projectsDescription: "Projects group related chats and share instructions between them.",
         archivedTitle: "Nothing archived",
         archivedDescription: "Chats you archive show up here.",
         sectionsTitle: "No sections yet",
@@ -4572,7 +4692,6 @@ export const en = {
         uploadFailed: "Could not upload {name}",
       },
     },
-    // One title and description per tab, shown when it has nothing yet.
     empty: {
       suggestedTitle: "Your library is empty",
       suggestedDescription: "Files you upload or create in chats show up here.",
@@ -4589,6 +4708,7 @@ export const en = {
       modelsTitle: "No fine-tuned models yet",
       modelsDescription: "Models you train or export in Unsloth show up here.",
       createFolder: "Create folder",
+      generateImage: "Generate an image",
       generateVideo: "Generate a video",
       generateAudio: "Generate audio",
       trainModel: "Train a model",
@@ -4608,11 +4728,10 @@ export const en = {
     searchFolder: "Search folder",
     dropToUpload: "Drop to upload",
     dropToUploadInto: 'Drop to upload to "{folder}"',
-    // Folder cards and list rows. The singular form is used when count is 1.
+    // The singular form is used when count is 1.
     itemCountOne: "{count} item",
     itemCount: "{count} items",
     selectItem: "Select {name}",
-    // The bar that floats over the page while anything is selected.
     selection: {
       startChat: "Start chat",
       move: "Move",
@@ -4635,7 +4754,6 @@ export const en = {
       noFolder: "Library (no folder)",
       deleteFolder: "Delete folder",
     },
-    // Each platform's own name for opening the file manager at a file.
     reveal: {
       finder: "Reveal in Finder",
       explorer: "Show in Explorer",
@@ -4655,6 +4773,8 @@ export const en = {
       pdfs: "PDFs",
       gridView: "Grid view",
       listView: "List view",
+      grid: "Grid",
+      list: "List",
       settings: "Library settings",
       sort: "Sort",
       sortDefault: "Default order",
@@ -4693,7 +4813,7 @@ export const en = {
       modifiedColumn: "Modified",
       justNow: "just now",
     },
-    // File sizes. {value} is already formatted for the locale.
+    // {value} is already formatted for the locale.
     size: {
       bytes: "{value} B",
       kilobytes: "{value} KB",
@@ -4701,7 +4821,6 @@ export const en = {
       gigabytes: "{value} GB",
       terabytes: "{value} TB",
     },
-    // Fine-tuned models, by how they were made.
     modelKind: {
       lora: "LoRA",
       fullFineTune: "Full fine-tune",
@@ -4729,7 +4848,7 @@ export const en = {
       deleteSandbox: "It is also removed from the chat that created it.",
       deleteModel: "This permanently deletes the model from disk.",
       unsavedTitle: "Your changes weren't saved",
-      // {reason} is why the save failed, ending in a full stop.
+      // {reason} ends in a full stop.
       unsavedDescription: "{reason} Try again, or discard your changes to close the file.",
       keepEditing: "Keep editing",
       discardChanges: "Discard changes",
@@ -4760,7 +4879,6 @@ export const en = {
       readOnlyNotUtf8:
         "This file is not UTF-8 text, so it opens read-only here. Some characters may not show correctly.",
     },
-    // The full-window file viewer, shared with the Images, Video and Audio pages.
     viewer: {
       scale: "Scale",
       fit: "Zoom to fit",
@@ -4774,7 +4892,6 @@ export const en = {
       untitledImage: "Untitled image",
       untitledVideo: "Untitled video",
     },
-    // The Project submenu that copies a file into a project.
     project: {
       label: "Project",
       newProject: "New project",
@@ -4839,7 +4956,6 @@ export const en = {
       speechModel: "{name} is a speech model",
       speechModelDescription: "Pick it from the model menu on the Audio page.",
       noMediaLink: "The server returned no link to play this file.",
-      // A Library "View in" link to a gallery entry that is no longer listed.
       imageNotFound: "Could not find this image",
       clipNotFound: "Could not find this clip",
       notFoundDescription: "It may be archived or deleted.",
@@ -4971,5 +5087,320 @@ export const en = {
         "Move the live monitor. Arrow keys nudge it, double-click resets it.",
       reconnecting: "Reconnecting...",
     },
+  },
+  projectsPage: {
+    title: "Projects",
+    search: "Search projects",
+    importExport: "Import / Export projects",
+    importChatsAction: "Import chats…",
+    exportAllProjects: "Export All Projects",
+    exportProjectsAndRecents: "Export Projects + Recents",
+    combined: "Combined",
+    perChat: "Per chat",
+    newProject: "New project",
+    name: "Name",
+    updated: "Updated",
+    newestFirst: "Newest first",
+    oldestFirst: "Oldest first",
+    today: "Today",
+    yesterday: "Yesterday",
+    emptyDescription: "A project keeps related chats together, with shared instructions and sources every chat in it can use.",
+    createFirst: "Create your first project",
+    noMatches: "No projects match your search.",
+    clearSearch: "Clear search",
+    showChats: "Show chats",
+    hideChats: "Hide chats",
+    pinProject: "Pin project",
+    unpinProject: "Unpin project",
+    newChatInProject: "New chat in project",
+    projectOptions: "Project options",
+    loadChatsFailed: "Could not load chats. Retry",
+    refreshChatsFailed: "Could not refresh chats. Retry",
+    noChats: "No chats",
+    unread: "Unread",
+    pinChat: "Pin chat",
+    unpinChat: "Unpin chat",
+    chatOptions: "Chat options",
+    exportAllChats: "Export all chats…",
+    archive: "Archive",
+    renameChat: "Rename chat",
+    chatName: "Chat name",
+    deleteChat: "Delete chat",
+    deleteChatDescription: "Are you sure you want to delete {name}? Its messages will be permanently deleted.",
+    importChats: "Import chats",
+    importDestination: "Choose where to import {name}:",
+    selectDestination: "Select destination",
+    recents: "Recents",
+    import: "Import",
+    deleteProject: "Delete project",
+    deleteProjectDescription: "Are you sure you want to delete {name}? Its chats will be permanently deleted.",
+    deleteProjectFiles: "The project workspace folder will be removed from disk.",
+    deleteAll: "Delete all",
+    projectFallback: "project",
+    importFailed: "Import failed.",
+    nothingToExport: "No conversations to export.",
+    exportFailed: "Export failed.",
+    renameChatFailed: "Failed to rename chat",
+    archiveChatFailed: "Failed to archive chat",
+    deleteChatFailed: "Failed to delete chat",
+    deleteProjectFailed: "Failed to delete project",
+  },
+  auth: {
+    welcomeBack: "Welcome back",
+    loginSubtitle: "Sign in with your password.",
+    setupTitle: "Setup your account",
+    setupSubtitle: "Create a new password",
+    login: "Login",
+    changePassword: "Change password",
+    alreadySetUp: "Password already setup? ",
+    backToLogin: "Back to login",
+    username: "Username",
+    password: "Password",
+    currentPassword: "Current password",
+    newPassword: "New password",
+    confirmPassword: "Confirm password",
+    setupCodeHint:
+      "First sign in? Paste the setup code your administrator gave you as the password.",
+    ownerHint:
+      "Installation owner? Sign in as unsloth, or the sign-in name shown in Settings > Accounts.",
+    currentSetupCodeHint:
+      "Paste the setup code you just signed in with as the current password.",
+    minLength: "Must be at least 8 characters.",
+    ensureMatch: "Please ensure passwords match.",
+    noSpaces: "New password cannot contain spaces.",
+    currentTooShort: "Current password must be at least 8 characters.",
+    setupInitFailed: "Unable to initialize setup. Reload the page and try again.",
+    newTooShort: "New password must be at least 8 characters.",
+    mismatch: "Passwords do not match.",
+    mustDiffer: "New password must be different from your current password.",
+    pleaseWait: "Please wait...",
+    continueAsOwner: "Continue as owner",
+    signInWithUsername: "Sign in with your username and password.",
+    bootstrapping: "Auth is still bootstrapping the default admin account.",
+    signInToChange:
+      "Sign in once with the seeded credentials to change the password.",
+    alreadyUpdated: "Password already updated. Use the login screen.",
+    busy: "Unsloth is busy. Try again in a moment.",
+    updateFailed: "Password update failed.",
+    loadFailed: "Failed to load.",
+    failed: "Auth failed.",
+    shuttingDown:
+      "This instance is shutting down: it was reachable on the network and its default password was never changed.",
+    shutdownCountdown:
+      "This instance is reachable on the network and still uses its default password, so it shuts down in {time}. Setting a password here keeps it running.",
+  },
+  routes: {
+    chat: "Chat",
+    api: "API",
+    dataRecipes: "Data Recipes",
+    login: "Login",
+    changePassword: "Change Password",
+  },
+  remoteCode: {
+    unsafeTitle: "Unsafe files detected",
+    blockedTitle: "Custom code blocked",
+    enableTitle: "Enable custom code for this model?",
+    // {provider} renders with its quotes; {note} is one of the notes below.
+    thisModel: "This model",
+    unsafeBody:
+      "{model} contains files that Hugging Face's security scan flagged as unsafe (for example, a malicious pickle that would run code when the model loads). It cannot be loaded. The flagged files were never downloaded.",
+    unsafeBodyFromProvider:
+      "{model} from {provider} contains files that Hugging Face's security scan flagged as unsafe (for example, a malicious pickle that would run code when the model loads). It cannot be loaded. The flagged files were never downloaded.",
+    customCode: "{model} declares custom Python code in its repository. {note}",
+    customCodeFromProvider:
+      "{model} from {provider} declares custom Python code in its repository. {note}",
+    blockedNote:
+      "A security scan flagged CRITICAL issues, so it cannot be enabled.",
+    reviewNote:
+      "Review the security scan below. Continue only if you trust the model source.",
+    trustNote: "Continue only if you trust the model source.",
+    flaggedIntro: "Our automatic scanner flagged issues including:",
+    nothingFlagged:
+      "Our automatic scanner did not flag any worrying files, but please double check.",
+    enableAndContinue: "Enable and continue",
+  },
+  tour: {
+    badge: "guided tour",
+    defaultTitle: "Quick tour",
+    defaultBody: "Let’s get you oriented.",
+    skipTour: "Skip tour",
+    skip: "Skip",
+    back: "Back",
+    next: "Next",
+    tip: "Tip: `Esc` skips. Tour blocks clicks so you can read.",
+    readMore: "Read more",
+  },
+  updateNotes: {
+    openRelease: "Open release",
+    openChangelog: "Open changelog",
+    retry: "Retry",
+    loadingChanges: "Loading new changes...",
+    customLlamaRepo:
+      "This install tracks a custom llama.cpp repository, so its changes cannot be compared.",
+    noItemisedNotes:
+      "This build predates itemised release notes, so its changes cannot be compared.",
+    compareFailed: "Could not compare these releases.",
+    llamaChangesLabel: "New llama.cpp changes from {from} to {to}",
+    showingChanges: "Showing {shown} of {total} changes",
+    noCarriedChanges: "No new carried changes are listed for this build.",
+    notesFor: "Release notes for {release}",
+    notesForVersion: "Release notes for version {version}",
+    notesTruncated: "Notes truncated. See the full release notes.",
+    summaryLabel: "Release notes summary",
+    moreCount: "+{count} more",
+    loadingNotes: "Loading release notes...",
+    loadFailed: "Could not load release notes.",
+    noNotesFor: "No release notes published for {release} yet.",
+    noNotes: "No release notes published yet.",
+  },
+  desktopStartup: {
+    checking: "Checking...",
+    installPrompt: "To install Unsloth, click Get Started.",
+    getStarted: "Get Started",
+    chatOnly: "Chat only (GGUF): smaller install, no training",
+    installLocation: "Install location:",
+    changeLocation: "Change",
+    useDefaultLocation: "Use default",
+    longPaths: {
+      title: "Windows will ask for permission",
+      // {tool}: "Registry Console Tool", never translated.
+      approve:
+        "Approve {tool} once to turn on long file paths for compiled kernels.",
+      waiting: "Waiting for Windows permission...",
+    },
+    skip: "Skip",
+    continue: "Continue",
+    install: {
+      preparing: "Preparing your workspace...",
+      preparingDetail: "Checking what this computer needs.",
+      downloading: "Downloading required components...",
+      downloadingDetail: "Creating your local environment.",
+      installing: "Installing Unsloth...",
+      installingDetail: "Setting up local AI tools...",
+      finishing: "Finishing setup...",
+      finishingDetail: "Getting everything ready.",
+      continuesAutomatically: "Setup will continue automatically.",
+      fewMinutes: "This can take a few minutes.",
+      someTakeLonger: "Some components take longer to configure.",
+    },
+    details: {
+      showInstall: "Show installation details",
+      hideInstall: "Hide installation details",
+      showSetup: "Show setup details",
+      hideSetup: "Hide setup details",
+      showUpdate: "Show update details",
+      hideUpdate: "Hide update details",
+    },
+    repair: {
+      upgrading: "Upgrading to the full install...",
+      gettingReady: "Getting things ready...",
+      upgradingDetail:
+        "Downloading PyTorch and its libraries for this machine's GPU. This can take several minutes.",
+      wontTakeLong: "This won’t take long.",
+      upgradeFailed: "Could not upgrade to the full install",
+      updateFailed: "Update failed",
+    },
+    closing: "Closing Unsloth Desktop...",
+    closingDetail: "Shutting down the backend.",
+    diskFull: "Not enough disk space",
+    setupFailed: "Setup ran into a problem",
+    tryAgain: "Try Again",
+    retry: "Retry",
+    elevation: {
+      title: "Permission needed",
+      packages: "The following system packages need to be installed:",
+      allow: "Allow",
+    },
+    starting: "Starting Unsloth...",
+    loadingProjects: "Loading projects...",
+    loadingModels: "Loading models...",
+    nearlyDone: "Nearly done...",
+    finishingUpdate: "Finishing update...",
+    serverStopped: "Server stopped",
+    startServer: "Start Server",
+    somethingWrong: "Something went wrong",
+    diagnostics: {
+      copy: "Copy Diagnostics",
+      copying: "Copying...",
+      clipboardFailed:
+        "Clipboard copy failed. Select and copy the diagnostics below.",
+      copyFailed: "Diagnostics copy failed: {error}",
+    },
+  },
+  desktopUpdate: {
+    updatingBackend: "Updating backend...",
+    downloadingApp: "Downloading app update...",
+    installing: "Installing update...",
+    failed: "Update failed",
+    updating: "Updating...",
+    updatingBackendDetail: "This may take a few minutes. Do not close the app.",
+    percentDownloaded: "{percent}% downloaded",
+    restartShortly: "The app will restart shortly.",
+    failedDetail: "Something went wrong during the update.",
+    downloadingFile: "Downloading {file}",
+    downloadingAppLabel: "Downloading app update",
+    skipRestart: "Skip & Restart",
+    banner: {
+      dismiss: "Dismiss app update notification",
+      failedTitle: "App update failed",
+      newVersion: "New Unsloth version",
+      backendRecovered: "Backend recovered. Diagnostics are still available.",
+      linuxManual: "Open the GitHub release page to install the Linux package",
+      available: "A new app update is available",
+      showNotes: "Show release notes",
+      hideNotes: "Hide release notes",
+      copyDiagnostics: "Copy diagnostics",
+      later: "Later",
+      remindLater: "Remind me later",
+      openReleasePage: "Open release page",
+      retry: "Retry update",
+      update: "Update",
+    },
+  },
+  desktopShell: {
+    navigation: "Sidebar and page navigation",
+    collapseSidebar: "Collapse sidebar",
+    expandSidebar: "Expand sidebar",
+    goBack: "Go back",
+    goForward: "Go forward",
+    titlebar: "Window titlebar",
+    windowControls: "Window controls",
+    minimize: "Minimize window",
+    maximize: "Maximize window",
+    restore: "Restore window",
+    close: "Close window",
+  },
+  runtimeUpdate: {
+    // {component}: llama.cpp, whisper.cpp or audio.cpp; {components}: a list of them.
+    installAudio: "Install the audio runtime",
+    installingAudio: "Installing the audio runtime...",
+    unknownVersion: "unknown",
+    failed: "Update failed: {error}",
+    unknownError: "unknown error",
+    skipVersions: "Skip these versions",
+    skipChange: "Skip this change",
+    skipVersion: "Skip this version",
+    skippedVersion: "Skipped {component} {version} for now",
+    skippedUpdate: "Skipped the {component} update for now",
+    skippedUpdates: "Skipped the {components} updates for now",
+    vulkanFaster: "Vulkan is >10% faster than ROCM. No restart needed",
+    noRestart: "No restart needed",
+    downloadSize: "{size} download",
+    // {change}: "<from backend> → <to backend>".
+    backendChange: "{change} backend",
+    updating: "Updating {component}...",
+    updatingLabel: "Updating {component}",
+    installingPhase: "Installing {component} ({current} of {total})...",
+    installingCount: "Installing {count} updates...",
+    bundleTitle: "{count} runtime updates",
+    newBackend: "New {component} backend",
+    newUpdate: "New {component} update",
+    hideUpdate: "Hide the {component} update until Unsloth is reopened",
+    hideUpdates: "Hide the {components} updates until Unsloth is reopened",
+    whatsNew: "What's new",
+    hideWhatsNew: "Hide what's new",
+    later: "Later",
+    update: "Update",
+    undo: "Undo",
   },
 } as const;

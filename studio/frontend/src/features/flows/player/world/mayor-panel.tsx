@@ -100,7 +100,7 @@ function Bar({
           style={{ height: `${Math.abs(f) * 50}%` }}
         />
       </div>
-      <span className="font-semibold text-[10px]">{label}</span>
+      <span className="font-semibold text-ui-10">{label}</span>
     </div>
   );
 }
