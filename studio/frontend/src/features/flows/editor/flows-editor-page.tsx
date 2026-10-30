@@ -19,7 +19,14 @@ import {
 import { useBlocker, useNavigate } from "@tanstack/react-router";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useReactFlow } from "@xyflow/react";
-import { type ReactElement, useCallback, useEffect, useState } from "react";
+import {
+  type ReactElement,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { getFlow } from "../api";
 import { ensureCatalog } from "../stores/catalog-loader";
@@ -73,6 +80,8 @@ function stayUnlessSaved(): Promise<boolean> {
     });
   });
 }
+const RecipeEditor = lazy(() => import("../recipe/recipe-editor"));
+const RecipeRuns = lazy(() => import("../recipe/recipe-runs"));
 
 type LoadState =
   | { status: "loading" }
@@ -85,6 +94,10 @@ function EditorBody({
 }: { flowId: string; readOnly: boolean }) {
   const navigate = useNavigate();
   const paletteOpen = useUiStore((s) => s.paletteOpen);
+  const drawerOpen = useUiStore((s) => s.drawerOpen);
+  const recipeEditorOpen = useUiStore((s) => s.recipeEditor !== null);
+  const recipeRunsOpen = useUiStore((s) => s.recipeRuns !== null);
+  const runStatus = useRuntimeStore((s) => s.runStatus);
   const { screenToFlowPosition } = useReactFlow();
   useEditorShortcuts(!readOnly);
   // The Nodes panel owns the left edge here: the app sidebar unpins (Desktop peeks it from the
@@ -145,6 +158,16 @@ function EditorBody({
         />
       </div>
       <QuickAdd />
+      {recipeEditorOpen && (
+        <Suspense fallback={null}>
+          <RecipeEditor />
+        </Suspense>
+      )}
+      {recipeRunsOpen && (
+        <Suspense fallback={null}>
+          <RecipeRuns />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -8,6 +8,8 @@ import type { EdgeKind, PortSpec } from "../types";
 export interface QuickAddState {
   screen: { x: number; y: number };
   flow: { x: number; y: number };
+  /** a recipe group: list the blocks it can take instead of nodes */
+  recipe?: string;
   from?: {
     nodeId: string;
     handleId: string;
@@ -52,6 +54,27 @@ export function storedWireStyle(): WireStyle {
   }
 }
 
+/** A Recipe Studio dialog opened over a recipe group: its run settings or the GitHub crawler form. */
+export interface RecipeEditorTarget {
+  groupId: string;
+  runSettings?: boolean;
+  /** Recipe Studio's GitHub crawler form, for a GitHub-seeded recipe */
+  easy?: boolean;
+}
+
+/** A recipe group's seed, provider connection, model preset or tool profile, open in the inspector. */
+export interface RecipeSetupTarget {
+  groupId: string;
+  kind: "seed" | "model_provider" | "model_config" | "tool_config";
+  name: string;
+}
+
+/** A recipe group's runs, in Recipe Studio's executions view: the newest one only, or all of them. */
+export interface RecipeRunsTarget {
+  groupId: string;
+  view: "preview" | "runs";
+}
+
 export type SaveState = "saved" | "dirty" | "saving" | "error" | "conflict";
 
 export interface PendingRun {
@@ -72,6 +95,14 @@ export interface UiState {
   wireStyle: WireStyle;
   saveState: SaveState;
   pendingRun: PendingRun | null;
+  recipeEditor: RecipeEditorTarget | null;
+  setRecipeEditor: (target: RecipeEditorTarget | null) => void;
+  recipeSetup: RecipeSetupTarget | null;
+  /** bumps when a different setup card opens, not when the open one is renamed */
+  recipeSetupKey: number;
+  setRecipeSetup: (target: RecipeSetupTarget | null, renamed?: boolean) => void;
+  recipeRuns: RecipeRunsTarget | null;
+  setRecipeRuns: (target: RecipeRunsTarget | null) => void;
   setSelection: (nodes: string[], edges: string[]) => void;
   openInspector: (nodeId: string | null) => void;
   setQuickAdd: (quickAdd: QuickAddState | null) => void;
@@ -100,6 +131,18 @@ export const useUiStore = create<UiState>((set, get) => ({
   wireStyle: storedWireStyle(),
   saveState: "saved",
   pendingRun: null,
+  recipeEditor: null,
+  setRecipeEditor: (recipeEditor) => set({ recipeEditor }),
+  recipeSetup: null,
+  recipeSetupKey: 0,
+  setRecipeSetup: (recipeSetup, renamed = false) =>
+    set((s) => ({
+      recipeSetup,
+      recipeSetupKey: renamed ? s.recipeSetupKey : s.recipeSetupKey + 1,
+      ...(recipeSetup && { inspectorNodeId: null }),
+    })),
+  recipeRuns: null,
+  setRecipeRuns: (recipeRuns) => set({ recipeRuns }),
   setSelection: (nodes, edges) => {
     const s = get();
     if (sameList(s.selectedNodes, nodes) && sameList(s.selectedEdges, edges))
@@ -107,6 +150,7 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({
       selectedNodes: nodes,
       selectedEdges: edges,
+      ...(nodes.length === 1 && { recipeSetup: null }),
       inspectorNodeId:
         nodes.length === 1
           ? nodes[0]
@@ -115,7 +159,12 @@ export const useUiStore = create<UiState>((set, get) => ({
             : s.inspectorNodeId,
     });
   },
-  openInspector: (nodeId) => set({ inspectorNodeId: nodeId }),
+  openInspector: (nodeId) =>
+    set(
+      nodeId
+        ? { inspectorNodeId: nodeId, recipeSetup: null }
+        : { inspectorNodeId: nodeId },
+    ),
   setQuickAdd: (quickAdd) => set({ quickAdd }),
   setDrawer: (open, tab) => {
     set((s) => ({ drawerOpen: open, drawerTab: tab ?? s.drawerTab }));
@@ -156,5 +205,8 @@ export const useUiStore = create<UiState>((set, get) => ({
       quickAdd: null,
       saveState: "saved",
       pendingRun: null,
+      recipeEditor: null,
+      recipeSetup: null,
+      recipeRuns: null,
     }),
 }));

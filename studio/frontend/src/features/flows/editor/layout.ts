@@ -2,6 +2,11 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { InternalNode } from "@xyflow/react";
+import {
+  isSetupId,
+  setupLayoutNodes,
+  withLaidOutSetup,
+} from "../recipe/recipe-setup";
 import { type DocGraph, useDocStore } from "../stores/doc-store";
 import type { LayoutRequest, LayoutResult } from "./layout-core";
 import { REROUTE_SIZE } from "./reroutes";
@@ -71,10 +76,19 @@ export async function autoLayout(
     (id) => getInternalNode(id)?.measured,
     direction,
   );
+  // Setup cards take part as nodes, so the layout leaves room for them and saves where they went.
+  const setup = setupLayoutNodes(graph, (id) => getInternalNode(id)?.measured);
+  request.nodes.push(...setup.nodes);
+  request.edges.push(...setup.edges);
   const id = ++nextId;
   const result = await new Promise<LayoutResult>((resolve, reject) => {
     pending.set(id, { resolve, reject });
     getWorker().postMessage({ id, request });
   });
-  useDocStore.getState().moveNodes(result);
+  const nodes = Object.fromEntries(
+    Object.entries(result).filter(([key]) => !isSetupId(key)),
+  );
+  useDocStore.getState().moveNodes(nodes);
+  const groups = withLaidOutSetup(useDocStore.getState().graph, result);
+  if (groups.length) useDocStore.getState().patchGraph({ groups });
 }

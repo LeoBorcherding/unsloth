@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -9,9 +10,16 @@ import {
 } from "@/features/recipe-studio/components/rf-ui/base-node";
 import { type NodeProps, NodeResizer } from "@xyflow/react";
 import { Suspense, lazy, memo, useState } from "react";
+import { toast } from "sonner";
+import {
+  checkRecipeGroup,
+  openAddBlock,
+  runRecipeGroup,
+} from "../recipe/recipe-group-actions";
 import { useDocStore } from "../stores/doc-store";
 import type { RfNode } from "./derive-rf";
 import { portInk, studioInk } from "./theme-colors";
+import { runToNode } from "./node-actions";
 
 const MarkdownPreview = lazy(() =>
   import("@/components/markdown/markdown-preview").then((m) => ({
@@ -40,6 +48,56 @@ const GROUP_EDGE =
 const NOTE_STYLE = { background: "var(--muted)", borderColor: "var(--border)" };
 // Recipe Studio's and the examples' default note yellow reads as "no colour picked".
 const DEFAULT_NOTE = "#fde68a";
+function RecipeFrameActions({ groupId }: { groupId: string }) {
+  const [checking, setChecking] = useState(false);
+  return (
+    <div className="nodrag ml-auto flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        title="Add a column, seed, model or tool profile"
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          openAddBlock(groupId, { x: rect.left, y: rect.bottom + 4 });
+        }}
+        data-testid="recipe-frame-add"
+      >
+        + Add
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="xs"
+        disabled={checking}
+        title="Check the recipe the way Recipe Studio does before a run"
+        onClick={() => {
+          setChecking(true);
+          void checkRecipeGroup(groupId)
+            .then((errors) =>
+              errors.length
+                ? toast.error("The recipe is not ready", {
+                    description: errors.slice(0, 3).join("\n"),
+                  })
+                : toast.success("Ready to run"),
+            )
+            .finally(() => setChecking(false));
+        }}
+      >
+        {checking ? "Checking…" : "Check"}
+      </Button>
+      <Button
+        type="button"
+        variant="dark"
+        size="xs"
+        onClick={() => runRecipeGroup(groupId, runToNode)}
+        data-testid="recipe-frame-run"
+      >
+        Run
+      </Button>
+    </div>
+  );
+}
 
 function GroupFrameImpl({ data, selected }: NodeProps<RfNode>) {
   const groupId = (data as { groupId: string }).groupId;
@@ -98,6 +156,7 @@ function GroupFrameImpl({ data, selected }: NodeProps<RfNode>) {
             {group.label}
           </span>
         )}
+        {group.kind === "recipe" && <RecipeFrameActions groupId={group.id} />}
       </div>
     </div>
   );
@@ -143,10 +202,10 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
       />
       {showEditor ? (
         <Textarea
-          fieldSizing="fixed"
+          fieldSizing="content"
           // biome-ignore lint/a11y/noAutofocus: editing starts on double-click
           autoFocus={editing}
-          className="nodrag nowheel h-full min-h-0 w-full resize-none rounded-xl border-0 bg-transparent text-xs leading-snug shadow-none focus-visible:ring-0 dark:bg-transparent"
+          className="nodrag nowheel min-h-[inherit] w-full resize-none rounded-xl border-0 bg-transparent text-xs leading-snug shadow-none focus-visible:ring-0 dark:bg-transparent"
           placeholder="Write a note…"
           value={note.text}
           onBlur={() => setEditing(false)}
@@ -159,7 +218,7 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
           Double-click to write a note…
         </p>
       ) : (
-        <BaseNodeContent className="nowheel h-full overflow-y-auto px-3 py-2">
+        <BaseNodeContent className="px-3 py-2">
           <Suspense
             fallback={
               <p className="whitespace-pre-wrap text-xs">{note.text}</p>
