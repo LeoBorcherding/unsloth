@@ -543,7 +543,11 @@ async def generate_answer(
         task.get("model"), bool(task.get("allowModelLoad") or run.get("allowModelLoad"))
     )
     unattended = run.get("source") == "schedule" and not run.get("allowModelLoad")
-    swap = await _plan_swap(task, task["model"], unattended, carried, cancel_event) if allow_switch else None
+    swap = (
+        await _plan_swap(task, task["model"], unattended, carried, cancel_event)
+        if allow_switch
+        else None
+    )
     if holder is not None:
         holder.pending = swap or carried
     loop = asyncio.get_running_loop()
