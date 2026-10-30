@@ -2819,6 +2819,8 @@ def get_system_info(
         "disk": {
             "total_gb": round(disk.total / 1e9, 2) if disk else 0,
             "free_gb": round(disk.free / 1e9, 2) if disk else 0,
+            # Not total - free: that adds the blocks the filesystem reserves for root.
+            "used_gb": round(disk.used / 1e9, 2) if disk else 0,
             "percent_used": disk.percent if disk else 0,
         },
         # Additive: null unless the HF cache sits on another volume (e.g. a symlinked drive).

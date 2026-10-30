@@ -70,6 +70,7 @@ import {
   StorageOverview,
 } from "../components/storage-overview";
 import { useMonitorOverlayStore } from "../stores/monitor-overlay-store";
+import { diskUsedGb } from "../disk-used";
 import { useSettingsPanelPrefsStore } from "../stores/settings-panel-prefs-store";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -378,12 +379,11 @@ export function ResourcesTab() {
     const ramUsed = Math.max(0, ramTotal - ramAvailable);
     const diskTotal = systemInfo.disk?.total_gb ?? 0;
     const diskFree = systemInfo.disk?.free_gb ?? 0;
-    const diskUsed = Math.max(0, diskTotal - diskFree);
+    const diskUsed = diskUsedGb(systemInfo.disk);
+    // Over the total shown beside it; reserved blocks count as neither used nor free.
     const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
     const modelsDisk = systemInfo.models_disk ?? null;
-    const modelsDiskUsed = modelsDisk
-      ? Math.max(0, modelsDisk.total_gb - modelsDisk.free_gb)
-      : 0;
+    const modelsDiskUsed = modelsDisk ? diskUsedGb(modelsDisk) : 0;
     const modelsDiskPercent =
       modelsDisk && modelsDisk.total_gb > 0
         ? (modelsDiskUsed / modelsDisk.total_gb) * 100

@@ -93,12 +93,15 @@ export interface SystemInfoResponse {
   disk: {
     total_gb: number;
     free_gb: number;
+    /** Absent from older backends. */
+    used_gb?: number;
     percent_used: number;
   };
   /** null or absent when it is the system disk. */
   models_disk?: {
     total_gb: number;
     free_gb: number;
+    used_gb?: number;
     percent_used: number;
   } | null;
   gpu: SystemGpuInfo;

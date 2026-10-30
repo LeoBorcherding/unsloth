@@ -51,8 +51,24 @@ def test_symlinked_cache_reports_the_drive_holding_the_bytes(second_drive, tmp_p
     assert system_disk.models_disk_usage(link / "hub") == {
         "total_gb": 2000.0,
         "free_gb": 1500.0,
+        "used_gb": 500.0,
         "percent_used": 25.0,
     }
+
+
+def test_used_excludes_blocks_reserved_for_root(second_drive, monkeypatch):
+    # ext4 keeps 5% back: 2000 total, 500 used, 1400 free. total - free would claim 600 used.
+    real = system_disk.shutil.disk_usage
+
+    def reserved(path):
+        if Path(path).is_relative_to(second_drive):
+            return _Usage(2000 * GB, 500 * GB, 1400 * GB)
+        return real(path)
+
+    monkeypatch.setattr(system_disk.shutil, "disk_usage", reserved)
+    usage = system_disk.models_disk_usage(second_drive / "hf" / "hub")
+    assert usage["used_gb"] == 500.0
+    assert usage["used_gb"] + usage["free_gb"] < usage["total_gb"]
 
 
 def test_cache_dir_missing_behind_a_symlink_still_finds_the_target_drive(second_drive, tmp_path):
