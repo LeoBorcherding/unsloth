@@ -26,6 +26,7 @@ _UNSET = object()
 _LAYOUT = _UNSET
 _DEPTH = {"load": 0, "peft": 0}
 _DDP_MESH = "_unsloth_tp_ddp_mesh"
+_WINDOWS = os.name == "nt"
 
 
 def _int_env(name):
@@ -70,9 +71,16 @@ class TPEnvLayout:
         cuda = torch.cuda.is_available()
         if cuda:
             torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
+        if cuda and _WINDOWS and not dist.is_nccl_available():
+            # Windows torch builds gloo without its GPU all_reduce, so gloo would crash natively
+            # at the first reduction (pytorch/pytorch#186535) instead of failing here.
+            raise RuntimeError(
+                f"Unsloth: UNSLOTH_TP_SIZE={self.tp} needs NCCL on GPU, and Windows CUDA and ROCm "
+                "builds of torch ship without it. Unset UNSLOTH_TP_SIZE, or run tensor parallel on Linux."
+            )
         if not dist.is_initialized():
             # What the Trainer's accelerate state would create; it reuses an existing group.
-            dist.init_process_group("nccl" if cuda else "gloo")
+            dist.init_process_group("nccl" if cuda and dist.is_nccl_available() else "gloo")
         if dist.get_world_size() != self.world:
             raise RuntimeError(
                 f"Unsloth: UNSLOTH_TP_SIZE={self.tp} read WORLD_SIZE={self.world}, but the process group has "
