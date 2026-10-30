@@ -96,6 +96,13 @@ def test_webm_in_a_video_column_is_video_not_audio(clip):
     assert result["detected_format"] == "video_text"
 
 
+def test_audio_in_a_column_named_video_stays_audio():
+    ds = Dataset.from_list([{"video": {"bytes": None, "path": "a.wav"}, "text": "hello"}] * 2)
+    result = check_dataset_format(ds, is_vlm = True)
+    assert result["is_audio"] is True
+    assert "video" not in (result["multimodal_columns"] or [])
+
+
 def test_text_columns_named_like_video_stay_text():
     ds = Dataset.from_dict(
         {"video_id": ["abc", "def"], "video title": ["Cooking", "Hiking"], "text": ["a", "b"]}

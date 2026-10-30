@@ -824,9 +824,8 @@ def detect_video_columns(sample: dict) -> list:
     for col_name, value in sample.items():
         if _is_video_value(value) or video_parts(value):
             columns.append(col_name)
-        elif _keyword_in_column("video", col_name) and (
-            _is_video_value(value, _VIDEO_EXTENSIONS + (".webm",))
-            or (isinstance(value, dict) and "path" in value)
+        elif _keyword_in_column("video", col_name) and _is_video_value(
+            value, _VIDEO_EXTENSIONS + (".webm",)
         ):
             columns.append(col_name)
     return columns
