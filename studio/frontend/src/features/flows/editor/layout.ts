@@ -170,6 +170,7 @@ export async function autoLayout(
       }
     : graph;
   const ctx: TidyContext = {
+    direction,
     graph: view,
     wireStyle: useUiStore.getState().wireStyle,
     size: (id) => {
@@ -185,7 +186,7 @@ export async function autoLayout(
       return handle ? handle.y + handle.height / 2 : undefined;
     },
   };
-  const fold = foldLayout(tidyRequest(ctx, direction), state, (key) =>
+  const fold = foldLayout(tidyRequest(ctx), state, (key) =>
     getInternalNode(key)?.measured,
   );
   const result = fold.unfold(await runLayout(fold.request));
