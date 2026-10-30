@@ -40,6 +40,9 @@ on:
       - 'tests/studio/playwright_link_definition_probe.py'
       - 'tests/studio/playwright_user_message_time.py'
       - 'tests/studio/playwright_progressive_rows.py'
+      - 'tests/studio/playwright_flows_editor.py'
+      - 'tests/studio/playwright_flows_player.py'
+      - 'tests/studio/playwright_flows_mayor.py'
       - 'tests/studio/_code_block_flicker_analysis.py'
       - 'tests/studio/test_code_block_flicker_contract.py'
       - 'tests/studio/_playwright_robust.py'
@@ -85,6 +88,9 @@ on:
       - 'tests/studio/playwright_link_definition_probe.py'
       - 'tests/studio/playwright_user_message_time.py'
       - 'tests/studio/playwright_progressive_rows.py'
+      - 'tests/studio/playwright_flows_editor.py'
+      - 'tests/studio/playwright_flows_player.py'
+      - 'tests/studio/playwright_flows_mayor.py'
       - 'tests/studio/_code_block_flicker_analysis.py'
       - 'tests/studio/test_code_block_flicker_contract.py'
       - 'tests/studio/_playwright_robust.py'
@@ -522,6 +528,17 @@ jobs:
         working-directory: ${{ github.workspace }}
         timeout-minutes: 5
         run: python3 tests/studio/playwright_progressive_rows.py
+
+      # Flows editor, players (story, 2D/3D world) and Mayor mode against the mock backend on the smoke pages.
+      - name: Browser smoke for Flows
+        working-directory: ${{ github.workspace }}
+        timeout-minutes: 10
+        env:
+          FLOWS_SHOTS: ${{ runner.temp }}/flows-shots
+        run: |
+          python3 tests/studio/playwright_flows_editor.py
+          python3 tests/studio/playwright_flows_player.py
+          python3 tests/studio/playwright_flows_mayor.py
 
       # Two small sizes and one repetition on Chromium: enough to prove the fixture still
       # renders every kind of content it claims to and that the curve still rises, which is all

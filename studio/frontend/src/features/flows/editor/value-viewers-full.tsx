@@ -79,7 +79,7 @@ export function TableViewer({
   const total = table.row_count ?? table.rows.length;
   return (
     <div className="flex flex-col gap-1.5" data-testid="flows-table-viewer">
-      <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+      <div className="flex items-center gap-2 text-ui-11 text-zinc-500">
         <span>
           {total} row{total === 1 ? "" : "s"}
           {total > rows.length ? ` (showing ${rows.length})` : ""}
@@ -109,7 +109,7 @@ export function TableViewer({
         </button>
       </div>
       <div className="max-h-80 overflow-auto rounded-md border border-white/10">
-        <table className="w-full border-collapse text-[11.5px]">
+        <table className="w-full border-collapse text-ui-11p5">
           <thead className="sticky top-0 bg-zinc-900">
             <tr>
               {table.columns.map((column) => (
@@ -195,7 +195,7 @@ export function ChartViewer({
             tickFormatter: (v: unknown) => formatCell(v),
           }
         : {})}
-      tick={{ fill: "#a1a1aa", fontSize: 11 }}
+      tick={{ fill: "#a1a1aa", fontSize: "calc(0.6875rem * var(--ui-font-scale, 1))" }}
       label={
         chart.x_label
           ? {
@@ -203,14 +203,14 @@ export function ChartViewer({
               position: "insideBottom",
               offset: -2,
               fill: "#71717a",
-              fontSize: 11,
+              fontSize: "calc(0.6875rem * var(--ui-font-scale, 1))",
             }
           : undefined
       }
     />,
     <YAxis
       key="y"
-      tick={{ fill: "#a1a1aa", fontSize: 11 }}
+      tick={{ fill: "#a1a1aa", fontSize: "calc(0.6875rem * var(--ui-font-scale, 1))" }}
       width={52}
       label={
         yLabel
@@ -219,7 +219,7 @@ export function ChartViewer({
               angle: -90,
               position: "insideLeft",
               fill: "#71717a",
-              fontSize: 11,
+              fontSize: "calc(0.6875rem * var(--ui-font-scale, 1))",
             }
           : undefined
       }
@@ -331,7 +331,7 @@ function HeatmapCanvas({ value }: { value: HeatmapValue }) {
     }
   }, [matrix, lo, hi, value.diverging]);
   if (!matrix)
-    return <p className="text-[11px] text-zinc-500">Loading heatmap...</p>;
+    return <p className="text-ui-11 text-zinc-500">Loading heatmap...</p>;
   return (
     <div className="flex flex-col gap-1" data-testid="flows-heatmap-viewer">
       <canvas
@@ -354,7 +354,7 @@ function HeatmapCanvas({ value }: { value: HeatmapValue }) {
         }}
         onMouseLeave={() => setHover(null)}
       />
-      <div className="flex justify-between text-[11px] text-zinc-500">
+      <div className="flex justify-between text-ui-11 text-zinc-500">
         <span>
           {formatCell(lo)} to {formatCell(hi)}
         </span>
@@ -388,7 +388,7 @@ export function TensorViewer({
   const stats = useMemo(() => numericStats(tensor.data), [tensor]);
   return (
     <div className="flex flex-col gap-1.5" data-testid="flows-tensor-viewer">
-      <p className="font-mono text-[11px] text-zinc-400">
+      <p className="font-mono text-ui-11 text-zinc-400">
         shape [{tensor.shape.join(", ")}]
         {tensor.dtype ? ` ${tensor.dtype}` : ""}
         {tensor.axes?.length ? ` (${tensor.axes.join(", ")})` : ""}

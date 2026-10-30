@@ -30,11 +30,11 @@ function NodeOutputs({ nodeId, spec }: { nodeId: string; spec: NodeSpec }) {
   if (!hasOutputs && !runtime.text && !runtime.error) return null;
   return (
     <section className="flex flex-col gap-2 border-white/10 border-t px-4 py-3">
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+      <h3 className="text-ui-11 font-semibold uppercase tracking-wider text-zinc-500">
         Output
       </h3>
       {runtime.error && (
-        <p className="rounded bg-red-500/10 px-2 py-1.5 text-[12px] text-red-300">
+        <p className="rounded bg-red-500/10 px-2 py-1.5 text-ui-12 text-red-300">
           {runtime.error}
         </p>
       )}
@@ -48,7 +48,7 @@ function NodeOutputs({ nodeId, spec }: { nodeId: string; spec: NodeSpec }) {
         spec.outputs.map((port) =>
           runtime.outputs && port.id in runtime.outputs ? (
             <div key={port.id} className="flex flex-col gap-1">
-              <span className="text-[11px] text-zinc-500">{port.label}</span>
+              <span className="text-ui-11 text-zinc-500">{port.label}</span>
               <OutputValue value={runtime.outputs[port.id]} />
             </div>
           ) : null,
@@ -70,11 +70,11 @@ function ParamRow({
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11.5px] font-medium text-zinc-400">
+      <span className="text-ui-11p5 font-medium text-zinc-400">
         {param.label}
       </span>
       {bound ? (
-        <p className="rounded-md border border-dashed border-white/15 px-2 py-1.5 text-[12px] text-zinc-400">
+        <p className="rounded-md border border-dashed border-white/15 px-2 py-1.5 text-ui-12 text-zinc-400">
           Set by its connected input
         </p>
       ) : (
@@ -147,9 +147,9 @@ function InspectorImpl() {
                 .getState()
                 .updateNode(node.id, { label: e.target.value || null })
             }
-            className="w-full bg-transparent font-semibold text-[15px] outline-none placeholder:text-zinc-100"
+            className="w-full bg-transparent font-semibold text-ui-15 outline-none placeholder:text-zinc-100"
           />
-          <p className="mt-0.5 text-[11.5px] leading-snug text-zinc-500">
+          <p className="mt-0.5 text-ui-11p5 leading-snug text-zinc-500">
             {spec.description}
           </p>
         </div>
@@ -166,7 +166,7 @@ function InspectorImpl() {
         <button
           type="button"
           onClick={() => void runToNode(node.id)}
-          className="flex items-center gap-1 rounded-md bg-sky-600/80 px-2 py-1 text-[12px] hover:bg-sky-500"
+          className="flex items-center gap-1 rounded-md bg-sky-600/80 px-2 py-1 text-ui-12 hover:bg-sky-500"
           title="Run only what this node needs"
         >
           <HugeiconsIcon icon={PlayIcon} size={12} /> Run to here
@@ -174,7 +174,7 @@ function InspectorImpl() {
         <button
           type="button"
           onClick={() => void rerollNode(node.id)}
-          className="flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-[12px] hover:bg-white/5"
+          className="flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-ui-12 hover:bg-white/5"
           title="Run this node again, ignoring the cache (new seed when it has one)"
         >
           <HugeiconsIcon icon={DiceIcon} size={12} /> Re-roll
@@ -190,7 +190,7 @@ function InspectorImpl() {
               [],
             );
           }}
-          className="flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-[12px] hover:bg-white/5"
+          className="flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-ui-12 hover:bg-white/5"
         >
           <HugeiconsIcon icon={Copy01Icon} size={12} /> Duplicate
         </button>
@@ -201,7 +201,7 @@ function InspectorImpl() {
               .getState()
               .updateNode(node.id, { disabled: !node.disabled })
           }
-          className="rounded-md border border-white/10 px-2 py-1 text-[12px] hover:bg-white/5"
+          className="rounded-md border border-white/10 px-2 py-1 text-ui-12 hover:bg-white/5"
         >
           {node.disabled ? "Enable" : "Disable"}
         </button>
@@ -212,7 +212,7 @@ function InspectorImpl() {
               .getState()
               .updateNode(node.id, { collapsed: !node.collapsed })
           }
-          className="rounded-md border border-white/10 px-2 py-1 text-[12px] hover:bg-white/5"
+          className="rounded-md border border-white/10 px-2 py-1 text-ui-12 hover:bg-white/5"
         >
           {node.collapsed ? "Expand" : "Collapse"}
         </button>
@@ -231,7 +231,7 @@ function InspectorImpl() {
       <div className="flex-1 overflow-y-auto">
         <section className="flex flex-col gap-3 px-4 py-3">
           {spec.params.length === 0 && (
-            <p className="text-[12px] text-zinc-500">
+            <p className="text-ui-12 text-zinc-500">
               This node has no settings.
             </p>
           )}
@@ -248,7 +248,7 @@ function InspectorImpl() {
             ))}
           {spec.params.some((param) => param.advanced) && (
             <details>
-              <summary className="cursor-pointer select-none text-[11.5px] font-medium text-zinc-400 hover:text-zinc-200">
+              <summary className="cursor-pointer select-none text-ui-11p5 font-medium text-zinc-400 hover:text-zinc-200">
                 Advanced
               </summary>
               <div className="mt-3 flex flex-col gap-3">
@@ -273,7 +273,7 @@ function InspectorImpl() {
         <NodeOutputs nodeId={node.id} spec={spec} />
         {viewed && (
           <section className="flex flex-col gap-2 border-white/10 border-t px-4 py-3">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            <h3 className="text-ui-11 font-semibold uppercase tracking-wider text-zinc-500">
               Earlier output
             </h3>
             {(spec.outputs.length > 0
@@ -283,7 +283,7 @@ function InspectorImpl() {
             ).map((port) =>
               port.id in viewed ? (
                 <div key={port.id} className="flex flex-col gap-1">
-                  <span className="text-[11px] text-zinc-500">
+                  <span className="text-ui-11 text-zinc-500">
                     {port.label}
                   </span>
                   <OutputValue value={viewed[port.id]} />

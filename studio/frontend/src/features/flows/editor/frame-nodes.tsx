@@ -84,7 +84,7 @@ function NoteFrameImpl({ data, selected }: NodeProps<RfNode>) {
         }
       />
       <textarea
-        className="nodrag nowheel h-full w-full resize-none bg-transparent text-[12px] leading-snug text-amber-100 outline-none placeholder:text-amber-100/40"
+        className="nodrag nowheel h-full w-full resize-none bg-transparent text-ui-12 leading-snug text-amber-100 outline-none placeholder:text-amber-100/40"
         placeholder="Write a note…"
         value={note.text}
         onChange={(e) =>

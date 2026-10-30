@@ -22,6 +22,8 @@ FONTSIZE_PROP_ALLOWED_DIRS = (
 FONTSIZE_STYLE_ALLOWLIST = {
     # Offscreen textarea; 12pt+ suppresses the iOS focus zoom. Never rendered.
     "lib/copy-to-clipboard.ts",
+    # Phaser canvas text in world pixels; it scales with the map zoom, and a canvas cannot read a CSS variable.
+    "features/flows/player/world/phaser-game.ts",
 }
 
 # Sizes a container query's em breakpoint, not text (--ui-space-scale derives

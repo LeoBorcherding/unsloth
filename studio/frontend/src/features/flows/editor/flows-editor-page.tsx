@@ -96,9 +96,9 @@ function EditorBody({
         }
       />
       {readOnly && (
-        <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[12px] text-amber-200">
-          This flow uses blocks this version of Unsloth Studio does not know, so
-          it opens read-only. Update Studio to edit or run it.
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-ui-12 text-amber-200">
+          This flow uses blocks this version of Unsloth does not know, so
+          it opens read-only. Update Unsloth to edit or run it.
         </div>
       )}
       {!readOnly && <CapabilityBanner flowId={flowId} />}
@@ -111,7 +111,7 @@ function EditorBody({
               <button
                 type="button"
                 onClick={() => useUiStore.getState().setDrawer(true, "run")}
-                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-1 text-[12px] capitalize text-zinc-300 shadow-lg hover:bg-zinc-800"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-1 text-ui-12 capitalize text-zinc-300 shadow-lg hover:bg-zinc-800"
               >
                 Run: {runStatus}
               </button>

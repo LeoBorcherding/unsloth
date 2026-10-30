@@ -101,7 +101,7 @@ function OutputPreview({
   }
   if ((runtime.status === "running" || !runtime.outputs) && runtime.text) {
     return (
-      <p className="line-clamp-4 whitespace-pre-wrap text-[11px] leading-snug text-zinc-300">
+      <p className="line-clamp-4 whitespace-pre-wrap text-ui-11 leading-snug text-zinc-300">
         {runtime.text}
       </p>
     );
@@ -114,7 +114,7 @@ function OutputPreview({
     const at = runtime.partialStep;
     return (
       <div className="flex flex-col gap-1">
-        <span className="text-[10px] uppercase tracking-wide text-amber-300/80">
+        <span className="text-ui-10 uppercase tracking-wide text-amber-300/80">
           {at
             ? runtime.status === "running"
               ? `Partial: ${at.step} of ${at.total}`
@@ -168,27 +168,27 @@ function OutputValues({
     if (isStructuredValue(value)) return <StructuredBadge value={value} />;
     if (typeof value === "string") {
       return (
-        <p className="line-clamp-4 whitespace-pre-wrap text-[11px] leading-snug text-zinc-300">
+        <p className="line-clamp-4 whitespace-pre-wrap text-ui-11 leading-snug text-zinc-300">
           {value}
         </p>
       );
     }
     if (typeof value === "number" || typeof value === "boolean") {
       return (
-        <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[11px] text-zinc-200">
+        <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-ui-11 text-zinc-200">
           {String(value)}
         </span>
       );
     }
     if (Array.isArray(value)) {
       return (
-        <span className="rounded bg-white/5 px-1.5 py-0.5 text-[11px] text-zinc-300">
+        <span className="rounded bg-white/5 px-1.5 py-0.5 text-ui-11 text-zinc-300">
           {value.length} items
         </span>
       );
     }
     return (
-      <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[11px] text-zinc-300">
+      <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-ui-11 text-zinc-300">
         {"{ "}
         {Object.keys(value as object)
           .slice(0, 4)
@@ -255,24 +255,24 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
           strokeWidth={1.8}
           style={{ color }}
         />
-        <span className="min-w-0 flex-1 truncate font-medium text-[13px]">
+        <span className="min-w-0 flex-1 truncate font-medium text-ui-13">
           {title}
         </span>
         {runtime.cached && runtime.status !== "running" && (
-          <span className="rounded bg-emerald-500/15 px-1 text-[10px] text-emerald-300">
+          <span className="rounded bg-emerald-500/15 px-1 text-ui-10 text-emerald-300">
             cached
           </span>
         )}
         {runtime.status !== "idle" && !runtime.cached && (
           <span
-            className={`text-[10px] ${runtime.status === "failed" ? "text-red-300" : running ? "text-sky-300" : "text-zinc-400"}`}
+            className={`text-ui-10 ${runtime.status === "failed" ? "text-red-300" : running ? "text-sky-300" : "text-zinc-400"}`}
             title={runtime.error ?? undefined}
           >
             {STATUS_LABEL[runtime.status] ?? runtime.status}
           </span>
         )}
         {spec.lane === "gpu" && runtime.status === "idle" && (
-          <span className="rounded bg-white/5 px-1 text-[9px] uppercase tracking-wide text-zinc-500">
+          <span className="rounded bg-white/5 px-1 text-ui-9 uppercase tracking-wide text-zinc-500">
             gpu
           </span>
         )}
@@ -331,7 +331,7 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
                         left: -5,
                       }}
                     />
-                    <span className="flow-detail truncate text-[11px] text-zinc-400">
+                    <span className="flow-detail truncate text-ui-11 text-zinc-400">
                       {port.label}
                       {port.multi ? "+" : ""}
                     </span>
@@ -344,7 +344,7 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
                     key={port.id}
                     className="relative flex h-5 items-center pl-1 pr-3"
                   >
-                    <span className="flow-detail truncate text-[11px] text-zinc-400">
+                    <span className="flow-detail truncate text-ui-11 text-zinc-400">
                       {port.label}
                     </span>
                     <Handle
@@ -376,7 +376,7 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
                     key={name}
                     className="relative flex h-5 max-w-full items-center pl-1 pr-3"
                   >
-                    <span className="flow-detail truncate text-[11px] italic text-zinc-300">
+                    <span className="flow-detail truncate text-ui-11 italic text-zinc-300">
                       {label} ›
                     </span>
                     <Handle
@@ -396,7 +396,7 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
               {summary.map((line) => (
                 <p
                   key={line}
-                  className="flow-detail line-clamp-2 text-[11px] leading-snug text-zinc-500"
+                  className="flow-detail line-clamp-2 text-ui-11 leading-snug text-zinc-500"
                 >
                   {line}
                 </p>
@@ -412,7 +412,7 @@ function FlowNodeViewImpl({ id, selected }: NodeProps<RfNode>) {
             </div>
           )}
           {runtime.status === "failed" && runtime.error && (
-            <p className="mx-3 line-clamp-3 rounded bg-red-500/10 px-2 py-1 text-[11px] text-red-300">
+            <p className="mx-3 line-clamp-3 rounded bg-red-500/10 px-2 py-1 text-ui-11 text-red-300">
               {runtime.error}
             </p>
           )}

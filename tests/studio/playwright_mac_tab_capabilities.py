@@ -57,6 +57,7 @@ TABS = [
     ("/library", "library", "Library"),
     ("/images", "images", "Images"),
     ("/studio", "train", "Train"),
+    ("/flows", "flows", "Flows"),
     ("/video", "video", "Video"),
     ("/export", "export", "Export"),
 ]
@@ -65,7 +66,7 @@ _SIGNED_OUT_PATHS = ("/login", "/change-password")
 
 # Only rows pinned by default (SIDEBAR_NAV_DEFAULT_PINNED, appearance-custom-store.ts) carry a
 # data-testid. test_inline_row_ids_match_the_frontends_default_pinned_set keeps this in sync.
-INLINE_ROW_IDS = ("hub", "projects", "library", "images", "train")
+INLINE_ROW_IDS = ("hub", "projects", "library", "images", "train", "flows")
 # The Projects row yields to the Projects section once projects load (app-sidebar.tsx).
 ROW_STAND_INS = {"projects": '[data-sidebar-section="projects"]'}
 GATED_ROW_ID = "train"

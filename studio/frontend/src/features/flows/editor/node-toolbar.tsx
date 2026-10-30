@@ -14,7 +14,7 @@ import { downloadNodeOutput, rerollNode, runToNode } from "./node-actions";
 import { ParamField } from "./param-fields";
 
 const BUTTON =
-  "flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] text-zinc-200 hover:bg-white/10";
+  "flex items-center gap-1 rounded-md px-2 py-1 text-ui-11p5 text-zinc-200 hover:bg-white/10";
 
 function SelectedNodeToolbarImpl({ readOnly }: { readOnly: boolean }) {
   const nodeId = useUiStore((s) =>

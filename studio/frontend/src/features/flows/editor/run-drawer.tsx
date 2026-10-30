@@ -56,7 +56,7 @@ function Timeline() {
   );
   if (!rows.length)
     return (
-      <p className="px-4 py-6 text-center text-[12px] text-zinc-500">
+      <p className="px-4 py-6 text-center text-ui-12 text-zinc-500">
         Run the flow to see each step here.
       </p>
     );
@@ -99,7 +99,7 @@ const TimelineRow = memo(function TimelineRow({
           useUiStore.getState().openInspector(id);
           void fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
         }}
-        className="flex w-full items-center gap-3 px-4 py-1.5 text-left text-[12.5px] hover:bg-white/5"
+        className="flex w-full items-center gap-3 px-4 py-1.5 text-left text-ui-12p5 hover:bg-white/5"
       >
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
@@ -136,7 +136,7 @@ const TimelineRow = memo(function TimelineRow({
             />
           </span>
         )}
-        <span className="w-14 text-right font-mono text-[11px] text-zinc-500">
+        <span className="w-14 text-right font-mono text-ui-11 text-zinc-500">
           {duration(rt, now)}
         </span>
       </button>
@@ -148,12 +148,12 @@ function Logs() {
   const logs = useRuntimeStore((s) => s.logs);
   if (!logs.length)
     return (
-      <p className="px-4 py-6 text-center text-[12px] text-zinc-500">
+      <p className="px-4 py-6 text-center text-ui-12 text-zinc-500">
         No log lines yet.
       </p>
     );
   return (
-    <pre className="px-4 py-2 font-mono text-[11px] leading-relaxed text-zinc-400">
+    <pre className="px-4 py-2 font-mono text-ui-11 leading-relaxed text-zinc-400">
       {logs.map((line) => (
         <LogLine key={line.seq} line={line} />
       ))}
@@ -230,7 +230,7 @@ function Outputs() {
   }, [runtimeOutputs]);
   if (!media.length && !structured.length)
     return (
-      <p className="px-4 py-6 text-center text-[12px] text-zinc-500">
+      <p className="px-4 py-6 text-center text-ui-12 text-zinc-500">
         Images, audio, video, tables and charts from the run appear here.
       </p>
     );
@@ -238,7 +238,7 @@ function Outputs() {
     <div className="flex flex-col gap-3 p-3">
       {structured.map((item) => (
         <section key={item.key} className="flex flex-col gap-1">
-          <h4 className="font-mono text-[11px] text-zinc-500">{item.label}</h4>
+          <h4 className="font-mono text-ui-11 text-zinc-500">{item.label}</h4>
           <StructuredOutput value={item.value} />
         </section>
       ))}
@@ -275,20 +275,20 @@ function RunDrawerImpl() {
             key={id}
             type="button"
             onClick={() => setDrawer(true, id)}
-            className={`rounded-md px-2.5 py-1 text-[12px] capitalize ${tab === id ? "bg-white/10 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+            className={`rounded-md px-2.5 py-1 text-ui-12 capitalize ${tab === id ? "bg-white/10 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
           >
             {id}
           </button>
         ))}
         {runStatus && (
           <span
-            className={`ml-2 rounded px-1.5 py-0.5 text-[10.5px] capitalize ${RUN_STATUS_STYLE[runStatus] ?? ""}`}
+            className={`ml-2 rounded px-1.5 py-0.5 text-ui-10p5 capitalize ${RUN_STATUS_STYLE[runStatus] ?? ""}`}
           >
             {runStatus}
           </span>
         )}
         {runError && (
-          <span className="ml-2 truncate text-[11.5px] text-red-300">
+          <span className="ml-2 truncate text-ui-11p5 text-red-300">
             {runError}
           </span>
         )}

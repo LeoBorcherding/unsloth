@@ -58,13 +58,13 @@ export function NodeHistory({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+          className="text-ui-11 font-semibold uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
           data-testid="flows-history-toggle"
         >
           History {open ? "▾" : "▸"}
         </button>
         {pinned && (
-          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10.5px] text-amber-200">
+          <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-ui-10p5 text-amber-200">
             Pinned
           </span>
         )}
@@ -72,14 +72,14 @@ export function NodeHistory({
           <button
             type="button"
             onClick={() => usePinsStore.getState().setPin(nodeId, null)}
-            className="ml-auto text-[11px] text-zinc-400 hover:text-zinc-100"
+            className="ml-auto text-ui-11 text-zinc-400 hover:text-zinc-100"
           >
             Unpin
           </button>
         )}
       </div>
       {open && entries && entries.length === 0 && (
-        <p className="text-[11.5px] text-zinc-500">
+        <p className="text-ui-11p5 text-zinc-500">
           No earlier outputs yet. Each run of this block adds one.
         </p>
       )}
@@ -116,12 +116,12 @@ export function NodeHistory({
                       className="h-full w-full object-cover"
                     />
                   ) : (
-                    <span className="flex h-full items-center justify-center text-[10px] uppercase text-zinc-400">
+                    <span className="flex h-full items-center justify-center text-ui-10 uppercase text-zinc-400">
                       {preview.media.kind}
                     </span>
                   )
                 ) : (
-                  <span className="line-clamp-4 p-1 text-[9.5px] leading-tight text-zinc-300">
+                  <span className="line-clamp-4 p-1 text-[calc(0.59375rem*var(--ui-font-scale,1))] leading-tight text-zinc-300">
                     {preview.text}
                   </span>
                 )}
@@ -131,7 +131,7 @@ export function NodeHistory({
         </div>
       )}
       {open && viewing !== null && entries?.[viewing] && !canPin && (
-        <span className="text-[11px] text-zinc-500">
+        <span className="text-ui-11 text-zinc-500">
           Blocks inside a For Each run every item, so they cannot be pinned.
         </span>
       )}
@@ -142,12 +142,12 @@ export function NodeHistory({
             onClick={() =>
               usePinsStore.getState().setPin(nodeId, entries[viewing].outputs)
             }
-            className="rounded-md bg-amber-500/20 px-2 py-1 text-[11.5px] text-amber-100 hover:bg-amber-500/30"
+            className="rounded-md bg-amber-500/20 px-2 py-1 text-ui-11p5 text-amber-100 hover:bg-amber-500/30"
             data-testid="flows-history-pin"
           >
             Pin this output
           </button>
-          <span className="self-center text-[11px] text-zinc-500">
+          <span className="self-center text-ui-11 text-zinc-500">
             Pinned outputs feed the next blocks instead of running this one.
           </span>
         </div>

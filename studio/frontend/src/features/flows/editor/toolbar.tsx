@@ -118,15 +118,15 @@ function ToolbarImpl({
           if (!e.target.value.trim())
             useDocStore.getState().setMeta({ name: "Untitled flow" });
         }}
-        className="ml-1 w-[min(320px,30vw)] rounded-md bg-transparent px-2 py-1 font-semibold text-[14px] outline-none hover:bg-white/5 focus:bg-white/5"
+        className="ml-1 w-[min(320px,30vw)] rounded-md bg-transparent px-2 py-1 font-semibold text-ui-14 outline-none hover:bg-white/5 focus:bg-white/5"
         aria-label="Flow name"
         data-testid="flows-name"
       />
-      <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10.5px] capitalize text-zinc-400">
+      <span className="rounded bg-white/5 px-1.5 py-0.5 text-ui-10p5 capitalize text-zinc-400">
         {kind}
       </span>
       <span
-        className={`ml-1 text-[11px] ${saveState === "error" || saveState === "conflict" ? "text-red-300" : "text-zinc-500"}`}
+        className={`ml-1 text-ui-11 ${saveState === "error" || saveState === "conflict" ? "text-red-300" : "text-zinc-500"}`}
         data-testid="flows-save-state"
       >
         {SAVE_LABEL[saveState]}
@@ -213,7 +213,7 @@ function ToolbarImpl({
           <button
             type="button"
             onClick={onApp}
-            className="flex items-center gap-1.5 rounded-md border border-white/15 px-2.5 py-1.5 text-[12.5px] text-zinc-200 hover:bg-white/10"
+            className="flex items-center gap-1.5 rounded-md border border-white/15 px-2.5 py-1.5 text-ui-12p5 text-zinc-200 hover:bg-white/10"
             title="Open this flow as a simple form with its results"
             data-testid="flows-open-app"
           >
@@ -224,7 +224,7 @@ function ToolbarImpl({
           <button
             type="button"
             onClick={onPlay}
-            className="flex items-center gap-1.5 rounded-md border border-violet-400/40 bg-violet-500/15 px-2.5 py-1.5 text-[12.5px] text-violet-100 hover:bg-violet-500/25"
+            className="flex items-center gap-1.5 rounded-md border border-violet-400/40 bg-violet-500/15 px-2.5 py-1.5 text-ui-12p5 text-violet-100 hover:bg-violet-500/25"
             data-testid="flows-play"
           >
             <HugeiconsIcon icon={GameController01Icon} size={15} /> Play
@@ -235,7 +235,7 @@ function ToolbarImpl({
             type="button"
             onClick={() => void stopFlow()}
             disabled={runStatus === "cancelling"}
-            className="flex items-center gap-1.5 rounded-md bg-red-600/90 px-3 py-1.5 text-[12.5px] font-medium hover:bg-red-500 disabled:opacity-60"
+            className="flex items-center gap-1.5 rounded-md bg-red-600/90 px-3 py-1.5 text-ui-12p5 font-medium hover:bg-red-500 disabled:opacity-60"
             data-testid="flows-stop"
           >
             <HugeiconsIcon icon={StopIcon} size={14} />{" "}
@@ -247,7 +247,7 @@ function ToolbarImpl({
             onClick={() =>
               collectFlowParams().length ? setDialog("run") : void runFlow()
             }
-            className="flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-[12.5px] font-medium hover:bg-sky-500"
+            className="flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-ui-12p5 font-medium hover:bg-sky-500"
             title="Run (Ctrl+Enter)"
             data-testid="flows-run"
           >
