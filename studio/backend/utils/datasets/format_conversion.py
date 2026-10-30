@@ -843,6 +843,80 @@ def convert_to_vlm_format(
     return converted_list
 
 
+def _own_video_part(video, account):
+    if isinstance(video, dict):
+        video = video.get("path")
+    if not isinstance(video, str) or not video.strip():
+        raise ValueError("Row has no video")
+    return _own_image_path(video, account)
+
+
+def own_message_videos(rows):
+    """Check every video path in VLM messages rows the way image paths are checked; returns the rows as a list."""
+    from utils.account_context import current_account
+    from .format_detection import video_parts
+
+    account = current_account()
+    rows = [row for row in rows]
+    for row in rows:
+        if not video_parts(row.get("messages")):
+            continue
+        for message in row["messages"]:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            # Arrow fills absent keys with None, and the collator reads any "image" key as an image.
+            content[:] = [
+                {k: v for k, v in part.items() if v is not None} if isinstance(part, dict) else part
+                for part in content
+            ]
+        for part in video_parts(row["messages"]):
+            part["video"] = _own_video_part(part["video"], account)
+    return rows
+
+
+def convert_video_to_vlm_format(
+    dataset,
+    video_column,
+    text_column,
+    question_column = None,
+    instruction = None,
+):
+    """Flat video + text rows to VLM messages; the collator decodes the clip, so the path stays a path."""
+    from utils.account_context import current_account
+
+    account = current_account()
+    default_instruction = instruction or "Describe this video."
+    converted = []
+    for row in dataset:
+        answer = row.get(text_column)
+        if row.get(video_column) is None or answer is None:
+            continue
+        question = row.get(question_column) if question_column else None
+        if not isinstance(question, str) or not question.strip():
+            question = default_instruction
+        converted.append(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "video", "video": _own_video_part(row[video_column], account)},
+                            {"type": "text", "text": question},
+                        ],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": str(answer)}]},
+                ]
+            }
+        )
+    if not converted:
+        raise ValueError(f"No rows have both a video in '{video_column}' and text in '{text_column}'")
+    skipped = len(dataset) - len(converted) if hasattr(dataset, "__len__") else 0
+    if skipped:
+        logger.info(f"Skipping {skipped} rows without a video or text")
+    return converted
+
+
 def convert_sharegpt_with_images_to_vlm_format(
     dataset,
     image_column = "image",

@@ -19,6 +19,8 @@ from .format_conversion import (
     convert_to_vlm_format,
     convert_llava_to_vlm_format,
     convert_sharegpt_with_images_to_vlm_format,
+    convert_video_to_vlm_format,
+    own_message_videos,
     normalize_chatml_roles,
 )
 from .chat_templates import (
@@ -1030,6 +1032,28 @@ def format_and_template_dataset(
                     "errors": errors,
                 }
 
+        elif vlm_structure["format"] == "video_text":
+            try:
+                dataset = convert_video_to_vlm_format(
+                    dataset,
+                    video_column = vlm_structure["video_column"],
+                    text_column = vlm_structure["text_column"],
+                    question_column = vlm_structure.get("question_column"),
+                    instruction = vlm_instruction,
+                )
+            except Exception as e:
+                errors.append(f"Failed to convert video + text rows to VLM format: {e}")
+                return {
+                    "dataset": dataset,
+                    "detected_format": "video_text",
+                    "final_format": "vlm_conversion_failed",
+                    "is_vlm": True,
+                    "success": False,
+                    "requires_manual_mapping": True,
+                    "warnings": warnings,
+                    "errors": errors,
+                }
+
         elif vlm_structure["needs_conversion"]:
             if vlm_text_column is None:
                 vlm_text_column = vlm_structure["text_column"]
@@ -1101,7 +1125,7 @@ def format_and_template_dataset(
                 }
 
         elif vlm_structure["format"] == "vlm_messages":
-            dataset = [sample for sample in dataset]
+            dataset = own_message_videos(dataset)
             warnings.append("Dataset already in standard VLM messages format")
 
         return {

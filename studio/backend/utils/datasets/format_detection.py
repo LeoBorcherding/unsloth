@@ -665,6 +665,13 @@ def detect_multimodal_dataset(dataset):
         audio_set = set(audio_columns)
         multimodal_columns = [c for c in multimodal_columns if c not in audio_set]
 
+    # Video trains on the vision path too; a {"bytes","path"} video cell would otherwise read as an image.
+    video_columns = [c for c in detect_video_columns(sample) if c not in set(audio_columns)]
+    if video_columns:
+        multimodal_columns = [c for c in multimodal_columns if c not in video_columns]
+        multimodal_columns += video_columns
+        modality_types.add("video")
+
     detected_text_col = None
     if audio_columns:
         text_keywords = ["text", "sentence", "transcript", "transcription", "label"]
@@ -686,6 +693,7 @@ def detect_multimodal_dataset(dataset):
 
     return {
         "is_image": len(multimodal_columns) > 0,
+        "is_video": bool(video_columns),
         "multimodal_columns": multimodal_columns,
         "modality_types": list(modality_types),
         "is_audio": is_audio,
@@ -780,6 +788,86 @@ _AUDIO_EXTENSIONS = (
 )
 
 
+# .webm stays audio (_AUDIO_EXTENSIONS); a video column holding .webm is matched by its name instead.
+_VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg")
+_VIDEO_TEXT_KEYWORDS = ("answer", "text", "caption", "description", "output", "response", "label")
+_VIDEO_QUESTION_KEYWORDS = ("question", "prompt", "instruction", "query")
+
+
+def _is_video_value(value) -> bool:
+    """A video file path or URL, or an undecoded {"path": ...} cell naming one."""
+    if isinstance(value, dict):
+        value = value.get("path")
+    if not isinstance(value, str) or len(value) >= 1000:
+        return False
+    return value.strip().lower().split("?")[0].endswith(_VIDEO_EXTENSIONS)
+
+
+def video_parts(messages) -> list:
+    """The {"type": "video"} parts of a ChatML message list."""
+    if not isinstance(messages, list):
+        return []
+    return [
+        part
+        for message in messages
+        if isinstance(message, dict) and isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "video" and part.get("video") is not None
+    ]
+
+
+def detect_video_columns(sample: dict) -> list:
+    """Columns holding videos: a flat path column, or messages carrying video parts."""
+    columns = []
+    for col_name, value in sample.items():
+        if _is_video_value(value) or video_parts(value):
+            columns.append(col_name)
+        elif _keyword_in_column("video", col_name) and isinstance(value, dict) and "path" in value:
+            columns.append(col_name)
+    return columns
+
+
+def detect_video_structure(sample: dict):
+    """The VLM structure of a video dataset, or None when it holds no video."""
+    if video_parts(sample.get("messages")):
+        return {
+            "format": "vlm_messages",
+            "needs_conversion": False,
+            "messages_column": "messages",
+            "image_column": None,
+            "video_column": None,
+            "text_column": None,
+        }
+    flat = [
+        col
+        for col in detect_video_columns(sample)
+        if not isinstance(sample[col], list)
+    ]
+    if not flat:
+        return None
+
+    def _pick(keywords):
+        for keyword in keywords:
+            for col_name, value in sample.items():
+                if col_name in flat or not isinstance(value, str) or not value.strip():
+                    continue
+                if _keyword_in_column(keyword, col_name):
+                    return col_name
+        return None
+
+    text_col = _pick(_VIDEO_TEXT_KEYWORDS)
+    question_col = _pick(_VIDEO_QUESTION_KEYWORDS)
+    return {
+        "format": "video_text" if text_col else "unknown",
+        "needs_conversion": True if text_col else None,
+        "messages_column": None,
+        "image_column": None,
+        "video_column": flat[0],
+        "text_column": text_col,
+        "question_column": question_col if question_col != text_col else None,
+    }
+
+
 def _is_audio_value(value) -> bool:
     """Check if a single sample value looks like audio data."""
     if value is None:
@@ -831,6 +919,10 @@ def detect_vlm_dataset_structure(dataset):
             "text_column": None,
             "messages_column": None,
         }
+
+    video_structure = detect_video_structure(sample)
+    if video_structure is not None:
+        return video_structure
 
     column_names = set(sample.keys())
     is_text = text_cell_check(dataset)

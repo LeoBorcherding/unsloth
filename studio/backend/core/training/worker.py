@@ -2480,6 +2480,11 @@ def _adapt_for_mlx_vlm(
             if isinstance(content, list):
                 new_content = []
                 for part in content:
+                    if isinstance(part, dict) and part.get("type") == "video":
+                        raise ValueError(
+                            "Training on video is not supported on Apple Silicon (MLX) yet. "
+                            "Train this dataset on an NVIDIA or AMD GPU, or drop the video column."
+                        )
                     if isinstance(part, dict) and part.get("type") == "image":
                         img = part.get("image")
                         if img is not None:
