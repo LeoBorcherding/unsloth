@@ -91,6 +91,7 @@ from .diffusion_families import (
     resolve_base_repo,
     resolve_local_gguf_child,
     supported_family_names,
+    family_for_base,
     family_for_checkpoint,
     transformer_config_overrides_for,
     transformer_variant_differs_from_base,
@@ -7926,6 +7927,8 @@ class DiffusionBackend:
             if kind == "pipeline"
             else _resolve_base_repo(repo_id, base_repo, fam, hf_token, gguf_filename)
         )
+        # Before the device target: a base the fp16 guard does not hold on resolves float32.
+        fam = family_for_base(fam, base)
         # ``base`` is the upstream id for reports; ``fetch_base`` is the only id handed to downloads.
         fetch_base = _fetch_base or prefer_ungated_mirror(base, hf_token)
         target = self._target_for_ordinal(fam, gpu_ordinal)

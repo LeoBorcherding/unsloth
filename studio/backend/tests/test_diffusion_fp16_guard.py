@@ -49,6 +49,46 @@ def test_unguarded_incompatible_family_still_promotes():
     assert _resolve_diffusion_compute_dtype(krea, torch.float16) is torch.float32
 
 
+def test_undistilled_zimage_base_promotes_to_fp32():
+    # The base overflows its residual stream in float16 (measured on an RX 5700 XT, 256 px); Turbo keeps the guard.
+    from core.inference.diffusion_families import family_for_base
+
+    z = detect_family("Tongyi-MAI/Z-Image-Turbo")
+    base = family_for_base(z, "Tongyi-MAI/Z-Image")
+    assert base.fp16_guard is None and guard.family_fp16_guard(base) is None
+    assert _resolve_diffusion_compute_dtype(base, torch.float16) is torch.float32
+    assert family_for_base(z, "Tongyi-MAI/Z-Image-Turbo") is z
+    assert family_for_base(z, None) is z
+
+
+def test_load_pipeline_resolves_the_base_before_the_device_target(monkeypatch):
+    from core.inference.diffusion import DiffusionBackend
+
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _target(
+        self,
+        fam,
+        ordinal = None,
+    ):
+        seen["fam"] = fam
+        raise _Stop
+
+    monkeypatch.setattr(DiffusionBackend, "_target_for_ordinal", _target)
+    for base, dtype in (
+        ("Tongyi-MAI/Z-Image", torch.float32),
+        ("Tongyi-MAI/Z-Image-Turbo", torch.float16),
+    ):
+        with pytest.raises(_Stop):
+            DiffusionBackend().load_pipeline(
+                "unsloth/Z-Image-GGUF", gguf_filename = "z-image-Q2_K.gguf", base_repo = base
+            )
+        assert _resolve_diffusion_compute_dtype(seen["fam"], torch.float16) is dtype, base
+
+
 def test_video_families_declare_only_native():
     # The video loader resolves the dtype but installs no guard hooks, so a patching recipe there would render black.
     for fam in _VIDEO_FAMILIES:
