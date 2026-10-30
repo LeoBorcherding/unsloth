@@ -69,12 +69,19 @@ def test_load_pipeline_resolves_the_base_before_the_device_target(monkeypatch):
     class _Stop(Exception):
         pass
 
-    def _target(self, fam, ordinal = None):
+    def _target(
+        self,
+        fam,
+        ordinal = None,
+    ):
         seen["fam"] = fam
         raise _Stop
 
     monkeypatch.setattr(DiffusionBackend, "_target_for_ordinal", _target)
-    for base, dtype in (("Tongyi-MAI/Z-Image", torch.float32), ("Tongyi-MAI/Z-Image-Turbo", torch.float16)):
+    for base, dtype in (
+        ("Tongyi-MAI/Z-Image", torch.float32),
+        ("Tongyi-MAI/Z-Image-Turbo", torch.float16),
+    ):
         with pytest.raises(_Stop):
             DiffusionBackend().load_pipeline(
                 "unsloth/Z-Image-GGUF", gguf_filename = "z-image-Q2_K.gguf", base_repo = base
