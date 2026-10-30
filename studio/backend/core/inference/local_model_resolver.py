@@ -1334,7 +1334,9 @@ def local_gguf_withheld(requested: str) -> bool:
     return wanted in entry.withheld or _names_missing_build(entry, wanted)
 
 
-def local_target_format(load_path: Optional[str], loader_id: Optional[str] = None) -> Optional[bool]:
+def local_target_format(
+    load_path: Optional[str], loader_id: Optional[str] = None
+) -> Optional[bool]:
     """Whether the weights the load opens, else the indexed entry, are GGUF; None when this machine knows neither; call off the event loop."""
     from pathlib import Path
     from types import SimpleNamespace

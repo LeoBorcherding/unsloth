@@ -17367,8 +17367,14 @@ async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
     # Halves of one choice: a caller sending either keeps the saved other half out.
     for group in (
         ("gpu_ids", "tensor_split"),
-        ("engine", "engine_parallelism", "engine_precision", "engine_kv_cache_dtype",
-         "engine_seed", "engine_gpu_memory_utilization"),
+        (
+            "engine",
+            "engine_parallelism",
+            "engine_precision",
+            "engine_kv_cache_dtype",
+            "engine_seed",
+            "engine_gpu_memory_utilization",
+        ),
     ):
         if sent.intersection(group):
             for key in group:

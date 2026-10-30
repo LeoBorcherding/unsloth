@@ -1510,9 +1510,7 @@ def _explicit_load(monkeypatch, body):
 def test_explicit_load_uses_the_saved_preset_for_fields_left_out(monkeypatch):
     _mock_override_store(monkeypatch)
     _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", custom_context_length = 8192, n_parallel = 2)
-    request = _explicit_load(
-        monkeypatch, {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
-    )
+    request = _explicit_load(monkeypatch, {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"})
     assert request.max_seq_length == 8192
     assert request.n_parallel == 2
 
