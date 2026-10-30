@@ -77,6 +77,13 @@ async def finetune(ctx: NodeContext) -> dict:
     }
     if not config["model_name"]:
         raise FlowNodeError("Name the base model to fine-tune")
+    base_model = config["model_name"]
+    start = ctx.inputs.get("start")
+    if isinstance(start, dict) and start.get("output_dir"):
+        # Keep training that LoRA instead of stacking a new one on the base model.
+        config["model_name"] = str(start["output_dir"])
+        config["model_format"] = "adapter"
+        base_model = str(start.get("base_model") or base_model)
     config.update(TASK_FLAGS.get(str(params.get("task") or "text"), {}))
     if params.get("num_epochs") not in (None, ""):
         config["num_epochs"] = int(params["num_epochs"])
@@ -248,7 +255,7 @@ async def finetune(ctx: NodeContext) -> dict:
     if holdout:
         metrics["train_rows"] = dataset.get("rows")
         metrics["holdout_rows"] = holdout["rows"]
-    checkpoint = {"kind": "checkpoint", "name": run, "base_model": config["model_name"]}
+    checkpoint = {"kind": "checkpoint", "name": run, "base_model": base_model}
     system = trained_system_prompt(config)
     if system:
         checkpoint["system_prompt"] = system

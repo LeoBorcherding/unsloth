@@ -4,13 +4,21 @@
 import type { Edge, Node } from "@xyflow/react";
 import { type DocGraph, GROUP_KEY, NOTE_KEY } from "../stores/doc-store";
 import type { FlowReroute, RerouteWire } from "../stores/reroute-graph";
-import type { FlowEdge, FlowGroup, FlowNode, FlowNote } from "../types";
+import type {
+  EdgeKind,
+  FlowEdge,
+  FlowGroup,
+  FlowNode,
+  FlowNote,
+} from "../types";
 import { edgeHandles } from "./connection-rules";
 import { wireHandles } from "./reroutes";
 
 export type FlowNodeData = { nodeId: string };
+/** Dashes a Loop's feeds-the-next-round wire in either wire style. */
+const FEEDBACK_EDGE_CLASS = "[&_path]:[stroke-dasharray:7_5]";
 export type FlowEdgeData = {
-  kind: "data" | "flow";
+  kind: EdgeKind;
   portType: string;
   /** Cards this drawn segment belongs to, through any reroutes, for hover emphasis. */
   ends?: string[];
@@ -355,6 +363,7 @@ export class RfDeriver {
         type: "flowEdge",
         selected: isSelected,
         data: { kind: edge.kind, portType },
+        ...(edge.kind === "feedback" ? { className: FEEDBACK_EDGE_CLASS } : {}),
       };
       this.edgeCache.set(id, {
         source: edge,
