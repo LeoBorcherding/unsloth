@@ -126,10 +126,11 @@ function EditorBody({
 
   return (
     <div
-      className={`flows-editor flex h-full min-h-0 w-full flex-col bg-background ${BELOW_TITLEBAR} text-foreground`}
+      // The titlebar strip and toolbar share the sidebar's colour, so the top reads as one surface with it.
+      className={`flows-editor flex h-full min-h-0 w-full flex-col bg-sidebar ${BELOW_TITLEBAR} text-foreground`}
       data-testid="flows-editor"
     >
-      <Toolbar />
+      <Toolbar readOnly={readOnly} />
       {readOnly && (
         <Alert className="rounded-none border-x-0 border-t-0 py-2">
           <AlertDescription className="text-xs text-amber-700 dark:text-amber-300">
@@ -139,7 +140,7 @@ function EditorBody({
         </Alert>
       )}
       {!readOnly && <CapabilityBanner flowId={flowId} />}
-      <div className="relative flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 bg-background">
         {paletteOpen && !readOnly && <Palette onDrop={dropAt} />}
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1">
