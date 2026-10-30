@@ -18,7 +18,12 @@ from core.inference.inference import (
 class _Processor:
     video_token = "<|video|>"
 
-    def __init__(self, video_processor = object(), places_marker = True, raises = False):
+    def __init__(
+        self,
+        video_processor = object(),
+        places_marker = True,
+        raises = False,
+    ):
         self.video_processor = video_processor
         self._places = places_marker
         self._raises = raises
@@ -75,7 +80,6 @@ def test_playlist_clip_refused_and_earlier_clips_removed(monkeypatch):
 
 def test_worker_sees_videos_on_the_transformers_backend():
     from core.inference.worker import _backend_declares
-
     assert _backend_declares(InferenceBackend, "videos")
 
 

@@ -2187,7 +2187,11 @@ class InferenceBackend:
 
         if not user_message:
             user_message = (
-                "Describe this image." if attached else "Describe this video." if videos else "Hello"
+                "Describe this image."
+                if attached
+                else "Describe this video."
+                if videos
+                else "Hello"
             )
 
         if attached or videos:
