@@ -11,9 +11,9 @@ import { memo } from "react";
 import { useCatalogStore } from "../stores/catalog-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RfEdge } from "./derive-rf";
+import { portInk } from "./theme-colors";
 import { WireDelete, WireHalo, useWireHover } from "./wire-delete";
 import { BusEdge } from "./wire-routing";
-import { portInk } from "./theme-colors";
 
 function CurvedEdgeImpl({
   id,
@@ -24,6 +24,7 @@ function CurvedEdgeImpl({
   sourcePosition,
   targetPosition,
   selected,
+  deletable,
   data,
 }: EdgeProps<RfEdge>) {
   const color =
@@ -70,7 +71,7 @@ function CurvedEdgeImpl({
         id={id}
         x={labelX}
         y={labelY}
-        show={hover || !!selected}
+        show={deletable !== false && (hover || !!selected)}
         onEnter={enter}
         onLeave={leave}
       />

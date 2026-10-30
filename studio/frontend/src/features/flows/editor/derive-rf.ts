@@ -11,8 +11,7 @@ import type {
   FlowNode,
   FlowNote,
 } from "../types";
-import { columnTargetPort } from "../recipe/recipe-look";
-import { edgeHandles, inHandle } from "./connection-rules";
+import { edgeHandles } from "./connection-rules";
 import { wireHandles } from "./reroutes";
 
 export type FlowNodeData = { nodeId: string };
@@ -44,6 +43,35 @@ export const NOTE_PREFIX = NOTE_KEY;
 type Positions = Record<string, { x: number; y: number }>;
 /** A size set live by a resize handle, before it is committed on release. */
 export type Boxes = Record<string, { width: number; height: number }>;
+
+/**
+ * How many frames enclose each frame. Frames sit under the cards, nested ones above the frames
+ * around them, so an outer frame drawn later never covers an inner frame's header.
+ */
+export function groupDepths(graph: DocGraph): Map<string, number> {
+  const depths = new Map<string, number>();
+  for (const id of graph.groupOrder) {
+    const [x, y, w, h] = graph.groups[id].rect;
+    let depth = 0;
+    for (const other of graph.groupOrder) {
+      if (other === id) continue;
+      const [ox, oy, ow, oh] = graph.groups[other].rect;
+      const inside = ox <= x && oy <= y && ox + ow >= x + w && oy + oh >= y + h;
+      const same = ox === x && oy === y && ow === w && oh === h;
+      // Identical frames stack in document order.
+      if (
+        inside &&
+        (!same ||
+          graph.groupOrder.indexOf(other) < graph.groupOrder.indexOf(id))
+      )
+        depth += 1;
+    }
+    depths.set(id, depth);
+  }
+  return depths;
+}
+
+const GROUP_Z = -100;
 
 export class RfDeriver {
   private nodeCache = new Map<
@@ -89,13 +117,7 @@ export class RfDeriver {
   >();
   private edgeCache = new Map<
     string,
-    {
-      source: FlowEdge;
-      from: FlowNode | undefined;
-      selected: boolean;
-      portType: string;
-      rf: RfEdge;
-    }
+    { source: FlowEdge; selected: boolean; portType: string; rf: RfEdge }
   >();
   private wireCache = new Map<
     string,
@@ -114,6 +136,7 @@ export class RfDeriver {
     const next: RfNode[] = [];
     let changed = false;
     const seen = new Set<string>();
+    const depths = graph.groupOrder.length > 1 ? groupDepths(graph) : undefined;
     for (const groupId of graph.groupOrder) {
       const group = graph.groups[groupId];
       const rfId = GROUP_PREFIX + groupId;
@@ -122,9 +145,11 @@ export class RfDeriver {
       const isSelected = selected.has(rfId);
       const size = sizes?.get(rfId);
       const box = boxes?.[rfId];
+      const zIndex = GROUP_Z + (depths?.get(groupId) ?? 0);
       const cached = this.groupCache.get(groupId);
       if (
         cached &&
+        cached.rf.zIndex === zIndex &&
         cached.source === group &&
         cached.selected === isSelected &&
         cached.x === pos.x &&
@@ -143,7 +168,7 @@ export class RfDeriver {
         data: { groupId },
         selected: isSelected,
         style: box ?? { width: group.rect[2], height: group.rect[3] },
-        zIndex: -1,
+        zIndex,
         dragHandle: ".flow-group-drag",
         ...(size ? { measured: size } : {}),
       };
@@ -321,26 +346,14 @@ export class RfDeriver {
       const edge = graph.edges[id];
       const isSelected = selected.has(id);
       const cached = this.edgeCache.get(id);
-      // A recipe column's value type (its wire colour) follows its params.
-      const from = graph.nodes[edge.source];
-      if (
-        cached &&
-        cached.source === edge &&
-        cached.selected === isSelected &&
-        (cached.from === from || cached.portType === portTypeOf(edge))
-      ) {
-        cached.from = from;
+      if (cached && cached.source === edge && cached.selected === isSelected) {
         next.push(cached.rf);
         continue;
       }
       changed = true;
       const portType =
-        cached && cached.source === edge && cached.from === from
-          ? cached.portType
-          : portTypeOf(edge);
+        cached && cached.source === edge ? cached.portType : portTypeOf(edge);
       const handles = edgeHandles(edge);
-      if (edge.kind === "data")
-        handles.targetHandle = inHandle(columnTargetPort(edge, graph));
       const rf: RfEdge = {
         id,
         source: edge.source,
@@ -354,7 +367,6 @@ export class RfDeriver {
       };
       this.edgeCache.set(id, {
         source: edge,
-        from,
         selected: isSelected,
         portType,
         rf,
@@ -387,6 +399,8 @@ export class RfDeriver {
         ...wireHandles(graph, wire),
         type: "flowEdge",
         selected: isSelected,
+        // A segment through a reroute moves by moving the reroute, not its end.
+        reconnectable: false,
         data: { kind: "data", portType: info.portType, ends: info.ends },
       };
       this.wireCache.set(id, { source: wire, selected: isSelected, key, rf });

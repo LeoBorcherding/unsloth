@@ -19,6 +19,41 @@ export interface QuickAddState {
   };
 }
 
+const NODES_HIDDEN_KEY = "unsloth_flows_nodes_hidden";
+
+const DRAWER_OPEN_KEY = "unsloth_flows_runs_open";
+
+function storedDrawerOpen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(DRAWER_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function storedPaletteOpen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(NODES_HIDDEN_KEY) !== "true";
+  } catch {
+    return true;
+  }
+}
+
+/** Bus: routed orthogonal wires with rounded corners and lanes. Curved: plain bezier wires. */
+export type WireStyle = "bus" | "curved";
+
+export const WIRE_STYLE_STORAGE_KEY = "unsloth_flows_wire_style";
+
+export function storedWireStyle(): WireStyle {
+  try {
+    return globalThis.localStorage?.getItem(WIRE_STYLE_STORAGE_KEY) === "curved"
+      ? "curved"
+      : "bus";
+  } catch {
+    return "bus";
+  }
+}
+
 /** A Recipe Studio dialog opened over a recipe group: its run settings or the GitHub crawler form. */
 export interface RecipeEditorTarget {
   groupId: string;
@@ -38,41 +73,6 @@ export interface RecipeSetupTarget {
 export interface RecipeRunsTarget {
   groupId: string;
   view: "preview" | "runs";
-}
-
-/** Bus: routed orthogonal wires with rounded corners and lanes. Curved: plain bezier wires. */
-export type WireStyle = "bus" | "curved";
-
-export const WIRE_STYLE_STORAGE_KEY = "unsloth_flows_wire_style";
-
-export function storedWireStyle(): WireStyle {
-  try {
-    return globalThis.localStorage?.getItem(WIRE_STYLE_STORAGE_KEY) === "curved"
-      ? "curved"
-      : "bus";
-  } catch {
-    return "bus";
-  }
-}
-
-const NODES_HIDDEN_KEY = "unsloth_flows_nodes_hidden";
-
-const DRAWER_OPEN_KEY = "unsloth_flows_runs_open";
-
-function storedDrawerOpen(): boolean {
-  try {
-    return globalThis.localStorage?.getItem(DRAWER_OPEN_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function storedPaletteOpen(): boolean {
-  try {
-    return globalThis.localStorage?.getItem(NODES_HIDDEN_KEY) !== "true";
-  } catch {
-    return true;
-  }
 }
 
 export type SaveState = "saved" | "dirty" | "saving" | "error" | "conflict";

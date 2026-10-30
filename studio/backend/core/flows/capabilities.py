@@ -39,7 +39,7 @@ def node_needs(spec: dict, params: dict) -> list[tuple[str, str]]:
     found = []
     for cap in spec.get("requires_approval") or []:
         if cap == "python":
-            found.append((cap, code_hash(params.get("code"))))
+            found.append((cap, code_hash(params.get(spec.get("code_param") or "code"))))
         elif cap == "http":
             found.append((cap, url_host(params.get("url")) or ""))
         elif cap == "provider":
@@ -48,13 +48,24 @@ def node_needs(spec: dict, params: dict) -> list[tuple[str, str]]:
                 found.append((cap, provider))
         else:
             found.append((cap, cap))
+    from core.flows.compiler import RECIPE_PARAM
+    from core.flows.recipe_share import uses_mcp
+
+    compiled = params.get(RECIPE_PARAM)
+    # A recipe group's MCP servers come in on its compiled recipe, not the step's own spec.
+    if (
+        isinstance(compiled, dict)
+        and uses_mcp(compiled.get("recipe"))
+        and ("mcp", "mcp") not in found
+    ):
+        found.append(("mcp", "mcp"))
     return found
 
 
 def doc_needs(doc: dict) -> dict:
     """Everything a flow document needs approved, in the shape stored as its approval."""
     from core.flows.engine import param_values
-    from core.flows.specs import SPECS_BY_TYPE
+    from core.flows.custom_nodes import spec_for_node
 
     need: dict[str, Any] = {
         "python": [],
@@ -64,7 +75,7 @@ def doc_needs(doc: dict) -> dict:
         "triggers": False,
     }
     for node in doc.get("nodes") or []:
-        spec = SPECS_BY_TYPE.get(node.get("type"))
+        spec = spec_for_node(node)
         if spec is None or node.get("disabled"):
             continue
         for cap, detail in node_needs(spec, param_values(spec, node)):
@@ -78,6 +89,22 @@ def doc_needs(doc: dict) -> dict:
                 need["providers"].append(detail)
             elif cap == "trigger":
                 need["triggers"] = True
+    # A recipe group's MCP servers live on the group, not on its Recipe Dataset step's params.
+    from core.flows.recipe_import import GENERATE_TYPE
+    from core.flows.recipe_share import uses_mcp
+
+    running = {
+        node.get("group")
+        for node in doc.get("nodes") or []
+        if node.get("type") == GENERATE_TYPE and not node.get("disabled")
+    }
+    for group in doc.get("groups") or []:
+        if (
+            group.get("kind") == "recipe"
+            and group.get("id") in running
+            and uses_mcp(group.get("config"))
+        ):
+            need["mcp"] = True
     return need
 
 

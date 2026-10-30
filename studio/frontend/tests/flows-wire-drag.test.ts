@@ -41,6 +41,7 @@ test("the controller sends partial requests at most once per frame and a full pa
   assert.match(routing, /frame = requestAnimationFrame\(/);
   assert.match(routing, /const next = partial\s*\? new Map<string, WireRoute>\(previous\)/);
   assert.match(src("canvas.tsx"), /<WireRouterController[^>]*moving=\{moving\}/);
+  assert.match(routing, /show=\{deletable !== false && \(hover \|\| !!selected\)\}/);
 });
 
 test("a route a frame behind its card follows the handles instead of jumping to a curve", () => {
@@ -56,4 +57,9 @@ test("each wire of a fan-in has its own × point before the shared leg", () => {
   const two = wireMidpoint([{ x: 0, y: 200 }, { x: 200, y: 200 }, { x: 200, y: 100 }, { x: 240, y: 100 }]);
   assert.notDeepEqual(one, two);
   assert.ok(one.x < 200 && two.x <= 200);
+});
+
+test("a reroute's wire segments have no draggable end; they move with the reroute", () => {
+  assert.match(src("derive-rf.ts"), /reconnectable: false,\s*data: \{ kind: "data", portType: info\.portType, ends: info\.ends \}/);
+  assert.match(src("use-wire-reconnect.ts"), /isWireSegment\(before\.graph, old\.id\)/);
 });

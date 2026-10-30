@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from core.flows.nodes._common import FLOW_CHAT_CONTEXT, as_text, note_loaded, poll_job, strip_think
 from core.flows.nodes.data import recipe_artifact
-from core.flows.registry import FlowNodeError, NodeContext, handler
+from core.flows.registry import FlowNodeError, NodeContext, cache_hook, handler
 
 POLL_S = 5.0
 BUSY_WAIT_S = 180.0
@@ -255,12 +255,12 @@ async def finetune(ctx: NodeContext) -> dict:
     if holdout:
         metrics["train_rows"] = dataset.get("rows")
         metrics["holdout_rows"] = holdout["rows"]
+    checkpoint = {"kind": "checkpoint", "name": run, "base_model": base_model}
+    system = trained_system_prompt(config)
+    if system:
+        checkpoint["system_prompt"] = system
     return {
-        "checkpoint": {
-            "kind": "checkpoint",
-            "name": run,
-            "base_model": base_model,
-        },
+        "checkpoint": checkpoint,
         "metrics": metrics,
         "holdout": holdout,
     }
@@ -364,6 +364,101 @@ def drafter_request(params: dict) -> dict:
     }
 
 
+def trained_system_prompt(config: dict) -> str:
+    """The one system message every training row got, when the run set one: the GRPO prompt, or
+    the SFT mapping's system prompt. A per-row system column has no single value to reuse."""
+    if config.get("objective") == "grpo" and config.get("rl_system_prompt"):
+        return str(config["rl_system_prompt"])
+    mapping = config.get("custom_format_mapping")
+    if isinstance(mapping, dict) and isinstance(mapping.get("__system_prompt"), str):
+        return mapping["__system_prompt"].strip()
+    return ""
+
+
+def _hub_revision(dataset: dict, token: Any) -> Optional[str]:
+    from huggingface_hub import HfApi
+    return HfApi().dataset_info(str(dataset["ref"]), token = token).sha
+
+
+def _content_hash(path: str) -> str:
+    import glob
+    import hashlib
+    import os
+
+    digest = hashlib.sha256()
+    for file in sorted(glob.glob(path)) if "*" in path else [path]:
+        digest.update(os.path.basename(file).encode() + b"\0")
+        with open(file, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def finetune_cache_material(ctx: NodeContext) -> Optional[dict]:
+    """What the params can't show: the dataset's content and, for GRPO, the reward rules.
+    None (an unreachable Hub, a missing file) means train again rather than guess."""
+    found = await dataset_material(ctx)
+    if found is None:
+        return None
+    if str(ctx.params.get("objective") or "sft") == "grpo":
+        # A reward can be saved again under the same name, so the key holds what each rule checks.
+        found["rewards"] = reward_rules(ctx.params.get("rewards"))
+    return found
+
+
+def reward_rules(rewards: Any) -> list:
+    from core.training.rewards import get_reward
+
+    rules = []
+    for r in rewards or []:
+        name = str((r or {}).get("name") or "").strip() if isinstance(r, dict) else ""
+        try:
+            record = get_reward(name)
+            rules.append([name, record.get("kind"), record.get("rule")])
+        except Exception:
+            rules.append([name, None])
+    return rules
+
+
+async def dataset_material(ctx: NodeContext) -> Optional[dict]:
+    from core.flows.nodes.data import local_seed_path, recipe_artifact
+    from core.training.account_jobs import account_hf_token
+
+    dataset = ctx.inputs.get("dataset")
+    if not isinstance(dataset, dict) or not dataset.get("ref"):
+        return None
+    if dataset.get("source") == "hf":
+        token = account_hf_token(getattr(ctx.caller, "hf_token", None))
+        sha = await asyncio.to_thread(_hub_revision, dataset, token)
+        return {"hub": sha} if sha else None
+    if dataset.get("source") == "recipe" and not recipe_artifact(dataset["ref"]):
+        # A recipe job id names one run's rows and is never reused.
+        return {"job": str(dataset["ref"])}
+    return {"sha256": await asyncio.to_thread(_content_hash, local_seed_path(dataset["ref"]))}
+
+
+async def finetune_cache_valid(ctx: NodeContext, outputs: dict) -> bool:
+    """A cached run is only reusable while its adapter folder (and held-out file) still exist."""
+    from studio_mcp import checkpoints
+
+    from core.flows.nodes.data import local_seed_path
+
+    name = (outputs.get("checkpoint") or {}).get("name") if isinstance(outputs, dict) else None
+    if not name:
+        return False
+    try:
+        await checkpoints.resolve(ctx.caller, name)
+        holdout = outputs.get("holdout")
+        if isinstance(holdout, dict) and holdout.get("ref"):
+            local_seed_path(holdout["ref"])
+    except Exception:
+        return False
+    return True
+
+
+cache_hook("train.finetune", material = finetune_cache_material, valid = finetune_cache_valid)
+
+
 def rl_roles(params: dict, objective: str) -> dict:
     """Column -> RL role for the columns the node names; Studio detects the rest by name."""
     named = {"prompt": params.get("prompt_column")}
@@ -444,13 +539,21 @@ def reward_history(payload: Any) -> list:
     )
     if not isinstance(rl, list):
         return []
-    return downsample(
-        [
-            round(float(e["reward"]), 4)
-            for e in rl
-            if isinstance(e, dict) and isinstance(e.get("reward"), (int, float))
-        ]
-    )
+    raw = [
+        float(e["reward"])
+        for e in rl
+        if isinstance(e, dict) and isinstance(e.get("reward"), (int, float))
+    ]
+    if not raw:
+        return []
+    # One step is one prompt's group, so the per-step reward swings between 0 and the max; a trailing
+    # mean over about a twentieth of the run is what shows whether it is learning.
+    window = max(1, min(25, len(raw) // 20))
+    head = sum(raw[:window]) / window
+    smooth = [
+        head if i < window else sum(raw[i - window + 1 : i + 1]) / window for i in range(len(raw))
+    ]
+    return downsample([round(v, 4) for v in smooth])
 
 
 def reward_metrics(history: list, ceiling: Optional[float]) -> dict:
@@ -509,27 +612,34 @@ def _too_many(rows: Any) -> FlowNodeError:
     )
 
 
+def _stream_rows(streamed: Any, start: int, end: Optional[int]) -> Any:
+    """Rows start..end of a streamed dataset, reading no further than the slice end or the cap plus one."""
+    from datasets import Dataset
+
+    if end is not None and end + 1 - start > HOLDOUT_MAX_ROWS:
+        raise _too_many(end + 1 - start)
+    count = HOLDOUT_MAX_ROWS + 1 if end is None else max(end + 1 - start, 0)
+    rows = list((streamed.skip(start) if start else streamed).take(count))
+    if len(rows) > HOLDOUT_MAX_ROWS:
+        raise _too_many(f"More than {HOLDOUT_MAX_ROWS}")
+    return Dataset.from_list(rows)
+
+
 def _hub_rows(dataset: dict, token: Any, start: int, end: Optional[int]) -> Any:
     """A Hub split, without downloading more than the hold-out can use: a slice streams just its
     rows, a split the Hub says is over the cap is refused before anything is fetched, and one of
     unknown size streams at most the cap plus one row."""
-    from datasets import Dataset, load_dataset, load_dataset_builder
+    from datasets import load_dataset, load_dataset_builder
 
     ref, subset = str(dataset["ref"]), dataset.get("subset") or None
     split = dataset.get("split") or "train"
 
-    def stream(count: int) -> Any:
+    def stream() -> Any:
         streamed = load_dataset(ref, subset, split = split, token = token, streaming = True)
-        rows = list((streamed.skip(start) if start else streamed).take(count))
-        if len(rows) > HOLDOUT_MAX_ROWS:
-            raise _too_many(f"More than {HOLDOUT_MAX_ROWS}")
-        return Dataset.from_list(rows)
+        return _stream_rows(streamed, start, end)
 
     if end is not None:
-        count = end + 1 - start
-        if count > HOLDOUT_MAX_ROWS:
-            raise _too_many(count)
-        return stream(max(count, 0))
+        return stream()
     try:
         known = load_dataset_builder(ref, subset, token = token).info.splits[split].num_examples
     except Exception:
@@ -537,7 +647,7 @@ def _hub_rows(dataset: dict, token: Any, start: int, end: Optional[int]) -> Any:
     if not known or start:
         if known and known - start > HOLDOUT_MAX_ROWS:
             raise _too_many(known - start)
-        return stream(HOLDOUT_MAX_ROWS + 1)
+        return stream()
     if known > HOLDOUT_MAX_ROWS:
         raise _too_many(known)
     return load_dataset(ref, subset, split = split, token = token)
@@ -563,17 +673,17 @@ def _load_rows(
             raise FlowNodeError(
                 "Hold-out works on Parquet, CSV or JSON datasets; set Hold out % to 0 for this one"
             )
-        loaded = load_dataset(builder, data_files = path, split = "train")
-        stop = len(loaded) if end is None else min(len(loaded), end + 1)
-        if start or end is not None:
-            loaded = loaded.select(range(min(start, stop), stop))
+        # Streamed, so a big local file is never read past the slice end or the cap.
+        streamed = load_dataset(builder, data_files = path, split = "train", streaming = True)
+        loaded = _stream_rows(streamed, start, end)
     if len(loaded) > HOLDOUT_MAX_ROWS:
         raise _too_many(len(loaded))
+    return _jsonable(loaded.to_list())
+
+
+def _jsonable(rows: list[dict]) -> list[dict]:
     # Timestamps and decimals in unused columns would stop the JSONL upload; NaN and inf become null.
-    return [
-        json.loads(json.dumps(row, default = str), parse_constant = lambda _: None)
-        for row in loaded.to_list()
-    ]
+    return [json.loads(json.dumps(row, default = str), parse_constant = lambda _: None) for row in rows]
 
 
 async def holdout_split(
@@ -617,13 +727,23 @@ async def holdout_split(
     return train, holdout
 
 
+def _eval_rows(dataset: dict, token: Any, split: str) -> list[dict]:
+    """The whole evaluation split: those rows are scored, not held out, so the hold-out cap doesn't apply."""
+    from datasets import load_dataset
+
+    loaded = load_dataset(
+        str(dataset["ref"]), dataset.get("subset") or None, split = split, token = token
+    )
+    return _jsonable(loaded.to_list())
+
+
 async def hub_eval_upload(ctx: NodeContext, dataset: dict, split: str) -> str:
     from core.flows.nodes.data import upload_rows
     from core.training.account_jobs import account_hf_token
 
     token = account_hf_token(getattr(ctx.caller, "hf_token", None))
     try:
-        rows = await asyncio.to_thread(_load_rows, {**dataset, "split": split}, token, None)
+        rows = await asyncio.to_thread(_eval_rows, dataset, token, split)
     except FlowNodeError:
         raise
     except Exception as exc:
@@ -727,9 +847,12 @@ async def chat_checkpoint(ctx: NodeContext) -> dict:
         prompt = as_text(ctx.inputs.get("prompt")) or str(ctx.params.get("prompt") or "")
         if not prompt.strip():
             raise FlowNodeError("The prompt is empty")
+        system = str(ctx.params.get("system_prompt") or "").strip() or str(
+            checkpoint.get("system_prompt") or ""
+        )
         text = await ctx.llm_text(
             model = None,
-            system = "",
+            system = system,
             prompt = prompt,
             max_tokens = int(ctx.params.get("max_tokens") or 512),
             seed = ctx.seed,

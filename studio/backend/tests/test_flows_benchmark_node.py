@@ -113,7 +113,7 @@ def test_adapter_is_scored_against_itself_off_and_failures_keep_the_row(monkeypa
     assert spec["baseline"] == {"mode": "adapter_off"} and spec["scorer"] == "reference"
     assert spec["local_adapter"] is True
     assert spec["model_providers"] == [{"name": "local", "is_local": True}]
-    assert out["score"] == 0.75
+    assert out["score"] == 75.0
     results = out["results"]
     assert (results["passed"], results["scored"], results["base_score"]) == (3, 4, 0.0)
     assert results["run_id"] == "r1" and len(results["preview"]) == 4
@@ -199,7 +199,7 @@ def test_lm_eval_refuses_an_adapter_and_scores_a_gguf_with_a_limit(monkeypatch):
         }
     ]
     # The Evals tab's headline metric, acc_norm for HellaSwag, not the first one listed.
-    assert out["score"] == 0.3 and out["results"]["metric"] == "acc_norm,none"
+    assert out["score"] == 30.0 and out["results"]["metric"] == "acc_norm,none"
     assert out["failures"]["rows"] == 3
 
 
@@ -254,3 +254,104 @@ def test_a_local_file_is_streamed_too(monkeypatch):
         "data_files": "/cache/x.jsonl",
         "streaming": True,
     }
+
+
+def _bench_flow(
+    task,
+    *,
+    via_export = None,
+    both = False,
+):
+    from core.flows.compiler import compile_flow, parse_document
+
+    from ._flows_helpers import doc, edge, node
+
+    nodes = [
+        node("data", "data.hf_dataset", repo = "a/b"),
+        node("train", "train.finetune"),
+        node("bench", "train.benchmark", task = task),
+    ]
+    edges = [edge("data", "dataset", "train", "dataset")]
+    if via_export:
+        nodes.append(node("export", "train.export", format = via_export))
+        edges += [
+            edge("train", "checkpoint", "export", "checkpoint"),
+            edge("export", "model", "bench", "model"),
+        ]
+    if both or not via_export:
+        edges.append(edge("train", "checkpoint", "bench", "checkpoint"))
+    parsed, errors = parse_document(doc(nodes, edges))
+    assert not errors, errors
+    return compile_flow(parsed)
+
+
+def test_an_lm_eval_task_on_a_fine_tune_checkpoint_is_refused_at_plan_time():
+    from core.flows.compiler import CompileError
+
+    with pytest.raises(CompileError) as found:
+        _bench_flow("GSM8K")
+    assert "Export Model" in str(found.value.issues) and "Recipe held-out" in str(
+        found.value.issues
+    )
+    _bench_flow("Recipe held-out")
+    _bench_flow("GSM8K", via_export = "gguf")
+    with pytest.raises(CompileError, match = "Format to GGUF"):
+        _bench_flow("GSM8K", via_export = "merged")
+    with pytest.raises(CompileError, match = "not both"):
+        _bench_flow("Recipe held-out", via_export = "gguf", both = True)
+
+
+def test_an_export_wired_into_model_loads_by_export_name_and_its_quant(monkeypatch):
+    from types import SimpleNamespace
+
+    asked, loads = {}, []
+
+    async def resolve_by(deadline, caller, **kwargs):
+        asked.update(kwargs)
+        return SimpleNamespace(
+            ref = "ref:exports/flows-run-1-gguf", is_lora = False, gguf_variant = "Q4_K_M"
+        )
+
+    async def load_llm(caller, job, **kwargs):
+        loads.append(kwargs)
+
+    monkeypatch.setattr("studio_mcp.trained_models.resolve_by", resolve_by)
+    monkeypatch.setattr("studio_mcp.loading.load_llm", load_llm)
+    monkeypatch.setattr(benchmark, "note_loaded", lambda *a: None)
+    ctx = _Ctx(lambda *a: {}, task = "GSM8K")
+    ctx.inputs = {
+        "model": {
+            "kind": "model",
+            "model_kind": "chat",
+            "repo": "flows-run-1-gguf",
+            "variant": "Q4_K_M",
+        }
+    }
+    ctx.resident = {"llm": "old"}
+    ctx.set_status = lambda *a, **k: None
+    assert asyncio.run(benchmark._load_target(ctx)) == ("flows-run-1-gguf", False)
+    assert (
+        asked["export"] == "flows-run-1-gguf"
+        and asked["variant"] == "Q4_K_M"
+        and asked["checkpoint"] is None
+    )
+    assert loads[0]["model"] == "ref:exports/flows-run-1-gguf" and loads[0]["variant"] == "Q4_K_M"
+    assert ctx.resident == {}
+
+
+def test_the_score_output_is_a_percent_with_two_decimals(monkeypatch):
+    async def loaded(ctx):
+        return "m", False
+
+    monkeypatch.setattr(benchmark, "_load_target", loaded)
+    sent = []
+    base = _routes(sent)
+
+    def routes(method, path, params, body):
+        found = base(method, path, params, body)
+        if path == "/api/benchmarks/evals/run":
+            found["details"]["recipe"]["candidate"]["score"] = 0.6066666666666667
+        return found
+
+    out = asyncio.run(benchmark.benchmark(_Ctx(routes)))
+    assert out["score"] == 60.67 and out["results"]["score"] == 60.67

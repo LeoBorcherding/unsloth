@@ -30,6 +30,7 @@ CATEGORIES = [
     {"id": "world", "title": "World Game", "color": "#22c55e"},
     {"id": "chat", "title": "Chat & Agents", "color": "#14b8a6"},
     {"id": "memory", "title": "Memory", "color": "#0d9488"},
+    {"id": "custom", "title": "Custom", "color": "#64748b"},
 ]
 
 PORT_COLORS = {
@@ -155,6 +156,16 @@ _LLM_SETTINGS = [
         step = 0.1,
         advanced = True,
     ),
+    P(
+        "reasoning_effort",
+        "select",
+        None,
+        "Reasoning effort",
+        options = ["low", "medium", "high", "max"],
+        advanced = True,
+    ),
+    # Chat's run settings for the load, in its saved-override shape; empty loads the way the model loads anyway.
+    P("load", "json", None, "Load settings", advanced = True),
     P("use_model_settings", "bool", False, "Use the model's saved settings", advanced = True),
 ]
 
@@ -186,7 +197,7 @@ def spec(
     params: list[dict] = (),
     lane: str = "cpu",
     model_kind: Optional[str] = None,
-    cacheable: bool = True,
+    cacheable: Optional[bool] = None,
     side_effect: bool = False,
     icon: Optional[str] = None,
     v: int = 1,
@@ -224,7 +235,8 @@ def spec(
         "params": list(params),
         "lane": lane,
         "model_kind": model_kind,
-        "cacheable": cacheable and not side_effect,
+        # Side-effect nodes run every time unless they say a cached result is safe to reuse.
+        "cacheable": (not side_effect) if cacheable is None else cacheable,
         "side_effect": side_effect,
         "icon": icon,
         "player": player,
@@ -638,6 +650,7 @@ NODE_SPECS: list[dict] = [
             P("system", "textarea", "", "System prompt", advanced = True),
             P("temperature", "number", None, "Temperature", min = 0, max = 2, step = 0.01, advanced = True),
             P("seed", "seed", None, "Seed", advanced = True),
+            P("thinking", "bool", False, "Allow thinking", advanced = True),
             *_LLM_SETTINGS,
         ],
         lane = "gpu",
@@ -827,7 +840,9 @@ NODE_SPECS: list[dict] = [
         "Repeat the steps in this node's group for a few rounds: generate, train, score. A dashed "
         "feeds-the-next-round wire carries the score step's failures into the next round's recipe "
         "seed. Round 1's held-out rows split once into probe rows (their failures feed back) and test "
-        "rows (never fed back; their score decides when to stop).",
+        "rows (never fed back; their score decides when to stop). Up to a quarter of each round's seed "
+        "rows rewrite failures, at most two per distinct failure (near-copies count once), so a round "
+        "with few failures stays mostly fresh rows.",
         outputs = [
             out("score", "number", "Best test score"),
             out("history", "json", "Rounds"),
@@ -841,12 +856,13 @@ NODE_SPECS: list[dict] = [
             P(
                 "failure_percent",
                 "int",
-                50,
+                25,
                 "Seed rows from failures %",
                 min = 0,
                 max = 100,
                 advanced = True,
             ),
+            P("per_failure", "int", 2, "Rewrites per failure", min = 1, max = 10, advanced = True),
             P(
                 "probe_percent",
                 "int",
@@ -1544,7 +1560,7 @@ NODE_SPECS: list[dict] = [
         "recipe.column",
         "Recipe column",
         "data",
-        "One column of a Data Recipe group. Double-click to edit it with the Recipe Studio editor; wires show "
+        "One column of a Data Recipe group. Double-click it to edit it in the inspector; wires show "
         "which columns its prompt reads.",
         inputs = [inp("in", "text", "Reads", optional = True, multi = True)],
         outputs = [out("out", "text", "Column")],
@@ -2231,19 +2247,22 @@ NODE_SPECS: list[dict] = [
         ],
         lane = "gpu",
         side_effect = True,
+        cacheable = True,
         icon = "dumbbell",
     ),
     spec(
         "train.benchmark",
         "Benchmark",
         "data",
-        "Score a checkpoint or a model on held-out rows or an lm-eval task. Runs also show on the Benchmarks Evals tab.",
+        "Score a checkpoint or a model on held-out rows or an lm-eval task. lm-eval tasks score a GGUF: wire "
+        "Fine-tune into Export Model (GGUF) and Export Model into Model. Runs also show on the Benchmarks Evals tab.",
         inputs = [
             inp("checkpoint", "checkpoint", "Checkpoint", optional = True),
+            inp("model", "model", "Model", optional = True),
             inp("dataset", "dataset", "Rows to score", optional = True),
         ],
         outputs = [
-            out("score", "number"),
+            out("score", "number", "Score %"),
             out("results", "dataset", "Per-row results"),
             out("failures", "dataset", "Failed rows"),
         ],
@@ -2316,7 +2335,17 @@ NODE_SPECS: list[dict] = [
         "Load a checkpoint and ask it a prompt.",
         inputs = [inp("checkpoint", "checkpoint"), inp("prompt", "text", optional = True)],
         outputs = [out("text", "text")],
-        params = [P("prompt", "textarea", "", "Prompt"), P("max_tokens", "int", 512, "Max tokens")],
+        params = [
+            P("prompt", "textarea", "", "Prompt"),
+            P(
+                "system_prompt",
+                "textarea",
+                "",
+                "System prompt",
+                help = "Sent as the system message. Leave empty to use the one the Fine-tune trained with, when it set one.",
+            ),
+            P("max_tokens", "int", 512, "Max tokens"),
+        ],
         lane = "gpu",
         icon = "chat",
     ),

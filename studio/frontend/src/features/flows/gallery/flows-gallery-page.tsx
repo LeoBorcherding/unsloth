@@ -537,41 +537,39 @@ export function FlowsGalleryPage(): ReactElement {
             and any flow can be shared as a single file.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            disabled={creating}
-            onClick={() => void newRecipe()}
-            title="A new flow with a starter Data Recipe in it"
-            data-testid="flows-new-recipe"
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={15} /> New recipe
-          </Button>
-          <Button
-            variant="outline"
-            disabled={migrating}
-            onClick={() => void bringRecipes()}
-            title="One flow per saved Data Recipe, each an editable recipe group. Safe to run again."
-            data-testid="flows-bring-recipes"
-          >
-            <HugeiconsIcon icon={TestTube01Icon} size={15} />{" "}
-            {migrating ? "Bringing in…" : "Bring in my Data Recipes"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setRecipeImportOpen(true)}
-            data-testid="flows-import-recipe"
-          >
-            <HugeiconsIcon icon={FileImportIcon} size={15} /> Import recipe JSON
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setImportOpen(true)}
-            data-testid="flows-import"
-          >
-            <HugeiconsIcon icon={FileImportIcon} size={15} /> Import
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          disabled={creating}
+          onClick={() => void newRecipe()}
+          title="A new flow with a starter Data Recipe in it"
+          data-testid="flows-new-recipe"
+        >
+          <HugeiconsIcon icon={PlusSignIcon} size={15} /> New recipe
+        </Button>
+        <Button
+          variant="outline"
+          disabled={migrating}
+          onClick={() => void bringRecipes()}
+          title="One flow per saved Data Recipe, each an editable recipe group. Safe to run again."
+          data-testid="flows-bring-recipes"
+        >
+          <HugeiconsIcon icon={TestTube01Icon} size={15} />{" "}
+          {migrating ? "Bringing in…" : "Bring in my Data Recipes"}
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setRecipeImportOpen(true)}
+          data-testid="flows-import-recipe"
+        >
+          <HugeiconsIcon icon={FileImportIcon} size={15} /> Import recipe JSON
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setImportOpen(true)}
+          data-testid="flows-import"
+        >
+          <HugeiconsIcon icon={FileImportIcon} size={15} /> Import
+        </Button>
       </header>
 
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">

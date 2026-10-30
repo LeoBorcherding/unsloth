@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import random
+import re
+from difflib import SequenceMatcher
 from typing import Any, Optional
 
 # Same guesses as the Benchmark node, so a failed row maps the way it was scored.
@@ -20,6 +22,14 @@ OUTPUT_KEYS = ("model_output", "output", "prediction", "generated")
 FIELDS = ("failed_prompt", "failed_reference", "failed_output")
 # A string this long from a test row is the row itself, not a shared label like "billing".
 LEAK_MIN_CHARS = 16
+# Seed defaults: a quarter of the rows rewrite failures, and no failure gets more than two of them,
+# so a round with a handful of failures stays mostly fresh rows instead of near-copies of a few.
+FAILURE_PERCENT = 25
+PER_FAILURE = 2
+# Score nodes whose score output is already a percent.
+PERCENT_SCORERS = ("train.benchmark",)
+# Failures whose normalized prompts match this closely (same reference) seed as one.
+NEAR_SAME = 0.9
 
 
 def split_holdout(rows: list[dict], probe_percent: int, seed: int) -> tuple[list[dict], list[dict]]:
@@ -94,27 +104,51 @@ def drop_test_rows(failures: list[dict], test_rows: list[dict]) -> list[dict]:
     return [f for f in failures if not any(s in banned for s in _strings(f))]
 
 
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def distinct(rows: list[dict]) -> list[dict]:
+    """Drop failure rows whose prompt is a near-copy of an earlier one with the same reference."""
+    kept: list[tuple[str, str, dict]] = []
+    for row in rows:
+        prompt, reference = _norm(row["failed_prompt"]), _norm(row["failed_reference"])
+        if any(
+            reference == ref
+            and (prompt == seen or SequenceMatcher(None, prompt, seen).ratio() >= NEAR_SAME)
+            for seen, ref, _ in kept
+        ):
+            continue
+        kept.append((prompt, reference, row))
+    return [row for _, _, row in kept]
+
+
 def seed_rows(
     failures: list[dict],
     rows: int,
-    failure_percent: int,
+    failure_percent: int = FAILURE_PERCENT,
     prompt_column: str = "",
     reference_column: str = "",
+    per_failure: int = PER_FAILURE,
 ) -> list[dict]:
-    """``rows`` seed rows: up to ``failure_percent`` of them rewrite a failure (cycled), the rest are fresh."""
+    """``rows`` seed rows: up to ``failure_percent`` of them rewrite a distinct failure, each failure at
+    most ``per_failure`` times; the rest are fresh."""
     rows = max(1, rows)
-    kept = [r for r in (failure_row(f, prompt_column, reference_column) for f in failures) if r]
-    take = min(rows, round(rows * failure_percent / 100)) if kept else 0
+    kept = distinct(
+        [r for r in (failure_row(f, prompt_column, reference_column) for f in failures) if r]
+    )
+    take = min(rows, round(rows * failure_percent / 100), len(kept) * max(1, per_failure))
     found = [dict(kept[i % len(kept)]) for i in range(take)]
     found += [{"origin": "fresh", **{c: "" for c in FIELDS}} for _ in range(rows - take)]
     return found
 
 
-def as_percent(score: Any) -> Optional[float]:
-    """A score node may answer 0..1 or 0..100; a dict with `score` or `accuracy` also works."""
+def as_percent(score: Any, percent: bool = False) -> Optional[float]:
+    """A score node may answer 0..1 or 0..100; a dict with `score` or `accuracy` also works.
+    ``percent`` says the node always answers 0..100 (Benchmark), so 0.5 is half a percent."""
     if isinstance(score, dict):
         score = next((score[k] for k in ("score", "accuracy", "value") if k in score), None)
     if isinstance(score, bool) or not isinstance(score, (int, float)):
         return None
-    value = float(score) * 100 if 0 <= score <= 1 else float(score)
+    value = float(score) * 100 if 0 <= score <= 1 and not percent else float(score)
     return round(max(0.0, min(100.0, value)), 2)

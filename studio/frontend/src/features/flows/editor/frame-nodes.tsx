@@ -10,8 +10,6 @@ import {
 } from "@/features/recipe-studio/components/rf-ui/base-node";
 import { type NodeProps, NodeResizer } from "@xyflow/react";
 import { Suspense, lazy, memo, useState } from "react";
-import { groupGenerate } from "../recipe/recipe-columns";
-import { noteRecipeGroup, withRecipeNotes } from "../recipe/recipe-notes";
 import { toast } from "sonner";
 import {
   checkRecipeGroup,
@@ -50,7 +48,6 @@ const GROUP_EDGE =
 const NOTE_STYLE = { background: "var(--muted)", borderColor: "var(--border)" };
 // Recipe Studio's and the examples' default note yellow reads as "no colour picked".
 const DEFAULT_NOTE = "#fde68a";
-
 function RecipeFrameActions({ groupId }: { groupId: string }) {
   const [checking, setChecking] = useState(false);
   return (
@@ -176,20 +173,6 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
     note.color?.toLowerCase() === DEFAULT_NOTE ? undefined : note.color;
   // Editing only after a double-click: an empty note shows its placeholder and still drags.
   const showEditor = editing;
-  // A note from a Data Recipe writes its edits back into the recipe's ui notes.
-  const write = (text: string) => {
-    const next = { ...note, text };
-    const { graph, patchGraph } = useDocStore.getState();
-    const group = noteRecipeGroup(graph, note.id);
-    if (!group) return upsertNote(next, `note:${note.id}`);
-    const notes = graph.noteOrder.map((id) =>
-      id === note.id ? next : graph.notes[id],
-    );
-    patchGraph(
-      { notes: [next], groups: [withRecipeNotes(group, notes)] },
-      `note:${note.id}`,
-    );
-  };
   return (
     <BaseNode
       className="corner-squircle h-full w-full min-w-0 overflow-hidden rounded-xl border-border/60 shadow-sm"
@@ -226,7 +209,9 @@ function NoteFrameImpl({ data }: NodeProps<RfNode>) {
           placeholder="Write a note…"
           value={note.text}
           onBlur={() => setEditing(false)}
-          onChange={(e) => write(e.target.value)}
+          onChange={(e) =>
+            upsertNote({ ...note, text: e.target.value }, `note:${note.id}`)
+          }
         />
       ) : !note.text ? (
         <p className="px-3 py-2 text-muted-foreground text-xs">

@@ -35,7 +35,7 @@ from core.flows import caller as flow_caller
 from core.flows.cache import cache_key
 from core.flows import loop as loop_rounds
 from core.flows.compiler import FOR_EACH, LOOP, CompileError, Plan, compile_flow
-from core.flows.registry import FlowCancelled, FlowNodeError, load_handlers
+from core.flows.registry import CACHE_HOOKS, FlowCancelled, FlowNodeError, load_handlers
 from core.flows.schema import MAX_FOREACH_ITEMS, MAX_GPU_OPS_PER_RUN, MAX_RUN_SECONDS
 from storage import flows_db
 from utils.account_context import AccountContext, arun_as, current_account
@@ -215,6 +215,7 @@ class RunState:
     app: Any = None
     resident: dict[str, Optional[str]] = field(default_factory = dict)
     initial_resident: dict[str, list[str]] = field(default_factory = dict)
+    resident_variant: dict[str, Optional[str]] = field(default_factory = dict)
     fresh: set[str] = field(default_factory = set)
     prefetch_task: Optional[asyncio.Task] = field(default = None, repr = False)
     prefetched: int = 0
@@ -1385,6 +1386,7 @@ class FlowEngine:
             if gpu_running == 0:
                 gpu_ready = [n for n in ready if plan.specs[n]["lane"] == "gpu"]
                 if gpu_ready:
+                    await self._probe_resident_variant(rs, gpu_ready)
                     launch.append(self._pick_gpu(rs, gpu_ready))
             for nid in launch:
                 pending.remove(nid)
@@ -1660,21 +1662,81 @@ class FlowEngine:
         repo = choice.get("repo", "") if isinstance(choice, dict) else ""
         return MODEL_SLOT.get(kind, kind), str(repo or "").lower()
 
+    async def _probe_resident_variant(self, rs: RunState, ready: list[str]) -> None:
+        """The loaded chat model's quant, for Model-unset cards that follow saved settings: their saved load can
+        be quant-specific. Read only when one is ready; nothing else is on the GPU at this point."""
+        from studio_mcp import loading
+
+        if not any(
+            self._model_of(rs.plan, nid) == ("llm", "")
+            and (rs.plan.nodes[nid].get("params") or {}).get(model_settings.USE_SAVED)
+            for nid in ready
+        ):
+            return
+        try:
+            _slots, status = await asyncio.wait_for(loading._resident(rs.caller), RESIDENT_PROBE_S)
+            variant = status.get("gguf_variant")
+        except Exception:
+            variant = None
+        rs.resident_variant["llm"] = variant if isinstance(variant, str) and variant else None
+
     def _pick_gpu(self, rs: RunState, ready: list[str]) -> str:
         plan = rs.plan
 
         def model_of(nid: str) -> tuple[str, str]:
             return self._model_of(plan, nid)
 
+        from core.flows.nodes._common import loaded_options, options_hash
+
+        variants = getattr(rs, "resident_variant", None) or {}
+
+        # Cards with their own load settings group by them too, so same-settings cards run back to back.
+        loads: dict[str, Optional[str]] = {}
+
+        def load_of(nid: str) -> Optional[str]:
+            if nid not in loads:
+                params = plan.nodes[nid].get("params") or {}
+                slot, repo = model_of(nid)
+                loads[nid] = (
+                    options_hash(
+                        model_settings.card_load_kwargs(
+                            params, None if repo else rs.resident.get(slot), variants.get(slot)
+                        )
+                    )
+                    if model_settings.LOAD in params or params.get(model_settings.USE_SAVED)
+                    else None
+                )
+            return loads[nid]
+
+        def loaded_with(slot: str, repo: str) -> Optional[str]:
+            found = loaded_options(slot)
+            return found[1] if found and found[0] == repo else None
+
         for nid in ready:
             slot, repo = model_of(nid)
-            if not repo or (rs.resident.get(slot) or "").lower() == repo:
+            resident = (rs.resident.get(slot) or "").lower()
+            if not repo:
+                # A card on the loaded model with its own load settings goes first only if they match the load.
+                if load_of(nid) is None or (
+                    resident and load_of(nid) == loaded_with(slot, resident)
+                ):
+                    return nid
+            elif resident == repo and load_of(nid) == loaded_with(slot, repo):
                 return nid
+        # A Model-unset card runs on whatever is loaded, so nothing that switches its slot to another repo goes first.
+        unset = {model_of(nid)[0] for nid in ready if not model_of(nid)[1]}
+
+        def switches(nid: str) -> bool:
+            slot, repo = model_of(nid)
+            return bool(slot in unset and repo and repo != (rs.resident.get(slot) or "").lower())
+
+        pool = [nid for nid in ready if not switches(nid)]
         counts: dict[tuple, int] = {}
-        for nid in ready:
-            counts[model_of(nid)] = counts.get(model_of(nid), 0) + 1
+        for nid in pool:
+            key = (*model_of(nid), load_of(nid))
+            counts[key] = counts.get(key, 0) + 1
         best = max(counts.values())
-        return next(n for n in ready if counts[model_of(n)] == best)
+        return next(n for n in pool if counts[(*model_of(n), load_of(n))] == best)
 
     def _gather_inputs(self, rs: RunState, nid: str, env: Env) -> tuple[dict, Optional[str]]:
         plan = rs.plan
@@ -1788,6 +1850,14 @@ class FlowEngine:
             return
 
         ctx = NodeContextImpl(self, rs, nid, spec, params, inputs, seed, iteration)
+        # Before the cache: a run that may not use a capability does not get another run's output of it.
+        for cap, detail in capabilities.node_needs(spec, params):
+            if refused := capabilities.refusal(rs.origin, rs.approvals, cap, detail, spec["title"]):
+                state.error = refused
+                env.values[nid] = SKIPPED
+                rs.set_status(nid, "failed")
+                self._record(rs, nid, "failed", None, refused, iteration)
+                return
         if params.get(model_settings.USE_SAVED) and spec.get("model_kind"):
             await _apply_saved_settings(ctx, spec, params, bound)
         key = None
@@ -1795,6 +1865,14 @@ class FlowEngine:
         cacheable = spec["cacheable"] and not (
             spec.get("model_kind") and not (isinstance(choice, dict) and choice.get("repo"))
         )
+        hook = CACHE_HOOKS.get(spec["type"]) if cacheable else None
+        extra = None
+        if hook is not None:
+            try:
+                extra = await hook.material(ctx)
+            except Exception:
+                logger.debug("flows: cache material failed", exc_info = True)
+            cacheable = extra is not None
         if cacheable and not forced:
             try:
                 model_key = await self._model_key(ctx, spec, params)
@@ -1806,6 +1884,7 @@ class FlowEngine:
                     model = model_key,
                     seed = seed,
                     flow_params = ctx.flow_params,
+                    extra = extra,
                 )
                 pending = rs.pending_cache(key)
                 hit = (
@@ -1819,6 +1898,8 @@ class FlowEngine:
                     from core.flows.nodes._common import gallery_media_present
                     if not await asyncio.to_thread(gallery_media_present, hit):
                         hit = None
+                if hit is not None and hook is not None and not await hook.valid(ctx, hit):
+                    hit = None
             except Exception:
                 logger.debug("flows: cache lookup failed", exc_info = True)
                 hit = None
@@ -1830,12 +1911,12 @@ class FlowEngine:
                 key = cache_key(
                     spec["type"], spec["v"], params, inputs,
                     model = await self._model_key(ctx, spec, params), seed = seed,
-                    flow_params = ctx.flow_params,
+                    flow_params = ctx.flow_params, extra = extra,
                 )  # fmt: skip
             except Exception:
                 key = None
 
-        handler = self._handlers().get(spec["type"])
+        handler = self._handlers().get(spec.get("handler") or spec["type"])
         if handler is None:
             state.error = f"{spec['title']} cannot run in this version of Unsloth Studio"
             env.values[nid] = SKIPPED
@@ -1843,10 +1924,6 @@ class FlowEngine:
             self._record(rs, nid, "failed", None, state.error, iteration)
             return
         try:
-            for cap, detail in capabilities.node_needs(spec, params):
-                refused = capabilities.refusal(rs.origin, rs.approvals, cap, detail, spec["title"])
-                if refused:
-                    raise FlowNodeError(refused)
             if spec["lane"] == "gpu":
                 lock = self.gpu_lock()
                 if lock.locked():
@@ -1909,7 +1986,7 @@ class FlowEngine:
         finally:
             rs.cancel_hooks.pop((nid, iteration), None)
         outputs = dict(outputs or {})
-        if key is not None and spec["cacheable"]:
+        if key is not None and cacheable:
             if rs.persist:
                 rs._unsaved_cache[key] = (spec["type"], outputs)
             else:
@@ -2156,10 +2233,14 @@ class FlowEngine:
         target = float(params.get("target") if params.get("target") is not None else 90)
         feed = params.get("feedback") is not False
         failure_percent = int(
-            params.get("failure_percent") if params.get("failure_percent") is not None else 50
+            params.get("failure_percent")
+            if params.get("failure_percent") is not None
+            else loop_rounds.FAILURE_PERCENT
         )
+        per_failure = int(params.get("per_failure") or loop_rounds.PER_FAILURE)
         seed_rows = int((plan.nodes[seed_node].get("params") or {}).get("rows") or 50)
         scorer_params = plan.nodes[scorer].get("params") or {}
+        in_percent = plan.specs[scorer]["type"] in loop_rounds.PERCENT_SCORERS
         rs.set_status(nid, "running")
         history: list[dict] = []
         failures: list[dict] = []
@@ -2213,6 +2294,7 @@ class FlowEngine:
                     failure_percent,
                     str(scorer_params.get("prompt_column") or ""),
                     str(scorer_params.get("reference_column") or ""),
+                    per_failure,
                 )
                 fed = sum(1 for row in rows if row["origin"] == "failure")
                 seed = await self._seed_upload(ctx, rows, f"loop-{nid}-round-{r + 1}")
@@ -2266,8 +2348,8 @@ class FlowEngine:
                 )
                 entry = {
                     "round": r + 1,
-                    "test_score": loop_rounds.as_percent(test_out.get("score")),
-                    "probe_score": loop_rounds.as_percent(probe_out.get("score")),
+                    "test_score": loop_rounds.as_percent(test_out.get("score"), in_percent),
+                    "probe_score": loop_rounds.as_percent(probe_out.get("score"), in_percent),
                     "rows_from_failures": fed,
                     "probe_failures": len(failures),
                     "probe_rows": probe.get("rows"),
@@ -2278,13 +2360,12 @@ class FlowEngine:
                     produced = child.values.get(b)
                     if isinstance(produced, dict) and isinstance(produced.get("checkpoint"), dict):
                         last[b] = produced["checkpoint"]
-                checkpoint = next(
-                    (
-                        v["checkpoint"]
-                        for v in (child.values.get(b) for b in before)
-                        if isinstance(v, dict) and isinstance(v.get("checkpoint"), dict)
-                    ),
-                    None,
+                # The Fine-tune whose held-out rows were scored, not whichever trainer comes first.
+                trained = child.values.get(held_src[0])
+                checkpoint = (
+                    trained["checkpoint"]
+                    if isinstance(trained, dict) and isinstance(trained.get("checkpoint"), dict)
+                    else None
                 )
                 history.append(entry)
                 if entry["test_score"] is not None and (
@@ -2439,11 +2520,17 @@ async def _apply_saved_settings(ctx: Any, spec: dict, params: dict, bound: set[s
     """In place, before the cache key: a saved setting that changes must miss the cache."""
     choice = params.get("model")
     model_id = choice.get("repo") if isinstance(choice, dict) else None
+    variant = choice.get("variant") if isinstance(choice, dict) else None
     if not model_id:
-        from core.flows.nodes._common import resident_name
+        from core.flows.nodes._common import resident_gguf_variant, resident_name
         model_id = await resident_name(ctx, spec["model_kind"])
+        variant = await resident_gguf_variant(ctx) if model_id else None
     saved = await asyncio.to_thread(model_settings.read_saved, model_id)
     params.update(model_settings.overlay(params, saved, spec, bound))
+    if any(p["id"] == model_settings.LOAD for p in spec["params"]):
+        load = await asyncio.to_thread(model_settings.saved_load, model_id, variant)
+        if load:
+            params[model_settings.LOAD] = {**(params.get(model_settings.LOAD) or {}), **load}
 
 
 def _bind_params(spec: dict, params: dict, inputs: dict) -> None:

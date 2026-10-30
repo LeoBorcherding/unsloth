@@ -289,3 +289,21 @@ export function numericChartX(chart: Pick<ChartValue, "type" | "x">): boolean {
     chart.x.every((x) => typeof x === "number" && Number.isFinite(x))
   );
 }
+
+/** The output ids a card draws: its ports, or for a sink card with none (Preview, Result) what the run returned. */
+export function shownOutputIds(
+  ports: readonly { id: string }[],
+  outputs: Record<string, unknown>,
+): string[] {
+  return ports.length ? ports.map((port) => port.id) : Object.keys(outputs);
+}
+
+/** A judge column's {score, reasoning} as "key: value" lines instead of raw JSON. */
+export function readable(value: unknown, depth = 0): string {
+  if (value === null || typeof value !== "object") return String(value);
+  if (depth > 1) return JSON.stringify(value);
+  if (Array.isArray(value)) return value.map((v) => readable(v, depth + 1)).join(", ");
+  return Object.entries(value)
+    .map(([key, v]) => `${key}: ${readable(v, depth + 1)}`)
+    .join(depth ? ", " : "\n");
+}

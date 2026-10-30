@@ -15,6 +15,7 @@ import {
   ReactFlow,
   SelectionMode,
   useReactFlow,
+  useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
   type DragEvent,
@@ -36,7 +37,7 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import type { FlowEdge, FlowGroup } from "../types";
 import { CanvasControls } from "./canvas-controls";
-import { dragHasFiles } from "./canvas-rules";
+import { FIT_MIN_ZOOM, dragHasFiles } from "./canvas-rules";
 import {
   checkConnection,
   parseHandle,
@@ -51,6 +52,7 @@ import {
   type RfNode,
   type WireInfo,
 } from "./derive-rf";
+import { watchRewiredOutputs } from "./stale-outputs";
 import { useWireReconnect } from "./use-wire-reconnect";
 import { addFileNodes } from "./file-drop";
 import {
@@ -68,13 +70,12 @@ import { FlowEdgeView } from "./flow-edge";
 import { FlowNodeView } from "./flow-node";
 import { GroupFrame, NoteFrame } from "./frame-nodes";
 import { NODE_DRAG_MIME, addNodeConnected, tryConnect } from "./node-factory";
+import { GRID, placementPosition } from "./placement";
 import {
   disconnectColumns,
   recipeConnectionError,
 } from "../recipe/recipe-actions";
-import { COLUMN_TYPE, columnOf, isRecipeGroup } from "../recipe/recipe-columns";
-import { columnLook } from "../recipe/recipe-look";
-import { noteRecipeGroup, withRecipeNotes } from "../recipe/recipe-notes";
+import { isRecipeGroup } from "../recipe/recipe-columns";
 import {
   parseSetupId,
   setupEdges,
@@ -87,7 +88,6 @@ import {
   SETUP_OUT,
   type SetupData,
 } from "../recipe/recipe-setup-node";
-import { GRID, placementPosition } from "./placement";
 import { SelectedNodeToolbar } from "./node-toolbar";
 import { RerouteNode } from "./reroute-node";
 import {
@@ -105,8 +105,8 @@ const NODE_TYPES = {
   flowNode: FlowNodeView,
   flowGroup: GroupFrame,
   flowNote: NoteFrame,
-  recipeSetup: RecipeSetupNode,
   flowReroute: RerouteNode,
+  recipeSetup: RecipeSetupNode,
 };
 const EDGE_TYPES = { flowEdge: FlowEdgeView };
 const SNAP_GRID: [number, number] = [GRID, GRID];
@@ -118,7 +118,7 @@ const DELETE_KEYS = ["Delete", "Backspace"];
 const MULTI_SELECT_KEYS = multiSelectKeys(
   typeof navigator === "undefined" ? "" : navigator.platform,
 );
-const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1 };
+const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1, minZoom: FIT_MIN_ZOOM };
 
 type Size = { width: number; height: number };
 type Positions = Record<string, { x: number; y: number }>;
@@ -126,7 +126,6 @@ type Positions = Record<string, { x: number; y: number }>;
 function portTypeOf(edge: FlowEdge): string {
   if (edge.kind === "flow") return "flow";
   const node = useDocStore.getState().graph.nodes[edge.source];
-  if (node?.type === COLUMN_TYPE) return columnLook(columnOf(node)).valueType;
   const spec = node ? getSpec(node.type) : undefined;
   return findPort(spec, "out", edge.source_port)?.type ?? "any";
 }
@@ -212,13 +211,16 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
   const bus = useUiStore((s) => s.wireStyle === "bus");
   const flowId = useDocStore((s) => s.flowId);
   const { screenToFlowPosition, flowToScreenPosition, fitView } = useReactFlow();
+  const { props: wireReconnect, reconnecting } =
+    useWireReconnect(!readOnly);
+  const updateNodeInternals = useRef(useUpdateNodeInternals());
+  useEffect(() => (readOnly ? undefined : watchRewiredOutputs()), [readOnly]);
   const recipeView = useDocStore((s) => {
     const first = s.graph.groupOrder.find((id) =>
       isRecipeGroup(s.graph.groups[id]),
     );
     return first ? `${s.flowId}:${first}` : null;
   });
-  const wireReconnect = useWireReconnect(!readOnly);
 
   const deriver = useRef<RfDeriver | null>(null);
   deriver.current ??= new RfDeriver();
@@ -385,7 +387,10 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           nextDrag ??= { ...(drag ?? {}) };
           delete nextDrag[change.id];
           ended = true;
-        } else if (change.type === "dimensions" && change.dimensions) {
+        }
+        // Every new size reaches `measured`, a resize's too: the DOM already has the final size
+        // when the handle is released, so no later measurement would report it.
+        if (change.type === "dimensions" && change.dimensions) {
           const current = (nextSizes ?? sizes).get(change.id);
           if (
             !current ||
@@ -403,7 +408,16 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           (change.selected ? selection.add : selection.remove).add(change.id);
         }
       }
-      if (nextBoxes) setBoxes(Object.keys(nextBoxes).length ? nextBoxes : null);
+      if (nextBoxes) {
+        setBoxes(Object.keys(nextBoxes).length ? nextBoxes : null);
+        // Handles move with a resize; React Flow re-reads their positions only when asked,
+        // since the size it holds is already the new one.
+        const resized = changes.flatMap((c) =>
+          c.type === "dimensions" && c.resizing !== undefined ? [c.id] : [],
+        );
+        if (resized.length)
+          requestAnimationFrame(() => updateNodeInternals.current(resized));
+      }
       if (nextDrag)
         setDrag(ended && !Object.keys(nextDrag).length ? null : nextDrag);
       if (nextSizes) setSizes(nextSizes);
@@ -477,7 +491,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
 
   const onNodeDragStop = useCallback(
     (_: unknown, node: RfNode) => {
-      const card = dragMembers.current?.groupRfId.startsWith(SUPER_PREFIX);
+      const superCard = dragMembers.current?.groupRfId.startsWith(SUPER_PREFIX);
       dragMembers.current = null;
       const current = dragRef.current;
       if (current) {
@@ -492,14 +506,16 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           }
           // Only a card dragged on its own keeps a spot; one carried with its frame follows the frame.
           if (current[GROUP_PREFIX + card.groupId]) continue;
-          const group = groups.get(card.groupId) ?? doc.graph.groups[card.groupId];
-          if (group) groups.set(card.groupId, withSetupPosition(group, id, [p.x, p.y]));
+          const group =
+            groups.get(card.groupId) ?? doc.graph.groups[card.groupId];
+          if (group)
+            groups.set(card.groupId, withSetupPosition(group, id, [p.x, p.y]));
         }
         // A super card moves its blocks without changing which group they are in.
         if (Object.keys(positions).length)
           doc.moveNodes(
             positions,
-            card ? undefined : groupMembership(positions, sizesRef.current),
+            superCard ? undefined : groupMembership(positions, sizesRef.current),
           );
         if (groups.size) doc.patchGraph({ groups: [...groups.values()] });
       }
@@ -580,6 +596,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       connectStart.current = null;
       if (
         readOnly ||
+        // Dropping a wire's end to remove it is not a new wire.
+        reconnecting.current ||
         !start?.nodeId ||
         !start.handleId ||
         state.isValid ||
@@ -630,6 +648,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       nodes: rfNodes,
       edges: rfEdges,
     }: { nodes: RfNode[]; edges: RfEdge[] }) => {
+      if (readOnly) return;
       const references = new Set(disconnectColumns(rfEdges.map((e) => e.id)));
       const ids = {
         nodes: [] as string[],
@@ -653,23 +672,10 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           ids.notes.push(node.id.slice(NOTE_PREFIX.length));
         else ids.nodes.push(node.id);
       }
-      // A deleted recipe note leaves the recipe's ui notes too.
-      const notes = new Set(ids.notes);
-      const remaining = graph.noteOrder
-        .filter((id) => !notes.has(id))
-        .map((id) => graph.notes[id]);
-      const touched = new Map<string, FlowGroup>();
-      for (const id of ids.notes) {
-        const group = noteRecipeGroup(graph, id);
-        if (group && !ids.groups.includes(group.id))
-          touched.set(group.id, withRecipeNotes(group, remaining));
-      }
-      useDocStore
-        .getState()
-        .removeElements({ ...ids, updateGroups: [...touched.values()] });
+      useDocStore.getState().removeElements(ids);
       useUiStore.getState().setSelection([], []);
     },
-    [],
+    [readOnly],
   );
 
   const onDoubleClick = useCallback(
@@ -737,14 +743,6 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     if (node.type === "flowNode") useUiStore.getState().openInspector(node.id);
   }, []);
 
-  const onNodeClick = useCallback((_: ReactMouseEvent, node: RfNode) => {
-    const card = parseSetupId(node.id);
-    if (!card) return;
-    const ui = useUiStore.getState();
-    ui.setSelection([], []);
-    ui.setRecipeSetup(card);
-  }, []);
-
   const onEdgeDoubleClick = useCallback(
     (event: ReactMouseEvent, edge: RfEdge) => {
       if (readOnly || edge.data?.kind !== "data") return;
@@ -766,6 +764,13 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       setWireHover(node.id);
   }, []);
   const onNodeMouseLeave = useCallback(() => setWireHover(null), []);
+  const onNodeClick = useCallback((_: ReactMouseEvent, node: RfNode) => {
+    const card = parseSetupId(node.id);
+    if (!card) return;
+    const ui = useUiStore.getState();
+    ui.setSelection([], []);
+    ui.setRecipeSetup(card);
+  }, []);
 
   return (
     <div

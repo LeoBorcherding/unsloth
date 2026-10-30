@@ -22,6 +22,7 @@ export const CATEGORY_TONES: Record<string, string> = {
   world: "bg-green-50 text-green-700 border-green-100 dark:bg-green-950/30 dark:text-green-300 dark:border-green-900/60",
   chat: "bg-teal-50 text-teal-700 border-teal-100 dark:bg-teal-950/30 dark:text-teal-300 dark:border-teal-900/60",
   memory: "bg-teal-50 text-teal-700 border-teal-100 dark:bg-teal-950/30 dark:text-teal-300 dark:border-teal-900/60",
+  custom: "bg-stone-50 text-stone-700 border-stone-200 dark:bg-stone-900/40 dark:text-stone-300 dark:border-stone-800",
 };
 
 /** The same tile tone from a hex, for categories the table above does not know. */

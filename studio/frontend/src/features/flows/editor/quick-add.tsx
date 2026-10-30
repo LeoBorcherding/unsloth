@@ -19,9 +19,9 @@ import { compatibleSpecs } from "./connection-rules";
 import { nodeIcon } from "./icons";
 import { NodeIconTile } from "./node-card";
 import { addNodeConnected } from "./node-factory";
-import { REROUTE_TYPE, rerouteCanFeed, rerouteTakes } from "./reroutes";
 import { snapPoint } from "./placement";
 import { CATEGORY_TONES } from "./node-tones";
+import { REROUTE_TYPE, rerouteCanFeed, rerouteTakes } from "./reroutes";
 
 export function QuickAdd() {
   const quickAdd = useUiStore((s) => s.quickAdd);

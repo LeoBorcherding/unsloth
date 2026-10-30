@@ -3,6 +3,7 @@
 
 import { toast } from "sonner";
 import { defaultParams, getSpec } from "../stores/catalog-store";
+import { customNodeSeed } from "../stores/custom-nodes-store";
 import { frameAt, newId, useDocStore } from "../stores/doc-store";
 import {
   connectColumns,
@@ -43,7 +44,13 @@ export function createNode(
 ): FlowNode | null {
   const spec = getSpec(type);
   if (!spec) return null;
-  return { id: newId("n"), type, v: spec.v, params: defaultParams(spec), pos };
+  const params = defaultParams(spec);
+  if (spec.custom) {
+    const seed = customNodeSeed(type);
+    if (!seed) return null;
+    Object.assign(params, seed);
+  }
+  return { id: newId("n"), type, v: spec.v, params, pos };
 }
 
 export interface ConnectRequest {

@@ -57,7 +57,6 @@ export interface GraphFragment {
 export interface GraphPatch {
   nodes?: FlowNode[];
   groups?: FlowGroup[];
-  notes?: FlowNote[];
   addEdges?: FlowEdge[];
   removeEdges?: string[];
 }
@@ -95,8 +94,6 @@ export interface DocState {
     groups?: string[];
     notes?: string[];
     reroutes?: string[];
-    /** groups to rewrite in the same undo step (a recipe dropping a deleted note) */
-    updateGroups?: FlowGroup[];
   }) => void;
   connect: (edge: FlowEdge, replaceSingleInput: boolean) => void;
   /** Adds (or moves) a reroute and threads it into `splitId`, a plain edge or a wire segment. */
@@ -485,19 +482,7 @@ export const useDocStore = create<DocState>((set, get) => {
           edgeOrder: dropEdges.size
             ? s.graph.edgeOrder.filter((id) => !dropEdges.has(id))
             : s.graph.edgeOrder,
-          groups: Object.assign(
-            omit(
-              ids.updateGroups?.length
-                ? { ...s.graph.groups }
-                : s.graph.groups,
-              dropGroups,
-            ),
-            Object.fromEntries(
-              (ids.updateGroups ?? [])
-                .filter((g) => s.graph.groups[g.id] && !dropGroups.has(g.id))
-                .map((g) => [g.id, g]),
-            ),
-          ),
+          groups: omit(s.graph.groups, dropGroups),
           groupOrder: dropGroups.size
             ? s.graph.groupOrder.filter((id) => !dropGroups.has(id))
             : s.graph.groupOrder,
@@ -764,12 +749,6 @@ export const useDocStore = create<DocState>((set, get) => {
           if (!edges[edge.id]) edgeOrder = [...edgeOrder, edge.id];
           edges[edge.id] = edge;
         }
-        const notes = patch.notes?.length ? { ...s.graph.notes } : s.graph.notes;
-        let noteOrder = s.graph.noteOrder;
-        for (const note of patch.notes ?? []) {
-          if (!notes[note.id]) noteOrder = [...noteOrder, note.id];
-          notes[note.id] = note;
-        }
         return withGraph(s, {
           nodes,
           nodeOrder,
@@ -777,8 +756,6 @@ export const useDocStore = create<DocState>((set, get) => {
           groupOrder,
           edges,
           edgeOrder,
-          notes,
-          noteOrder,
         });
       }, coalesceKey),
 

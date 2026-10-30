@@ -10,6 +10,8 @@ internal API key (the same path the MCP server uses), so auth, account scoping a
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 from core.flows.specs import SPECS_BY_TYPE
@@ -78,6 +80,7 @@ class NodeContext(Protocol):
         seed: Optional[int] = None,
         stream_port: Optional[str] = "text",
         sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
         use_adapter: Optional[bool] = None,
     ) -> str: ...
 
@@ -95,6 +98,7 @@ class NodeContext(Protocol):
         on_text: Optional[Callable[[str], None]] = None,
         retry_bad_json: bool = True,
         sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
     ) -> Any:
         """Structured output (`response_format` json_schema); falls back to parsing the first JSON object in the text.
         With ``on_text`` the answer streams, and it gets the raw JSON written so far after every chunk."""
@@ -244,6 +248,23 @@ def handler(node_type: str) -> Callable[[Handler], Handler]:
         return fn
 
     return deco
+
+
+@dataclass(frozen = True)
+class CacheHook:
+    """For a node whose result lives outside the cache: `material` adds what the params and inputs
+    can't show (a dataset's content hash; None = don't cache this run), `valid` drops a hit whose
+    files are gone."""
+
+    material: Callable[[NodeContext], Awaitable[Any]]
+    valid: Callable[[NodeContext, dict], Awaitable[bool]]
+
+
+CACHE_HOOKS: dict[str, CacheHook] = {}
+
+
+def cache_hook(node_type: str, *, material: Callable, valid: Callable) -> None:
+    CACHE_HOOKS[node_type] = CacheHook(material, valid)
 
 
 def load_handlers() -> dict[str, Handler]:

@@ -2,12 +2,12 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { InternalNode } from "@xyflow/react";
-import { type DocGraph, useDocStore } from "../stores/doc-store";
 import {
   isSetupId,
   setupLayoutNodes,
   withLaidOutSetup,
 } from "../recipe/recipe-setup";
+import { type DocGraph, useDocStore } from "../stores/doc-store";
 import type { LayoutRequest, LayoutResult } from "./layout-core";
 import { REROUTE_SIZE } from "./reroutes";
 import { foldLayout } from "./super-cards";
@@ -89,14 +89,10 @@ export async function autoLayout(
     pending.set(id, { resolve, reject });
     getWorker().postMessage({ id, request: folded.request });
   });
-  const laidOut = folded.unfold(result);
-  useDocStore
-    .getState()
-    .moveNodes(
-      Object.fromEntries(
-        Object.entries(laidOut).filter(([key]) => !isSetupId(key)),
-      ),
-    );
-  const groups = withLaidOutSetup(useDocStore.getState().graph, laidOut);
+  const nodes = Object.fromEntries(
+    Object.entries(folded.unfold(result)).filter(([key]) => !isSetupId(key)),
+  );
+  useDocStore.getState().moveNodes(nodes);
+  const groups = withLaidOutSetup(useDocStore.getState().graph, result);
   if (groups.length) useDocStore.getState().patchGraph({ groups });
 }

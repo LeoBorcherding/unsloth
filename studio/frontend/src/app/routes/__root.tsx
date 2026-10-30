@@ -3,8 +3,10 @@
 
 import { ImageViewer } from "@/components/image-viewer";
 import { useAppShellReadySignal } from "@/components/app-readiness";
+import { LazyImportFailure } from "@/components/lazy-import-boundary";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandPalette } from "@/components/command-palette";
+import { SpookyDecorations } from "@/features/halloween/spooky-decorations";
 import { Navbar } from "@/components/navbar";
 import { SidebarEdgeTrigger } from "@/components/sidebar-edge-trigger";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -20,14 +22,15 @@ import {
   useIsAccountOwner,
 } from "@/features/auth";
 import {
-  ChatPage,
   type ChatSearch,
-  hydrateModelDisclaimerPreference,
+  loadChatPage,
+  loadedChatPage,
   openFolderAsProject,
   startLlamaCppAutoReload,
   StopRunningChatsDialog,
   useOpeningFolder,
   useChatRuntimeStore,
+  usePinnedChatsSync,
 } from "@/features/chat";
 import { useExportRuntimeLifecycle } from "@/features/export";
 import { FIND_SCOPE_ATTRIBUTE, FindInPage } from "@/features/find-in-page";
@@ -74,10 +77,12 @@ import {
 } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  type ComponentType,
   lazy,
 
   type ReactNode,
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -161,6 +166,64 @@ function RouteBoundary({
   );
 }
 
+type ChatPageProps = { search: ChatSearch; active: boolean };
+type ChatPageAttemptProps = ChatPageProps & { onRetry: () => void };
+
+function ChatPageLoadFailure({
+  active,
+  onRetry,
+}: {
+  active: boolean;
+  onRetry: () => void;
+}) {
+  const t = useT();
+  const signalReady = useAppShellReadySignal();
+  // The page it stands in for would have signalled; without this Desktop keeps its startup screen.
+  useLayoutEffect(() => {
+    signalReady();
+  }, [signalReady]);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      onRetry();
+    }
+    wasActive.current = active;
+  }, [active, onRetry]);
+  return (
+    <LazyImportFailure
+      message={t("settings.dialog.panelFailed")}
+      reloadLabel={t("settings.dialog.panelReload")}
+      testId="chat-page-load-failure"
+      className="flex h-full min-h-0 flex-1 flex-col items-center justify-center p-6 text-center text-muted-foreground"
+    />
+  );
+}
+
+// A failed import resolves to the failure panel (not a throw), so a crash inside the page still
+// reaches the route boundary; a new lazy() per attempt since lazy() caches its result.
+function chatPageAttempt(): ComponentType<ChatPageAttemptProps> {
+  return (
+    loadedChatPage() ??
+    lazy<ComponentType<ChatPageAttemptProps>>(() =>
+      loadChatPage().then(
+        (m) => ({ default: m.ChatPage }),
+        () => ({ default: ChatPageLoadFailure }),
+      ),
+    )
+  );
+}
+
+function ChatPage(props: ChatPageProps) {
+  // Kept until a failure: swapping component type would remount the page and drop its state.
+  const [Page, setPage] = useState(chatPageAttempt);
+  const retry = useCallback(() => setPage(() => chatPageAttempt()), []);
+  return (
+    <Suspense fallback={<RouteFallback />}>
+      <Page {...props} onRetry={retry} />
+    </Suspense>
+  );
+}
+
 // Mounted persistently below so an in-flight batch survives leaving the tab; lazy on first visit.
 const ImagesPage = lazy(() =>
   import("@/features/images").then((m) => ({ default: m.ImagesPage })),
@@ -209,12 +272,12 @@ function HubSourceNoticeMount() {
 
 // Models page and picker read chat settings too, so hydration cannot wait for ChatPage.
 function ChatSettingsHydrationMount() {
+  usePinnedChatsSync();
   const hydratePersistedSettings = useChatRuntimeStore(
     (state) => state.hydratePersistedSettings,
   );
   useEffect(() => {
     void hydratePersistedSettings();
-    hydrateModelDisclaimerPreference().catch(() => undefined);
   }, [hydratePersistedSettings]);
   return null;
 }
@@ -435,9 +498,10 @@ function RootLayout() {
   const playFlowId = FLOW_PLAY_ROUTE.exec(pathname)?.[1] ?? null;
   const isFlowPlayRoute = playFlowId !== null;
   const isFlowEditorRoute = !isFlowPlayRoute && pathname.startsWith("/flows/");
-  // These pages render their own full-height shell: no outer inset or scroll.
-  const isChatLike =
-    isChatRoute || isImagesRoute || isVideoRoute || isAudioRoute || isFlowPlayRoute || isFlowEditorRoute;
+  // All four pages render their own full-height shell: no outer inset or scroll.
+  const isChatLike = isChatRoute || isImagesRoute || isVideoRoute || isAudioRoute;
+  // The Flows editor and player are full-height shells too.
+  const isFullHeightShell = isChatLike || isFlowPlayRoute || isFlowEditorRoute;
   // Uses Navbar's hook, not the md breakpoint: a narrowed desktop window keeps the desktop navbar.
   const nonChatTopInset = useIsMobileShell()
     ? "pt-14"
@@ -468,14 +532,17 @@ function RootLayout() {
       : DEFAULT_DOCUMENT_TITLE;
   }, [documentTitle]);
 
+  // Desktop mounts this root before the port exists; authFetch retries keep the URL it started with.
+  const desktopShellReady = useDesktopShellReady();
+
   // Settings predating the server override map live only locally; backfill once after auth.
   useEffect(() => {
-    if (isAuthFlowRoute) {
+    if (isAuthFlowRoute || !desktopShellReady) {
       return;
     }
     void backfillModelOverrides();
     void hydratePins();
-  }, [isAuthFlowRoute]);
+  }, [isAuthFlowRoute, desktopShellReady]);
 
   useEffect(() => {
     if (isAuthFlowRoute) {
@@ -535,7 +602,6 @@ function RootLayout() {
   const pathLeasesSupported = useNativePathLeasesSupported();
   const ragUnavailable = useRagAvailabilityStore((s) => s.isUnavailable());
   const openingFolder = useOpeningFolder();
-  const desktopShellReady = useDesktopShellReady();
   // Menu items for web shortcuts are live exactly while a mounted handler would take them.
   const sidebarMounted = useShortcutAvailable("toggleSidebar", hasAppMenus);
   const findMounted = useShortcutAvailable("findInPage", hasAppMenus);
@@ -669,6 +735,7 @@ function RootLayout() {
       <StopRunningChatsDialog />
       <ImageViewer />
       {!hideNavbar && <CommandPalette />}
+      {!hideNavbar && <SpookyDecorations />}
       {hideNavbar ? (
         <main className="flex-1 pt-[var(--studio-hidden-route-top-inset,0px)] [--studio-titlebar-height:var(--studio-hidden-route-top-inset,0px)]">
           <RouteBoundary readyWhenCommitted={!routeOwnsReloadReadiness}>
@@ -686,7 +753,7 @@ function RootLayout() {
           <SidebarEdgeTrigger />
           <SidebarInset
             className={
-              isChatLike
+              isFullHeightShell
                 ? "overflow-hidden"
                 :
                   isLibraryRoute
@@ -697,7 +764,7 @@ function RootLayout() {
             <Navbar />
             <div
               {...{ [FIND_SCOPE_ATTRIBUTE]: "" }}
-              className={`relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col ${isChatLike ? "overflow-hidden" : "overflow-visible"} ${isChatLike ? "" : nonChatTopInset}`}
+              className={`relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col ${isFullHeightShell ? "overflow-hidden" : "overflow-visible"} ${isFullHeightShell ? "" : nonChatTopInset}`}
             >
               {/* The find bar floats over this region and searches it: the workspace on screen,
                   without the sidebar, the navbar, or the off-route workspaces parked here under

@@ -37,6 +37,14 @@ class _Ctx:
         self.hooks = []
         self.seed = 7
         self.caller = None
+        self.refuse: dict[str, str] = {}
+
+    def capability_refusal(
+        self,
+        cap,
+        detail = None,
+    ):
+        return self.refuse.get(cap)
 
     async def call(
         self,
@@ -65,9 +73,6 @@ class _Ctx:
         pass
 
     def log(self, *a, **k):
-        pass
-
-    async def ensure_model(self, *a, **k):
         pass
 
     def check_cancelled(self):

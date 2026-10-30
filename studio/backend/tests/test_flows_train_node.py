@@ -268,6 +268,15 @@ def test_reward_history_reads_the_status_rl_log():
     assert training.reward_history({}) == [] and training.reward_metrics([], 2.5) == {}
 
 
+def test_a_long_reward_log_is_a_trailing_mean_so_start_and_end_are_not_one_noisy_step():
+    # 0, 2.5, 0, 2.5 ... for 100 steps then a steady 2.5: one step alone says 0 or 2.5.
+    raw = [2.5 * (i % 2) for i in range(100)] + [2.5] * 100
+    payload = {"metric_history": {"rl": [{"step": i + 1, "reward": r} for i, r in enumerate(raw)]}}
+    history = training.reward_history(payload)
+    assert history[0] == 1.25 and history[-1] == 2.5
+    assert len(history) == training.HISTORY_POINTS and max(history) <= 2.5
+
+
 def test_one_column_for_both_roles_is_refused():
     ctx = _Ctx(_recipe_routes([]), prompt_column = "q", response_column = "q")
     with pytest.raises(FlowNodeError, match = "different columns"):
@@ -580,6 +589,11 @@ def test_hub_eval_split_survives_the_hold_out(monkeypatch):
         return ROWS if dataset.get("split") == "train" else ROWS[:5]
 
     monkeypatch.setattr(training, "_load_rows", load_rows)
+    monkeypatch.setattr(
+        training,
+        "_eval_rows",
+        lambda dataset, token, split: load_rows({**dataset, "split": split}, token, None),
+    )
     started = []
     ctx = _Ctx(_recipe_routes(started), holdout_percent = 10, eval_split = "test", eval_steps = 0.1)
     ctx.inputs = {
@@ -709,3 +723,108 @@ def test_chat_with_checkpoint_turns_the_adapter_back_on_after_a_benchmark(monkey
     asyncio.run(benchmark_judge())
     assert server["use_adapter"] is False
     assert asyncio.run(training.chat_checkpoint(ctx)) == {"text": "SELECT 1;"}
+
+
+def test_chat_with_checkpoint_asks_with_the_trained_system_prompt(monkeypatch):
+    from types import SimpleNamespace
+
+    from studio_mcp import loading, trained_models
+
+    async def noop(*a, **k):
+        return None
+
+    async def resolve_by(*a, **k):
+        return SimpleNamespace(ref = "/out/run-1", is_lora = True)
+
+    monkeypatch.setattr(loading, "load_llm", noop)
+    monkeypatch.setattr(trained_models, "resolve_by", resolve_by)
+    asked = []
+
+    def chat(**params):
+        ctx = _Ctx(lambda m, p, q, b: {})
+        ctx.inputs = {
+            "checkpoint": {
+                "kind": "checkpoint",
+                "name": "run-1",
+                "system_prompt": "Answer in SQL.",
+            },
+            "prompt": "list users",
+        }
+        ctx.params = {"max_tokens": 8, **params}
+        ctx.resident, ctx.set_status = {}, lambda *a, **k: None
+
+        async def llm_text(**k):
+            asked.append(k["system"])
+            return "ok"
+
+        ctx.llm_text = llm_text
+        asyncio.run(training.chat_checkpoint(ctx))
+
+    chat()
+    chat(system_prompt = "Be brief.")
+    assert asked == ["Answer in SQL.", "Be brief."]
+
+
+def test_the_checkpoint_carries_the_one_system_prompt_training_used():
+    grpo = {"objective": "grpo", "rl_system_prompt": "Use <answer> tags."}
+    assert training.trained_system_prompt(grpo) == "Use <answer> tags."
+    sft = {
+        "custom_format_mapping": {
+            "q": "user",
+            "a": "assistant",
+            "__system_prompt": " Answer in SQL. ",
+        }
+    }
+    assert training.trained_system_prompt(sft) == "Answer in SQL."
+    assert (
+        training.trained_system_prompt({"custom_format_mapping": {"s": "system", "q": "user"}})
+        == ""
+    )
+
+
+def test_the_evaluation_split_is_not_held_to_the_hold_out_cap(monkeypatch):
+    import datasets
+
+    big = datasets.Dataset.from_dict({"q": list(range(training.HOLDOUT_MAX_ROWS + 5))})
+    monkeypatch.setattr(
+        datasets,
+        "load_dataset",
+        lambda *a, split = None, **k: big if split == "test" else pytest.fail(split),
+    )
+    rows = training._eval_rows({"ref": "org/data"}, None, "test")
+    assert len(rows) == training.HOLDOUT_MAX_ROWS + 5
+
+
+def test_local_holdout_streams_only_the_slice_and_checks_the_cap_first(tmp_path, monkeypatch):
+    import datasets
+
+    from core.flows.nodes import data
+
+    csv = tmp_path / "rows.csv"
+    csv.write_text("q,a\n" + "".join(f"q{i},a{i}\n" for i in range(20)))
+    folder = tmp_path / "recipe"
+    folder.mkdir()
+    datasets.Dataset.from_dict({"q": [f"q{i}" for i in range(20)]}).to_parquet(
+        str(folder / "a.parquet")
+    )
+    real = datasets.load_dataset
+
+    def streamed_only(
+        *a,
+        streaming = False,
+        **k,
+    ):
+        assert streaming, "a whole local file loaded"
+        return real(*a, streaming = True, **k)
+
+    monkeypatch.setattr(datasets, "load_dataset", streamed_only)
+    monkeypatch.setattr(training, "HOLDOUT_MAX_ROWS", 5)
+    monkeypatch.setattr(data, "local_seed_path", lambda ref: ref)
+    for path in (str(csv), f"{folder}/*.parquet"):
+        local = {"source": "local", "ref": path}
+        assert [r["q"] for r in training._load_rows(local, None, 9, 7)] == ["q7", "q8", "q9"]
+        with pytest.raises(FlowNodeError, match = "More than 5"):
+            training._load_rows(local, None, None)
+        with pytest.raises(FlowNodeError, match = "10 rows"):
+            training._load_rows(local, None, 9)
+        assert len(training._load_rows(local, None, None, 16)) == 4

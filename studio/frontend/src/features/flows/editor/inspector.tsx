@@ -293,61 +293,61 @@ function InspectorImpl() {
           </section>
         )}
         {!isColumn && (
-          <section className="flex flex-col gap-4 px-4 py-3">
-            {spec.params.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                This node has no settings.
-              </p>
-            )}
-            {spec.params
-              .filter(
-                (param) =>
-                  !param.advanced &&
-                  paramVisible(param, node.params, spec.params),
-              )
-              .map((param) => (
-                <ParamRow
-                  key={param.id}
-                  param={param}
-                  bound={param.bindable === true && boundParams.has(param.id)}
-                  value={node.params[param.id]}
-                  onChange={(value) => setParam(param.id, value)}
+        <section className="flex flex-col gap-4 px-4 py-3">
+          {spec.params.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              This node has no settings.
+            </p>
+          )}
+          {spec.params
+            .filter(
+              (param) =>
+                !param.advanced &&
+                paramVisible(param, node.params, spec.params),
+            )
+            .map((param) => (
+              <ParamRow
+                key={param.id}
+                param={param}
+                bound={param.bindable === true && boundParams.has(param.id)}
+                value={node.params[param.id]}
+                onChange={(value) => setParam(param.id, value)}
+              />
+            ))}
+          {spec.params.some((param) => param.advanced) && (
+            <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <CollapsibleTrigger asChild={true}>
+                <CollapsibleSectionTriggerButton
+                  label="Advanced"
+                  open={advancedOpen}
                 />
-              ))}
-            {spec.params.some((param) => param.advanced) && (
-              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                <CollapsibleTrigger asChild={true}>
-                  <CollapsibleSectionTriggerButton
-                    label="Advanced"
-                    open={advancedOpen}
-                  />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="mt-3 flex flex-col gap-4">
-                  {spec.params
-                    .filter(
-                      (param) =>
-                        param.advanced &&
-                        paramVisible(param, node.params, spec.params),
-                    )
-                    .map((param, i, shown) => (
-                      <Fragment key={param.id}>
-                        {param.group && param.group !== shown[i - 1]?.group && (
-                          <p className="border-border/60 border-t pt-3 text-xs font-medium text-foreground first:border-t-0 first:pt-0">
-                            {param.group}
-                          </p>
-                        )}
-                        <ParamRow
-                          param={param}
-                          bound={param.bindable === true && boundParams.has(param.id)}
-                          value={node.params[param.id]}
-                          onChange={(value) => setParam(param.id, value)}
-                        />
-                      </Fragment>
-                    ))}
-                </CollapsibleContent>
-              </Collapsible>
-            )}
-          </section>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-3 flex flex-col gap-4">
+                {spec.params
+                  .filter(
+                    (param) =>
+                      param.advanced &&
+                      paramVisible(param, node.params, spec.params),
+                  )
+                  .map((param, i, shown) => (
+                    <Fragment key={param.id}>
+                      {param.group && param.group !== shown[i - 1]?.group && (
+                        <p className="border-border/60 border-t pt-3 text-xs font-medium text-foreground first:border-t-0 first:pt-0">
+                          {param.group}
+                        </p>
+                      )}
+                      <ParamRow
+                        param={param}
+                        bound={param.bindable === true && boundParams.has(param.id)}
+                        value={node.params[param.id]}
+                        onChange={(value) => setParam(param.id, value)}
+                      />
+                    </Fragment>
+                  ))}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+        </section>
         )}
         {node.type === GENERATE_TYPE && <RecipePanel node={node} />}
         {spec.type === "train.finetune" &&

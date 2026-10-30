@@ -111,7 +111,7 @@ const TimelineRow = memo(function TimelineRow({
   recipeGroup?: string;
 }) {
   return (
-    <li className="flex items-center hover:bg-muted/35">
+    <li className="flex items-center hover:bg-muted/40">
       <button
         type="button"
         onClick={() => {
@@ -119,7 +119,7 @@ const TimelineRow = memo(function TimelineRow({
           useUiStore.getState().openInspector(id);
           void fitView({ nodes: [{ id }], duration: 300, maxZoom: 1.2 });
         }}
-        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-1.5 text-left text-xs transition"
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-1.5 text-left text-xs transition hover:bg-muted/35"
       >
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${
