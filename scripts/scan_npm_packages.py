@@ -36,6 +36,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # ─────────────────────────────────────────────────────────────────────
 HARD_MAX_TARBALL_BYTES = 256 * 1024 * 1024  # 256 MiB compressed
 HARD_MAX_TEXT_FILE_BYTES = 16 * 1024 * 1024  # 16 MiB per text file
+# Pinned (name, version, member) data files over the text cap, skipped unread: no code imports them.
+OVERSIZE_DATA_MEMBERS = frozenset(
+    {
+        # TypeDoc API dump (47 MB); Flows imports phaser's dist build, never this.
+        ("phaser", "3.90.0", "package/types/phaser.json"),
+    }
+)
 HARD_MAX_BINARY_FILE_BYTES = 256 * 1024 * 1024  # 256 MiB per .node etc
 HARD_MAX_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB cumulative
 HARD_MAX_MEMBERS = 50_000  # entries per tarball
@@ -690,6 +697,7 @@ def safe_extract(
     *,
     max_total_bytes: int = HARD_MAX_TOTAL_BYTES,
     max_members: int = HARD_MAX_MEMBERS,
+    skip_members: frozenset[str] = frozenset(),
 ) -> str | None:
     """Extract tarball_path under extract_root with policed members, returning None on success or a string describing the refusal. Streams via `r|gz` so we can abort mid-extraction without having materialised the rest of the archive."""
     extract_root.mkdir(parents = True, exist_ok = True)
@@ -728,6 +736,8 @@ def safe_extract(
                     continue
                 if not member.isfile():
                     return f"refused unknown member type for {name!r}"
+                if name in skip_members:
+                    continue
                 dest.parent.mkdir(parents = True, exist_ok = True)
                 src = tf.extractfile(member)
                 if src is None:
@@ -1549,7 +1559,10 @@ def scan_one(pkg: PackageEntry, workspace: Path) -> tuple[list[Finding], str | N
         _, err = download_tarball(pkg, tarball)
         if err:
             return [], err
-        err = safe_extract(tarball, extract)
+        skip = frozenset(
+            m for n, v, m in OVERSIZE_DATA_MEMBERS if n == pkg.name and v == pkg.version
+        )
+        err = safe_extract(tarball, extract, skip_members = skip)
         if err:
             return [], err
         return scan_extracted_tree(pkg, extract), None

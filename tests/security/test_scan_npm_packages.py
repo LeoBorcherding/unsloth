@@ -849,3 +849,34 @@ def test_scan_one_keeps_its_cleanup_inside_the_workspace(tmp_path, monkeypatch, 
     assert (findings, err) == ([], "integrity missing")
     assert (victim / "keep.txt").read_text() == "keep"
     assert list(workspace.iterdir()) == []
+
+
+def _tgz(tmp_path: Path, members: dict[str, bytes]) -> Path:
+    path = tmp_path / "pkg.tgz"
+    with tarfile.open(path, "w:gz") as tf:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    return path
+
+
+def test_a_pinned_oversize_data_member_is_skipped_and_nothing_else(tmp_path, monkeypatch):
+    monkeypatch.setattr(snp, "HARD_MAX_TEXT_FILE_BYTES", 64)
+    tgz = _tgz(tmp_path, {"package/index.js": b"x", "package/types/big.json": b"{" * 200})
+
+    err = snp.safe_extract(
+        tgz, tmp_path / "skipped", skip_members = frozenset({"package/types/big.json"})
+    )
+    assert err is None
+    assert (tmp_path / "skipped/package/index.js").exists()
+    assert not (tmp_path / "skipped/package/types/big.json").exists()
+
+    assert "declared size" in (snp.safe_extract(tgz, tmp_path / "strict") or "")
+
+
+def test_oversize_data_members_are_pinned_to_a_version():
+    assert all(
+        name and version and member.startswith("package/")
+        for name, version, member in snp.OVERSIZE_DATA_MEMBERS
+    )

@@ -30,7 +30,12 @@ def _flow_edge(src: str, dst: str) -> dict:
     }
 
 
-def _doc(flow_id: str, name: str, nodes: list[dict], edges: list[dict] = ()) -> dict:
+def _doc(
+    flow_id: str,
+    name: str,
+    nodes: list[dict],
+    edges: list[dict] = (),
+) -> dict:
     return {
         "format": "unsloth-flow",
         "version": 1,
