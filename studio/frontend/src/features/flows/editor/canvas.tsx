@@ -12,10 +12,12 @@ import {
   type FinalConnectionState,
   type NodeChange,
   type OnConnectStartParams,
+  type ReactFlowState,
   ReactFlow,
   SelectionMode,
   useReactFlow,
   useUpdateNodeInternals,
+  useStoreApi,
 } from "@xyflow/react";
 import {
   type DragEvent,
@@ -63,9 +65,13 @@ import {
   useSuperCardView,
 } from "./super-card-node";
 import {
-  SUPER_PREFIX,
+  isApplePlatform,
   multiSelectKeys,
+  SUPER_PREFIX,
+  type SuperCardData,
+  boxCovers,
   superCardDragMembers,
+  toggledSelection,
 } from "./super-cards";
 import { FlowEdgeView } from "./flow-edge";
 import { FlowNodeView } from "./flow-node";
@@ -116,10 +122,24 @@ const DOT_SIZE = 1.2;
 const VISIBLE_ONLY_THRESHOLD = 300;
 const PRO_OPTIONS = { hideAttribution: true };
 const DELETE_KEYS = ["Delete", "Backspace"];
-const MULTI_SELECT_KEYS = multiSelectKeys(
-  typeof navigator === "undefined" ? "" : navigator.platform,
-);
+const PLATFORM = typeof navigator === "undefined" ? "" : navigator.platform;
+const MULTI_SELECT_KEYS = multiSelectKeys(PLATFORM);
+const APPLE = isApplePlatform(PLATFORM);
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1, minZoom: FIT_MIN_ZOOM };
+
+/** A selection box drawn inside a group touches it; only a box around the whole group takes it. */
+function boxSkips(state: ReactFlowState<RfNode, RfEdge>, id: string): boolean {
+  if (!id.startsWith(GROUP_PREFIX)) return false;
+  const { userSelectionActive, userSelectionRect, transform, nodeLookup } =
+    state;
+  const node = nodeLookup.get(id);
+  if (!userSelectionActive || !userSelectionRect || !node) return false;
+  return !boxCovers(userSelectionRect, transform, {
+    ...node.internals.positionAbsolute,
+    width: node.measured.width ?? 0,
+    height: node.measured.height ?? 0,
+  });
+}
 
 type Size = { width: number; height: number };
 type Positions = Record<string, { x: number; y: number }>;
@@ -222,6 +242,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     );
     return first ? `${s.flowId}:${first}` : null;
   });
+  const store = useStoreApi<RfNode, RfEdge>();
 
   const deriver = useRef<RfDeriver | null>(null);
   deriver.current ??= new RfDeriver();
@@ -405,6 +426,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
             });
           }
         } else if (change.type === "select") {
+          if (change.selected && boxSkips(store.getState(), change.id))
+            continue;
           selection ??= { add: new Set(), remove: new Set() };
           (change.selected ? selection.add : selection.remove).add(change.id);
         }
@@ -660,18 +683,24 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         reroutes: [] as string[],
       };
       const graph = useDocStore.getState().graph;
-      for (const node of rfNodes) {
-        if (node.type === "flowReroute") ids.reroutes.push(node.id);
-        else if (node.id.startsWith(GROUP_PREFIX)) {
-          const groupId = node.id.slice(GROUP_PREFIX.length);
+      // A closed super card goes with its blocks and everything folded into it.
+      const removed = rfNodes.flatMap((node) => {
+        if (!node.id.startsWith(SUPER_PREFIX)) return [node.id];
+        const data = node.data as unknown as SuperCardData;
+        return [...data.memberIds, ...data.folded.map((f) => f.id)];
+      });
+      for (const id of removed) {
+        if (graph.reroutes[id]) ids.reroutes.push(id);
+        else if (id.startsWith(GROUP_PREFIX)) {
+          const groupId = id.slice(GROUP_PREFIX.length);
           ids.groups.push(groupId);
           // A recipe's columns mean nothing outside it: they go with the frame.
           if (graph.groups[groupId]?.kind === "recipe")
-            for (const id of graph.nodeOrder)
-              if (graph.nodes[id].group === groupId) ids.nodes.push(id);
-        } else if (node.id.startsWith(NOTE_PREFIX))
-          ids.notes.push(node.id.slice(NOTE_PREFIX.length));
-        else ids.nodes.push(node.id);
+            for (const nodeId of graph.nodeOrder)
+              if (graph.nodes[nodeId].group === groupId) ids.nodes.push(nodeId);
+        } else if (id.startsWith(NOTE_PREFIX))
+          ids.notes.push(id.slice(NOTE_PREFIX.length));
+        else ids.nodes.push(id);
       }
       useDocStore.getState().removeElements(ids);
       useUiStore.getState().setSelection([], []);
@@ -827,6 +856,13 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
         connectionMode={ConnectionMode.Strict}
         deleteKeyCode={readOnly ? null : DELETE_KEYS}
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
+        selectionKeyCode={MULTI_SELECT_KEYS}
+        onNodeContextMenu={(event, node) => {
+          if (!APPLE || !event.ctrlKey) return;
+          event.preventDefault();
+          const ui = useUiStore.getState();
+          ui.setSelection(toggledSelection(ui.selectedNodes, node.id), ui.selectedEdges);
+        }}
         selectionMode={SelectionMode.Partial}
         selectionOnDrag={false}
         panOnDrag={true}
