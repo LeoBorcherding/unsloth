@@ -92,3 +92,30 @@ def test_video_only_turn_resolves_reasoning_markers():
     body = inspect.getsource(inference_module.InferenceBackend._generate_vision_response)
     call = body.index("detect_reasoning_channel_markers(processor")
     assert "if attached or videos" in body[call : call + 400]
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_video_url_part_reaches_the_processor_as_one_video_part(structured):
+    """The route drops OpenAI video_url parts (the clip travels as `videos`), so the backend adds the marker part."""
+    from core.inference.chat_template_helpers import messages_with_attached_image
+    from models.inference import ChatCompletionRequest
+    from routes.inference import _extract_content_parts
+
+    request = ChatCompletionRequest(
+        model = "m",
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAAA"}},
+                    {"type": "text", "text": "What happens in this video?"},
+                ],
+            }
+        ],
+    )
+    _, messages, _ = _extract_content_parts(request.messages, structured = structured)
+    rendered = messages_with_attached_image(
+        messages, fallback_user_text = "x", structured_content = True, image = 0, video = 1
+    )
+    types = [part["type"] for part in rendered[-1]["content"]]
+    assert types.count("video") == 1 and "video_url" not in types, types
