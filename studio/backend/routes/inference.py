@@ -17349,6 +17349,129 @@ async def _run_tracked_load_model_impl(
             _finish_load_attempt(attempt)
 
 
+async def _fill_saved_load_settings(request: LoadRequest, named: str) -> None:
+    """The model's saved Run settings, as /models/load applies them, for fields the caller left out."""
+    from utils.openai_auto_switch_settings import (
+        model_override_load_kwargs,
+        resolve_override_for_load,
+        stored_gpu_index_kind,
+    )
+
+    alias = named if named != request.model_path else None
+    _, override = resolve_override_for_load(request.model_path, alias, request.gguf_variant)
+    if not override:
+        return
+    is_gguf = await _explicit_load_is_gguf(request, alias or request.model_path)
+    kwargs = model_override_load_kwargs(override, is_gguf = is_gguf)
+    sent = set(request.model_fields_set)
+    # Halves of one choice: a caller sending either keeps the saved other half out.
+    for group in (
+        ("gpu_ids", "tensor_split"),
+        (
+            "engine",
+            "engine_parallelism",
+            "engine_precision",
+            "engine_kv_cache_dtype",
+            "engine_seed",
+            "engine_gpu_memory_utilization",
+        ),
+    ):
+        if sent.intersection(group):
+            for key in group:
+                kwargs.pop(key, None)
+    # A saved vLLM/SGLang engine implies load_in_4bit=False; it goes with the engine the caller replaced.
+    if (
+        "engine" not in kwargs
+        and override.get("engine") in ("vllm", "sglang")
+        and override.get("load_in_4bit") is not False
+    ):
+        kwargs.pop("load_in_4bit", None)
+    if kwargs.get("gpu_ids") and not await _override_gpu_ids_still_resolve(
+        kwargs["gpu_ids"], stored_gpu_index_kind(override)
+    ):
+        kwargs.pop("gpu_ids", None)
+        kwargs.pop("tensor_split", None)
+    extras = kwargs.pop("llama_extra_args", None)
+    for key, value in kwargs.items():
+        if key not in sent:
+            setattr(request, key, value)
+    # A saved [] is a clear, not a gap: it stops the load inheriting the last same-model flags.
+    if extras is not None and "llama_extra_args" not in sent:
+        request.llama_extra_args = _strip_preset_extras(request, extras)
+
+
+async def _explicit_load_is_gguf(request: LoadRequest, loader_id: str) -> bool:
+    if request.gguf_variant:
+        return True
+    from core.inference.local_model_resolver import local_target_format
+
+    known = await asyncio.to_thread(local_target_format, request.model_path, loader_id)
+    if known is not None:
+        return known
+    # Not downloaded yet: an unknown id would read as GGUF, so ask the Hub what the load will fetch.
+    try:
+        listed = await asyncio.to_thread(_hub_lists_gguf, request.model_path, request.hf_token)
+    except Exception:
+        listed = None
+    return True if listed is None else listed
+
+
+def _hub_lists_gguf(repo_id: str, hf_token: Optional[str]) -> Optional[bool]:
+    """None when the listing could not be read: a failed lookup is not 'no GGUF files'."""
+    from core.inference.llama_cpp import _hf_offline_if_unreachable_for
+    from utils.models import model_config
+
+    failures: list[Exception] = []
+    token = model_config._gguf_remote_detect_failure.set(failures)
+    try:
+        # Same guard as the load: a dead link reads offline instead of sitting through the retries.
+        with _hf_offline_if_unreachable_for(repo_id):
+            found = model_config.detect_gguf_model_remote(repo_id, hf_token)
+            offline = model_config._env_offline()
+    finally:
+        model_config._gguf_remote_detect_failure.reset(token)
+    if found:
+        return True
+    if not (failures or offline):
+        return False
+    # Unread listing: a cached snapshot with no GGUF in it (the lookup already searched the cache) is safetensors.
+    try:
+        cached = next(iter(model_config._iter_hf_cache_snapshots(repo_id)), None)
+    except Exception:
+        cached = None
+    return False if cached is not None else None
+
+
+def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:
+    """Preset extras are appended last, so drop flags a set field emits itself, as the inherited path does."""
+    from core.inference.llama_server_args import (
+        matches_explicit_ctx_override,
+        strip_shadowing_flags,
+    )
+
+    fields_set = request.model_fields_set
+    return strip_shadowing_flags(
+        extras,
+        strip_context = "max_seq_length" in fields_set
+        and not matches_explicit_ctx_override(extras, request.max_seq_length),
+        strip_cache = "cache_type_kv" in fields_set,
+        strip_spec = "speculative_type" in fields_set or "spec_draft_n_max" in fields_set,
+        strip_template = "chat_template_override" in fields_set,
+        strip_split_mode = _should_strip_split_mode(request, extras),
+        strip_tensor_split = _should_strip_tensor_split(request),
+        strip_offload = request.gpu_memory_mode == "manual",
+        strip_reasoning_budget = "reasoning_budget" in fields_set,
+        strip_reasoning_budget_message = "reasoning_budget_message" in fields_set,
+        strip_batch = "n_batch" in fields_set,
+        strip_ubatch = "n_ubatch" in fields_set,
+        strip_ctx_checkpoints = "ctx_checkpoints" in fields_set,
+        strip_cache_ram = "cache_ram" in fields_set,
+        strip_spec_draft_cache = "spec_draft_cache_type" in fields_set,
+        strip_load_mode = "load_mode" in fields_set,
+        strip_load_mode_aliases = "load_mode" in fields_set,
+    )
+
+
 @router.post("/load", response_model = LoadResponse)
 @account_access.gpu_busy_route
 async def load_model(
@@ -17369,10 +17492,15 @@ async def load_model(
     if _resolve_trained_run_request(request):
         # keeps the job's name as the served id, so chat and /v1/models answer to it
         request._advertised_id = request._advertised_id or named
-    return await _tunnel_safe_json(
-        load_model_gated(request, fastapi_request, current_subject, user_initiated = True),
-        label = "Model load",
-    )
+    from utils.models.model_config import shared_hub_model_info
+
+    # One scope, so the load's own Hub listing reuses the one the saved-settings fill read.
+    with shared_hub_model_info():
+        await _fill_saved_load_settings(request, named)
+        return await _tunnel_safe_json(
+            load_model_gated(request, fastapi_request, current_subject, user_initiated = True),
+            label = "Model load",
+        )
 
 
 def _repo_is_in_the_hub_cache(model_ref) -> Optional[bool]:

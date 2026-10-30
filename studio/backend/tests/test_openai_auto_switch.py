@@ -1487,6 +1487,166 @@ def test_model_override_roundtrip(monkeypatch):
     assert settings.get_model_overrides() == {}
 
 
+_QWEN_SMALL = "unsloth/Qwen3-1.7B-GGUF"
+
+
+def _explicit_load(monkeypatch, body):
+    """What the /load route (also mounted as /v1/load) hands the gated load for ``body``."""
+    seen = []
+
+    async def _gated(request, *args, **kwargs):
+        seen.append(request)
+        return {"status": "loaded"}
+
+    async def _passthrough(coro, *, label):
+        return await coro
+
+    monkeypatch.setattr(inference_route, "load_model_gated", _gated)
+    monkeypatch.setattr(inference_route, "_tunnel_safe_json", _passthrough)
+    asyncio.run(inference_route.load_model(LoadRequest.model_validate(body), object(), "tester"))
+    return seen[0]
+
+
+def test_explicit_load_uses_the_saved_preset_for_fields_left_out(monkeypatch):
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", custom_context_length = 8192, n_parallel = 2)
+    request = _explicit_load(monkeypatch, {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"})
+    assert request.max_seq_length == 8192
+    assert request.n_parallel == 2
+
+
+def test_explicit_load_fields_the_caller_sent_beat_the_saved_preset(monkeypatch):
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", custom_context_length = 8192, n_parallel = 2)
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    # 0 is Auto, a choice, not an absent field.
+    assert _explicit_load(monkeypatch, {**body, "max_seq_length": 0}).max_seq_length == 0
+    request = _explicit_load(monkeypatch, {**body, "max_seq_length": 4096, "n_parallel": 1})
+    assert (request.max_seq_length, request.n_parallel) == (4096, 1)
+
+
+def test_explicit_load_brings_the_saved_extra_args_on_a_fresh_load(monkeypatch):
+    # A fresh process has no backend args to inherit, so only the preset can supply them.
+    _mock_override_store(monkeypatch)
+    _put(f"{_QWEN_SMALL}:UD-Q4_K_XL", llama_extra_args = ["--no-mmap"])
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    assert _explicit_load(monkeypatch, body).llama_extra_args == ["--no-mmap"]
+    assert _explicit_load(monkeypatch, {**body, "llama_extra_args": []}).llama_extra_args == []
+
+
+def test_explicit_load_drops_preset_flags_that_shadow_sent_fields(monkeypatch):
+    # Extras go on the command line last, so a preset -c would beat the caller's Auto.
+    _mock_override_store(monkeypatch)
+    _put(
+        f"{_QWEN_SMALL}:UD-Q4_K_XL",
+        custom_context_length = 8192,
+        llama_extra_args = ["--ctx-size", "8192", "--no-mmap"],
+    )
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    auto = _explicit_load(monkeypatch, {**body, "max_seq_length": 0})
+    assert (auto.max_seq_length, auto.llama_extra_args) == (0, ["--no-mmap"])
+    saved = _explicit_load(monkeypatch, body)
+    assert saved.max_seq_length == 8192
+    assert "--no-mmap" in saved.llama_extra_args
+
+
+def test_explicit_load_keeps_a_saved_empty_extra_args_clear(monkeypatch):
+    # A quant-level [] clear (kept by the store) must not fall back to inherited flags.
+    monkeypatch.setattr(
+        settings,
+        "resolve_override_for_load",
+        lambda *args, **kwargs: (f"{_QWEN_SMALL}:UD-Q4_K_XL", {"llama_extra_args": []}),
+    )
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    assert _explicit_load(monkeypatch, body).llama_extra_args == []
+
+
+def test_explicit_load_drops_the_engine_implied_4bit_with_the_engine(monkeypatch):
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "local_target_format", lambda *args, **kwargs: False)
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    body = {"model_path": "unsloth/Qwen3-1.7B"}
+    saved = _explicit_load(monkeypatch, body)
+    assert (saved.engine, saved.load_in_4bit) == ("vllm", False)
+    auto = _explicit_load(monkeypatch, {**body, "engine": "auto"})
+    assert auto.engine == "auto"
+    assert "load_in_4bit" not in auto.model_fields_set
+
+
+def test_explicit_load_asks_the_hub_for_a_saved_repo_not_downloaded_yet(monkeypatch):
+    # An unindexed id reads as GGUF locally, which would drop a saved safetensors engine.
+    from utils.models import model_config
+
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "_snapshot", lambda: (0.0, {}))
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    asked = []
+
+    def _remote(repo_id, hf_token = None):
+        asked.append(repo_id)
+        return None
+
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _remote)
+    saved = _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"})
+    assert asked == ["unsloth/Qwen3-1.7B"]
+    assert (saved.engine, saved.load_in_4bit) == ("vllm", False)
+    monkeypatch.setattr(
+        model_config, "detect_gguf_model_remote", lambda *a, **k: "Qwen3-1.7B-Q4_K_M.gguf"
+    )
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
+
+    def _unreachable(repo_id, hf_token = None):
+        model_config._note_gguf_remote_detect_failure(TimeoutError("hub"))
+        return None
+
+    # A listing that failed says nothing about the format, so the old GGUF reading stands.
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _unreachable)
+    monkeypatch.setattr(model_config, "_iter_hf_cache_snapshots", lambda *a, **k: iter(()))
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
+    # ...unless the repo is in the HF cache with no GGUF in it: cached safetensors, offline.
+    monkeypatch.setattr(
+        model_config, "_iter_hf_cache_snapshots", lambda *a, **k: iter([Path("/hf/snap")])
+    )
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine == "vllm"
+
+
+def test_explicit_load_shares_the_fill_hub_listing_with_the_load(monkeypatch):
+    from utils.models import model_config
+
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "_snapshot", lambda: (0.0, {}))
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    scopes = []
+
+    def _remote(repo_id, hf_token = None):
+        scopes.append(model_config._hub_model_info_scope.get())
+        return None
+
+    async def _gated(request, *args, **kwargs):
+        with model_config.shared_hub_model_info():
+            scopes.append(model_config._hub_model_info_scope.get())
+        return {"status": "loaded"}
+
+    async def _passthrough(coro, *, label):
+        return await coro
+
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _remote)
+    monkeypatch.setattr(inference_route, "load_model_gated", _gated)
+    monkeypatch.setattr(inference_route, "_tunnel_safe_json", _passthrough)
+    request = LoadRequest.model_validate({"model_path": "unsloth/Qwen3-1.7B"})
+    asyncio.run(inference_route.load_model(request, object(), "tester"))
+    assert len(scopes) == 2 and scopes[0] is not None and scopes[0] is scopes[1]
+    assert model_config._hub_model_info_scope.get() is None
+
+
+def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
+    _mock_override_store(monkeypatch)
+    body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}
+    request = _explicit_load(monkeypatch, body)
+    assert request.model_fields_set == set(body)
+    assert request.max_seq_length == 0
+
+
 def test_reasoning_budget_override_route_roundtrip(monkeypatch):
     _mock_override_store(monkeypatch)
 
