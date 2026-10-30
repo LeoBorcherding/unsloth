@@ -357,6 +357,7 @@ def resolve_selected_cuda_ordinals(gpu_ids: Optional[list[int]]) -> list[int]:
     try:
         from utils.hardware.hardware import (
             get_parent_visible_gpu_ids,
+            reject_ordinals_on_another_arch_pack,
             resolve_requested_gpu_ids,
         )
     except Exception as exc:  # noqa: BLE001 -- without the hardware layer the mask is unknowable
@@ -370,7 +371,9 @@ def resolve_selected_cuda_ordinals(gpu_ids: Optional[list[int]]) -> list[int]:
             f"Requested GPU {wanted} but none of them are visible to this process "
             f"(visible: {visible}). Clear the GPU selection to use the default device."
         )
-    return sorted(dict.fromkeys(ordinals))
+    ordinals = sorted(dict.fromkeys(ordinals))
+    reject_ordinals_on_another_arch_pack(ordinals)
+    return ordinals
 
 
 _UNPLANNED = object()
@@ -583,6 +586,27 @@ def auto_cuda_ranking_possible() -> bool:
         return len(hw.get_parent_visible_gpu_ids()) >= 2
     except Exception:  # noqa: BLE001 -- unknown host keeps the current device
         return False
+
+
+def kpack_safe_auto_ordinal(ordinal: Optional[int]) -> Optional[int]:
+    """``ordinal``, or for an automatic load left on card 0 (None) the first card of the ROCm kernel pack this process
+    loads when card 0 cannot run it. Never raises."""
+    if ordinal is not None:
+        return ordinal
+    try:
+        import torch
+
+        from utils.hardware import hardware as hw
+
+        loaded, foreign = hw.rocm_ordinals_on_another_arch_pack()
+        if 0 not in foreign:
+            return None
+        for candidate in range(torch.cuda.device_count()):
+            if hw._props_gfx_arch(torch.cuda.get_device_properties(candidate)) == loaded:
+                return candidate
+    except Exception:  # noqa: BLE001 -- automatic placement keeps the current device
+        pass
+    return None
 
 
 def auto_cuda_ordinal_for_load() -> Optional[int]:

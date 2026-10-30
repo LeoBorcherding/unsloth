@@ -74,6 +74,7 @@ def test_resolve_selected_cuda_ordinals_translates_the_mask(monkeypatch):
         lambda: {"raw": None, "numeric_ids": [4, 5], "supports_explicit_gpu_ids": True},
     )
     monkeypatch.setattr(hw, "get_physical_gpu_count", lambda: 8)
+    monkeypatch.setattr(hw, "rocm_ordinals_on_another_arch_pack", lambda: ("", set()))
     assert dd.resolve_selected_cuda_ordinals([5, 4]) == [0, 1]
     assert dd.resolve_selected_cuda_ordinals([]) == []
     with pytest.raises(ValueError):

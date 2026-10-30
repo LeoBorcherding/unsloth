@@ -6552,6 +6552,57 @@ def reject_gpu_ids_without_torch_kernels(gpu_ids) -> None:
     )
 
 
+# From TheRock 10.1 HIP loads a kernel pack per device arch. Older runtimes (the rocm7.14.0 wheel) load the first covered
+# device's pack and register it for every card, so a card of another arch faults at its first kernel launch.
+_KPACK_PER_ARCH_HIP = (10, 1)
+
+
+def rocm_ordinals_on_another_arch_pack() -> tuple[str, set[int]]:
+    """(arch whose kernel pack this process loads, torch ordinals of another arch), or ("", set()). Fails open."""
+    try:
+        import torch
+
+        match = re.match(r"(\d+)\.(\d+)", str(getattr(torch.version, "hip", "") or ""))
+        if not match or (int(match[1]), int(match[2])) >= _KPACK_PER_ARCH_HIP:
+            return "", set()
+        packs = _torch_kernel_pack_arches(torch)
+        if not packs or not torch.cuda.is_available():
+            return "", set()
+        arches = []
+        for ordinal in range(torch.cuda.device_count()):
+            try:
+                arches.append(_props_gfx_arch(torch.cuda.get_device_properties(ordinal)))
+            except Exception:
+                arches.append("")
+        for arch in arches:
+            if not arch:
+                # An unread card ahead of the first covered one may be the one whose pack loads.
+                return "", set()
+            if arch in packs:
+                return arch, {o for o, a in enumerate(arches) if a and a != arch}
+        return "", set()
+    except Exception as e:
+        logger.debug("kernel pack arch probe failed: %s", e)
+        return "", set()
+
+
+def reject_ordinals_on_another_arch_pack(ordinals) -> None:
+    """For work run in this process (the image engine), where every visible card shares one loaded kernel pack."""
+    loaded, foreign = rocm_ordinals_on_another_arch_pack()
+    bad = sorted(set(int(o) for o in ordinals) & foreign)
+    if not bad:
+        return
+    try:
+        visible = get_parent_visible_gpu_ids()
+        physical = [visible[o] if o < len(visible) else o for o in bad]
+    except Exception:
+        physical = bad
+    raise ValueError(
+        f"{', '.join(_describe_rocm_gpus(physical))} cannot run here: this ROCm runtime loads the {loaded} "
+        f"kernels for every GPU in the process. Pick a {loaded} GPU, or leave the GPU selection on automatic."
+    )
+
+
 def gpu_ids_with_torch_kernels() -> Optional[list[int]]:
     """Exclude GPUs with known missing torch kernels; None preserves visibility."""
     uncovered = rocm_gpu_ids_without_torch_kernels()
