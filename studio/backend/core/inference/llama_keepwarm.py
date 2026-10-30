@@ -47,6 +47,8 @@ _unattended: contextvars.ContextVar[bool] = contextvars.ContextVar(
 # The (id, quant) idle-unload last freed, so an alias/unknown request that would otherwise 503 against an empty backend
 # can reload it (set on unload, cleared on reload). The quant lets the reload restore the exact freed variant.
 _last_unloaded_model = None
+# LoadRequest fields the stashed model ran with, replayed over its saved row; set only by a scheduled swap.
+_last_unloaded_load = None
 _last_unloaded_mlx = False
 # Slot KV manifest saved by the idle unload; whoever pops it owns deleting its files.
 _kv_resume = None
@@ -537,17 +539,28 @@ def get_last_unloaded_model():
         return _last_unloaded_model
 
 
+def get_last_unloaded_load():
+    """The stash and the load settings stashed with it, read together."""
+    with _lock:
+        return _last_unloaded_model, _last_unloaded_load
+
+
 def stash_is_mlx(identity) -> bool:
     """Whether ``identity``, as get_last_unloaded_model() returned it, is an MLX model idle unload freed."""
     with _lock:
         return _last_unloaded_mlx and _last_unloaded_model is identity
 
 
-def _set_last_unloaded(value, mlx: bool = False) -> None:
-    global _last_unloaded_model, _last_unloaded_mlx, _kv_resume
+def _set_last_unloaded(
+    value,
+    mlx: bool = False,
+    load = None,
+) -> None:
+    global _last_unloaded_model, _last_unloaded_load, _last_unloaded_mlx, _kv_resume
     stale = None
     with _lock:
         _last_unloaded_model = value
+        _last_unloaded_load = dict(load) if value is not None and load else None
         _last_unloaded_mlx = mlx and value is not None
         if value is None and _kv_resume is not None:
             stale, _kv_resume = _kv_resume, None
@@ -822,9 +835,64 @@ def loaded_identity():
     return _loaded_identity(get_llama_cpp_backend())
 
 
-def stash_for_reload(identity) -> None:
-    """Let the next reload-only request bring ``identity`` back, as after an idle unload."""
-    _set_last_unloaded(identity)
+# GgufLoadIntent field -> LoadRequest field, for the settings a reload can replay as they ran.
+_REPLAYED_LOAD_FIELDS = (
+    ("n_ctx", "max_seq_length"),
+    ("max_seq_length_auto_derived", "max_seq_length_auto_derived"),
+    ("chat_template_override", "chat_template_override"),
+    ("cache_type_kv", "cache_type_kv"),
+    ("speculative_type", "speculative_type"),
+    ("spec_draft_n_max", "spec_draft_n_max"),
+    ("spec_draft_cache_type", "spec_draft_cache_type"),
+    ("tensor_parallel", "tensor_parallel"),
+    ("disable_vision", "disable_vision"),
+    ("gpu_memory_mode", "gpu_memory_mode"),
+    ("gpu_layers", "gpu_layers"),
+    ("n_cpu_moe", "n_cpu_moe"),
+    ("tensor_split", "tensor_split"),
+    ("n_batch", "n_batch"),
+    ("n_ubatch", "n_ubatch"),
+    ("load_mode", "load_mode"),
+    ("ctx_checkpoints", "ctx_checkpoints"),
+    ("cache_ram", "cache_ram"),
+    ("reasoning_budget", "reasoning_budget"),
+    ("reasoning_budget_message", "reasoning_budget_message"),
+    ("extra_args", "llama_extra_args"),
+)
+
+
+def _load_settings_of(backend) -> Optional[dict]:
+    intent = getattr(backend, "last_load_intent", None)
+    if intent is None or not backend.is_loaded:
+        return None
+    settings = {}
+    for source, target in _REPLAYED_LOAD_FIELDS:
+        if not hasattr(intent, source):
+            continue
+        value = getattr(intent, source)
+        settings[target] = list(value) if isinstance(value, tuple) else value
+    # None would inherit the next resident model's extras; [] keeps the load's own (none).
+    if settings.get("llama_extra_args") is None and "llama_extra_args" in settings:
+        settings["llama_extra_args"] = []
+    if not getattr(intent, "n_parallel_from_default", False):
+        settings["n_parallel"] = getattr(intent, "n_parallel", None)
+    # The intent holds the GPUs placement resolved; the caller's pick is what a reload should send.
+    requested_gpus = getattr(backend, "_requested_gpu_ids", None)
+    if requested_gpus:
+        settings["gpu_ids"] = [int(i) for i in requested_gpus]
+    return settings
+
+
+def loaded_load_settings() -> Optional[dict]:
+    """The loaded GGUF's load settings as LoadRequest fields, or None when none is loaded."""
+    from routes.inference import get_llama_cpp_backend
+    return _load_settings_of(get_llama_cpp_backend())
+
+
+def stash_for_reload(identity, load = None) -> None:
+    """Let the next reload-only request bring ``identity`` back, as after an idle unload;
+    ``load`` (from loaded_load_settings) brings it back with the settings it ran with."""
+    _set_last_unloaded(identity, load = load)
 
 
 def _note_idle_unload_event(freed, reason: str = "idle") -> None:
