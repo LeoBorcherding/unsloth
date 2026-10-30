@@ -1,5 +1,3 @@
-# transitive dep of onnxruntime (via data-designer's pymupdf4llm)
-flatbuffers==25.12.19
 # Also needed by sentence_transformers (installed with --no-deps in extras-no-deps.txt);
 # librosa pulls it in too, but is skipped in no-torch mode.
 # scikit-learn publishes win_arm64 wheels from 1.8 only; 1.7.1 would source-build there.
@@ -13,6 +11,7 @@ scikit-learn==1.8.0; sys_platform == "win32" and platform_machine == "ARM64"
 
 # Additional extras
 jiwer==4.0.0                     # WER/CER metrics for vision OCR save-merge benchmarks
+gguf>=0.10.0                     # Required by transformers to load GGUF checkpoints in PyTorch
 omegaconf==2.3.1
 # Imported only by Hub remote code (DeepSeek-OCR and DeepSeek-OCR-2 modeling files), so a
 # grep of this repo finds no user; without them those models fail to load (#8732).
