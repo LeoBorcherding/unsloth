@@ -84,9 +84,6 @@ export function holdSidebarPinned() {
   hold(true);
 }
 
-export function holdSidebarUnpinned() {
-  hold(false);
-}
 
 export function releaseSidebarPinned() {
   if (!held) return;
