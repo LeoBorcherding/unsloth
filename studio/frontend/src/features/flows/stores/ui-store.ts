@@ -105,6 +105,8 @@ export interface UiState {
   setRecipeRuns: (target: RecipeRunsTarget | null) => void;
   setSelection: (nodes: string[], edges: string[]) => void;
   openInspector: (nodeId: string | null) => void;
+  /** Opens the settings panel on `nodeId`, or closes it when it already shows that block. */
+  toggleInspector: (nodeId: string) => void;
   setQuickAdd: (quickAdd: QuickAddState | null) => void;
   setDrawer: (open: boolean, tab?: UiState["drawerTab"]) => void;
   togglePalette: () => void;
@@ -151,12 +153,11 @@ export const useUiStore = create<UiState>((set, get) => ({
       selectedNodes: nodes,
       selectedEdges: edges,
       ...(nodes.length === 1 && { recipeSetup: null }),
+      // An open panel (settings or a recipe's setup) follows a single selection; a closed one stays shut.
       inspectorNodeId:
-        nodes.length === 1
+        nodes.length === 1 && (s.inspectorNodeId !== null || s.recipeSetup)
           ? nodes[0]
-          : nodes.length === 0
-            ? s.inspectorNodeId
-            : s.inspectorNodeId,
+          : s.inspectorNodeId,
     });
   },
   openInspector: (nodeId) =>
@@ -164,6 +165,12 @@ export const useUiStore = create<UiState>((set, get) => ({
       nodeId
         ? { inspectorNodeId: nodeId, recipeSetup: null }
         : { inspectorNodeId: nodeId },
+    ),
+  toggleInspector: (nodeId) =>
+    set((s) =>
+      s.inspectorNodeId === nodeId
+        ? { inspectorNodeId: null }
+        : { inspectorNodeId: nodeId, recipeSetup: null },
     ),
   setQuickAdd: (quickAdd) => set({ quickAdd }),
   setDrawer: (open, tab) => {
