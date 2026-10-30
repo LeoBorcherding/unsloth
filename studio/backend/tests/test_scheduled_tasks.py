@@ -1343,7 +1343,10 @@ class SwapWorld:
         self.loaded = earlier
         self.unloaded, self.stashed, self.reloads = [], [], []
         self.idle = idle
-        monkeypatch.setattr(llama_keepwarm, "idle_for", lambda seconds: self.idle)
+        # None leaves the real idle clock in place.
+        if idle is not None:
+            monkeypatch.setattr(llama_keepwarm, "idle_for", lambda seconds: self.idle)
+            monkeypatch.setattr(llama_keepwarm, "_attended_since_launch", True, raising = False)
         monkeypatch.setattr(llama_keepwarm, "loaded_identity", lambda: self.loaded)
         monkeypatch.setattr(llama_keepwarm, "stash_for_reload", self.stashed.append)
         monkeypatch.setattr(
@@ -1420,6 +1423,72 @@ def test_a_scheduled_run_while_away_switches_back_to_the_earlier_model(monkeypat
     assert world.stashed == [SwapWorld.EARLIER]
     assert world.reloads == [(inference_routes._RELOAD_ONLY_MODEL, True)]
     assert world.loaded == SwapWorld.EARLIER
+
+
+def just_launched(monkeypatch, away_seconds):
+    import time
+
+    keepwarm = keepwarm_module()
+    monkeypatch.setattr(scheduler_module, "_AWAY_SECONDS", away_seconds)
+    monkeypatch.setattr(scheduler_module, "_YIELD_POLL_SECONDS", 0.01)
+    # The idle clock starts at import, and nobody has used Studio since.
+    monkeypatch.setattr(keepwarm, "_last_attended", time.monotonic())
+    monkeypatch.setattr(keepwarm, "_attended_since_launch", False, raising = False)
+    return keepwarm
+
+
+def test_a_run_missed_while_the_app_was_closed_waits_out_the_launch_and_runs(monkeypatch):
+    just_launched(monkeypatch, 0.3)
+    world = SwapWorld(monkeypatch, idle = None)
+    producer = world.run(monkeypatch, {"id": "run-1", "source": "schedule"})
+    assert producer.payload is not None
+    assert world.unloaded == ["/models/qwen.gguf"]
+    assert world.loaded == SwapWorld.EARLIER
+
+
+def test_someone_using_studio_right_after_launch_still_skips_the_run(monkeypatch):
+    keepwarm = just_launched(monkeypatch, 30)
+    world = SwapWorld(monkeypatch, idle = None)
+    producer = world.producer()
+
+    def someone_chats():
+        keepwarm._note_start()
+        keepwarm._note_end()
+
+    timer = threading.Timer(0.05, someone_chats)
+    timer.start()
+    try:
+        with pytest.raises(RunFailed) as failure:
+            world.run(monkeypatch, {"id": "run-1", "source": "schedule"}, producer)
+    finally:
+        timer.cancel()
+    assert failure.value.code == "model_busy"
+    assert producer.payload is None and world.loaded == SwapWorld.EARLIER
+    assert keepwarm.attended_since_launch()
+
+
+def test_a_load_still_running_after_the_launch_wait_skips_the_run(monkeypatch):
+    keepwarm = just_launched(monkeypatch, 0.3)
+    world = SwapWorld(monkeypatch, idle = None)
+    producer = world.producer()
+    # Someone's load holds the gate past the away window; it stamps activity only once it lands.
+    assert keepwarm._load_lock.acquire(blocking = False)
+    try:
+        with pytest.raises(RunFailed) as failure:
+            world.run(monkeypatch, {"id": "run-1", "source": "schedule"}, producer)
+    finally:
+        keepwarm._load_lock.release()
+    assert failure.value.code == "model_busy"
+    assert producer.payload is None and world.loaded == SwapWorld.EARLIER
+
+
+def test_studios_own_runs_do_not_end_the_launch_wait(monkeypatch):
+    keepwarm = just_launched(monkeypatch, 30)
+    with keepwarm.unattended_activity():
+        keepwarm._note_start()
+        keepwarm._note_end()
+        keepwarm._note_activity()
+    assert not keepwarm.attended_since_launch()
 
 
 def test_a_scheduled_run_stays_off_a_model_the_user_loaded_while_it_waited(monkeypatch):

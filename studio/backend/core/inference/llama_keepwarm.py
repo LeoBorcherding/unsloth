@@ -41,6 +41,8 @@ _preview_swap_inflight = 0
 _last_active = time.monotonic()
 # _last_active minus scheduled runs and their swaps: one run must not make the next look attended.
 _last_attended = _last_active
+# A launch is not someone using Studio: until this flips, _last_attended is only the import time.
+_attended_since_launch = False
 _unattended: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "keepwarm_unattended", default = False
 )
@@ -150,10 +152,11 @@ def _note_start(is_preview: bool = False) -> None:
 
 
 def _stamp_active() -> None:
-    global _last_active, _last_attended
+    global _last_active, _last_attended, _attended_since_launch
     _last_active = time.monotonic()
     if not _unattended.get():
         _last_attended = _last_active
+        _attended_since_launch = True
 
 
 def _note_end(is_preview: bool = False) -> None:
@@ -230,6 +233,11 @@ def attended_stamp() -> float:
     """Changes whenever someone's inference request ends or their model load lands."""
     with _lock:
         return _last_attended
+
+
+def attended_since_launch() -> bool:
+    with _lock:
+        return _attended_since_launch
 
 
 def inference_in_flight() -> bool:
@@ -512,6 +520,11 @@ def inference_lifecycle_gate():
 
 def model_load_gate():
     return _unload_gate(lock = _load_lock)
+
+
+def model_load_in_progress() -> bool:
+    # A load stamps activity only once it lands, so a long one is invisible to idle_for() until then.
+    return _load_lock.locked()
 
 
 def note_model_loaded(backend = None) -> None:
