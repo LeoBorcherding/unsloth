@@ -139,6 +139,11 @@ export const ptBR = {
     more: "Mais",
     addressPlaceholder: "Pesquise ou digite um URL",
     local: "Local",
+    browserUse: {
+      label: "Uso do navegador",
+      description: "Permite que os modelos controlem o navegador integrado",
+      unavailable: "Carregue um modelo que chame ferramentas para que ele use o navegador.",
+    },
     suggested: "Sugestões",
     suggestedMenu: {
       open: "Abrir",
@@ -496,7 +501,6 @@ export const ptBR = {
       clearDataFailed: "Não foi possível limpar os dados de sites. Tente novamente.",
     },
   },
-  // English fallback until this experimental feature is translated.
   managedEngines: en.managedEngines,
   sandboxSetup: {
     levelTitle: "O sandbox do sistema não está disponível",
@@ -625,6 +629,38 @@ export const ptBR = {
     compactEmpty: "Ainda não há nada para compactar",
     compactUnsupported: "A compactação requer um modelo GGUF ou MLX com suporte a ferramentas",
   },
+  halloween: {
+    navLabel: "Doces ou travessuras…",
+    title: "Doces ou travessuras?!",
+    description:
+      "Preparamos alguns sustos para o Unsloth, disponíveis até o fim de outubro.",
+    chooseTheme: "Escolha um tema assustador",
+    spookyGreetings: "Saudações assustadoras",
+    spookyGreetingsDescription:
+      "A preguiça recebe os novos chats com um susto.",
+    decorations: "Aranhas e morcegos",
+    decorationsDescription:
+      "Teias nos cantos e, de vez em quando, uma aranha ou um morcego com um tema de Halloween.",
+    surprise: "Doces ou travessuras!",
+    surpriseDescription: "Deixe a preguiça escolher um tema para você.",
+    themesTitle: "Temas assustadores",
+    back: "Voltar",
+    footer: "O Unsloth volta ao normal à meia-noite de 1º de novembro.",
+    removeNow: "Remover agora",
+    hideFromSidebar: "Ocultar da barra lateral",
+    greeting: {
+      pumpkins: "As abóboras estão esculpidas. E agora?",
+      brewing: "Vamos preparar a poção",
+      trickOrTreat: "Doces ou travessuras?",
+      manor: "Boas-vindas à mansão",
+      manorName: "Boas-vindas à mansão, {name}",
+      happyHalloween: "Feliz Halloween",
+      happyHalloweenName: "Feliz Halloween, {name}",
+      spirits: "Os espíritos estão ouvindo…",
+      mysteries: "Que mistérios vamos desvendar esta noite?",
+      conjure: "O que posso conjurar para você?",
+    },
+  },
   welcome: {
     goodToSeeYou: "Que bom ver você",
     goodToSeeYouName: "Que bom ver você, {name}",
@@ -704,7 +740,6 @@ export const ptBR = {
     shutdown: "Desligar",
   },
   shell: {
-    // The Help submenu of the account menu, and the desktop app's Help menu.
     helpMenu: {
       documentation: "Documentação",
       keyboardShortcuts: "Atalhos de teclado",
@@ -777,11 +812,8 @@ export const ptBR = {
       export: "Exportar",
       recents: "Recentes",
       noChatsYet: "Nenhum chat ainda",
-      // Shown under an empty project folder in the sidebar.
       noChats: "Nenhum chat",
-      // Shown in the Projects section when every project is pinned, so it has no rows.
       allProjectsPinned: "Todos os projetos fixados",
-      // Same, when some of them are filed in custom sections instead.
       allProjectsFiled: "Todos os projetos estão fixados ou em seções",
       noProjects: "Nenhum projeto",
       showMore: "Mostrar mais",
@@ -793,6 +825,8 @@ export const ptBR = {
       guidedTour: "Tour guiado",
       help: "Ajuda",
       logOut: "Sair",
+      logOutNeedsPassword: "Defina uma senha em Configurações > Acesso remoto antes de sair, para conseguir entrar de novo.",
+      logOutFailed: "Não foi possível sair com segurança. Tente de novo em instantes.",
       shutdown: "Desligar",
     },
     commandPalette: {
@@ -883,11 +917,9 @@ export const ptBR = {
       organizeChats: "Organizar conversas",
       organizeProjects: "Organizar projetos",
       sortPinnedChats: "Ordenar conversas fixadas",
-      // Header of the menu's section-visibility toggles.
       show: "Mostrar",
       newSection: "Nova seção",
     },
-    // User-made sidebar sections that group chats and projects.
     sections: {
       createTitle: "Nova seção",
       createDescription: "Agrupe conversas e projetos como quiser",
@@ -898,16 +930,13 @@ export const ptBR = {
       edit: "Editar",
       remove: "Remover seção",
       markAllRead: "Marcar tudo como lido",
-      // The row menu's one submenu for projects and sections, and its headings.
       moveTo: "Mover para",
       section: "Seção",
       sectionsHeading: "Seções",
       removeFromProject: "Remover do projeto",
       newSection: "Nova seção",
       removeFromSection: "Remover da seção",
-      // Names the project or section the row leaves; the two above are for when it is not one.
       removeFrom: "Remover de {name}",
-      // Shown in a section with nothing filed in it yet.
       empty: "Arraste conversas ou projetos para cá",
       sectionOptions: "Opções da seção",
       newChatInSection: "Novo chat em {name}",
@@ -942,6 +971,11 @@ export const ptBR = {
   },
   settings: {
     accounts: {
+      signsInAs: "Entra como {username}",
+      signsInAsOwner: "Entra como {alias} ou {username}",
+      signInName: "Seu nome de login",
+      signInNameDescription: "O nome que você digita para entrar quando esta instalação tem mais de uma conta. unsloth também funciona sempre. Deixe vazio para usar só unsloth.",
+      signInNameSave: "Salvar nome",
       title: "Contas",
       description: "Crie contas privadas do Unsloth. Novos usuários entram com um código de configuração de uso único e escolhem uma senha.",
       username: "Nome de usuário",
@@ -1082,7 +1116,7 @@ export const ptBR = {
       lastVisited: "Última visitada",
     },
     tabs: {
-      sandbox: "Sandbox",
+      sandbox: "Segurança",
       accounts: "Contas",
       general: "Geral",
       profile: "Perfil",
@@ -1366,7 +1400,7 @@ export const ptBR = {
       },
     },
     sandbox: {
-      title: "Sandbox",
+      title: "Segurança",
       description: "Indica se as chamadas de ferramentas de Python e Terminal rodam dentro de um sandbox do sistema neste computador.",
       docs: "Documentação",
       docsLabel: "Abrir a documentação do sandbox",
@@ -1421,16 +1455,16 @@ export const ptBR = {
       installingRuntime: "Instalando…",
       installRuntimeFailed: "A instalação do runtime falhou.",
       installRuntimeError: "Não foi possível iniciar a instalação do runtime.",
-      unsupportedArch: "O sandbox do Windows (MXC) só funciona no Windows x64, então não está disponível neste PC.",
+      unsupportedArch: "O sandbox do Windows (MXC) só funciona no Windows x64 e ARM64, então não está disponível neste PC.",
       builtinNeedsUpdate: "O contêiner integrado do Windows precisa da build {required} ou mais recente, e este PC usa {current}. Instale a atualização mais recente do Windows para usá-lo sem uma etapa de administrador, ou ative o sandbox alternativo abaixo.",
       unsupportedBuild: "O sandbox do Windows (MXC) precisa do Windows 11 24H2 (build 26100) ou mais recente, então não está disponível neste PC.",
-      permissionsIntro: "Escolha quando as ferramentas perguntam antes e se Python e Terminal também rodam dentro do sandbox do sistema.",
       permissionLabel: "Permissões de ferramentas",
+      levelRowLabel: "Nível do sandbox",
       levelPickerTitle: "Como o código deve ser isolado?",
       levelOff: "Desativado",
       levelOffShort: "Acesso total desliga o sandbox",
-      levelHighDetail: "Sandbox do sistema. Python e Terminal rodam dentro do sandbox do sistema (bubblewrap, Seatbelt ou MXC) além das proteções de software. Sem um sandbox do sistema funcionando, chamadas arriscadas perguntam antes.",
-      levelLowDetail: "Sandbox de software. Python e Terminal rodam somente com as proteções de software, fora do sandbox do sistema. Chamadas arriscadas perguntam antes, exceto com Acesso total.",
+      levelHighDetail: "Python e Terminal rodam dentro do sandbox do sistema (bubblewrap, Seatbelt ou MXC) além das proteções de software. Sem um sandbox do sistema funcionando, chamadas arriscadas perguntam antes.",
+      levelLowDetail: "Python e Terminal rodam somente com as proteções de software, fora do sandbox do sistema. Chamadas arriscadas perguntam antes, exceto com Acesso total.",
       levelLabel: "Sandbox",
       levelHigh: "Alto",
       levelLow: "Baixo",
@@ -1441,6 +1475,7 @@ export const ptBR = {
       managedNote: "O proprietário deste servidor Unsloth configura o sandbox do sistema.",
     },
     debugging: {
+      description: "Leia os logs do Unsloth sem sair do app.",
       logSection: "Arquivo de log",
       source: "Arquivo de log",
       sourceHint: "Os executores de modelos gravam os próprios logs, então uma falha ao carregar ou ao gerar costuma ser explicada ali, e não no log do servidor.",
@@ -2075,13 +2110,13 @@ export const ptBR = {
         },
         details: {
           ask:
-            "Pede aprovação antes de cada chamada de ferramenta, incluindo código de terminal e Python, buscas na web, edição de arquivos e ferramentas MCP. Ferramentas executadas por um provedor externo não são pausadas. Ideal quando você quer revisar cada etapa.",
+            "Pede aprovação antes de cada chamada de ferramenta, incluindo código de terminal e Python, buscas na web, edição de arquivos e ferramentas MCP. Ferramentas executadas por um provedor externo não são pausadas.",
           auto:
             "Executa sozinho as chamadas comuns e só pergunta quando uma ação parece arriscada, como ler credenciais, elevar privilégios ou executar comandos destrutivos.",
           off:
-            "Executa todas as chamadas de ferramentas sem perguntar. O código de Python e terminal continua rodando no sandbox, que limita quais arquivos do seu computador ele pode acessar. Se este computador não tiver um sandbox do sistema funcionando, chamadas arriscadas de Python e terminal perguntam primeiro.",
+            "Executa todas as chamadas de ferramentas sem perguntar. O código de Python e terminal continua rodando no sandbox, que limita quais arquivos do seu computador ele pode acessar. Sem um sandbox do sistema funcionando, chamadas arriscadas perguntam antes.",
           full:
-            "Executa todas as chamadas de ferramentas sem perguntar e desativa o sandbox de código, assim o código de Python e terminal pode ler e alterar qualquer arquivo que sua conta acessa. Ideal para tarefas confiáveis que precisam trabalhar fora do sandbox.",
+            "Executa todas as chamadas de ferramentas sem perguntar e desativa o sandbox de código, assim o código de Python e terminal pode ler e alterar qualquer arquivo que sua conta acessa.",
         },
       },
     },
@@ -2096,8 +2131,8 @@ export const ptBR = {
       avatarShape: "Formato da foto de perfil",
       avatarShapeCircle: "Círculo",
       avatarShapeRounded: "Arredondado",
-      greetingSloth: "Bicho-preguiça na saudação",
-      greetingSlothDescription: "Mostra o bicho-preguiça na saudação do chat.",
+      greetingSloth: "Saudação",
+      greetingSlothDescription: "Mostrar a saudação nas novas conversas.",
       chooseSloth: "Ou escolha um bicho-preguiça",
       noPicture: "Sem foto de perfil",
       noneLabel: "Nenhuma",
@@ -2201,6 +2236,12 @@ export const ptBR = {
         classic: "Clássico",
         minimal: "Minimalista",
         moreThemes: "Mais temas",
+        halloween: "Halloween",
+      },
+      trickOrTreat: {
+        label: "Doces ou travessuras",
+        description:
+          "Temas de Halloween e saudações assustadoras, até 1º de novembro.",
       },
       custom: {
         chatWidth: {
@@ -2331,10 +2372,12 @@ export const ptBR = {
       description: "Monitore o hardware e o armazenamento deste servidor Unsloth.",
       liveUpdates: "Atualizações ao vivo",
       floatingWindow: "Janela flutuante",
-      disableOverlay: "Desativar sobreposição",
+      showFloatingWindow: "Mostrar janela flutuante",
+      showFloatingWindowDescription: "Mantém o uso de CPU, RAM e GPU visível sobre o Unsloth.",
       liveMonitor: {
         title: "Monitor ao vivo",
         apiTitle: "Monitor da API",
+        apiDescription: "Veja o que outros apps enviam para a API deste servidor assim que chega.",
         summary: "Solicitações ativas, erros e uso de tokens",
         status: "{active} ativas · {recent} recentes · {model}",
         noModelLoaded: "nenhum modelo carregado",
@@ -2354,7 +2397,7 @@ export const ptBR = {
         gpuUnusableDetail: "Detectada, mas o PyTorch não consegue usá-la",
         detailedView: "Visualização detalhada",
         detailedViewDescription:
-          "Mostra a carga da CPU e a carga, temperatura e consumo de cada GPU na janela flutuante e aqui.",
+          "Mostra a carga da CPU e a carga, temperatura e consumo de cada GPU na janela flutuante.",
         cpuLoad: "Carga da CPU",
         gpuLoad: "Carga da GPU",
         temperature: "Temperatura",
@@ -2387,6 +2430,10 @@ export const ptBR = {
         used: "{value} usados",
         free: "{value} livres",
         total: "{value} total",
+        usedOf: "{used} em uso de {total}",
+        segmentUsed: "Em uso pela GPU",
+        segmentSystem: "Em uso pelo sistema",
+        segmentAvailable: "Disponível",
       },
       llamaBackend: {
         title: "GGUF inference engine",
@@ -2438,7 +2485,6 @@ export const ptBR = {
           updateChecksDisabled:
             "As verificações de atualização estão desativadas (UNSLOTH_DISABLE_UPDATE_CHECK=1), então os backends disponíveis não são consultados.",
         },
-        // Not rendered: extra terms the settings search matches these rows on.
         llamaBackendKeywords:
           "llama.cpp backend gguf inference cuda rocm hip vulkan metal cpu gpu accelerator prebuilt switch engine",
       },
@@ -2451,6 +2497,7 @@ export const ptBR = {
         noRamReserveDescription: "Reduz a RAM ocupada pelos pesos do modelo.",
         noRamReserveHint: "Ignora o carregamento mapeado em memória nas versões compatíveis do Windows quando o modelo está totalmente descarregado na GPU, para que suas páginas não fiquem residentes. Caso contrário, mantém o carregamento mapeado em memória. Buffers de CPU necessários ainda podem usar RAM. Remove --no-mmap e --mlock.",
         multiModel: "Manter vários modelos carregados",
+        openSystemSettings: "Configurações do sistema",
         multiModelOff: "Desativado",
         multiModelFit: "Quando couberem",
         multiModelAlways: "Sempre",
@@ -2471,7 +2518,6 @@ export const ptBR = {
         reloadRequired: "Recarregue o modelo para aplicar as novas opções de memória.",
         loadError: "Falha ao carregar as configurações de memória do modelo",
         saveError: "Falha ao salvar as configurações de memória do modelo",
-        // Not rendered: extra terms the settings search matches these rows on.
         modelMemoryKeywords:
           "mlock memlock ulimit vram gpu memoria ram residente fixar travar manter carregado descarregar ocioso mmap no-mmap load-mode paginacao swap",
         multiModelKeywords:
@@ -2517,6 +2563,10 @@ export const ptBR = {
           hideDetailsAction: "Ocultar detalhes",
           clearAction: "Limpar caches",
           clearOneAction: "Limpar",
+          showFolders: "Mostrar pastas",
+          hideFolders: "Ocultar pastas",
+          previousLocations: "Inclui locais anteriores. O botão Limpar principal afeta a pasta de cache atual. Os botões de modelo limpam apenas a cópia selecionada.",
+          clearModelDescription: "Isso remove apenas esta cópia em cache. Ela será baixada novamente quando necessário.",
           clearingAction: "Limpando...",
           confirmTitle: "Limpar os arquivos em cache?",
           confirmDescription: "Isso libera cerca de {size}.",
@@ -2575,6 +2625,8 @@ export const ptBR = {
         python: "Python",
         torch: "Torch",
         transformers: "Transformers",
+        mlxLm: "mlx-lm",
+        mlxVlm: "mlx-vlm",
         uptime: "Tempo de atividade",
         processMemory: "Memória do processo",
         notInstalled: "Não instalado",
@@ -2614,8 +2666,6 @@ export const ptBR = {
       docsLabel: "Abrir a documentação do unsloth start",
       agentDocs: "Abrir a documentação de configuração do {agent}",
       copyGeneratedCommand: "Copiar comando gerado",
-      // English is the baseline until translated: the three-part sentence is assembled around an
-      // inline link and needs restructuring first.
       automaticSettingsNote:
         "Unsloth automatically applies the model’s recommended settings if you have not set any flags.",
       configurationNote:
@@ -2767,11 +2817,6 @@ export const ptBR = {
       autoScrollManual: "Manual",
       autoScrollKeywords:
         "rolagem rolar automática acompanhar fim pular streaming gerar visualização travar scroll autoscroll follow",
-      scrollToBottomButton: "Botão de rolar até o final",
-      scrollToBottomButtonDescription:
-        "Mostra um botão para voltar à mensagem mais recente depois de rolar para cima.",
-      scrollToBottomButtonKeywords:
-        "rolar final baixo pular recente seta botão ocultar scroll bottom button",
       replyNotification: "Avisar quando uma resposta terminar",
       replyNotificationDescription:
         "Mostra uma notificação do sistema quando uma resposta termina enquanto o Unsloth está minimizado ou em segundo plano.",
@@ -2793,9 +2838,8 @@ export const ptBR = {
         "detalhes geração velocidade tokens estatísticas camadas especialistas desenvolvedor verbose developer stats speed tok/s prefill decode layers offload vram experts",
       inlineEditResponse: "Editar resposta nas respostas",
       inlineEditResponseDescription: "Mostrar Editar resposta em cada resposta, em vez de no menu Mais.",
-      modelDisclaimer: "Mostrar aviso do modelo",
-      modelDisclaimerDescription:
-        'Mostra "LLMs podem cometer erros" abaixo da caixa de chat.',
+      composerAtBottom: "Caixa de texto embaixo",
+      composerAtBottomDescription: "Comece novas conversas com a caixa de texto na parte de baixo da página, não no meio.",
       projectAttachments: "Compartilhar arquivos em todo o projeto",
       projectAttachmentsDescription:
         "Disponibiliza novos anexos para todos os chats do projeto.",
@@ -3162,13 +3206,23 @@ export const ptBR = {
       readDocs: "Leia a documentação da API",
       noAccess: "Nenhum acesso à API ainda.",
       accessTokens: "Tokens de acesso",
+      quickstartTitle: "Início rápido",
+      columnName: "Nome",
+      columnToken: "Token",
+      columnCreated: "Criado",
+      columnLastUsed: "Último uso",
+      columnExpires: "Expira",
       loadError: "Não foi possível carregar o acesso à API.",
       createError: "Não foi possível criar o token de acesso.",
       revokeError: "Não foi possível revogar o token de acesso.",
       never: "Nunca",
-      tokenNamePlaceholder: "Nome do token (ex.: produção)",
+      tokenNamePlaceholder: "Nome do token",
       newAccessTokenName: "Nome do novo token de acesso",
       createToken: "Criar token",
+      neverExpiresHint: "Nunca expira",
+      expiresInDaysHint: "Expira em {n} dias",
+      createTokenHint: 'Criar um token chamado "{name}"',
+      defaultTokenName: "Novo token {n}",
       creating: "Criando...",
       newTokenCreated: "Novo token de acesso criado",
       accessTokenCopied: "Token de acesso copiado",
@@ -3202,13 +3256,16 @@ export const ptBR = {
       expired: "expirado",
       expiredStatus: "Expirado",
       today: "hoje",
-      created: "Criado {value}",
-      used: "Usado {value}",
-      expires: "Expira {value}",
       actionsFor: "Ações para {name}",
       copyPrefix: "Copiar prefixo",
       copyFailed: "Não foi possível copiar",
       revokeToken: "Revogar token",
+      regenerateToken: "Gerar novo token",
+      regenerateTitle: 'Gerar novamente o token de acesso "{name}"?',
+      regenerateDescription: "Um novo token com o mesmo nome e período de validade substitui este. Apps que usam o token atual perdem o acesso imediatamente.",
+      regenerateAction: "Gerar novamente",
+      regenerating: "Gerando...",
+      regenerateError: "Não foi possível gerar novamente o token de acesso.",
       revokeTitle: 'Revogar token de acesso "{name}"?',
       revokeDescription:
         "Aplicativos que usam este token perderão o acesso imediatamente. Esta ação não pode ser desfeita.",
@@ -3289,8 +3346,9 @@ export const ptBR = {
         loadError: "Não foi possível carregar as configurações da API de decisões.",
         sendsTo: "As solicitações são enviadas para {provider}.",
         connectionMissing: "Esta conexão não existe mais ou não tem modelos de decisões. Escolha outro modelo.",
-        addConnection: "Para usar um modelo de decisões hospedado, adicione TypeSafe, Liquid AI ou OpenRouter em Conexões.",
-        openConnections: "Abrir Conexões",
+        addConnection: "Para usar um modelo de decisões hospedado, adicione-o em ",
+        connectionsLink: "Conexões",
+        addConnectionSuffix: ".",
       },
       mcp: {
         title: "Acesso de agentes (MCP)",
@@ -3318,6 +3376,7 @@ export const ptBR = {
       desktopAppVersionUnavailable: "Indisponível",
       llamaCppVersion: "Versão do llama.cpp",
       audioCppVersion: "Versão do audio.cpp",
+      mlxVersion: "Versão do MLX",
       whisperCppVersion: "Versão do whisper.cpp",
       engines: {
         title: "Motores",
@@ -3431,6 +3490,8 @@ export const ptBR = {
   },
   studio: {
     goToLibrary: "Ir para a Biblioteca",
+    imageTraining: "Treino de imagem",
+    goToImageTraining: "Treinar LoRAs de imagem",
     routeTitle: "Treinar",
     wizard: {
       modelTitle: "Modelo",
@@ -4219,7 +4280,6 @@ export const ptBR = {
       terminalStart: "> treinamento do unsloth iniciado...",
       preparingResources: "> Preparando modelo e dataset...",
       gettingReady: "> Estamos deixando tudo pronto para a sua execução...",
-      waitingForFirstStep: "> {message} | aguardando o primeiro passo... ({step})",
       resumingTraining: "Retomando treinamento...",
       startingTraining: "iniciando treinamento...",
       dataset: "Dataset",
@@ -4385,6 +4445,21 @@ export const ptBR = {
       archiveSuccessful: "Arquivar execuções bem-sucedidas",
       project: "Projeto",
       projectNone: "Nenhum",
+      model: "Modelo",
+      modelLoaded: "O modelo que estiver carregado",
+      modelOnDevice: "Neste dispositivo",
+      modelNote: "Se este modelo não estiver carregado quando a tarefa rodar, o Unsloth pergunta antes.",
+      modelNoteAllowed: "Muda para este modelo só enquanto você não usa o Unsloth e depois volta ao que você tinha.",
+      modelEmpty: "Baixe um modelo no Model Hub ou adicione uma conexão para escolher outro.",
+      modelMissing: "{model} (não está neste dispositivo)",
+      allowLoad: "Trocar automaticamente quando eu estiver fora",
+      allowLoadHint:
+        "Quando esta tarefa vence e você não usa o Unsloth há 5 minutos, ela carrega este modelo sem perguntar, executa a tarefa e depois volta para o modelo que você tinha. Se você estiver usando o Unsloth ou treinando nesse momento, a execução é pulada e seu modelo fica como está. Desativado, o Unsloth pergunta antes de carregar.",
+      reasoning: "Esforço de raciocínio",
+      reasoningDefault: "Padrão",
+      reasoningOff: "Desligado",
+      reasoningLowest: "Mínimo",
+      reasoningHighest: "Máximo",
       create: "Criar",
     },
     deleteDialog: {
@@ -4393,6 +4468,10 @@ export const ptBR = {
     },
     errors: {
       noModel: "Nenhum modelo estava carregado. Carregue um modelo no chat e execute a tarefa de novo.",
+      modelNotLoaded: "O modelo da tarefa não estava carregado. Carregue-o no chat e execute a tarefa novamente.",
+      modelLoadFailed: "Não foi possível carregar o modelo da tarefa. Verifique se ele ainda está baixado no Model Hub.",
+      modelBusy: "Pulada enquanto você usava o Unsloth; seu modelo não foi alterado.",
+      connectionUnavailable: "A conexão da tarefa não existe ou está desativada. Verifique em Conexões.",
       timeout: "O modelo demorou demais para responder.",
       cancelled: "A execução foi interrompida antes de terminar.",
       interrupted: "O Unsloth foi fechado antes de a execução terminar.",
@@ -4402,6 +4481,13 @@ export const ptBR = {
       updateFailed: "Não foi possível atualizar a tarefa",
       deleteFailed: "Não foi possível excluir a tarefa",
       runFailed: "Não foi possível iniciar a tarefa",
+    },
+    loadPrompt: {
+      title: "Carregar {model}?",
+      description: "“{title}” usa {model}, que não está carregado. Executá-la troca o chat para {model} até terminar e depois volta.",
+      always: "Não perguntar de novo. Trocar só enquanto eu não uso o Unsloth.",
+      notNow: "Agora não",
+      load: "Carregar e executar",
     },
     toast: {
       finished: "“{title}” está pronta",
@@ -4425,7 +4511,6 @@ export const ptBR = {
       all: "Tudo",
       chats: "Chats",
     },
-    // The Chats tab: conversations and projects, kept apart from every file tab.
     chats: {
       sections: {
         chats: "Chats",
@@ -4559,6 +4644,7 @@ export const ptBR = {
       modelsTitle: "Nenhum modelo ajustado ainda",
       modelsDescription: "Os modelos que você treina ou exporta no Unsloth aparecem aqui.",
       createFolder: "Criar pasta",
+      generateImage: "Gerar uma imagem",
       generateVideo: "Gerar um vídeo",
       generateAudio: "Gerar áudio",
       trainModel: "Treinar um modelo",
