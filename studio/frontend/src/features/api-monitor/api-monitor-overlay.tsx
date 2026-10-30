@@ -8,6 +8,7 @@ import type {
   ApiMonitorResponse,
 } from "@/features/chat/types/api";
 import { FIND_PORTAL_ATTRIBUTE } from "@/features/find-in-page/lib/find-attributes";
+import { requestResidentStatusRefresh } from "@/features/hub/lib/resident-status-refresh";
 import { useMonitorFrameStore, useShortcut } from "@/features/settings";
 import { FLOATING_PANEL_POSITION_KEYS } from "@/hooks/floating-panel-position";
 import { useFloatingPanelLayout } from "@/hooks/use-floating-panel-layout";
@@ -36,6 +37,7 @@ import {
   startWatching,
 } from "./new-traffic";
 import { useApiMonitorOverlayStore } from "./overlay-store";
+import { createResidentDriftWatch } from "./resident-drift";
 import {
   isFullyCovered,
   PANEL_MARGIN,
@@ -152,6 +154,7 @@ export function ApiMonitorOverlay(): ReactElement | null {
   );
 
   const watchRef = useRef<ApiMonitorWatch>(createWatch(0));
+  const residentDriftRef = useRef(createResidentDriftWatch());
   const lastNewEntryAtRef = useRef(0);
 
   // One loop: panel contents while open, traffic watch while closed; off on the full page.
@@ -188,6 +191,9 @@ export function ApiMonitorOverlay(): ReactElement | null {
           if (cancelled) return;
           const fresh = first;
           first = false;
+          if (residentDriftRef.current(next, useChatRuntimeStore.getState())) {
+            requestResidentStatusRefresh();
+          }
           setData((previous) =>
             fresh ? next : mergeMonitorResponse(previous, next),
           );
