@@ -13,6 +13,7 @@ from peft import PeftModel, PeftModelForCausalLM
 import contextlib
 import inspect
 import json
+import os
 import re
 import sys
 import threading
@@ -721,6 +722,54 @@ def _processor_takes_text_first(processor) -> bool:
     return False
 
 
+def _processor_reads_video(processor) -> bool:
+    """A video processor AND a template that places its video token, the rule MLX uses too."""
+    token = getattr(processor, "video_token", None)
+    if getattr(processor, "video_processor", None) is None or not token:
+        return False
+    try:
+        rendered = processor.apply_chat_template(
+            [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": "x"}]}],
+            add_generation_prompt = True,
+            tokenize = False,
+        )
+    except Exception:
+        # A load must never fail on a probe.
+        return False
+    return isinstance(rendered, str) and token in rendered
+
+
+def _write_video_clips(videos_b64) -> list:
+    import base64
+    import tempfile
+
+    from utils.media_playlist import refuse_playlist
+
+    paths = []
+    try:
+        for clip in videos_b64:
+            data = base64.b64decode(clip.split(",", 1)[1] if clip.startswith("data:") else clip)
+            # The video processor opens this through FFmpeg, which follows playlist entries.
+            refuse_playlist(data)
+            with tempfile.NamedTemporaryFile(
+                prefix = "unsloth-video-", suffix = ".mp4", delete = False
+            ) as handle:
+                handle.write(data)
+                paths.append(handle.name)
+    except BaseException:
+        _discard_files(paths)
+        raise
+    return paths
+
+
+def _discard_files(paths) -> None:
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 # LlamaModel_fast_forward cuts input_ids at max_seq_length, so decoding past it crashes; FastModel's stock forward does not.
 def _truncates_past_window(model) -> bool:
     return any(
@@ -1290,6 +1339,7 @@ class InferenceBackend:
                 self.models[model_name]["model"] = model
                 self.models[model_name]["tokenizer"] = processor
                 self.models[model_name]["processor"] = processor
+                self.models[model_name]["has_video_input"] = _processor_reads_video(processor)
 
             else:
                 model, tokenizer = _load_with_offload_fallback(
@@ -1686,6 +1736,7 @@ class InferenceBackend:
         presence_penalty: float = 0.0,
         tool_protocol_active: Optional[bool] = None,
         stop: Optional[list] = None,
+        videos: Optional[list] = None,
     ) -> Generator[str, None, None]:
         """Forwards tools and reasoning flags into apply_chat_template for templates that understand
         them."""
@@ -1710,6 +1761,7 @@ class InferenceBackend:
             tool_protocol_active = tool_protocol_active,
             presence_penalty = presence_penalty,
             stop = stop,
+            videos = videos,
         )
 
     def _generate_chat_response_inner(
@@ -1735,6 +1787,7 @@ class InferenceBackend:
         presence_penalty: float = 0.0,
         tool_protocol_active: Optional[bool] = None,
         stop: Optional[list] = None,
+        videos: Optional[list] = None,
     ) -> Generator[str, None, None]:
         """Keeps native tool tokens per tool_protocol_active: unrestricted mode sends an empty tools
         list."""
@@ -1769,7 +1822,9 @@ class InferenceBackend:
             )
             return
 
-        if is_vision and (image or images):
+        if videos and not model_info.get("has_video_input"):
+            raise RuntimeError("The loaded model does not read video.")
+        if is_vision and (image or images or videos):
             # FastVisionModel may return a raw tokenizer, not a ProcessorMixin (e.g. Gemma-3), so check first.
             from transformers import ProcessorMixin
 
@@ -1800,6 +1855,7 @@ class InferenceBackend:
                     preserve_thinking = preserve_thinking,
                     tool_protocol_active = tool_protocol_active,
                     stop = stop,
+                    videos = videos,
                 )
                 return
             else:
@@ -2046,6 +2102,7 @@ class InferenceBackend:
         preserve_thinking: Optional[bool] = None,
         tool_protocol_active: Optional[bool] = None,
         stop: Optional[list] = None,
+        videos: Optional[list] = None,
     ) -> Generator[str, None, None]:
         """Handle vision model generation with true token-by-token streaming."""
         # Reset so a failed or uncountable run cannot surface stale stats.
@@ -2078,9 +2135,11 @@ class InferenceBackend:
         continue_partial = trailing_assistant_text(messages) if continue_final_message else None
 
         if not user_message:
-            user_message = "Describe this image." if attached else "Hello"
+            user_message = (
+                "Describe this image." if attached else "Describe this video." if videos else "Hello"
+            )
 
-        if attached:
+        if attached or videos:
             has_tool_history = messages_have_tool_history(messages)
             # tool_choice="none" and a forced unknown name also arrive with tools=None (#10092).
             folded_system = not system_prompt and any(
@@ -2092,6 +2151,8 @@ class InferenceBackend:
                 system_prompt = system_prompt,
                 fallback_user_text = user_message,
                 structured_content = True,
+                image = 1 if attached else 0,
+                video = len(videos or ()),
             )
             # Existing markers are left alone, which is wrong for replayed MCP pictures.
             _prior_markers = image_marker_parts(vision_messages)
@@ -2200,7 +2261,20 @@ class InferenceBackend:
                     else:
                         raise
             _images = attached[0] if len(attached) == 1 else attached
-            if _processor_takes_text_first(processor):
+            if videos:
+                # The processor decodes the clips here; nothing reads the files after this call.
+                video_paths = _write_video_clips(videos)
+                try:
+                    inputs = processor(
+                        text = input_text,
+                        images = _images or None,
+                        videos = video_paths,
+                        add_special_tokens = False,
+                        return_tensors = "pt",
+                    ).to(model.device)
+                finally:
+                    _discard_files(video_paths)
+            elif _processor_takes_text_first(processor):
                 inputs = processor(
                     text = input_text,
                     images = _images,

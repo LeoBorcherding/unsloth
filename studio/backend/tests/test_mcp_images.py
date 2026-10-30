@@ -487,10 +487,10 @@ def test_a_replay_only_turn_takes_the_vision_render():
 
     inner = inspect.getsource(inference_module.InferenceBackend._generate_chat_response_inner)
     assert (
-        "if is_vision and (image or images):" in inner
+        "if is_vision and (image or images or videos):" in inner
     ), "a conversation whose only pictures are replayed still has to render as vision"
     vision = inspect.getsource(inference_module.InferenceBackend._generate_vision_response)
-    assert "if attached:" in vision, "and the branch inside keys off every attached image"
+    assert "if attached or videos:" in vision, "and the branch inside keys off every attached image"
 
 
 def test_a_named_non_mcp_tool_result_is_not_promoted_on_replay():
