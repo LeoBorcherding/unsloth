@@ -10,6 +10,7 @@ import {
 import { type DocGraph, useDocStore } from "../stores/doc-store";
 import type { LayoutRequest, LayoutResult } from "./layout-core";
 import { REROUTE_SIZE } from "./reroutes";
+import { foldLayout } from "./super-cards";
 
 let worker: Worker | null = null;
 let nextId = 0;
@@ -81,12 +82,15 @@ export async function autoLayout(
   request.nodes.push(...setup.nodes);
   request.edges.push(...setup.edges);
   const id = ++nextId;
+  const folded = foldLayout(request, useDocStore.getState(), (key) =>
+    getInternalNode(key)?.measured,
+  );
   const result = await new Promise<LayoutResult>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    getWorker().postMessage({ id, request });
+    getWorker().postMessage({ id, request: folded.request });
   });
   const nodes = Object.fromEntries(
-    Object.entries(result).filter(([key]) => !isSetupId(key)),
+    Object.entries(folded.unfold(result)).filter(([key]) => !isSetupId(key)),
   );
   useDocStore.getState().moveNodes(nodes);
   const groups = withLaidOutSetup(useDocStore.getState().graph, result);

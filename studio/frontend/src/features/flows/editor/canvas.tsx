@@ -55,6 +55,17 @@ import {
 import { watchRewiredOutputs } from "./stale-outputs";
 import { useWireReconnect } from "./use-wire-reconnect";
 import { addFileNodes } from "./file-drop";
+import {
+  OpenSuperCards,
+  SuperCardCombineToolbar,
+  SuperCardView,
+  useSuperCardView,
+} from "./super-card-node";
+import {
+  SUPER_PREFIX,
+  multiSelectKeys,
+  superCardDragMembers,
+} from "./super-cards";
 import { FlowEdgeView } from "./flow-edge";
 import { FlowNodeView } from "./flow-node";
 import { GroupFrame, NoteFrame } from "./frame-nodes";
@@ -90,6 +101,7 @@ import {
 import { WireRouterController, setWireHover } from "./wire-routing";
 
 const NODE_TYPES = {
+  flowSuperCard: SuperCardView,
   flowNode: FlowNodeView,
   flowGroup: GroupFrame,
   flowNote: NoteFrame,
@@ -103,7 +115,9 @@ const DOT_SIZE = 1.2;
 const VISIBLE_ONLY_THRESHOLD = 300;
 const PRO_OPTIONS = { hideAttribution: true };
 const DELETE_KEYS = ["Delete", "Backspace"];
-const MULTI_SELECT_KEYS = ["Meta", "Control", "Shift"];
+const MULTI_SELECT_KEYS = multiSelectKeys(
+  typeof navigator === "undefined" ? "" : navigator.platform,
+);
 const FIT_VIEW_OPTIONS = { padding: 0.2, maxZoom: 1.1, minZoom: FIT_MIN_ZOOM };
 
 type Size = { width: number; height: number };
@@ -435,11 +449,22 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
     }
   }, []);
 
+  const view = useSuperCardView(nodes, edges, selectedSet);
+
   const onNodeDragStart = useCallback(
     (_: ReactMouseEvent, node: RfNode) => {
       dragMembers.current = null;
-      if (!node.id.startsWith(GROUP_PREFIX)) return;
       const doc = useDocStore.getState().graph;
+      const folded = superCardDragMembers(node, doc);
+      if (folded) {
+        dragMembers.current = {
+          groupRfId: node.id,
+          origin: node.position,
+          members: folded,
+        };
+        return;
+      }
+      if (!node.id.startsWith(GROUP_PREFIX)) return;
       const group = doc.groups[node.id.slice(GROUP_PREFIX.length)];
       if (!group) return;
       const members = new Map<string, { x: number; y: number }>();
@@ -466,6 +491,7 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
 
   const onNodeDragStop = useCallback(
     (_: unknown, node: RfNode) => {
+      const superCard = dragMembers.current?.groupRfId.startsWith(SUPER_PREFIX);
       dragMembers.current = null;
       const current = dragRef.current;
       if (current) {
@@ -485,8 +511,12 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           if (group)
             groups.set(card.groupId, withSetupPosition(group, id, [p.x, p.y]));
         }
+        // A super card moves its blocks without changing which group they are in.
         if (Object.keys(positions).length)
-          doc.moveNodes(positions, groupMembership(positions, sizesRef.current));
+          doc.moveNodes(
+            positions,
+            superCard ? undefined : groupMembership(positions, sizesRef.current),
+          );
         if (groups.size) doc.patchGraph({ groups: [...groups.values()] });
       }
       setDrag(null);
@@ -758,8 +788,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
       data-testid="flows-canvas"
     >
       <ReactFlow<RfNode, RfEdge>
-        nodes={nodes}
-        edges={edges}
+        nodes={view.nodes}
+        edges={view.edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
@@ -808,6 +838,8 @@ export function FlowCanvas({ readOnly = false }: { readOnly?: boolean }) {
           color="color-mix(in oklab, var(--foreground) 14%, transparent)"
         />
         <CanvasControls readOnly={readOnly} />
+        <SuperCardCombineToolbar readOnly={readOnly} />
+        <OpenSuperCards readOnly={readOnly} />
         <SelectedNodeToolbar readOnly={readOnly} />
         {bus && (
           <WireRouterController scope={flowId ?? ""} moving={moving} />
