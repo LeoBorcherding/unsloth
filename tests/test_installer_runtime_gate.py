@@ -6,7 +6,6 @@ mid-install waits instead of repairing over the same venv."""
 
 from __future__ import annotations
 
-import fcntl
 import importlib.util
 import os
 import re
@@ -17,6 +16,9 @@ import time
 from pathlib import Path
 
 import pytest
+
+# POSIX only; an import at the top would fail collection on Windows before the skip below applies.
+fcntl = pytest.importorskip("fcntl")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
