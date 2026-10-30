@@ -116,24 +116,18 @@ export function getLayoutedElements<TNode extends Node>(
     configs,
   } = options;
 
+  // Aux boxes stay where they are. Model, provider and tool cards are laid out with the rest:
+  // they feed the left side of the cards that use them, so they belong in an earlier column.
   const hasConfigs = configs && Object.keys(configs).length > 0;
-  const dataNodes = hasConfigs
-    ? nodes.filter((n) => !(isInfraNode(n.id, configs) || isAuxNode(n.id)))
-    : nodes;
-  const dataEdges = hasConfigs
-    ? edges.filter(
-        (e) =>
-          !(
-            isInfraNode(e.source, configs) ||
-            isInfraNode(e.target, configs) ||
-            isAuxNode(e.source) ||
-            isAuxNode(e.target)
-          ),
-      )
-    : edges;
+  const dataNodes = nodes.filter((n) => !isAuxNode(n.id));
+  const dataEdges = edges.filter((e) => !(isAuxNode(e.source) || isAuxNode(e.target)));
 
   const phantomEdges = hasConfigs
-    ? buildPhantomEdges(dataNodes, dataEdges, configs)
+    ? buildPhantomEdges(
+        dataNodes.filter((n) => !isInfraNode(n.id, configs)),
+        dataEdges,
+        configs,
+      )
     : [];
 
   const graph = new dagre.graphlib.Graph();
