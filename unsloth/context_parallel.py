@@ -209,11 +209,10 @@ def _hybrid_config_blocker(model) -> Optional[str]:
 
 
 def _supports_context_parallel(model, backend = "ring") -> bool:
-    from .models.llama import LlamaAttention_fast_forward
+    from .models.llama import LlamaAttention_fast_forward, runs_fast_forward
 
     modules = [module for name, module in model.named_modules() if name.endswith("self_attn")]
-    forwards = [getattr(type(m).forward, "__func__", type(m).forward) for m in modules]
-    if bool(forwards) and all(f is LlamaAttention_fast_forward for f in forwards):
+    if bool(modules) and all(runs_fast_forward(m, LlamaAttention_fast_forward) for m in modules):
         return not _stateful_mixers(model)
     mixers = _stateful_mixers(model)
     return (
@@ -625,6 +624,45 @@ def _install_accelerator_state(self):
             handler.find_unused_parameters = False
 
 
+def _model_parallel_axes(model) -> list:
+    """Tensor / pipeline parallel axes in use: UNSLOTH_TP_SIZE or a model split by hand."""
+    import os
+
+    axes = []
+    raw = str(os.environ.get("UNSLOTH_TP_SIZE", "")).strip()
+    try:
+        tp = int(raw) if raw else 1  # as tp_env._int_env, which raises its own error on a bad value
+    except ValueError:
+        tp = 1
+    if tp > 1:
+        axes.append(f"tensor parallel (UNSLOTH_TP_SIZE={raw})")
+    if isinstance(model, torch.nn.Module):
+        try:
+            from .models.pp_native import is_pipeline_parallel
+            from .models.tp_native import is_tensor_parallel
+        except Exception:
+            return axes
+        if is_pipeline_parallel(model):
+            axes.append("pipeline parallel (apply_pipeline_parallel)")
+        if is_tensor_parallel(model) and not axes:
+            axes.append("tensor parallel (apply_tensor_parallel)")
+    return axes
+
+
+def _refuse_model_parallel_cp(size: int, args, kwargs) -> None:
+    """The CP mesh (world // cp, cp) would reuse a tp launch's groups and silently train on mixed-up shards."""
+    model = kwargs["model"] if "model" in kwargs else (args[0] if args else None)
+    axes = _model_parallel_axes(model)
+    if not axes:
+        return
+    raise NotImplementedError(
+        f"Unsloth: context parallelism (context_parallel_size = {size}) does not compose with "
+        f"{' and '.join(axes)} yet: its context parallel groups would be the other axis' groups, and training "
+        "would run with wrong gradients. Use context parallelism alone (with DDP or UNSLOTH_FSDP2=1), or "
+        "tensor / pipeline parallelism with context_parallel_size = 1."
+    )
+
+
 def _check_cp_runtime(self, size: int, backend: str) -> None:
     # train() would swap in a fresh model without the attention hooks or the support check.
     if getattr(self, "model_init", None) is not None:
@@ -775,18 +813,31 @@ def patch_sft_trainer(install_cp_methods: bool = False) -> None:
             valid = isinstance(forwarded, int) and not isinstance(forwarded, bool)
             requested = forwarded if valid else 1
         if requested > 1:
+            _refuse_model_parallel_cp(requested, args, kwargs)
             # Before the original __init__: Unsloth wraps instance methods there (auto packing's
             # train reset, the token budget's training_step), and they must capture the CP ones.
             install_methods()
         original_init(self, *args, **kwargs)
         self._context_parallel_manager = None
         # Unsloth's attention ignores transformers' own CP: it would stay local to each shard.
-        parallelism_config = getattr(getattr(self, "args", None), "parallelism_config", None)
-        if (getattr(parallelism_config, "cp_size", 1) or 1) > 1:
-            raise NotImplementedError(
-                "Unsloth: use SFTConfig(context_parallel_size = N) instead of "
-                "parallelism_config with cp_size > 1."
-            )
+        # `accelerate launch` with parallelism_config_cp_size builds it from the environment
+        # (ACCELERATE_USE_PARALLELISM_CONFIG), leaving args.parallelism_config None.
+        for source, parallelism_config in (
+            (
+                "parallelism_config",
+                getattr(getattr(self, "args", None), "parallelism_config", None),
+            ),
+            (
+                "the accelerate config (parallelism_config_cp_size)",
+                getattr(getattr(self, "accelerator", None), "parallelism_config", None),
+            ),
+        ):
+            cp_size = getattr(parallelism_config, "cp_size", 1) or 1
+            if cp_size > 1:
+                raise NotImplementedError(
+                    f"Unsloth: use SFTConfig(context_parallel_size = {cp_size}) instead of "
+                    f"{source} with cp_size > 1."
+                )
         size, backend, rotate_method = context_parallel_options(getattr(self, "args", None))
         if size <= 1:
             _install_accelerator_state(self)
@@ -1035,15 +1086,16 @@ class _GatherSequence(torch.autograd.Function):
             return torch.cat(parts, dim = 1)
         batch, local, rest = x.shape[0], x.shape[1], x.shape[2:]
         # Gather concatenates on dim 0, so sequence goes first; fresh output like torch.cat.
-        out = x.new_empty((batch, size * local, *rest))
         if batch == 1:
+            out = x.new_empty((batch, size * local, *rest))
             _all_gather_into(
                 out.view(size * local, *rest), x.reshape(local, *rest).contiguous(), group = group
             )
             return out
         buffer = x.new_empty((size * local, batch, *rest))
         _all_gather_into(buffer, x.movedim(1, 0).contiguous(), group = group)
-        return out.copy_(buffer.movedim(0, 1))
+        # Out of place: an in-place copy into a returned fresh tensor zeroes compiled grads (torch 2.11).
+        return buffer.movedim(0, 1).contiguous()
 
     @staticmethod
     def backward(ctx, grad):
@@ -1263,6 +1315,29 @@ def _recount_completion_tokens(trainer, result):
     return (*result[:index], total, *result[index + 1 :])
 
 
+def _refuse_transformers_cp(
+    self,
+    config_name: str,
+    backend_hint: str = "",
+) -> None:
+    # Unsloth's attention ignores transformers / accelerate CP: it would stay local to each shard.
+    # `accelerate launch` with parallelism_config_cp_size builds it from the environment
+    # (ACCELERATE_USE_PARALLELISM_CONFIG), leaving args.parallelism_config None.
+    for source, parallelism_config in (
+        ("parallelism_config", getattr(getattr(self, "args", None), "parallelism_config", None)),
+        (
+            "the accelerate config (parallelism_config_cp_size)",
+            getattr(getattr(self, "accelerator", None), "parallelism_config", None),
+        ),
+    ):
+        cp_size = getattr(parallelism_config, "cp_size", 1) or 1
+        if cp_size > 1:
+            raise NotImplementedError(
+                f"Unsloth: use {config_name}(context_parallel_size = {cp_size}{backend_hint}) "
+                f"instead of {source} with cp_size > 1."
+            )
+
+
 def _check_rl_config(self, kind: str) -> None:
     args = self.args
     if kind == "dpo_trainer":
@@ -1356,10 +1431,16 @@ def patch_rl_trainer(trainer_cls, kind: str) -> None:
         except ValueError:
             requested = 1  # Raised again after the original __init__.
         if requested > 1:
+            _refuse_model_parallel_cp(requested, args, kwargs)
             # Before the original __init__, so instance wrappers made there capture the CP methods.
             install_methods()
         original_init(self, *args, **kwargs)
         self._context_parallel_manager = None
+        _refuse_transformers_cp(
+            self,
+            "DPOConfig" if kind == "dpo_trainer" else "GRPOConfig",
+            ", context_parallel_backend = 'ulysses'",
+        )
         size, backend, _ = context_parallel_options(getattr(self, "args", None))
         if size <= 1:
             _install_accelerator_state(self)

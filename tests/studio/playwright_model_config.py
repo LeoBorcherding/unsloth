@@ -758,23 +758,16 @@ with sync_playwright() as p:
         else:
             default_ctx = ctx_in.input_value()
             info(f"default Context Length shown: {default_ctx!r}")
-            remember = popover.get_by_label("Remember for this model").first
-            if _count(remember):
-                try:
-                    remember.check()
-                except Exception:
-                    remember.click()
-            else:
-                fail("'Remember for this model' checkbox not found")
             ctx_in.click()
             ctx_in.fill(str(DISTINCT_CTX))
             expect(ctx_in).to_have_value(str(DISTINCT_CTX), timeout = 5_000)
+            # Enter commits the draft: an uncommitted value leaves Reload disabled on a loaded model.
+            ctx_in.press("Enter")
             shoot("05-ctx-set")
             btn = primary_button(popover)
             if btn is None:
                 fail("primary Load/Save button not found in run-settings")
             else:
-                # Keep the input focused: the click must commit the draft into the same load request.
                 click_and_wait_for_commit(btn, "context length Load")
                 shoot("06-after-load")
 
@@ -842,7 +835,6 @@ with sync_playwright() as p:
 
     # 3. Reset clears the override (never pins context) (HARD).
     step("reset clears the per-model override", LOAD_STEP_BUDGET_S)
-    # Exact: each changed field also has a "Reset <label> to default" button above the footer.
     reset_btn = popover.get_by_role("button", name = "Reset all", exact = True).first
     if _count(reset_btn) == 0:
         fail("Reset all button not found in run-settings")
@@ -899,12 +891,6 @@ with sync_playwright() as p:
         # A skip is not a pass: this step is the only guard on the phantom-pin regression.
         soft_fail("re-type-shown did not run: Context Length input has no numeric default")
     else:
-        remember = popover.get_by_label("Remember for this model").first
-        if _count(remember):
-            try:
-                remember.check()
-            except Exception:
-                remember.click()
         ctx_in.click()
         ctx_in.fill(str(native_default))
         expect(ctx_in).to_have_value(str(native_default), timeout = 5_000)
@@ -967,12 +953,6 @@ with sync_playwright() as p:
                     toggled = True
                 except Exception:
                     pass
-            remember = popover.get_by_label("Remember for this model").first
-            if _count(remember):
-                try:
-                    remember.check()
-                except Exception:
-                    remember.click()
             btn = primary_button(popover)
             if btn is not None and btn.is_enabled():
                 click_and_wait_for_commit(btn, "advanced settings Load")
