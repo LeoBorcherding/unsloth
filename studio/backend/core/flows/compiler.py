@@ -570,6 +570,23 @@ def _check_feedback(
                 )
             )
             continue
+        percent = next((p for p in specs[held[0]]["params"] if p["id"] == "holdout_percent"), None)
+        if percent:
+            raw = (nodes[held[0]].get("params") or {}).get("holdout_percent", percent["default"])
+            # int(), as the run reads it: 0.5 truncates to no hold-out at all.
+            try:
+                unset = int(raw or 0) < 1
+            except (TypeError, ValueError, OverflowError):
+                unset = False
+            if unset:
+                errors.append(
+                    issue(
+                        f"Set {specs[held[0]]['title']}'s Hold out % above 0, so the Loop "
+                        "has held-out rows to score",
+                        node_id = held[0],
+                    )
+                )
+                continue
         scored = {
             src_node
             for port in sspec["inputs"]

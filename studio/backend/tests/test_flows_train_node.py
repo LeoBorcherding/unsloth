@@ -828,3 +828,24 @@ def test_local_holdout_streams_only_the_slice_and_checks_the_cap_first(tmp_path,
         with pytest.raises(FlowNodeError, match = "10 rows"):
             training._load_rows(local, None, 9)
         assert len(training._load_rows(local, None, None, 16)) == 4
+
+
+def test_hub_holdout_of_unknown_size_streams_at_most_the_cap(monkeypatch):
+    from types import SimpleNamespace
+
+    import datasets
+
+    def no_download(
+        *a,
+        streaming = False,
+        **k,
+    ):
+        assert streaming, "a full split download"
+        return SimpleNamespace(take = lambda n: [{"q": i} for i in range(min(n, 20))])
+
+    monkeypatch.setattr(datasets, "load_dataset", no_download)
+    monkeypatch.setattr(datasets, "load_dataset_builder", lambda *a, **k: 1 / 0)
+    assert len(training._load_rows({"source": "hf", "ref": "org/ds"}, None, None)) == 20
+    monkeypatch.setattr(training, "HOLDOUT_MAX_ROWS", 5)
+    with pytest.raises(FlowNodeError, match = "More than 5"):
+        training._load_rows({"source": "hf", "ref": "org/ds"}, None, None)
