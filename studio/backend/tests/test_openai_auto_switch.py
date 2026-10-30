@@ -1606,6 +1606,35 @@ def test_explicit_load_asks_the_hub_for_a_saved_repo_not_downloaded_yet(monkeypa
     assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
 
 
+def test_explicit_load_shares_the_fill_hub_listing_with_the_load(monkeypatch):
+    from utils.models import model_config
+
+    _mock_override_store(monkeypatch)
+    monkeypatch.setattr(resolver, "_snapshot", lambda: (0.0, {}))
+    _put("unsloth/Qwen3-1.7B", engine = "vllm")
+    scopes = []
+
+    def _remote(repo_id, hf_token = None):
+        scopes.append(model_config._hub_model_info_scope.get())
+        return None
+
+    async def _gated(request, *args, **kwargs):
+        with model_config.shared_hub_model_info():
+            scopes.append(model_config._hub_model_info_scope.get())
+        return {"status": "loaded"}
+
+    async def _passthrough(coro, *, label):
+        return await coro
+
+    monkeypatch.setattr(model_config, "detect_gguf_model_remote", _remote)
+    monkeypatch.setattr(inference_route, "load_model_gated", _gated)
+    monkeypatch.setattr(inference_route, "_tunnel_safe_json", _passthrough)
+    request = LoadRequest.model_validate({"model_path": "unsloth/Qwen3-1.7B"})
+    asyncio.run(inference_route.load_model(request, object(), "tester"))
+    assert len(scopes) == 2 and scopes[0] is not None and scopes[0] is scopes[1]
+    assert model_config._hub_model_info_scope.get() is None
+
+
 def test_explicit_load_with_no_saved_preset_is_unchanged(monkeypatch):
     _mock_override_store(monkeypatch)
     body = {"model_path": _QWEN_SMALL, "gguf_variant": "UD-Q4_K_XL"}

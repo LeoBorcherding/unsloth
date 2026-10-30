@@ -17412,17 +17412,21 @@ async def _explicit_load_is_gguf(request: LoadRequest, loader_id: str) -> bool:
 
 def _hub_lists_gguf(repo_id: str, hf_token: Optional[str]) -> Optional[bool]:
     """None when the listing could not be read: a failed lookup is not 'no GGUF files'."""
+    from core.inference.llama_cpp import _hf_offline_if_unreachable_for
     from utils.models import model_config
 
     failures: list[Exception] = []
     token = model_config._gguf_remote_detect_failure.set(failures)
     try:
-        found = model_config.detect_gguf_model_remote(repo_id, hf_token)
+        # Same guard as the load: a dead link reads offline instead of sitting through the retries.
+        with _hf_offline_if_unreachable_for(repo_id):
+            found = model_config.detect_gguf_model_remote(repo_id, hf_token)
+            offline = model_config._env_offline()
     finally:
         model_config._gguf_remote_detect_failure.reset(token)
     if found:
         return True
-    return None if failures or model_config._env_offline() else False
+    return None if failures or offline else False
 
 
 def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:
@@ -17475,11 +17479,15 @@ async def load_model(
     if _resolve_trained_run_request(request):
         # keeps the job's name as the served id, so chat and /v1/models answer to it
         request._advertised_id = request._advertised_id or named
-    await _fill_saved_load_settings(request, named)
-    return await _tunnel_safe_json(
-        load_model_gated(request, fastapi_request, current_subject, user_initiated = True),
-        label = "Model load",
-    )
+    from utils.models.model_config import shared_hub_model_info
+
+    # One scope, so the load's own Hub listing reuses the one the saved-settings fill read.
+    with shared_hub_model_info():
+        await _fill_saved_load_settings(request, named)
+        return await _tunnel_safe_json(
+            load_model_gated(request, fastapi_request, current_subject, user_initiated = True),
+            label = "Model load",
+        )
 
 
 def _repo_is_in_the_hub_cache(model_ref) -> Optional[bool]:
