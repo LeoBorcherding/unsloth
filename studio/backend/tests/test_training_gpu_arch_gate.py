@@ -311,7 +311,13 @@ class TestOneLoadedPackPerProcess:
     """RX 5700 XT (gfx1010) + RX 6500 XT (gfx1034), both packs installed: the rocm7.14.0 HIP runtime loads the gfx1010
     pack for both cards, and the image engine's first kernel on the 6500 XT kills the backend."""
 
-    def _torch(self, tmp_path, devices, packs = ("torch_gfx1010.kpack", "torch_gfx1034.kpack"), hip = "7.14.60850"):
+    def _torch(
+        self,
+        tmp_path,
+        devices,
+        packs = ("torch_gfx1010.kpack", "torch_gfx1034.kpack"),
+        hip = "7.14.60850",
+    ):
         torch = TestMultiArchKernelPacks._torch(self, tmp_path, devices, packs)
         torch.version.hip = hip
         return torch
@@ -335,7 +341,9 @@ class TestOneLoadedPackPerProcess:
         assert _hw_module.rocm_ordinals_on_another_arch_pack()[1] == set()
 
     def test_an_uncovered_first_card_loads_the_next_pack(self, monkeypatch, no_mask, tmp_path):
-        torch = self._torch(tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",))
+        torch = self._torch(
+            tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",)
+        )
         _install(monkeypatch, torch)
         assert _hw_module.rocm_ordinals_on_another_arch_pack() == ("gfx1101", {0})
 
@@ -351,19 +359,25 @@ class TestOneLoadedPackPerProcess:
             dd.resolve_selected_cuda_ordinals([0, 1])
         assert dd.resolve_selected_cuda_ordinals([0]) == [0]
 
-    def test_an_automatic_load_leaves_a_card_0_that_cannot_run_the_pack(self, monkeypatch, no_mask, tmp_path):
+    def test_an_automatic_load_leaves_a_card_0_that_cannot_run_the_pack(
+        self, monkeypatch, no_mask, tmp_path
+    ):
         from core.inference import diffusion_device as dd
 
-        torch = self._torch(tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",))
+        torch = self._torch(
+            tmp_path, [_props("gfx1036"), _props("gfx1101")], ("torch_gfx1101.kpack",)
+        )
         _install(monkeypatch, torch)
         assert dd.kpack_safe_auto_ordinal(None) == 1
         assert dd.kpack_safe_auto_ordinal(0) == 0
 
-    def test_an_automatic_load_stays_put_when_card_0_runs_the_pack(self, monkeypatch, no_mask, tmp_path):
+    def test_an_automatic_load_stays_put_when_card_0_runs_the_pack(
+        self, monkeypatch, no_mask, tmp_path
+    ):
         from core.inference import diffusion_device as dd
-
         _install(monkeypatch, self._torch(tmp_path, [_props("gfx1010:xnack-"), _props("gfx1034")]))
         assert dd.kpack_safe_auto_ordinal(None) is None
+
 
 class TestIdSpace:
     """Results are consumed as physical ids, so ordinals map through the mask."""
