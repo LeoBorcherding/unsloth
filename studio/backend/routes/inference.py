@@ -17432,7 +17432,14 @@ def _hub_lists_gguf(repo_id: str, hf_token: Optional[str]) -> Optional[bool]:
         model_config._gguf_remote_detect_failure.reset(token)
     if found:
         return True
-    return None if failures or offline else False
+    if not (failures or offline):
+        return False
+    # Unread listing: a cached snapshot with no GGUF in it (the lookup already searched the cache) is safetensors.
+    try:
+        cached = next(iter(model_config._iter_hf_cache_snapshots(repo_id)), None)
+    except Exception:
+        cached = None
+    return False if cached is not None else None
 
 
 def _strip_preset_extras(request: LoadRequest, extras: list[str]) -> list[str]:

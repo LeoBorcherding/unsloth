@@ -1601,7 +1601,13 @@ def test_explicit_load_asks_the_hub_for_a_saved_repo_not_downloaded_yet(monkeypa
 
     # A listing that failed says nothing about the format, so the old GGUF reading stands.
     monkeypatch.setattr(model_config, "detect_gguf_model_remote", _unreachable)
+    monkeypatch.setattr(model_config, "_iter_hf_cache_snapshots", lambda *a, **k: iter(()))
     assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine != "vllm"
+    # ...unless the repo is in the HF cache with no GGUF in it: cached safetensors, offline.
+    monkeypatch.setattr(
+        model_config, "_iter_hf_cache_snapshots", lambda *a, **k: iter([Path("/hf/snap")])
+    )
+    assert _explicit_load(monkeypatch, {"model_path": "unsloth/Qwen3-1.7B"}).engine == "vllm"
 
 
 def test_explicit_load_shares_the_fill_hub_listing_with_the_load(monkeypatch):
