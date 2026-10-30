@@ -280,10 +280,31 @@ class TestDetectHostFallsBackToTheLibraries:
         )
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising = False)
         host = ILP.detect_host()
-        assert host.has_physical_nvidia and host.has_usable_nvidia
+        assert host.has_physical_nvidia and host.has_usable_nvidia and host.nvidia_gpu_seen
         assert host.driver_cuda_version == (12, 8)
         assert host.compute_caps == ["89", "86"]
         assert host.physical_compute_caps == ["89", "86"]
+
+    def test_nvidia_smi_listing_no_gpu_is_not_an_nvidia_gpu(self, monkeypatch):
+        # The driver leaves nvidia-smi on PATH when the card is gone or unreachable.
+        _hide_the_real_host(monkeypatch, nvidia_smi = "/usr/bin/nvidia-smi")
+        _failing_smi(monkeypatch)
+        monkeypatch.setattr(ILP, "nvidia_library_inventory", lambda: None)
+        host = ILP.detect_host()
+        assert host.nvidia_smi and not host.nvidia_gpu_seen
+
+    def test_a_hung_nvidia_smi_listing_is_unknown_not_absent(self, monkeypatch):
+        _hide_the_real_host(monkeypatch, nvidia_smi = "/usr/bin/nvidia-smi")
+
+        def run_capture(command, **kwargs):
+            if command and "nvidia-smi" in str(command[0]):
+                raise subprocess.TimeoutExpired(command, 20)
+            return subprocess.CompletedProcess(command, 1, stdout = "", stderr = "")
+
+        monkeypatch.setattr(ILP, "run_capture", run_capture)
+        monkeypatch.setattr(ILP, "nvidia_library_inventory", lambda: None)
+        host = ILP.detect_host()
+        assert host.nvidia_gpu_seen and not host.has_physical_nvidia
 
     def test_an_absent_nvidia_smi_is_the_same(self, monkeypatch):
         _hide_the_real_host(monkeypatch, nvidia_smi = None)

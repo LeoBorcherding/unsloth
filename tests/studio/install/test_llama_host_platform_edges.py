@@ -130,7 +130,7 @@ def test_windows_rocm_with_physical_nvidia_never_takes_vulkan(monkeypatch):
 @pytest.mark.parametrize(
     "trace",
     [
-        dict(nvidia_smi = "C:/Windows/System32/nvidia-smi.exe"),
+        dict(nvidia_smi = "C:/Windows/System32/nvidia-smi.exe", nvidia_gpu_seen = True),
         dict(compute_caps = ["89"]),
         dict(physical_compute_caps = ["89"]),
     ],
@@ -163,9 +163,16 @@ def test_windows_rocm_beside_another_gpu_keeps_the_vulkan_guard(var, other, monk
         monkeypatch.setenv(var, "1")
         host = _host(has_rocm = True, **{other: True})
     else:
-        host = _host(has_rocm = True, nvidia_smi = "C:/nvidia-smi.exe", **{other: True})
+        host = _host(
+            has_rocm = True, nvidia_smi = "C:/nvidia-smi.exe", nvidia_gpu_seen = True, **{other: True}
+        )
     assert _direct_names([VULKAN, CPU], host) == [CPU]
     assert _single_name([VULKAN, CPU], host, monkeypatch) == CPU
+
+
+def test_windows_rocm_with_an_nvidia_smi_that_lists_no_gpu_still_takes_vulkan(monkeypatch):
+    host = _host(has_rocm = True, nvidia_smi = "C:/Windows/System32/nvidia-smi.exe")
+    assert _single_name([VULKAN, CPU], host, monkeypatch) == VULKAN
 
 
 def test_windows_rocm_beside_an_intel_igpu_still_takes_vulkan_unmasked(monkeypatch):

@@ -1447,6 +1447,27 @@ def test_rocm_torch_preference_does_not_hide_nvidia_from_the_mixed_host_rule(
     assert route.persist_llama_backend is None
 
 
+def test_an_nvidia_smi_that_lists_no_gpu_does_not_block_the_mixed_host_rule(_unpinned_amd_env):
+    # The driver keeps nvidia-smi on PATH after the card is gone; main found no bundle at all.
+    host = _windows_amd_host(
+        nvidia_smi = r"C:\Windows\System32\nvidia-smi.exe",
+        rocm_gfx_target = "gfx1010",
+        rocm_gfx_targets = ["gfx1010", "gfx1034"],
+    )
+    assert ilp._should_auto_vulkan_for_amd_windows(host, FORK) is True
+
+
+def test_a_listed_nvidia_gpu_without_caps_keeps_the_mixed_host_off_vulkan(_unpinned_amd_env):
+    # ROCm torch cleared has_physical_nvidia and the driver reported no compute_cap.
+    host = _windows_amd_host(
+        nvidia_smi = r"C:\Windows\System32\nvidia-smi.exe",
+        nvidia_gpu_seen = True,
+        rocm_gfx_target = "gfx1010",
+        rocm_gfx_targets = ["gfx1010", "gfx1034"],
+    )
+    assert ilp._should_auto_vulkan_for_amd_windows(host, FORK) is False
+
+
 def test_the_mixed_host_rule_is_windows_only(_unpinned_amd_env):
     host = _windows_amd_host(
         system = "Linux",

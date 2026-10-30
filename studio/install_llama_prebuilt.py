@@ -391,6 +391,9 @@ class HostInfo:
     vulkan_routed: bool = False
     # Set only by the probe route: the installed Vulkan bundle must itself list a Vulkan GPU.
     vulkan_device_required: bool = False
+    # An NVIDIA GPU was found. Survives the ROCm-torch clear of has_physical_nvidia; nvidia_smi
+    # alone does not count, the binary stays on PATH with the driver after the card is gone.
+    nvidia_gpu_seen: bool = False
 
 
 @dataclass
@@ -790,7 +793,7 @@ def _windows_rocm_vulkan_fallback_allowed(host: HostInfo) -> bool:
     and following ROCm torch clears has_physical_nvidia while the card stays enumerable."""
     return not (
         host.has_physical_nvidia
-        or host.nvidia_smi
+        or host.nvidia_gpu_seen
         or host.physical_compute_caps
         or host.compute_caps
         or _hip_visible_device_mask_set()
@@ -3004,6 +3007,8 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
     visible_device_tokens = parse_cuda_visible_devices(visible_cuda_devices)
     has_physical_nvidia = False
     has_usable_nvidia = False
+    # `nvidia-smi -L` hung or couldn't start: unknown, so the Vulkan rules stay off as before.
+    nvidia_listing_unknown = False
     if nvidia_smi:
         # Require `nvidia-smi -L` to list a GPU: the banner prints even when the driver is unreachable.
         try:
@@ -3013,7 +3018,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
                 has_physical_nvidia = True
                 has_usable_nvidia = visible_device_tokens != []
         except Exception:
-            pass
+            nvidia_listing_unknown = True
 
         try:
             result = run_capture([nvidia_smi], timeout = 20)
@@ -3280,6 +3285,7 @@ def detect_host(*, probe_rocm_with_nvidia: bool = False) -> HostInfo:
         rocm_gfx_target = rocm_gfx_target,
         rocm_gfx_targets = rocm_gfx_targets,
         macos_version = macos_version,
+        nvidia_gpu_seen = has_physical_nvidia or nvidia_listing_unknown,
     )
 
 
@@ -6954,7 +6960,7 @@ def _uncovered_rocm_gpu_takes_vulkan(host: HostInfo) -> bool:
         and host.is_x86_64
         and not host.has_physical_nvidia
         # Following ROCm torch clears has_physical_nvidia but keeps the card's evidence.
-        and not (host.nvidia_smi or host.physical_compute_caps or host.driver_cuda_version)
+        and not (host.nvidia_gpu_seen or host.physical_compute_caps or host.driver_cuda_version)
         and not _hip_visible_device_mask_set()
         and not _vulkan_visible_device_mask_set()
         and not _hipcc_available()
@@ -10008,7 +10014,7 @@ def _should_auto_vulkan_for_amd_windows(host: HostInfo, published_repo: str | No
     if (
         not os.environ.get("UNSLOTH_ROCM_GFX_ARCH")
         and not host.rocm_gfx_forwarded
-        and not (host.nvidia_smi or host.physical_compute_caps or host.compute_caps)
+        and not (host.nvidia_gpu_seen or host.physical_compute_caps or host.compute_caps)
         and active == _pick_rocm_gfx_target(" ".join(targets))
         and not _gfx_is_windows_hip_supported(active, published_repo)
     ):
