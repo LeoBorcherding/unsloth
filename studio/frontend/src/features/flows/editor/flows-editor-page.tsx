@@ -94,10 +94,8 @@ function EditorBody({
 }: { flowId: string; readOnly: boolean }) {
   const navigate = useNavigate();
   const paletteOpen = useUiStore((s) => s.paletteOpen);
-  const drawerOpen = useUiStore((s) => s.drawerOpen);
   const recipeEditorOpen = useUiStore((s) => s.recipeEditor !== null);
   const recipeRunsOpen = useUiStore((s) => s.recipeRuns !== null);
-  const runStatus = useRuntimeStore((s) => s.runStatus);
   const { screenToFlowPosition } = useReactFlow();
   useEditorShortcuts(!readOnly);
   // The Nodes panel owns the left edge here: the app sidebar unpins (Desktop peeks it from the
