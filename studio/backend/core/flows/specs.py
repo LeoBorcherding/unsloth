@@ -30,6 +30,7 @@ CATEGORIES = [
     {"id": "world", "title": "World Game", "color": "#22c55e"},
     {"id": "chat", "title": "Chat & Agents", "color": "#14b8a6"},
     {"id": "memory", "title": "Memory", "color": "#0d9488"},
+    {"id": "custom", "title": "Custom", "color": "#64748b"},
 ]
 
 PORT_COLORS = {

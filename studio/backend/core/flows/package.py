@@ -27,7 +27,7 @@ from core.flows import glb, schema
 from core.flows.compiler import parse_document
 from core.flows import replication
 from core.flows.recipe_share import missing_seed, share_flow
-from core.flows.specs import SPECS_BY_TYPE
+from core.flows.custom_nodes import spec_for_node
 
 MAX_ENTRIES = schema.MAX_ASSETS + 8
 MAX_RATIO = 200
@@ -220,7 +220,7 @@ def record_lineage(doc: dict) -> None:
 
 def _uses_models(doc: dict) -> bool:
     return any(
-        (SPECS_BY_TYPE.get(n.get("type")) or {}).get("lane") == "gpu" for n in doc.get("nodes", [])
+        (spec_for_node(n) or {}).get("lane") == "gpu" for n in doc.get("nodes", [])
     )
 
 
@@ -407,7 +407,7 @@ def read_package(data: bytes) -> tuple[dict, dict[str, tuple[bytes, str]], dict]
     for group in doc.get("groups") or []:
         if group.get("kind") == "recipe" and (seed := missing_seed(group.get("config"))):
             warnings.append(f"{group.get('label') or 'Data Recipe'}: {seed}")
-    unknown = sorted({n["type"] for n in doc.get("nodes", []) if n["type"] not in SPECS_BY_TYPE})
+    unknown = sorted({n["type"] for n in doc.get("nodes", []) if spec_for_node(n) is None})
     if unknown:
         warnings.append(
             "Node types this Unsloth Studio does not know (the flow opens read-only until it is updated): "

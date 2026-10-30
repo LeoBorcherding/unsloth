@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from core.flows.specs import SPECS_BY_TYPE
+from core.flows.custom_nodes import spec_for_node
 
 MAX_PINS = 32
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -176,8 +176,8 @@ def notices(
 
 def live_conversations(doc: dict) -> bool:
     return any(
-        (SPECS_BY_TYPE.get(n.get("type")) or {}).get("entrypoint")
-        and (SPECS_BY_TYPE.get(n.get("type")) or {}).get("lane") == "gpu"
+        (spec_for_node(n) or {}).get("entrypoint")
+        and (spec_for_node(n) or {}).get("lane") == "gpu"
         and not n.get("disabled")
         for n in doc.get("nodes") or []
     )

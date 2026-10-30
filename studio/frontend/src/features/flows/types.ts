@@ -203,6 +203,38 @@ export interface NodeSpec {
   requires_approval?: string[];
   /** Part of something another node runs (a recipe column); never run on its own. */
   design?: boolean;
+  /** Custom nodes only (core/flows/custom_nodes.py): run by one shared handler. */
+  handler?: string;
+  code_param?: string;
+  custom?: { hash: string };
+}
+
+/** A script in the account's custom node library. `spec` is null when the stored script no longer parses. */
+export interface CustomNodeEntry {
+  id: string;
+  name: string;
+  source: string;
+  hash: string;
+  spec: NodeSpec | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Whether custom nodes can run here: they need OS isolation and never run on Windows. */
+export interface CustomNodeSandbox {
+  ready: boolean;
+  platform: string;
+  message: string;
+  manual_command: string;
+}
+
+export interface SandboxLibraries {
+  python: string;
+  packages: { name: string; version: string }[];
+  /** "sandbox": asked inside the sandbox; "studio-python": the probe failed, read from Studio's interpreter. */
+  source: "sandbox" | "studio-python";
+  note: string;
 }
 
 export interface NodeCategory {
