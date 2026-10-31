@@ -895,6 +895,7 @@ def format_and_template_dataset(
     progress_callback = None,
     split_name = None,
     raw_text_column = None,
+    dataset_revision = None,
 ):
     """Combines format_dataset and apply_chat_template_to_dataset, for UI workflows where one call does everything. custom_prompt_template is retained for signature compatibility; non-None values are rejected because Studio cannot persist a matching inference template. Returns {dataset (with a 'text' column), detected_format, final_format, success, requires_manual_mapping, warnings, errors, summary}."""
     from .tokenizer_fingerprint import install_tokenizer_fingerprint
@@ -966,6 +967,7 @@ def format_and_template_dataset(
                         question_column = video_question_column,
                         instruction = vlm_instruction,
                         dataset_name = dataset_name,
+                        dataset_revision = dataset_revision,
                     )
                 except Exception as e:
                     errors.append(f"Failed to convert the mapped video + text columns: {e}")
@@ -1126,6 +1128,7 @@ def format_and_template_dataset(
                     instruction = vlm_instruction,
                     video_columns = vlm_structure.get("video_columns"),
                     dataset_name = dataset_name,
+                    dataset_revision = dataset_revision,
                 )
             except Exception as e:
                 errors.append(f"Failed to convert video + text rows to VLM format: {e}")
@@ -1229,7 +1232,9 @@ def format_and_template_dataset(
 
         elif vlm_structure["format"] == "vlm_messages":
             try:
-                dataset = own_message_videos(dataset, dataset_name = dataset_name)
+                dataset = own_message_videos(
+                    dataset, dataset_name = dataset_name, dataset_revision = dataset_revision
+                )
             except Exception as e:
                 errors.append(f"Failed to read the video parts of VLM messages rows: {e}")
                 return {

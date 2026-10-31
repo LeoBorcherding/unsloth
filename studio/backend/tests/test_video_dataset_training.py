@@ -293,25 +293,29 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
 
     from utils.datasets.format_conversion import convert_video_to_vlm_format, own_message_videos
 
-    calls = []
+    calls, revisions = [], []
 
     class Api:
         def list_repo_files(
             self,
             repo_id,
             repo_type = None,
+            revision = None,
         ):
             assert (repo_id, repo_type) == ("someone/clips", "dataset")
+            revisions.append(("list", revision))
             return ["videos/clip00.mp4", "videos/clip01.mp4", "README.md"]
 
     def download(
         repo_id,
         filename,
         repo_type = None,
+        revision = None,
         cache_dir = None,
         **kw,
     ):
         calls.append(filename)
+        revisions.append(("download", revision))
         return str(tmp_path / filename)
 
     monkeypatch.setattr(huggingface_hub, "HfApi", Api)
@@ -321,11 +325,49 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
     assert [_video_parts(r)[0]["video"] for r in out] == [
         str(tmp_path / f"videos/clip0{i}.mp4") for i in range(2)
     ]
+    assert {revision for _, revision in revisions} == {None}
     messages = [
         {"messages": [{"role": "user", "content": [{"type": "video", "video": "clip01.mp4"}]}]}
     ]
     out = own_message_videos(messages, dataset_name = "someone/clips")
     assert _video_parts(out[0])[0]["video"] == str(tmp_path / "videos/clip01.mp4")
+
+    # A pinned dataset revision lists and downloads clips from that revision, not main.
+    revisions.clear()
+    convert_video_to_vlm_format(
+        rows, "video", "answer", dataset_name = "someone/clips", dataset_revision = "abc123"
+    )
+    own_message_videos(messages, dataset_name = "someone/clips", dataset_revision = "abc123")
+    assert revisions and {revision for _, revision in revisions} == {"abc123"}
+    assert {kind for kind, _ in revisions} == {"list", "download"}
+
+
+def test_the_dataset_revision_reaches_the_clip_resolver_from_every_trainer():
+    import ast
+    from pathlib import Path
+
+    backend = Path(__file__).parents[1]
+    for path in ("core/training/trainer.py", "core/training/worker.py"):
+        tree = ast.parse((backend / path).read_text(encoding = "utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "format_and_template_dataset"
+            # Clips are resolved only on the VLM path; a text-only call never reaches them.
+            and any(
+                kw.arg == "is_vlm"
+                and not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+                for kw in node.keywords
+            )
+        ]
+        assert calls, path
+        missing = [
+            c.lineno for c in calls if not any(kw.arg == "dataset_revision" for kw in c.keywords)
+        ]
+        assert (
+            not missing
+        ), f"{path}: format_and_template_dataset without dataset_revision at {missing}"
 
 
 def test_a_lone_column_of_clip_paths_is_not_raw_text():
@@ -344,6 +386,7 @@ def test_an_ambiguous_bare_clip_name_is_refused(monkeypatch, tmp_path):
             self,
             repo_id,
             repo_type = None,
+            revision = None,
         ):
             return ["train/clip.mp4", "test/clip.mp4"]
 
