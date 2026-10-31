@@ -7403,6 +7403,23 @@ def test_a_flag_naming_the_second_ordinal_keeps_both_cards(tmp_path, monkeypatch
     assert mask != "0"
 
 
+def test_a_torch_classified_host_still_charges_the_projector_to_an_unknown_total_card(
+    tmp_path, monkeypatch
+):
+    # Torch can classify the dGPU, but the APU reports no total: the CPU-pinned projector stays
+    # charged, so an explicit pick is neither narrowed onto the dGPU nor run with --fit off.
+    monkeypatch.setattr(
+        LlamaCppBackend, "_torch_unified_memory_classification_known", lambda self, *a, **k: True
+    )
+    monkeypatch.delenv("LLAMA_ARG_DEVICE", raising = False)
+    assert _host_projector_explicit_launch(tmp_path, monkeypatch, extra = ["--device", "none"]) == (
+        None,
+        "on",
+    )
+    mask, _fit = _host_projector_explicit_launch(tmp_path, monkeypatch, extra = ["--main-gpu", "1"])
+    assert mask != "0"
+
+
 def test_the_explicit_device_ordinals_needed_reads_flags_and_env(monkeypatch):
     from core.inference.llama_cpp import _explicit_device_ordinals_needed as need
 

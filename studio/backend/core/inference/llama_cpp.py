@@ -24925,6 +24925,7 @@ class LlamaCppBackend:
                 _tier_gpus = frozenset()
                 # dGPU subsets an explicit pick may price without host-only bytes.
                 _discount_prefixes = frozenset()
+                _explicit_device_pick = False
                 # Sized inputs for the tensor-spill planner, None when the fit never
                 # priced them. Bound before the try like _placement_verdict_partial:
                 # the except arm restores use_fit=True without rebinding
@@ -25220,6 +25221,7 @@ class LlamaCppBackend:
                             or self._visibility_mask_is_unmappable()
                         ):
                             _tier_gpus = frozenset()
+                            _explicit_device_pick = True
                         # Under that pick, host-only bytes may skip only a dGPU subset whose pinned
                         # mask (emitted in ascending ids) keeps every ordinal the flags name on the
                         # same card: a leading run of the inherited order, already ascending.
@@ -26876,7 +26878,11 @@ class LlamaCppBackend:
                     # the measured pool, so charge it when shared memory is present.
                     _shared_pool_mmproj = (
                         _mmproj_pinned_bytes
-                        if (not gpus or bool(_shared_gpu_ids | _unclassified_gpu_ids))
+                        if (
+                            not gpus
+                            or bool(_shared_gpu_ids | _unclassified_gpu_ids)
+                            or len(_mm_budgeted_gpus) < len(gpus)
+                        )
                         else 0
                     )
                     _host_input_embd = _host_input_bytes_now(model_size)
@@ -27268,7 +27274,11 @@ class LlamaCppBackend:
                                             shared_gpu_ids = _shared_gpu_ids,
                                         )
                                     )
-                                    if not _candidate_fit:
+                                    # An explicit pick takes only a prefix _select_gpus vetted.
+                                    if not _candidate_fit and (
+                                        not _explicit_device_pick
+                                        or frozenset(_candidate_indices) in _discount_prefixes
+                                    ):
                                         gpu_indices, use_fit = _candidate_indices, False
                             # No silent shrink: effective_ctx stays requested_ctx; use_fit means --fit on will offload. -nkvo keeps the cache on the host, so overflow is not real.
                             if (
