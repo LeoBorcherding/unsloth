@@ -130,3 +130,32 @@ def _mlx_adapter():
 def test_mlx_refuses_video_rather_than_dropping_it():
     with pytest.raises(ValueError, match = "video"):
         _mlx_adapter()(_format(_messages_rows()))
+
+
+@pytest.mark.parametrize("url", ["https://example.com/clip.mp4", "HTTP://example.com/clip.mov?x=1"])
+@pytest.mark.parametrize("shape", ["flat", "messages"])
+def test_remote_video_urls_are_refused_with_a_clear_message(url, shape):
+    # Never handed to the collator to fetch unguarded, nor read as a local path for a managed account.
+    if shape == "flat":
+        ds = Dataset.from_dict({"video": [url] * 2, "answer": ANSWERS})
+    else:
+        ds = Dataset.from_list(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": [{"type": "video", "video": url}]},
+                        {"role": "assistant", "content": [{"type": "text", "text": a}]},
+                    ]
+                }
+                for a in ANSWERS
+            ]
+        )
+    info = format_and_template_dataset(
+        ds,
+        model_name = "unsloth/Qwen2.5-VL-3B-Instruct",
+        tokenizer = None,
+        is_vlm = True,
+        dataset_name = "local",
+    )
+    assert not info["success"]
+    assert "Remote video URLs are not fetched" in " ".join(map(str, info["errors"]))

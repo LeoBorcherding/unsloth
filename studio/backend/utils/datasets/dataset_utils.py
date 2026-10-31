@@ -1125,7 +1125,20 @@ def format_and_template_dataset(
                 }
 
         elif vlm_structure["format"] == "vlm_messages":
-            dataset = own_message_videos(dataset)
+            try:
+                dataset = own_message_videos(dataset)
+            except Exception as e:
+                errors.append(f"Failed to read the video parts of VLM messages rows: {e}")
+                return {
+                    "dataset": dataset,
+                    "detected_format": "vlm_messages",
+                    "final_format": "vlm_conversion_failed",
+                    "is_vlm": True,
+                    "success": False,
+                    "requires_manual_mapping": True,
+                    "warnings": warnings,
+                    "errors": errors,
+                }
             warnings.append("Dataset already in standard VLM messages format")
 
         return {

@@ -848,6 +848,12 @@ def _own_video_part(video, account):
         video = video.get("path")
     if not isinstance(video, str) or not video.strip():
         raise ValueError("Row has no video")
+    if video.strip().lower().startswith(("http://", "https://")):
+        # The collator would fetch it unguarded; the image fetchers' 64 MB cap does not fit clips.
+        raise ValueError(
+            f"Remote video URLs are not fetched for training: {video}. "
+            "Download the clips and point the column at local files or a Hub dataset."
+        )
     return _own_image_path(video, account)
 
 
