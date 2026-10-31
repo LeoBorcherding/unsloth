@@ -40,6 +40,11 @@ export function isChatModelVoice(id: string | null | undefined): boolean {
   return id === VOICE_CHAT_MODEL_VOICE;
 }
 
+/** The chat model's female / male and an audio.cpp voice's speakers are separate lists. */
+export function speakerCarriesOver(from: string | null | undefined, to: string): boolean {
+  return isChatModelVoice(from) === isChatModelVoice(to);
+}
+
 /** Whether the loaded chat model answers in speech (the inference status's `speaks`). */
 export function chatModelSpeaks(state: {
   models: readonly { id: string; speaks?: boolean }[];

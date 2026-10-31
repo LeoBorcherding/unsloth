@@ -16,6 +16,7 @@ import {
   VOICE_TTS_MODELS,
   chatModelSpeaks,
   isChatModelVoice,
+  speakerCarriesOver,
   voiceTtsCanClone,
 } from "@/features/chat/voice/voice-models";
 import { ModelSelector } from "@/features/model-picker";
@@ -68,6 +69,12 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
     [isMac],
   );
   const speaks = useChatRuntimeStore(chatModelSpeaks);
+  const pick = (id: string) => {
+    if (!speakerCarriesOver(value, id)) {
+      useChatRuntimeStore.getState().setSelectedVoiceSpeaker("");
+    }
+    onValueChange(id);
+  };
   const picker = (
     <ModelSelector
       models={models}
@@ -80,7 +87,7 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
           toast.info(t("voicePanel.ggufVoicesOnly"));
           return;
         }
-        onValueChange(id);
+        pick(id);
       }}
       variant="ghost"
       className="!h-8.5"
@@ -101,7 +108,7 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
         type="button"
         disabled={!speaks}
         onClick={() => {
-          onValueChange(VOICE_CHAT_MODEL_VOICE);
+          pick(VOICE_CHAT_MODEL_VOICE);
           onClose?.();
         }}
         className={cn(

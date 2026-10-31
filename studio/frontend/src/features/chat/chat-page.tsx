@@ -37,6 +37,7 @@ import {
   holdForServing,
   settleVoiceLoad,
   type VoiceHold,
+  voiceReplacedByServing,
   voiceToUnload,
 } from "@/features/chat/voice/voice-ownership";
 import { isChatModelVoice } from "@/features/chat/voice/voice-models";
@@ -2984,6 +2985,8 @@ export function ChatPage({
         const { loadVoice, servedVoice, unloadVoice, voiceServing } = await loadVoiceMode();
         if (await voiceServing(id)) {
           if (epoch !== voiceEpochRef.current) return false;
+          const replaced = voiceReplacedByServing(loadedVoiceRef.current, id);
+          if (replaced) await unloadVoice(replaced).catch(() => {});
           loadedVoiceRef.current = holdForServing(loadedVoiceRef.current, id);
           store.setVoiceSlotLoaded(true);
           return true;
