@@ -196,3 +196,15 @@ def test_a_blank_first_answer_still_finds_the_answer_column():
     assert check_dataset_format(ds, is_vlm = True)["detected_format"] == "video_text"
     out = _format(ds)
     assert len(out) == 1 and out[0]["messages"][1]["content"] == [{"type": "text", "text": ANSWERS[1]}]
+
+
+def test_every_video_column_reaches_the_message():
+    ds = Dataset.from_dict(
+        {"video_front": CLIPS, "video_side": ["clips/side0.mp4", None], "answer": ANSWERS}
+    )
+    out = _format(ds)
+    assert _video_parts(out[0]) == [
+        {"type": "video", "video": CLIPS[0]},
+        {"type": "video", "video": "clips/side0.mp4"},
+    ]
+    assert _video_parts(out[1]) == [{"type": "video", "video": CLIPS[1]}]

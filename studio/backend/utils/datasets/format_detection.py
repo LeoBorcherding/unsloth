@@ -891,6 +891,7 @@ def detect_video_structure(sample: dict):
         "messages_column": None,
         "image_column": None,
         "video_column": flat[0],
+        "video_columns": flat,
         "text_column": text_col,
         "question_column": question_col if question_col != text_col else None,
     }

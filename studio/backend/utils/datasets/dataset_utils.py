@@ -1041,6 +1041,7 @@ def format_and_template_dataset(
                     text_column = vlm_structure["text_column"],
                     question_column = vlm_structure.get("question_column"),
                     instruction = vlm_instruction,
+                    video_columns = vlm_structure.get("video_columns"),
                 )
             except Exception as e:
                 errors.append(f"Failed to convert video + text rows to VLM format: {e}")

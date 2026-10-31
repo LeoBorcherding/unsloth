@@ -887,8 +887,9 @@ def convert_video_to_vlm_format(
     text_column,
     question_column = None,
     instruction = None,
+    video_columns = None,
 ):
-    """Flat video + text rows to VLM messages; the collator decodes the clip, so the path stays a path."""
+    """Flat video + text rows to VLM messages, one video part per clip column; the collator decodes the clip, so the path stays a path."""
     from utils.account_context import current_account
 
     account = current_account()
@@ -896,7 +897,8 @@ def convert_video_to_vlm_format(
     converted = []
     for row in dataset:
         answer = row.get(text_column)
-        if row.get(video_column) is None or answer is None or not str(answer).strip():
+        clips = [row[c] for c in (video_columns or [video_column]) if row.get(c) is not None]
+        if not clips or answer is None or not str(answer).strip():
             continue
         question = row.get(question_column) if question_column else None
         if not isinstance(question, str) or not question.strip():
@@ -907,7 +909,10 @@ def convert_video_to_vlm_format(
                     {
                         "role": "user",
                         "content": [
-                            {"type": "video", "video": _own_video_part(row[video_column], account)},
+                            *(
+                                {"type": "video", "video": _own_video_part(clip, account)}
+                                for clip in clips
+                            ),
                             {"type": "text", "text": question},
                         ],
                     },
