@@ -942,7 +942,9 @@ class _SpeechChunker:
         self.streamed = False
         self.cache = None
         self._placed = False
-        cache_cls = getattr(sys.modules.get(type(codec).__module__), "LiquidCodecStreamingCache", None)
+        cache_cls = getattr(
+            sys.modules.get(type(codec).__module__), "LiquidCodecStreamingCache", None
+        )
         try:
             takes_cache = "streaming_cache" in inspect.signature(codec.decode).parameters
         except (TypeError, ValueError):

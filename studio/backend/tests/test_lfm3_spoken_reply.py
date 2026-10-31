@@ -6,19 +6,52 @@ and reading text aloud through the chat model's TTS mode."""
 
 import asyncio
 import base64
+import importlib
 import io
 import sys
 import threading
 import types
 import wave
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 import torch
 from fastapi import HTTPException
 
-import core.inference.inference as inf
+_STUBBED: list[str] = []
+
+
+def _stub_if_missing(name, attrs):
+    """Stubs a dep the backend pytest job lacks, so collection succeeds; real installs are left alone."""
+    if name in sys.modules:
+        return
+    try:
+        importlib.import_module(name)
+        return
+    except Exception:  # noqa: BLE001 - any import failure means "not usable here", so stub it
+        pass
+    _STUBBED.append(name)
+    mod = types.ModuleType(name)
+    mod.__spec__ = None
+    for attr in attrs:
+        setattr(mod, attr, MagicMock())
+    sys.modules[name] = mod
+    parent, _, child = name.rpartition(".")
+    if parent and parent in sys.modules:
+        setattr(sys.modules[parent], child, mod)
+
+
+_stub_if_missing(
+    "unsloth", ("FastLanguageModel", "FastVisionModel", "FastModel", "is_bfloat16_supported")
+)
+_stub_if_missing("unsloth.chat_templates", ("get_chat_template",))
+
+import core.inference.inference as inf  # noqa: E402
+
+for _name in reversed(_STUBBED):
+    sys.modules.pop(_name, None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_audio_chat_load import _config, backend  # noqa: E402, F401 - fixture
@@ -40,7 +73,11 @@ class _Codec(torch.nn.Module):
 
 
 class _Tokenizer:
-    def decode(self, ids, skip_special_tokens = False):
+    def decode(
+        self,
+        ids,
+        skip_special_tokens = False,
+    ):
         assert skip_special_tokens
         return " Paris is the capital. "
 
@@ -67,7 +104,11 @@ class _Model(torch.nn.Module):
     config = types.SimpleNamespace(interleaved_n_audio = 12)
     device = "cpu"
 
-    def __init__(self, frames = 3, cancel_during = None):
+    def __init__(
+        self,
+        frames = 3,
+        cancel_during = None,
+    ):
         super().__init__()
         self.p = torch.nn.Parameter(torch.zeros(1))
         self.frames, self.cancel_during, self.kwargs = frames, cancel_during, None
@@ -87,7 +128,11 @@ class _Model(torch.nn.Module):
         )
 
 
-def _backend(model, processor, audio_type = "audio_vlm"):
+def _backend(
+    model,
+    processor,
+    audio_type = "audio_vlm",
+):
     b = inf.InferenceBackend.__new__(inf.InferenceBackend)
     b.active_model_name = "LiquidAI/LFM3-Audio-2B"
     b.models = {
@@ -105,7 +150,11 @@ def _backend(model, processor, audio_type = "audio_vlm"):
     return b
 
 
-def _spoken(b, cancel_event = None, **kwargs):
+def _spoken(
+    b,
+    cancel_event = None,
+    **kwargs,
+):
     return list(
         inf.InferenceBackend.generate_audio_input_response(
             b,
@@ -289,7 +338,12 @@ class LiquidCodecStreamingCache:
 class _StreamingCodec(_Codec):
     config = types.SimpleNamespace(sampling_rate = 24000, n_q = 12)
 
-    def decode(self, codes, streaming_cache = None, finalize = True):
+    def decode(
+        self,
+        codes,
+        streaming_cache = None,
+        finalize = True,
+    ):
         if streaming_cache is not None:
             streaming_cache.chunks += 1
             streaming_cache.finished = finalize
@@ -303,7 +357,11 @@ _StreamingCodec.__module__ = __name__
 class _TokenTokenizer:
     words = {1: "Paris", 2: " is", 3: " the", 4: " capital."}
 
-    def decode(self, ids, skip_special_tokens = False):
+    def decode(
+        self,
+        ids,
+        skip_special_tokens = False,
+    ):
         ids = ids.tolist() if hasattr(ids, "tolist") else ids
         return "".join(self.words.get(int(i), "") for i in ids)
 
