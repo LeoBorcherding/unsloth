@@ -3830,6 +3830,103 @@ def _requests_float32(dtype):
     return dtype is torch.float32
 
 
+def _base_config_dicts(model):
+    """config.json of each base the model names (PEFT base, then _name_or_path), at the loaded commit, cache first."""
+    config = getattr(model, "config", None)
+    loaded = getattr(config, "_name_or_path", None)
+    names = [
+        getattr(peft_config, "base_model_name_or_path", None)
+        for peft_config in (getattr(model, "peft_config", None) or {}).values()
+    ]
+    names.append(loaded)
+    for name in dict.fromkeys(n for n in names if isinstance(n, str) and n):
+        # The loaded config's _commit_hash pins the snapshot it came from; another repo has no pin.
+        revision = getattr(config, "_commit_hash", None) if name == loaded else None
+        try:
+            if os.path.isdir(name):
+                path = os.path.join(name, "config.json")
+            else:
+                from huggingface_hub import hf_hub_download
+                try:
+                    path = hf_hub_download(
+                        name, "config.json", revision = revision, local_files_only = True
+                    )
+                except Exception:
+                    path = hf_hub_download(name, "config.json", revision = revision)
+            with open(path, encoding = "utf-8") as f:
+                yield json.load(f)
+        except Exception:
+            continue
+
+
+def _restore_lfm3_audio_release_config(model, save_directory):
+    """LFM3-Audio's remote config saves as text_config / audio_encoder_config, but llama.cpp converts only
+    the release layout (lfm / encoder / depthformer); LoRA leaves the config as released, so the
+    conversion reads the base's own config.json."""
+    path = os.path.join(save_directory, "config.json")
+    try:
+        with open(path, encoding = "utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if saved.get("model_type") != "lfm3_audio" or "lfm" in saved:
+        return False
+    vocab = (saved.get("text_config") or {}).get("vocab_size")
+    for release in _base_config_dicts(model):
+        if release.get("model_type") != "lfm3_audio" or not isinstance(release.get("lfm"), dict):
+            continue
+        if vocab is not None and release["lfm"].get("vocab_size") != vocab:
+            continue  # resized embeddings: the release config no longer describes these weights
+        # The dtype the weights were written in and the code modules the save copied, not the release's.
+        release = {
+            **release,
+            **{k: saved[k] for k in ("dtype", "torch_dtype", "auto_map") if k in saved},
+        }
+        with open(path, "w", encoding = "utf-8") as f:
+            json.dump(release, f, indent = 2)
+        return True
+    print(
+        "Unsloth: LFM3-Audio config.json is not in its release layout and the base's could not be read; "
+        "llama.cpp's converter will not recognize it."
+    )
+    return False
+
+
+def _release_layout_for_merged_save(model, save_directory, save_method):
+    # A merged LFM3-Audio folder is reloaded with no PEFT base to look the release config up from,
+    # so it carries the release layout itself. 4-bit keeps its quantization_config.
+    if "16bit" not in str(save_method) or not os.path.isdir(str(save_directory)):
+        return False
+    return _restore_lfm3_audio_release_config(model, save_directory)
+
+
+def _push_lfm3_audio_release_config(
+    model,
+    repo_id,
+    token = None,
+):
+    # A plain PEFT merged push uploads straight from the merge, so the release layout is pushed after it.
+    if getattr(getattr(model, "config", None), "model_type", None) != "lfm3_audio":
+        return False
+    import tempfile
+
+    from huggingface_hub import HfApi, hf_hub_download
+
+    with tempfile.TemporaryDirectory(prefix = "unsloth-lfm3-config-") as directory:
+        hf_hub_download(
+            repo_id, "config.json", token = token, local_dir = directory, force_download = True
+        )
+        if not _restore_lfm3_audio_release_config(model, directory):
+            return False
+        HfApi(token = token).upload_file(
+            path_or_fileobj = os.path.join(directory, "config.json"),
+            path_in_repo = "config.json",
+            repo_id = repo_id,
+            commit_message = "Unsloth: LFM3-Audio config in its release layout",
+        )
+    return True
+
+
 def _stamp_saved_config_float32(save_directory):
     # save_pretrained writes the resident model's 16-bit dtype, and dtype = "auto" would then
     # cast the float32 tensors back down on load.
@@ -5051,6 +5148,12 @@ def unsloth_save_pretrained_gguf(
         fix_sentencepiece_gguf(save_directory)
     except Exception as e:
         logger.warning(f"Unsloth: fix_sentencepiece_gguf skipped ({type(e).__name__}): {e}")
+    except BaseException:
+        _drop_staged_checkpoint(staged_directory)
+        raise
+
+    try:
+        _restore_lfm3_audio_release_config(self, save_directory)
     except BaseException:
         _drop_staged_checkpoint(staged_directory)
         raise
@@ -6692,6 +6795,7 @@ def unsloth_generic_save(
         print(f"Unsloth: Saving full fine-tuned model to '{save_directory}' ...")
         with _internal_mtp_save():
             model.save_pretrained(save_directory, **_save_kwargs)
+        _release_layout_for_merged_save(model, save_directory, save_method)
         if "16bit" in save_method and _requests_float32(dtype):
             _stamp_saved_config_float32(save_directory)
         if (
@@ -6785,6 +6889,11 @@ def unsloth_generic_save(
         # Pushes with an attached head were rerouted to a local save above.
         if not push_to_hub:
             _stitch_mtp_head(model, save_directory)
+            _release_layout_for_merged_save(model, save_directory, save_method)
+        elif "16bit" in save_method and is_main_process:
+            _push_lfm3_audio_release_config(
+                model, _determine_username(save_directory, None, token)[0], token = token
+            )
 
     if push_to_hub and datasets:
         try:
