@@ -10,6 +10,11 @@ import {
   type TrainingObjective,
 } from "@/types/training";
 
+import {
+  GRPO_FORMAT_WARMUP_MIN_CONTEXT,
+  GRPO_FORMAT_WARMUP_STEPS,
+} from "@/config/training";
+
 const RL_OBJECTIVES = ["dpo", "orpo", "grpo"] as const;
 
 export interface YamlRlSettings {
@@ -22,6 +27,8 @@ export interface YamlRlSettings {
   grpoTemperature?: number;
   grpoEpsilonHigh?: number | null;
   grpoMaskTruncatedCompletions?: boolean;
+  grpoReasoningFormat?: boolean;
+  grpoFormatWarmupSteps?: number;
   grpoPythonRewardIsolation?: GrpoPythonRewardIsolation;
   grpoEnableThinking?: boolean;
   grpoSystemPrompt?: string;
@@ -39,14 +46,17 @@ export function parseRunConfigRlSettings(
   config: Record<string, unknown>,
 ): YamlRlSettings {
   const settings = config.rl_settings;
-  return parseRlSection({
-    ...(settings !== null && typeof settings === "object" ? settings : {}),
-    objective: config.objective,
-    rewards: config.reward_specs,
-  });
+  return parseRlSection(
+    {
+      ...(settings !== null && typeof settings === "object" ? settings : {}),
+      objective: config.objective,
+      rewards: config.reward_specs,
+    },
+    config.max_seq_length,
+  );
 }
 
-export function parseRlSection(rl: unknown): YamlRlSettings {
+export function parseRlSection(rl: unknown, context?: unknown): YamlRlSettings {
   if (rl == null || typeof rl !== "object" || Array.isArray(rl)) {
     return { trainingObjective: "sft" };
   }
@@ -96,6 +106,22 @@ export function parseRlSection(rl: unknown): YamlRlSettings {
       : undefined,
   );
   set("grpoEpsilonHigh", inRange(r.epsilon_high, 0, 1, true));
+  if (typeof r.reasoning_format === "boolean") {
+    out.grpoReasoningFormat = r.reasoning_format;
+  }
+  set(
+    "grpoFormatWarmupSteps",
+    // The backend's range: anything else would only fail at Start.
+    intInRange(r.format_warmup_steps, 0, 1000) ?? undefined,
+  );
+  // An omitted count gets the backend's default, not the store's 0; a written 0 stays.
+  if (
+    out.grpoReasoningFormat === true &&
+    out.grpoFormatWarmupSteps === undefined &&
+    !(isNum(context) && context < GRPO_FORMAT_WARMUP_MIN_CONTEXT)
+  ) {
+    out.grpoFormatWarmupSteps = GRPO_FORMAT_WARMUP_STEPS;
+  }
   if (typeof r.mask_truncated_completions === "boolean") {
     out.grpoMaskTruncatedCompletions = r.mask_truncated_completions;
   }

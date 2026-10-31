@@ -179,6 +179,8 @@ test("every extra setting the form changes reaches the example, and nothing host
     grpo_mask_truncated_completions: true,
     grpo_epsilon_high: 0.28,
     grpo_python_reward_isolation: "auto",
+    grpo_reasoning_format: true,
+    grpo_format_warmup_steps: 100,
     grpo_rewards: [{ name: "exact-answer", weight: 2 }],
   };
   const full = payload({

@@ -138,6 +138,8 @@ export function serializeConfigToYaml(
             temperature: state.grpoTemperature,
             epsilon_high: state.grpoEpsilonHigh,
             mask_truncated_completions: state.grpoMaskTruncatedCompletions,
+            reasoning_format: state.grpoReasoningFormat,
+            format_warmup_steps: state.grpoFormatWarmupSteps,
             python_reward_isolation: state.grpoPythonRewardIsolation,
             enable_thinking: state.grpoEnableThinking,
             system_prompt: state.grpoSystemPrompt,
@@ -154,5 +156,6 @@ export function serializeConfigToYaml(
  * fields with the wrong type are dropped so the current value stays. */
 export function parseYamlRlSettings(text: string): YamlRlSettings {
   const parsed = yaml.load(text) as Record<string, unknown> | null;
-  return parseRlSection(parsed?.rl);
+  const training = parsed?.training as Record<string, unknown> | undefined;
+  return parseRlSection(parsed?.rl, training?.max_seq_length);
 }

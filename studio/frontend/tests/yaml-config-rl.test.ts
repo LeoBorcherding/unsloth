@@ -40,6 +40,8 @@ test("GRPO settings round-trip through the YAML file", () => {
     grpoMaxCompletionLength: 200,
     grpoTemperature: 0.9,
     grpoEpsilonHigh: 0.28,
+    grpoReasoningFormat: true,
+    grpoFormatWarmupSteps: 100,
     grpoMaskTruncatedCompletions: true,
     grpoPythonRewardIsolation: "auto",
     grpoEnableThinking: false,
@@ -56,6 +58,8 @@ test("GRPO settings round-trip through the YAML file", () => {
     grpoMaxCompletionLength: 200,
     grpoTemperature: 0.9,
     grpoEpsilonHigh: 0.28,
+    grpoReasoningFormat: true,
+    grpoFormatWarmupSteps: 100,
     grpoMaskTruncatedCompletions: true,
     grpoPythonRewardIsolation: "auto",
     grpoEnableThinking: false,
@@ -101,4 +105,44 @@ test("fractional generation counts and token limits are dropped", () => {
       .grpoNumGenerations,
     6,
   );
+});
+
+test("a GRPO YAML with the reasoning format and no warm-up count gets the notebooks' 100", () => {
+  const yaml = (extra: string, context = 2048) =>
+    `training:\n  max_seq_length: ${context}\nrl:\n  objective: grpo\n  reasoning_format: true\n${extra}`;
+  assert.equal(parseYamlRlSettings(yaml("")).grpoFormatWarmupSteps, 100);
+  assert.equal(
+    parseYamlRlSettings(yaml("  format_warmup_steps: 0\n"))
+      .grpoFormatWarmupSteps,
+    0,
+  );
+  assert.equal(
+    parseYamlRlSettings(yaml("  format_warmup_steps: 30\n"))
+      .grpoFormatWarmupSteps,
+    30,
+  );
+  // Below the warm-up's context floor, or with the format off, the count stays unset.
+  assert.equal(
+    parseYamlRlSettings(yaml("", 1024)).grpoFormatWarmupSteps,
+    undefined,
+  );
+  assert.equal(
+    parseYamlRlSettings("rl:\n  objective: grpo\n  reasoning_format: false\n")
+      .grpoFormatWarmupSteps,
+    undefined,
+  );
+});
+
+test("an imported warm-up count outside the backend's range is dropped", () => {
+  const yaml = (steps: string) =>
+    `training:\n  max_seq_length: 2048\nrl:\n  objective: grpo\n  reasoning_format: true\n  format_warmup_steps: ${steps}\n`;
+  for (const bad of ["-5", "2.5", "5000"]) {
+    // Dropped, so the reasoning format's default applies instead.
+    assert.equal(
+      parseYamlRlSettings(yaml(bad)).grpoFormatWarmupSteps,
+      100,
+      bad,
+    );
+  }
+  assert.equal(parseYamlRlSettings(yaml("1000")).grpoFormatWarmupSteps, 1000);
 });

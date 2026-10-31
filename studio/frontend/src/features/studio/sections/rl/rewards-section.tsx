@@ -29,10 +29,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { GRPO_REASONING_SYSTEM_PROMPT } from "@/config/training";
 import {
   type RewardPreviewResponse,
   type RewardRecord,
   type RuleType,
+  configuredSystemPrompt,
   deleteReward,
   exportReward,
   importReward,
@@ -84,6 +86,9 @@ const REWARD_TAG_CLASS = "h-4 px-1.5 text-ui-10 font-medium";
 
 const SAMPLE_COMPLETION =
   "<reasoning>\n48 + 24 = 72\n</reasoning>\n<answer>\n72\n</answer>";
+// The template already opens <start_working_out>, so the reply starts inside it.
+const REASONING_SAMPLE_COMPLETION =
+  "48 + 24 = 72<end_working_out><SOLUTION>72</SOLUTION>";
 
 const SANDBOX_NAME: Record<string, string> = {
   "mxc-processcontainer": "Windows MXC",
@@ -401,11 +406,13 @@ export function RewardsSection(): ReactElement {
     rewards,
     setRewards,
     mapping,
+    reasoning,
     grpoSystemPrompt,
     isolationMode,
     setIsolationMode,
   } = useTrainingConfigStore(
     useShallow((s) => ({
+      reasoning: s.grpoReasoningFormat,
       rewards: s.grpoRewards,
       setRewards: s.setGrpoRewards,
       mapping: s.rlRoleMapping,
@@ -427,7 +434,19 @@ export function RewardsSection(): ReactElement {
   const [actionError, setActionError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  const [completion, setCompletion] = useState(SAMPLE_COMPLETION);
+  const [completion, setCompletion] = useState(
+    reasoning ? REASONING_SAMPLE_COMPLETION : SAMPLE_COMPLETION,
+  );
+  useEffect(() => {
+    // Follow the format switch unless the sample was edited.
+    setCompletion((prev) =>
+      prev === SAMPLE_COMPLETION || prev === REASONING_SAMPLE_COMPLETION
+        ? reasoning
+          ? REASONING_SAMPLE_COMPLETION
+          : SAMPLE_COMPLETION
+        : prev,
+    );
+  }, [reasoning]);
   const [referenceEdit, setReferenceEdit] = useState<string | null>(null);
   const [preview, setPreview] = useState<Record<string, number | null> | null>(
     null,
@@ -490,7 +509,12 @@ export function RewardsSection(): ReactElement {
       const { prompt, systemPrompt } = previewPrompt(
         previewRow,
         mapping,
-        grpoSystemPrompt,
+        // An empty prompt can survive turning the reasoning format on; training adds its prompt.
+        configuredSystemPrompt(
+          grpoSystemPrompt,
+          reasoning,
+          GRPO_REASONING_SYSTEM_PROMPT,
+        ),
       );
       const res = await previewRewards(
         rewards,
@@ -532,6 +556,7 @@ export function RewardsSection(): ReactElement {
     answerColumn,
     mapping,
     grpoSystemPrompt,
+    reasoning,
     isolationMode,
     selectedRules,
   ]);

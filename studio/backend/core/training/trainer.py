@@ -84,8 +84,13 @@ from utils.models.model_config import _env_offline
 from utils.datasets import format_and_template_dataset
 from utils.datasets.cells import csv_as_text_kwargs
 from utils.datasets.chat_templates import get_training_chat_template
-from utils.datasets.completion_masking import apply_completion_masking
+from utils.datasets.completion_masking import (
+    apply_completion_masking,
+    count_truncated_drops,
+    truncated_drop_cause,
+)
 from utils.datasets.iterable import is_streaming_dataset as detect_streaming_dataset
+from utils.datasets.iterable import take_rows
 from utils.datasets.pretokenized import (
     PRETOKENIZED_FORMAT,
     has_custom_labels,
@@ -3661,7 +3666,7 @@ class UnslothTrainer:
                         )
                         stream = load_dataset(**load_kwargs, streaming = True)
                         dataset_attestation_source = stream
-                        dataset = Dataset.from_list(list(stream.take(rows_to_stream)))
+                        dataset = Dataset.from_list(take_rows(stream, rows_to_stream))
                         logger.info(
                             f"[dataset-slice] Downloaded {len(dataset)} rows "
                             f"(requested {rows_to_stream})\n"
@@ -4812,6 +4817,10 @@ class UnslothTrainer:
             self.tokenizer = get_training_chat_template(
                 self.tokenizer, self.model_name, dataset_final_format
             )
+            rl_settings = training_args.get("rl_settings") or {}
+            if training_args.get("objective") == "grpo" and rl_settings.get("reasoning_format"):
+                from core.training.rl_format import apply_reasoning_template
+                apply_reasoning_template(self.tokenizer)
 
             data_collator = None
             audio_response_masker = None
@@ -5203,15 +5212,67 @@ class UnslothTrainer:
                     and getattr(rl_tokenizer, "chat_template", None)
                 ):
                     self.tokenizer.chat_template = rl_tokenizer.chat_template
+                from core.training.rl import reasoning_format_refusal, rl_lengths
+                from core.training.rl_format import (
+                    load_warmup_source,
+                    run_format_warmup,
+                    warmup_offline_warning,
+                    warmup_steps_to_run,
+                )
+
+                rl_train = dataset["dataset"] if isinstance(dataset, dict) else dataset
+                if objective == "grpo" and (rl_settings or {}).get("reasoning_format"):
+                    # Before the warm-up, so a dataset the format can't render costs no SFT steps.
+                    refusal = reasoning_format_refusal(rl_train)
+                    if refusal:
+                        raise ValueError(refusal)
+                warmup_steps = warmup_steps_to_run(
+                    rl_settings, objective, bool(training_args.get("resume_from_checkpoint"))
+                )
+                warmup_source = None
+                if warmup_steps > 0:
+                    try:
+                        warmup_source = load_warmup_source()
+                    except Exception:
+                        # Not in the run's cache preflight: offline, skip it rather than fail the run.
+                        if not _env_offline():
+                            raise
+                        self._record_warning(warmup_offline_warning())
+                        warmup_steps = 0
+                if warmup_steps > 0:
+                    self._update_progress(
+                        status_message = f"Format warm-up: step 0 of {warmup_steps}..."
+                    )
+                    run_format_warmup(
+                        self.model,
+                        rl_tokenizer,
+                        config_args,
+                        warmup_steps,
+                        should_stop = lambda: self.should_stop,
+                        dataset = warmup_source,
+                        on_step = lambda step, steps: self._update_progress(
+                            status_message = f"Format warm-up: step {step} of {steps}..."
+                        ),
+                        max_completion_length = rl_lengths(
+                            "grpo",
+                            int(config_args.get("max_seq_length") or 2048),
+                            rl_settings or {},
+                        )[1],
+                    )
+                    if self.should_stop:
+                        self._update_progress(
+                            is_training = False, status_message = "Training cancelled."
+                        )
+                        return
                 logger.info(f"Configuring {objective.upper()} trainer\n")
                 self.trainer = build_rl_trainer(
                     objective,
                     model = self.model,
                     tokenizer = rl_tokenizer,
-                    train_dataset = dataset["dataset"] if isinstance(dataset, dict) else dataset,
+                    train_dataset = rl_train,
                     eval_dataset = eval_dataset,
                     config_args = config_args,
-                    settings = training_args.get("rl_settings") or {},
+                    settings = rl_settings,
                     reward_specs = training_args.get("reward_specs") or [],
                     sample_sink = self._emit_samples if self.sample_callbacks else None,
                     on_warning = self._record_warning,
@@ -5428,19 +5489,40 @@ class UnslothTrainer:
 
                             if filtered_len == 0 or drop_pct > 30:
                                 max_seq = training_args.get("max_seq_length", 2048)
+                                cause = None
+                                # Packed rows all reach the cap, so a truncated prompt cannot be told apart there.
+                                if not config_args.get("packing"):
+                                    try:
+                                        cap = (
+                                            getattr(self.trainer.args, "max_length", None)
+                                            or max_seq
+                                        )
+                                        cut = count_truncated_drops(
+                                            pre_mask_dataset["input_ids"],
+                                            self.trainer.train_dataset["input_ids"],
+                                            cap,
+                                        )
+                                        cause = truncated_drop_cause(cut, dropped, cap)
+                                    except Exception as e:  # noqa: BLE001 - keep the generic message
+                                        logger.info(f"Could not count truncated rows: {e}\n")
                                 error_msg = (
                                     f"{dropped}/{original_len} samples ({drop_pct}%) were "
                                     f"dropped after applying 'Train on completions': after "
                                     f"masking, those rows had no trainable response tokens "
-                                    f"left. The usual cause is that this model's response "
-                                    f"template was not found in the formatted samples, so "
-                                    f"every token was masked out. That typically means the "
-                                    f"dataset is already formatted, or its structure does "
-                                    f"not match the model's chat template, so 'Train on "
-                                    f"completions' should be turned off for this dataset. "
-                                    f"Less commonly, a max_seq_length ({max_seq}) shorter "
-                                    f"than the prompt can truncate the response away; only "
-                                    f"raise it if your samples are actually longer than that."
+                                    f"left. "
+                                ) + (
+                                    cause
+                                    or (
+                                        f"The usual cause is that this model's response "
+                                        f"template was not found in the formatted samples, so "
+                                        f"every token was masked out. That typically means the "
+                                        f"dataset is already formatted, or its structure does "
+                                        f"not match the model's chat template, so 'Train on "
+                                        f"completions' should be turned off for this dataset. "
+                                        f"Less commonly, a max_seq_length ({max_seq}) shorter "
+                                        f"than the prompt can truncate the response away; only "
+                                        f"raise it if your samples are actually longer than that."
+                                    )
                                 )
                                 logger.error(error_msg)
                                 self._update_progress(error = error_msg, is_training = False)

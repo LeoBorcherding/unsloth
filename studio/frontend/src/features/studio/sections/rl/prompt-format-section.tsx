@@ -2,12 +2,18 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { SectionField } from "@/components/section-box";
+import { Input } from "@/components/ui/input";
 import { SegmentedTabsList } from "@/components/segmented-tabs";
 import { Switch } from "@/components/ui/switch";
 import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { GRPO_DEFAULT_SYSTEM_PROMPT } from "@/config/training";
 import {
+  GRPO_DEFAULT_SYSTEM_PROMPT,
+  GRPO_FORMAT_WARMUP_MIN_CONTEXT,
+  GRPO_REASONING_SYSTEM_PROMPT,
+} from "@/config/training";
+import {
+  configuredSystemPrompt,
   effectiveSystemPrompt,
   previewCell,
   ruleTags,
@@ -26,8 +32,8 @@ import { RL_PANEL_CLASS } from "./rl-panel";
 
 type Preset = "notebook" | "none" | "custom";
 
-function presetOf(prompt: string): Preset {
-  if (prompt === GRPO_DEFAULT_SYSTEM_PROMPT) {
+function presetOf(prompt: string, notebook: string): Preset {
+  if (prompt === notebook) {
     return "notebook";
   }
   return prompt.trim() === "" ? "none" : "custom";
@@ -41,6 +47,11 @@ export function PromptFormatSection(): ReactElement {
       setPrompt: state.setGrpoSystemPrompt,
       thinking: state.grpoEnableThinking,
       setThinking: state.setGrpoEnableThinking,
+      reasoning: state.grpoReasoningFormat,
+      setReasoning: state.setGrpoReasoningFormat,
+      warmupSteps: state.grpoFormatWarmupSteps,
+      contextLength: state.contextLength,
+      setWarmupSteps: state.setGrpoFormatWarmupSteps,
       rewards: state.grpoRewards,
       mapping: state.rlRoleMapping,
     })),
@@ -52,17 +63,32 @@ export function PromptFormatSection(): ReactElement {
     })),
   );
   const [editing, setEditing] = useState(false);
-  const preset = presetOf(s.prompt);
+  const notebookPrompt = s.reasoning
+    ? GRPO_REASONING_SYSTEM_PROMPT
+    : GRPO_DEFAULT_SYSTEM_PROMPT;
+  // What training gets: with the reasoning format on, an empty prompt is the reasoning one.
+  const configured = configuredSystemPrompt(
+    s.prompt,
+    s.reasoning,
+    GRPO_REASONING_SYSTEM_PROMPT,
+  );
+  const preset = presetOf(configured, notebookPrompt);
   const showEditor = preset === "custom" || editing;
   const active: Preset = showEditor ? "custom" : preset;
-  const presetLabel = (option: Preset) => t(`rl.prompt.presets.${option}`);
+  // The preset is the reasoning format's prompt while that is on.
+  const presetLabel = (option: Preset) =>
+    t(
+      option === "notebook" && s.reasoning
+        ? "rl.prompt.presets.reasoningTags"
+        : `rl.prompt.presets.${option}`,
+    );
 
   const promptColumn = Object.entries(s.mapping).find(
     ([, role]) => role === "prompt",
   )?.[0];
   const userText = promptColumn ? previewCell(previewRow?.[promptColumn]) : "";
   // A row's own system message wins in training, so the preview and tag check use it too.
-  const system = effectiveSystemPrompt(previewRow, s.mapping, s.prompt);
+  const system = effectiveSystemPrompt(previewRow, s.mapping, configured);
 
   const selected = new Set(s.rewards.map((r) => r.name));
   const tags = [
@@ -76,7 +102,7 @@ export function PromptFormatSection(): ReactElement {
 
   const choose = (value: string) => {
     if (value === "notebook") {
-      s.setPrompt(GRPO_DEFAULT_SYSTEM_PROMPT);
+      s.setPrompt(notebookPrompt);
       setEditing(false);
     } else if (value === "none") {
       s.setPrompt("");
@@ -84,7 +110,7 @@ export function PromptFormatSection(): ReactElement {
     } else if (value === "custom") {
       // Start from the notebook text rather than an empty box that looks filled in.
       if (s.prompt.trim() === "") {
-        s.setPrompt(GRPO_DEFAULT_SYSTEM_PROMPT);
+        s.setPrompt(notebookPrompt);
       }
       setEditing(true);
     }
@@ -92,6 +118,52 @@ export function PromptFormatSection(): ReactElement {
 
   return (
     <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-3">
+        <ParamsRow
+          label={t("rl.prompt.reasoningFormat")}
+          tooltip={t("rl.prompt.reasoningFormatHint")}
+        >
+          <Switch
+            checked={s.reasoning}
+            onCheckedChange={s.setReasoning}
+            aria-label={t("rl.prompt.reasoningFormat")}
+          />
+        </ParamsRow>
+        {s.reasoning && (
+          <ParamsRow
+            label={t("rl.prompt.warmupSteps")}
+            tooltip={t("rl.prompt.warmupStepsHint")}
+          >
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={1000}
+              step={10}
+              aria-label={t("rl.prompt.warmupSteps")}
+              className="w-28 font-mono"
+              value={s.warmupSteps}
+              onChange={(e) => {
+                const n = Number.parseInt(e.target.value, 10);
+                s.setWarmupSteps(
+                  Number.isFinite(n) ? Math.min(1000, Math.max(0, n)) : 0,
+                );
+              }}
+            />
+          </ParamsRow>
+        )}
+        {s.reasoning &&
+          s.warmupSteps > 0 &&
+          s.contextLength < GRPO_FORMAT_WARMUP_MIN_CONTEXT && (
+            <p className="flex items-start gap-1.5 text-ui-11p5 leading-ui-15 text-amber-700 dark:text-amber-300">
+              <HugeiconsIcon icon={Alert02Icon} className="size-3.5 shrink-0" />
+              {t("rl.prompt.warmupContext", {
+                n: GRPO_FORMAT_WARMUP_MIN_CONTEXT,
+              })}
+            </p>
+          )}
+      </div>
+
       <SectionField
         label={t("rl.prompt.systemPrompt")}
         hint={
@@ -111,13 +183,22 @@ export function PromptFormatSection(): ReactElement {
                 size="compact"
                 options={[
                   { value: "notebook", label: presetLabel("notebook") },
-                  { value: "none", label: presetLabel("none") },
+                  {
+                    value: "none",
+                    label: presetLabel("none"),
+                    // Training adds the reasoning prompt to an empty one.
+                    disabled: s.reasoning,
+                  },
                   { value: "custom", label: presetLabel("custom") },
                 ]}
               />
             </Tabs>
             <p className="text-ui-11p5 leading-ui-15 text-muted-foreground/85">
-              {t(`rl.prompt.presetHints.${active}`)}
+              {t(
+                active === "notebook" && s.reasoning
+                  ? "rl.prompt.presetHints.reasoningTags"
+                  : `rl.prompt.presetHints.${active}`,
+              )}
             </p>
           </div>
           {showEditor && (
@@ -180,6 +261,7 @@ export function PromptFormatSection(): ReactElement {
       >
         <Switch
           checked={s.thinking}
+          disabled={s.reasoning}
           onCheckedChange={s.setThinking}
           aria-label={t("rl.params.thinking")}
         />

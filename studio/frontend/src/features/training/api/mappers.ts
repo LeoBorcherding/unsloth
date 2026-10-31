@@ -318,6 +318,11 @@ export function buildTrainingStartPayload(
     grpo_mask_truncated_completions:
       objective === "grpo" && config.grpoMaskTruncatedCompletions,
     grpo_epsilon_high: objective === "grpo" ? config.grpoEpsilonHigh : null,
+    grpo_reasoning_format: objective === "grpo" && config.grpoReasoningFormat,
+    grpo_format_warmup_steps:
+      objective === "grpo" && config.grpoReasoningFormat
+        ? config.grpoFormatWarmupSteps
+        : 0,
     grpo_python_reward_isolation:
       objective === "grpo" ? config.grpoPythonRewardIsolation : "required",
     grpo_rewards: objective === "grpo" ? config.grpoRewards : [],

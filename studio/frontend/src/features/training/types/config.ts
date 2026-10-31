@@ -6,10 +6,10 @@ import type {
   DatasetFormat,
   DatasetSource,
   GradientCheckpointing,
-  ModelType,
   GrpoRewardSelection,
   GrpoPythonRewardIsolation,
   GrpoVariant,
+  ModelType,
   S3Config,
   TrainingMethod,
   TrainingObjective,
@@ -198,6 +198,8 @@ export interface TrainingConfigState {
   grpoVariant: GrpoVariant;
   grpoMaskTruncatedCompletions: boolean;
   grpoEpsilonHigh: number | null;
+  grpoReasoningFormat: boolean;
+  grpoFormatWarmupSteps: number;
   grpoPythonRewardIsolation: GrpoPythonRewardIsolation;
   grpoRewards: GrpoRewardSelection[];
 }
@@ -344,6 +346,8 @@ export interface TrainingConfigActions {
   setGrpoMaskTruncatedCompletions: (value: boolean) => void;
   setGrpoPythonRewardIsolation: (value: GrpoPythonRewardIsolation) => void;
   setGrpoEpsilonHigh: (value: number | null) => void;
+  setGrpoReasoningFormat: (value: boolean) => void;
+  setGrpoFormatWarmupSteps: (value: number) => void;
   setGrpoRewards: (value: GrpoRewardSelection[]) => void;
   /** Returns the RL objective that was loaded as SFT (Apple Silicon), else null. */
   restoreRunConfig: (
