@@ -6,19 +6,52 @@ and reading text aloud through the chat model's TTS mode."""
 
 import asyncio
 import base64
+import importlib
 import io
 import sys
 import threading
 import types
 import wave
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 import torch
 from fastapi import HTTPException
 
-import core.inference.inference as inf
+_STUBBED: list[str] = []
+
+
+def _stub_if_missing(name, attrs):
+    """Stubs a dep the backend pytest job lacks, so collection succeeds; real installs are left alone."""
+    if name in sys.modules:
+        return
+    try:
+        importlib.import_module(name)
+        return
+    except Exception:  # noqa: BLE001 - any import failure means "not usable here", so stub it
+        pass
+    _STUBBED.append(name)
+    mod = types.ModuleType(name)
+    mod.__spec__ = None
+    for attr in attrs:
+        setattr(mod, attr, MagicMock())
+    sys.modules[name] = mod
+    parent, _, child = name.rpartition(".")
+    if parent and parent in sys.modules:
+        setattr(sys.modules[parent], child, mod)
+
+
+_stub_if_missing(
+    "unsloth", ("FastLanguageModel", "FastVisionModel", "FastModel", "is_bfloat16_supported")
+)
+_stub_if_missing("unsloth.chat_templates", ("get_chat_template",))
+
+import core.inference.inference as inf  # noqa: E402
+
+for _name in reversed(_STUBBED):
+    sys.modules.pop(_name, None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_audio_chat_load import _config, backend  # noqa: E402, F401 - fixture
@@ -40,7 +73,11 @@ class _Codec(torch.nn.Module):
 
 
 class _Tokenizer:
-    def decode(self, ids, skip_special_tokens = False):
+    def decode(
+        self,
+        ids,
+        skip_special_tokens = False,
+    ):
         assert skip_special_tokens
         return " Paris is the capital. "
 
@@ -67,7 +104,11 @@ class _Model(torch.nn.Module):
     config = types.SimpleNamespace(interleaved_n_audio = 12)
     device = "cpu"
 
-    def __init__(self, frames = 3, cancel_during = None):
+    def __init__(
+        self,
+        frames = 3,
+        cancel_during = None,
+    ):
         super().__init__()
         self.p = torch.nn.Parameter(torch.zeros(1))
         self.frames, self.cancel_during, self.kwargs = frames, cancel_during, None
@@ -87,7 +128,11 @@ class _Model(torch.nn.Module):
         )
 
 
-def _backend(model, processor, audio_type = "audio_vlm"):
+def _backend(
+    model,
+    processor,
+    audio_type = "audio_vlm",
+):
     b = inf.InferenceBackend.__new__(inf.InferenceBackend)
     b.active_model_name = "LiquidAI/LFM3-Audio-2B"
     b.models = {
@@ -105,7 +150,11 @@ def _backend(model, processor, audio_type = "audio_vlm"):
     return b
 
 
-def _spoken(b, cancel_event = None, **kwargs):
+def _spoken(
+    b,
+    cancel_event = None,
+    **kwargs,
+):
     return list(
         inf.InferenceBackend.generate_audio_input_response(
             b,
@@ -173,7 +222,7 @@ def test_spoken_reply_yields_text_then_one_wav():
     assert kwargs["continue_final_message"] is True
     assert model.kwargs["return_dict_in_generate"] is True
     # Each checkpoint's generation_config carries its own audio sampling (Audio and Omni differ).
-    assert not [k for k in model.kwargs if k.startswith("audio_")]
+    assert not [k for k in model.kwargs if k.startswith("audio_") and k != "audio_streamer"]
     assert b.last_generation_stats["usage"]["completion_tokens"] == 5
 
 
@@ -276,3 +325,161 @@ def test_tts_route_serves_a_speaking_chat_model_and_refuses_a_silent_one(monkeyp
     with pytest.raises(HTTPException) as exc:
         asyncio.run(route._generate_tts_wav("hello", payload, None, "t"))
     assert exc.value.detail == "Active model is not an audio model."
+
+
+class LiquidCodecStreamingCache:
+    """Stands in for the codec's own cache: holds nothing back, counts chunks."""
+
+    def __init__(self, config):
+        self.chunks = 0
+        self.finished = False
+
+
+class _StreamingCodec(_Codec):
+    config = types.SimpleNamespace(sampling_rate = 24000, n_q = 12)
+
+    def decode(
+        self,
+        codes,
+        streaming_cache = None,
+        finalize = True,
+    ):
+        if streaming_cache is not None:
+            streaming_cache.chunks += 1
+            streaming_cache.finished = finalize
+        return types.SimpleNamespace(audio_values = torch.full((1, codes.shape[-1] * 1920), 0.25))
+
+
+# _SpeechChunker finds the cache class in the codec's module, as with the remote LiquidCodec.
+_StreamingCodec.__module__ = __name__
+
+
+class _TokenTokenizer:
+    words = {1: "Paris", 2: " is", 3: " the", 4: " capital."}
+
+    def decode(
+        self,
+        ids,
+        skip_special_tokens = False,
+    ):
+        ids = ids.tolist() if hasattr(ids, "tolist") else ids
+        return "".join(self.words.get(int(i), "") for i in ids)
+
+
+class _StreamingModel(torch.nn.Module):
+    """Interleaves text tokens and speech frames through the streamers, as LFM3's generate does,
+    and waits after the first chunk's frames until the caller lets it finish."""
+
+    config = types.SimpleNamespace(interleaved_n_audio = 12)
+    device = "cpu"
+
+    def __init__(self, frames = 10):
+        super().__init__()
+        self.p = torch.nn.Parameter(torch.zeros(1))
+        self.frames = frames
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def generate(self, streamer, audio_streamer, **kwargs):
+        streamer.put(torch.zeros((1, 7), dtype = torch.long))  # the prompt
+        for token in (1, 2):
+            streamer.put(torch.tensor([[token]]))
+        for i in range(self.frames):
+            if i == inf._SPEECH_FIRST_CHUNK_FRAMES:
+                assert self.release.wait(5)
+            audio_streamer.put(torch.zeros(12, dtype = torch.long))
+            if i == 5:
+                for token in (3, 4):
+                    streamer.put(torch.tensor([[token]]))
+        self.finished.set()
+        return types.SimpleNamespace(
+            sequences = torch.tensor([[0] * 7 + [1, 2, 3, 4]]),
+            audio_codes = torch.zeros((1, 12, self.frames), dtype = torch.long),
+            audio_lengths = torch.tensor([self.frames]),
+        )
+
+
+def _streaming_backend(model):
+    processor = _Processor(_StreamingCodec())
+    processor.tokenizer = _TokenTokenizer()
+    return _backend(model, processor)
+
+
+def _spoken_iter(b, cancel_event = None):
+    return inf.InferenceBackend.generate_audio_input_response(
+        b,
+        messages = [{"role": "user", "content": "Answer this."}],
+        system_prompt = None,
+        audio_array = np.zeros(1600, dtype = np.float32),
+        temperature = 0.7,
+        top_p = 0.9,
+        top_k = 40,
+        min_p = 0.0,
+        max_new_tokens = 256,
+        repetition_penalty = 1.0,
+        cancel_event = cancel_event,
+        speak = True,
+    )
+
+
+def test_spoken_reply_streams_speech_before_generation_ends():
+    model = _StreamingModel(frames = 10)
+    b = _streaming_backend(model)
+    gen = _spoken_iter(b)
+
+    early = []
+    for item in gen:
+        early.append(item)
+        if isinstance(item, dict):
+            break
+    # The first chunk is out while generate still waits to make the rest.
+    assert not model.finished.is_set()
+    assert early == ["Paris", " is", early[-1]]
+    assert _wav(early[-1]["speech"]) == (24000, inf._SPEECH_FIRST_CHUNK_FRAMES * 1920)
+    model.release.set()
+    rest = list(gen)
+
+    text = "".join(x for x in early + rest if isinstance(x, str))
+    speech = [x for x in early + rest if isinstance(x, dict)]
+    assert text == "Paris is the capital."
+    assert len(speech) == 2
+    assert sum(_wav(x["speech"])[1] for x in speech) == 10 * 1920
+    assert b.last_generation_stats["usage"]["completion_tokens"] == 4
+
+
+def test_stopping_a_streamed_spoken_reply_ends_generate():
+    model = _StreamingModel(frames = 10)
+    cancel = threading.Event()
+    gen = _spoken_iter(_streaming_backend(model), cancel)
+    for item in gen:
+        if isinstance(item, dict):
+            break
+    cancel.set()
+    model.release.set()
+    assert list(gen) == []
+    assert not model.finished.is_set()
+
+
+def test_closing_a_streamed_spoken_reply_frees_the_generation_lock():
+    model = _StreamingModel(frames = 10)
+    b = _streaming_backend(model)
+    gen = _spoken_iter(b)
+    for item in gen:
+        if isinstance(item, dict):
+            break
+    model.release.set()
+    gen.close()
+    assert b._generation_lock.acquire(timeout = 5)
+    b._generation_lock.release()
+
+
+def test_non_streamed_route_joins_speech_chunks_into_one_wav():
+    import routes.inference as route
+    from core.inference.inference import _speech_item
+
+    chunks = [_speech_item(np.full(n, 0.25, dtype = np.float32), 24000) for n in (1920, 3840)]
+    joined = route._joined_speech_reply(chunks)
+    assert joined["format"] == "wav" and joined["sample_rate"] == 24000
+    assert _wav(joined["data"]) == (24000, 5760)
+    assert route._joined_speech_reply(chunks[:1])["data"] == chunks[0]["speech"]
+    assert route._joined_speech_reply([]) == {}

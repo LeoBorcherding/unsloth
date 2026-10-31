@@ -3,11 +3,45 @@
 
 """LFM3-Audio-2B (audio in, no image processor) loads through AutoModelForMultimodalLM, not the text load."""
 
+import importlib
+import sys
 import types
+from unittest.mock import MagicMock
 
 import pytest
 
-import core.inference.inference as inf
+_STUBBED: list[str] = []
+
+
+def _stub_if_missing(name, attrs):
+    """Stubs a dep the backend pytest job lacks, so collection succeeds; real installs are left alone."""
+    if name in sys.modules:
+        return
+    try:
+        importlib.import_module(name)
+        return
+    except Exception:  # noqa: BLE001 - any import failure means "not usable here", so stub it
+        pass
+    _STUBBED.append(name)
+    mod = types.ModuleType(name)
+    mod.__spec__ = None
+    for attr in attrs:
+        setattr(mod, attr, MagicMock())
+    sys.modules[name] = mod
+    parent, _, child = name.rpartition(".")
+    if parent and parent in sys.modules:
+        setattr(sys.modules[parent], child, mod)
+
+
+_stub_if_missing(
+    "unsloth", ("FastLanguageModel", "FastVisionModel", "FastModel", "is_bfloat16_supported")
+)
+_stub_if_missing("unsloth.chat_templates", ("get_chat_template",))
+
+import core.inference.inference as inf  # noqa: E402
+
+for _name in reversed(_STUBBED):
+    sys.modules.pop(_name, None)
 
 
 class _Lfm3AudioModel:  # what the text load builds: no generate()
@@ -43,8 +77,13 @@ def _config(**overrides):
 
 @pytest.fixture
 def backend(monkeypatch):
-    import unsloth
     import utils.models.diffusion_lm as diffusion_lm
+
+    try:
+        import unsloth
+    except Exception:  # noqa: BLE001 - the CPU test job has no usable unsloth
+        unsloth = types.ModuleType("unsloth")
+    monkeypatch.setitem(sys.modules, "unsloth", unsloth)
 
     calls = {}
 
@@ -58,7 +97,10 @@ def backend(monkeypatch):
 
     noop = lambda *a, **k: None
     monkeypatch.setattr(
-        unsloth, "FastModel", types.SimpleNamespace(from_pretrained = fast_model, for_inference = noop)
+        unsloth,
+        "FastModel",
+        types.SimpleNamespace(from_pretrained = fast_model, for_inference = noop),
+        raising = False,
     )
     monkeypatch.setattr(
         inf,

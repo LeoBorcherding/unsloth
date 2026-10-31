@@ -25,6 +25,7 @@ import {
   cancelVoiceSession,
   claimHeldTurnForEdit,
   clearHeldTurn,
+  clearVoiceTurnAudio,
   endHeldEdit,
   getHeldTurnText,
   isComposerHeldForEdit,
@@ -32,6 +33,7 @@ import {
   registerComposerTextReader,
   rushVoiceReveal,
   setMicMuted,
+  takeVoiceTurnAudio,
   voiceRevealText,
 } from "@/features/chat/adapters/studio-voice-loop-adapter";
 import { getActiveChatGenerationRuns } from "@/features/chat/api/chat-generation-api";
@@ -84,6 +86,7 @@ import {
   registerVoiceReplyText,
   registerVoiceResume,
   registerVoiceStopSpeaking,
+  registerVoiceSpokenAudio,
   registerVoiceSubmit,
   registerVoiceThreadReset,
   registerVoiceToggle,
@@ -97,6 +100,7 @@ import {
   interjectAction,
   reportLayaOutcome,
 } from "@/features/chat/voice/voice-models-client";
+import { chatModelSpeaks, isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { voiceServing } from "@/features/chat/voice/voice-slot";
 import { pauseOutputSpectrum } from "@/features/chat/voice/voice-spectrum";
 import { voiceTrace } from "@/features/chat/voice/voice-trace";
@@ -115,6 +119,12 @@ import {
 import { type HoldToStop, createHoldToStop } from "./hold-to-stop";
 import { type OrbDwell, createOrbDwell } from "./orb-dwell";
 import { ORB_WIDGET_LONG_PRESS_MS, pendingApproval } from "./orb-widget";
+import {
+  coalescedTurnAudio,
+  lastUserTurnHasAudio,
+  voiceTurnAttachment,
+  withoutAudioPlayer,
+} from "./turn-audio";
 import { isRevealPrefix, isTypedVoiceSubmit } from "./typed-send";
 
 // Tracks the previous thread-running state across the first-send remount, so the
@@ -130,6 +140,13 @@ let _voicedThreadId: string | null = null;
 function voicedApprovalCount(s: ReturnType<typeof useChatRuntimeStore.getState>): number {
   const pending = pendingApproval(s.toolConfirmations, s.activeThreadId, (id) => describeToolCall(id) !== null);
   return pending ? pending.more + 1 : 0;
+}
+
+// Voice mode speaks with the chat model itself (an opt-in pick): each turn goes with its
+// recorded speech and the reply comes back spoken, so no TTS runs on its text.
+function speaksWithChatModel(): boolean {
+  const s = useChatRuntimeStore.getState();
+  return isChatModelVoice(s.selectedVoiceModelId) && chatModelSpeaks(s);
 }
 
 // Voice coalescing window: after a finished utterance is appended as a user
@@ -329,6 +346,8 @@ export const VoiceEngine: FC = () => {
     beginStream,
     feedText,
     endStream,
+    feedClip,
+    endClips,
     sayAside,
     warmAsides,
     stop,
@@ -352,6 +371,14 @@ export const VoiceEngine: FC = () => {
   endStreamRef.current = endStream;
   const speakRef = useRef(speak);
   speakRef.current = speak;
+  const feedClipRef = useRef(feedClip);
+  feedClipRef.current = feedClip;
+  const endClipsRef = useRef(endClips);
+  endClipsRef.current = endClips;
+  // The run in flight answers a turn sent with its speech to a chat model that speaks: its
+  // reply plays from the streamed chunks, and only the text TTS is skipped.
+  const spokenRunRef = useRef(false);
+  const spokenClipsRef = useRef(0);
   // Whether the run-start branch opened a TTS session for the run in flight. It
   // only does so while voice mode is already active, so a run that started before
   // the user switched voice mode on has no session for endStream to flush.
@@ -369,12 +396,20 @@ export const VoiceEngine: FC = () => {
   const lastAsideAtRef = useRef(0);
   const sayAsideRef = useRef(sayAside);
   sayAsideRef.current = (...args: Parameters<typeof sayAside>) => {
+    // Speaking with the chat model, an aside would queue behind the reply on that same model.
+    if (speaksWithChatModel()) return;
     lastAsideAtRef.current = Date.now();
     return sayAside(...args);
   };
   // Whether anything was said aloud for the current turn: the first aside must not be "still on it".
   const spokenThisTurnRef = useRef(false);
-  warmAsidesRef.current = warmAsides;
+  const warmAsidesIfTts = useCallback(
+    async (texts: readonly string[]) => {
+      if (!speaksWithChatModel()) await warmAsides(texts);
+    },
+    [warmAsides],
+  );
+  warmAsidesRef.current = warmAsidesIfTts;
   // Thinking filler for the run in flight: decided at submit (the model is told
   // about it), spoken after a short delay once the run starts, then at most one
   // more line if the model is still thinking. Text is held back until the filler
@@ -453,7 +488,7 @@ export const VoiceEngine: FC = () => {
       for (const part of msg.content as Array<{ type: string; text?: string }>) {
         if (part.type === "text" && part.text) text += part.text;
       }
-      return text;
+      return withoutAudioPlayer(text);
     }
     return "";
   }, []);
@@ -469,6 +504,9 @@ export const VoiceEngine: FC = () => {
     queuedUtteranceRef.current = [];
     const text = held.length ? [...held, said].join(" ") : said;
     if (held.length) voiceTrace("engine.foldHeld", { held, text });
+    // Drained on every send, so speech kept while the model could not answer in it never rides along later.
+    const taken = takeVoiceTurnAudio();
+    const turnAudio = speaksWithChatModel() ? taken : null;
     // Barge-in: the instant the user speaks, cut the audio and the in-flight run.
     // This utterance supersedes whatever the model was saying. Cover the tail
     // clip (isPlaying) too, not just an active streaming session (isSpeaking).
@@ -508,6 +546,26 @@ export const VoiceEngine: FC = () => {
       fresh.setText("");
       if (n < 5) setTimeout(() => deferredClear(n + 1), DEFERRED_CLEAR_MS);
     };
+    const sendNow = () => {
+      composer.setText(text);
+      composer.send();
+      composer.setText("");
+      setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
+    };
+    // The composer's own send, with the turn's speech attached first when it goes to the chat model.
+    const sendThroughComposer = () => {
+      if (!turnAudio) {
+        sendNow();
+        return;
+      }
+      const bytes = Uint8Array.from(atob(turnAudio), (c) => c.charCodeAt(0));
+      void composer
+        .addAttachment(new File([bytes], "voice.wav", { type: "audio/wav" }))
+        .catch((error: unknown) => voiceTrace("engine.turnAudioAttachFailed", { message: String(error) }))
+        .then(() => {
+          if (voiceModeRef.current === "active") sendNow();
+        });
+    };
 
     // First message of a thread: the append + delayed-startRun coalescing path
     // can't reliably drive a brand-new thread -- its runtime remounts on the first
@@ -517,10 +575,7 @@ export const VoiceEngine: FC = () => {
     if (thread.getState().messages.length === 0) {
       // send() takes the box, not `text`: parked turns were never in it (the re-arm
       // clears it), so an empty box here sent nothing at all.
-      composer.setText(text);
-      composer.send();
-      composer.setText("");
-      setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
+      sendThroughComposer();
       return;
     }
 
@@ -529,6 +584,16 @@ export const VoiceEngine: FC = () => {
       auiRef.current.thread().append({
         role: "user",
         content: [{ type: "text", text }],
+        ...(turnAudio
+          ? {
+              attachments: [
+                voiceTurnAttachment(
+                  coalescedTurnAudio(auiRef.current.thread().getState().messages, turnAudio),
+                  `voice-${Date.now()}`,
+                ),
+              ],
+            }
+          : {}),
         createdAt: new Date(),
         startRun: false,
       } as never);
@@ -539,10 +604,7 @@ export const VoiceEngine: FC = () => {
 
     if (!appended) {
       // Fallback: old immediate-send behavior.
-      composer.setText(text);
-      composer.send();
-      composer.setText("");
-      setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
+      sendThroughComposer();
       return;
     }
 
@@ -627,6 +689,17 @@ export const VoiceEngine: FC = () => {
       holdOn ? VOICE_HOLD_COALESCE_MS : cutRun ? VOICE_RESTART_COALESCE_MS : VOICE_COALESCE_MS,
     );
   }, [resumeListen, stop]);
+
+  useEffect(() => {
+    registerVoiceSpokenAudio((threadId, wav) => {
+      if (voiceModeRef.current !== "active" || !spokenRunRef.current) return;
+      const active = useChatRuntimeStore.getState().activeThreadId;
+      if (threadId && active && threadId !== active) return;
+      spokenClipsRef.current += 1;
+      feedClipRef.current(wav);
+    });
+    return () => registerVoiceSpokenAudio(null);
+  }, []);
 
   useEffect(() => {
     registerVoiceReplyText(() => latestAssistantText());
@@ -758,7 +831,11 @@ export const VoiceEngine: FC = () => {
     // The filler model answers inside the coalesce window, before the run starts.
     fillerAnsweredRef.current = false;
     const notesEpoch = voiceNotesEpoch();
-    void fillerFromModel(text, prevAskedQuestion).then((fromModel) => {
+    // No thinking filler when the chat model speaks: it would have to wait for the reply itself.
+    const fillerVerdict = speaksWithChatModel()
+      ? Promise.resolve(null)
+      : fillerFromModel(text, prevAskedQuestion);
+    void fillerVerdict.then((fromModel) => {
       // Voice off, a thread switch or a typed send since: the verdict is for a turn that's gone.
       if (notesEpoch !== voiceNotesEpoch()) return;
       if (fromModel) fillerAnsweredRef.current = true;
@@ -812,6 +889,8 @@ export const VoiceEngine: FC = () => {
           if (action === "queue" && !queuedUtteranceRef.current.includes(text)) {
             queuedUtteranceRef.current.push(text);
           }
+          // An ignored utterance's speech must not ride along with the next turn.
+          if (action === "ignore") clearVoiceTurnAudio();
           composer.setText("");
           // The barge-in held the reply; nothing cut it, so let it carry on. Without
           // this the playback context stayed suspended and the loop looked stuck.
@@ -1030,7 +1109,7 @@ export const VoiceEngine: FC = () => {
     if (!was || voiceSlotLoading) return;
     if (voiceModeRef.current !== "active" || !hasChatModelRef.current) return;
     // The voice is up and idle: cache the fixed asides so the first one is instant.
-    void warmAsides(asidePhrases());
+    void warmAsidesIfTts(asidePhrases());
     if (pendingForVoiceRef.current.length) {
       // Something is being said right now: cutting the session here lost a turn
       // mid-transcription. Its own finish (or no-speech resume) sends the lot.
@@ -1039,15 +1118,15 @@ export const VoiceEngine: FC = () => {
       return;
     }
     resumeListen();
-  }, [voiceSlotLoading, resumeListen, warmAsides]);
+  }, [voiceSlotLoading, resumeListen, warmAsidesIfTts]);
 
   // The slot can already be serving when voice mode starts (loaded from the picker
   // or the API first), so the loading transition above never fires: warm here too.
   const voiceSlotLoaded = useChatRuntimeStore((s) => s.voiceSlotLoaded);
   useEffect(() => {
     if (voiceMode !== "active" || !voiceSlotLoaded || voiceSlotLoading) return;
-    void warmAsides(asidePhrases());
-  }, [voiceMode, voiceSlotLoaded, voiceSlotLoading, warmAsides]);
+    void warmAsidesIfTts(asidePhrases());
+  }, [voiceMode, voiceSlotLoaded, voiceSlotLoading, warmAsidesIfTts]);
 
   // Clear any pending synth-gap or dwell timer on unmount so it can't fire after teardown.
   useEffect(() => () => {
@@ -1139,6 +1218,9 @@ export const VoiceEngine: FC = () => {
         // on the first complete sentence, not after the whole reply.
         beginStreamRef.current();
         streamBegunRef.current = true;
+        spokenRunRef.current =
+          speaksWithChatModel() && lastUserTurnHasAudio(auiRef.current.thread().getState().messages);
+        spokenClipsRef.current = 0;
         _voicedThreadId = useChatRuntimeStore.getState().activeThreadId;
         runStartedAtRef.current = Date.now();
         spokenThisTurnRef.current = false;
@@ -1166,7 +1248,7 @@ export const VoiceEngine: FC = () => {
           const text = latestAssistantText();
           if (f && !f.queued) {
             // Hold the reply until the filler is in the queue.
-          } else {
+          } else if (!spokenRunRef.current) {
             feedTextRef.current(text);
           }
           const now = Date.now();
@@ -1278,6 +1360,16 @@ export const VoiceEngine: FC = () => {
     // stop(). Skipping would silently drop the reply and dead-end the loop.
 
     const text = latestAssistantText();
+    const spokenRun = spokenRunRef.current;
+    spokenRunRef.current = false;
+    if (spokenRun && streamBegun && spokenClipsRef.current > 0) {
+      // The reply played as it streamed: end the stream once the last chunk has.
+      const endMsgs = auiRef.current.thread().getState().messages;
+      const endTail = endMsgs.length ? endMsgs[endMsgs.length - 1] : null;
+      spokenReplyRef.current = endTail?.role === "assistant" ? { id: endTail.id, text } : null;
+      setTimeout(() => endClipsRef.current(), 150);
+      return;
+    }
     if (!text) {
       resumeListen();
       return;
@@ -1340,6 +1432,7 @@ export const VoiceEngine: FC = () => {
   // End the loop (the plus-menu toggle; ChatPage unloads the voice models on it).
   const turnOff = useCallback(() => {
     _voicedThreadId = null;
+    spokenRunRef.current = false;
     setLoopVoiceMode("off");
     voiceModeRef.current = "off";
     setVoiceModeState("off");
@@ -1408,6 +1501,7 @@ export const VoiceEngine: FC = () => {
     voiceTrace("engine.threadReset", { prevThreadId, stopped: oldRun, paused: useChatRuntimeStore.getState().voicePaused });
     if (oldRun) stopChatThread(oldRun);
     _voicedThreadId = null;
+    spokenRunRef.current = false;
     settleInterject(null);
     if (voiceCoalesceTimerRef.current) {
       clearTimeout(voiceCoalesceTimerRef.current);

@@ -614,6 +614,8 @@ def _gpu_load_in_flight() -> bool:
         return False
     finally:
         gpu_arbiter._lock.release()
+
+
 # Left free after a decision model joins a resident chat, image or video model.
 _BESIDE_HEADROOM_MIB = 2048
 
