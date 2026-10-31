@@ -1059,6 +1059,7 @@ def format_and_template_dataset(
                     question_column = vlm_structure.get("question_column"),
                     instruction = vlm_instruction,
                     video_columns = vlm_structure.get("video_columns"),
+                    dataset_name = dataset_name,
                 )
             except Exception as e:
                 errors.append(f"Failed to convert video + text rows to VLM format: {e}")
@@ -1162,7 +1163,7 @@ def format_and_template_dataset(
 
         elif vlm_structure["format"] == "vlm_messages":
             try:
-                dataset = own_message_videos(dataset)
+                dataset = own_message_videos(dataset, dataset_name = dataset_name)
             except Exception as e:
                 errors.append(f"Failed to read the video parts of VLM messages rows: {e}")
                 return {

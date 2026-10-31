@@ -278,3 +278,31 @@ def test_an_image_past_the_detection_probe_is_still_refused():
     rows = rows + [{"video": CLIPS[1], "image": Image.new("RGB", (4, 4)), "answer": "b"}]
     with pytest.raises(ValueError, match = "image"):
         convert_video_to_vlm_format(rows, "video", "answer")
+
+
+def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    from utils.datasets.format_conversion import convert_video_to_vlm_format, own_message_videos
+
+    calls = []
+
+    class Api:
+        def list_repo_files(self, repo_id, repo_type = None):
+            assert (repo_id, repo_type) == ("someone/clips", "dataset")
+            return ["videos/clip00.mp4", "videos/clip01.mp4", "README.md"]
+
+    def download(repo_id, filename, repo_type = None, cache_dir = None, **kw):
+        calls.append(filename)
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
+    rows = [{"video": f"videos/clip0{i}.mp4", "answer": a} for i, a in enumerate(ANSWERS)]
+    out = convert_video_to_vlm_format(rows, "video", "answer", dataset_name = "someone/clips")
+    assert [_video_parts(r)[0]["video"] for r in out] == [str(tmp_path / f"videos/clip0{i}.mp4") for i in range(2)]
+    messages = [
+        {"messages": [{"role": "user", "content": [{"type": "video", "video": "clip01.mp4"}]}]}
+    ]
+    out = own_message_videos(messages, dataset_name = "someone/clips")
+    assert _video_parts(out[0])[0]["video"] == str(tmp_path / "videos/clip01.mp4")

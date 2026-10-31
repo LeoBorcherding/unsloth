@@ -843,7 +843,45 @@ def convert_to_vlm_format(
     return converted_list
 
 
-def _own_video_part(video, account):
+class _HubClips:
+    """Repo-relative clip names of a Hub dataset, resolved by download the way bare image filenames are."""
+
+    def __init__(self, dataset_name):
+        self.repo, self.files = dataset_name, None
+        # A repo id only: "local" and local folders have nothing to list.
+        if not isinstance(dataset_name, str) or dataset_name.count("/") != 1 or os.path.exists(dataset_name):
+            self.repo = None
+
+    def resolve(self, path):
+        if self.repo is None or os.path.exists(path) or "://" in path or os.path.isabs(path):
+            return None
+        if self.files is None:
+            from huggingface_hub import HfApi
+
+            from .format_detection import _VIDEO_EXTENSIONS
+
+            self.files = {}
+            try:
+                repo_files = HfApi().list_repo_files(self.repo, repo_type = "dataset")
+            except Exception as e:  # noqa: BLE001 -- not a Hub repo or offline: paths stay local
+                logger.info(f"Could not list {self.repo} to resolve video filenames: {e}")
+                repo_files = []
+            for f in repo_files:
+                if f.lower().endswith(_VIDEO_EXTENSIONS + (".webm",)):
+                    self.files.setdefault(os.path.basename(f), f)
+                    self.files[f] = f
+        if path not in self.files:
+            return None
+        from huggingface_hub import hf_hub_download
+
+        from utils.hf_cache_settings import active_hf_hub_cache
+
+        return hf_hub_download(
+            self.repo, self.files[path], repo_type = "dataset", cache_dir = active_hf_hub_cache()
+        )
+
+
+def _own_video_part(video, account, hub = None):
     from .format_detection import encoded_video
 
     video = encoded_video(video)
@@ -862,15 +900,19 @@ def _own_video_part(video, account):
             f"Remote video URLs are not fetched for training: {video}. "
             "Download the clips and point the column at local files or a Hub dataset."
         )
+    resolved = hub.resolve(video) if hub is not None else None
+    if resolved is not None:
+        return resolved
     return _own_image_path(video, account)
 
 
-def own_message_videos(rows):
+def own_message_videos(rows, dataset_name = None):
     """Check every video path in VLM messages rows the way image paths are checked; returns the rows as a list."""
     from utils.account_context import current_account
     from .format_detection import video_parts
 
     account = current_account()
+    hub = _HubClips(dataset_name)
     rows = [row for row in rows]
     for row in rows:
         if not video_parts(row.get("messages")):
@@ -885,7 +927,7 @@ def own_message_videos(rows):
                 for part in content
             ]
         for part in video_parts(row["messages"]):
-            part["video"] = _own_video_part(part["video"], account)
+            part["video"] = _own_video_part(part["video"], account, hub)
     return rows
 
 
@@ -896,6 +938,7 @@ def convert_video_to_vlm_format(
     question_column = None,
     instruction = None,
     video_columns = None,
+    dataset_name = None,
 ):
     """Flat video + text rows to VLM messages, one video part per clip column; the collator decodes the clip, so the path stays a path."""
     from utils.account_context import current_account
@@ -903,6 +946,7 @@ def convert_video_to_vlm_format(
     from .format_detection import _holds_images, _is_image_value
 
     account = current_account()
+    hub = _HubClips(dataset_name)
     default_instruction = instruction or "Describe this video."
     converted = []
     for row in dataset:
@@ -931,7 +975,7 @@ def convert_video_to_vlm_format(
                         "role": "user",
                         "content": [
                             *(
-                                {"type": "video", "video": _own_video_part(clip, account)}
+                                {"type": "video", "video": _own_video_part(clip, account, hub)}
                                 for clip in clips
                             ),
                             {"type": "text", "text": question},
