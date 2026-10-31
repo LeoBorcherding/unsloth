@@ -339,3 +339,20 @@ def test_a_classlabel_answer_trains_on_the_class_name():
     ds = Dataset.from_dict({"video": CLIPS, "label": [1, 0]}, features = features)
     out = _format(ds)
     assert [row["messages"][1]["content"][0]["text"] for row in out] == ["dog", "cat"]
+
+
+def test_a_manual_video_mapping_uses_the_video_converter():
+    ds = Dataset.from_dict({"video": CLIPS, "ask": [QUESTION] * 2, "target": ANSWERS})
+    info = format_and_template_dataset(
+        ds,
+        model_name = "unsloth/Qwen2.5-VL-3B-Instruct",
+        tokenizer = None,
+        is_vlm = True,
+        dataset_name = "local",
+        custom_format_mapping = {"video": "image", "target": "assistant", "ask": "user"},
+    )
+    assert info["success"], info["errors"]
+    for row, clip, answer in zip(info["dataset"], CLIPS, ANSWERS):
+        user, assistant = row["messages"]
+        assert user["content"] == [{"type": "video", "video": clip}, {"type": "text", "text": QUESTION}]
+        assert assistant["content"] == [{"type": "text", "text": answer}]

@@ -11,6 +11,8 @@ from .format_detection import (
     detect_vlm_dataset_structure,
     detect_custom_format_heuristic,
     is_plain_text_dataset,
+    detect_video_columns,
+    video_sample,
     _VIDEO_TEXT_KEYWORDS,
 )
 from .format_conversion import (
@@ -929,6 +931,62 @@ def format_and_template_dataset(
                     user_vlm_image_column = col
                 elif role in ["text", "user", "caption", "assistant"]:
                     user_vlm_text_column = col
+
+            # The text-role loop above keeps the last one; a clip needs the answer and question kept apart.
+            video_answer_column = next(
+                (c for c, r in custom_format_mapping.items() if r in ("assistant", "text", "caption")),
+                user_vlm_text_column,
+            )
+            video_question_column = next(
+                (c for c, r in custom_format_mapping.items() if r == "user" and c != video_answer_column),
+                None,
+            )
+            first = next(iter(dataset), None)
+            mapped_video = (
+                user_vlm_image_column
+                and user_vlm_text_column
+                and isinstance(first, dict)
+                and user_vlm_image_column in detect_video_columns(video_sample(dataset, first))
+            )
+            if mapped_video:
+                # The image role on a clip column: the image converter would try to open the clip.
+                try:
+                    dataset = convert_video_to_vlm_format(
+                        dataset,
+                        video_column = user_vlm_image_column,
+                        text_column = video_answer_column,
+                        question_column = video_question_column,
+                        instruction = vlm_instruction,
+                        dataset_name = dataset_name,
+                    )
+                except Exception as e:
+                    errors.append(f"Failed to convert the mapped video + text columns: {e}")
+                    return {
+                        "dataset": dataset,
+                        "detected_format": "user_mapped",
+                        "final_format": "vlm_conversion_failed",
+                        "is_vlm": True,
+                        "success": False,
+                        "requires_manual_mapping": True,
+                        "warnings": warnings,
+                        "errors": errors,
+                    }
+                warnings.append(
+                    f"Applied user VLM mapping: video='{user_vlm_image_column}', text='{video_answer_column}'"
+                )
+                return {
+                    "dataset": dataset,
+                    "detected_format": "user_mapped",
+                    "final_format": "vlm_messages",
+                    "chat_column": "messages",
+                    "is_vlm": True,
+                    "is_image": True,
+                    "multimodal_info": multimodal_info,
+                    "success": True,
+                    "requires_manual_mapping": False,
+                    "warnings": warnings,
+                    "errors": [],
+                }
 
             if user_vlm_image_column and user_vlm_text_column:
                 try:
