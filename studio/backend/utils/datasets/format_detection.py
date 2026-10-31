@@ -881,16 +881,20 @@ def detect_video_structure(sample: dict):
     if not flat:
         return None
 
-    def _pick(keywords):
+    def _pick(keywords, scalars = False):
         for keyword in keywords:
             for col_name, value in sample.items():
-                if col_name in flat or not isinstance(value, str) or not value.strip():
+                # An answer may be a number or ClassLabel id; the conversion stringifies it.
+                usable = (isinstance(value, str) and value.strip()) or (
+                    scalars and isinstance(value, (int, float)) and not isinstance(value, bool)
+                )
+                if col_name in flat or not usable:
                     continue
                 if _keyword_in_column(keyword, col_name):
                     return col_name
         return None
 
-    text_col = _pick(_VIDEO_TEXT_KEYWORDS)
+    text_col = _pick(_VIDEO_TEXT_KEYWORDS, scalars = True)
     question_col = _pick(_VIDEO_QUESTION_KEYWORDS)
     return {
         "format": "video_text" if text_col else "unknown",
@@ -899,6 +903,11 @@ def detect_video_structure(sample: dict):
         "image_column": None,
         "video_column": flat[0],
         "video_columns": flat,
+        "image_columns": [
+            col
+            for col, value in sample.items()
+            if col not in flat and (_is_image_value(value) or _holds_images(value))
+        ],
         "text_column": text_col,
         "question_column": question_col if question_col != text_col else None,
     }

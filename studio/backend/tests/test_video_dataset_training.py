@@ -226,3 +226,31 @@ def test_decoded_hf_video_cells_are_video():
     assert structure["format"] == "video_text" and structure["video_column"] == "clip"
     out = convert_video_to_vlm_format(rows, "clip", "answer", video_columns = structure["video_columns"])
     assert [_video_parts(row) for row in out] == [[{"type": "video", "video": c}] for c in CLIPS]
+
+
+def test_a_numeric_answer_column_is_an_answer():
+    ds = Dataset.from_dict({"video": CLIPS, "label": [0, 1]})
+    assert check_dataset_format(ds, is_vlm = True)["detected_format"] == "video_text"
+    out = _format(ds)
+    assert [row["messages"][1]["content"][0]["text"] for row in out] == ["0", "1"]
+
+
+def test_rows_mixing_video_and_image_columns_are_refused():
+    from PIL import Image
+
+    image = Image.new("RGB", (4, 4))
+    ds = Dataset.from_dict({"video": CLIPS, "image": [image, image], "answer": ANSWERS})
+    info = format_and_template_dataset(
+        ds,
+        model_name = "unsloth/Qwen2.5-VL-3B-Instruct",
+        tokenizer = None,
+        is_vlm = True,
+        dataset_name = "local",
+    )
+    assert not info["success"]
+    assert "image" in " ".join(map(str, info["errors"]))
+
+
+def test_a_text_column_named_image_is_not_an_image():
+    ds = Dataset.from_dict({"video": CLIPS, "image_caption": ["a", "b"], "answer": ANSWERS})
+    assert len(_format(ds)) == 2

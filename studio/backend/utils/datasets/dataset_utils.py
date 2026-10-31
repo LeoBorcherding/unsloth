@@ -1033,6 +1033,23 @@ def format_and_template_dataset(
                     "errors": errors,
                 }
 
+        elif vlm_structure["format"] == "video_text" and vlm_structure.get("image_columns"):
+            errors.append(
+                f"Rows mix video ('{vlm_structure['video_column']}') with image columns "
+                f"{vlm_structure['image_columns']}; video conversion would drop the images, so remove "
+                "those columns or split the dataset."
+            )
+            return {
+                "dataset": dataset,
+                "detected_format": "video_text",
+                "final_format": "vlm_conversion_failed",
+                "is_vlm": True,
+                "success": False,
+                "requires_manual_mapping": True,
+                "warnings": warnings,
+                "errors": errors,
+            }
+
         elif vlm_structure["format"] == "video_text":
             try:
                 dataset = convert_video_to_vlm_format(
