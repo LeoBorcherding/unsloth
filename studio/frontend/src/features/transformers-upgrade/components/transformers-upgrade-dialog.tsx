@@ -56,7 +56,8 @@ export function TransformersUpgradeDialog() {
         if (!next && !installing) resolve(false);
       }}
     >
-      <AlertDialogContent className="max-w-lg">
+      {/* A plain max-w loses to the size rule, and three buttons don't fit its 28rem. */}
+      <AlertDialogContent className="sm:!max-w-[calc(34rem*var(--ui-space-scale,1))]">
         <AlertDialogHeader className="min-w-0">
           <div className="flex w-full min-w-0 items-start gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
@@ -133,7 +134,7 @@ export function TransformersUpgradeDialog() {
           </div>
         </AlertDialogHeader>
 
-        <AlertDialogFooter>
+        <AlertDialogFooter className="sm:flex-wrap">
           <AlertDialogCancel disabled={installing}>Cancel</AlertDialogCancel>
           {installable ? (
             <>
