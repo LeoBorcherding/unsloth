@@ -12,6 +12,7 @@ from utils.datasets.format_detection import (
     detect_video_columns,
     detect_video_structure,
     has_message_prompt_completion,
+    video_sample,
     is_plain_text_dataset,
 )
 from utils.datasets.pretokenized import PRETOKENIZED_FORMAT, is_pretokenized_dataset
@@ -511,7 +512,7 @@ def detect_multimodal_dataset(dataset):
             modality_types.add("audio")
     if audio_columns:
         multimodal_columns = [col for col in multimodal_columns if col not in set(audio_columns)]
-    video_columns = detect_video_columns(sample)
+    video_columns = detect_video_columns(video_sample(dataset, sample))
     audio_columns = [col for col in audio_columns if col not in video_columns]
     if video_columns:
         multimodal_columns = [col for col in multimodal_columns if col not in video_columns]
@@ -560,7 +561,7 @@ def detect_vlm_dataset_structure(dataset):
             "text_column": None,
             "messages_column": None,
         }
-    video_structure = detect_video_structure(sample)
+    video_structure = detect_video_structure(video_sample(dataset, sample))
     if video_structure is not None:
         return video_structure
     column_names = set(sample.keys())

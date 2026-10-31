@@ -667,7 +667,7 @@ def detect_multimodal_dataset(dataset):
 
     # Video trains on the vision path too; a {"bytes","path"} video cell would otherwise read as an image.
     # A column named video wins over the audio match a .webm path gets.
-    video_columns = detect_video_columns(sample)
+    video_columns = detect_video_columns(video_sample(dataset, sample))
     audio_columns = [c for c in audio_columns if c not in video_columns]
     if video_columns:
         multimodal_columns = [c for c in multimodal_columns if c not in video_columns]
@@ -792,7 +792,9 @@ _AUDIO_EXTENSIONS = (
 
 # .webm is also an audio container, so it counts as video only in a column named video.
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg")
-_VIDEO_TEXT_KEYWORDS = ("answer", "text", "caption", "description", "output", "response", "label")
+_VIDEO_TEXT_KEYWORDS = (
+    "answer", "completion", "text", "caption", "description", "output", "response", "label",
+)
 _VIDEO_QUESTION_KEYWORDS = ("question", "prompt", "instruction", "query")
 
 
@@ -803,6 +805,25 @@ def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
     if not isinstance(value, str) or len(value) >= 1000:
         return False
     return value.strip().lower().split("?")[0].endswith(extensions)
+
+
+def video_sample(dataset, sample: dict, rows: int = 32) -> dict:
+    """``sample`` with each null cell taken from the next rows, so a sparse first row still shows its video column."""
+    import itertools
+
+    if all(value is not None for value in sample.values()):
+        return sample
+    filled = dict(sample)
+    try:
+        for row in itertools.islice(iter(dataset), 1, rows):
+            for key, value in row.items():
+                if filled.get(key) is None and value is not None:
+                    filled[key] = value
+            if all(value is not None for value in filled.values()):
+                break
+    except Exception:  # noqa: BLE001 -- unreadable rows: detect from the first one
+        return sample
+    return filled
 
 
 def video_parts(messages) -> list:
@@ -924,7 +945,7 @@ def detect_vlm_dataset_structure(dataset):
             "messages_column": None,
         }
 
-    video_structure = detect_video_structure(sample)
+    video_structure = detect_video_structure(video_sample(dataset, sample))
     if video_structure is not None:
         return video_structure
 

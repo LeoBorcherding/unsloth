@@ -11,6 +11,7 @@ from .format_detection import (
     detect_vlm_dataset_structure,
     detect_custom_format_heuristic,
     is_plain_text_dataset,
+    _VIDEO_TEXT_KEYWORDS,
 )
 from .format_conversion import (
     standardize_chat_format,
@@ -1053,6 +1054,23 @@ def format_and_template_dataset(
                     "warnings": warnings,
                     "errors": errors,
                 }
+
+        elif vlm_structure["format"] == "unknown" and vlm_structure.get("video_column"):
+            # Rows left flat would otherwise be reported as formatted VLM messages.
+            errors.append(
+                f"Found videos in '{vlm_structure['video_column']}' but no answer column; name the answer column with one of these words: "
+                + ", ".join(_VIDEO_TEXT_KEYWORDS)
+            )
+            return {
+                "dataset": dataset,
+                "detected_format": "unknown",
+                "final_format": "vlm_unknown",
+                "is_vlm": True,
+                "success": False,
+                "requires_manual_mapping": True,
+                "warnings": warnings,
+                "errors": errors,
+            }
 
         elif vlm_structure["needs_conversion"]:
             if vlm_text_column is None:

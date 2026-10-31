@@ -159,3 +159,33 @@ def test_remote_video_urls_are_refused_with_a_clear_message(url, shape):
     )
     assert not info["success"]
     assert "Remote video URLs are not fetched" in " ".join(map(str, info["errors"]))
+
+
+def test_completion_is_a_video_answer_column():
+    ds = Dataset.from_dict({"video": CLIPS, "completion": ANSWERS})
+    assert check_dataset_format(ds, is_vlm = True)["detected_format"] == "video_text"
+    for row, answer in zip(_format(ds), ANSWERS):
+        assert row["messages"][1]["content"] == [{"type": "text", "text": answer}]
+
+
+def test_a_video_column_with_no_answer_column_is_not_reported_as_formatted():
+    ds = Dataset.from_dict({"video": CLIPS, "notes_id": ["1", "2"]})
+    info = format_and_template_dataset(
+        ds,
+        model_name = "unsloth/Qwen2.5-VL-3B-Instruct",
+        tokenizer = None,
+        is_vlm = True,
+        dataset_name = "local",
+    )
+    assert not info["success"]
+    assert info["requires_manual_mapping"] is True
+    assert "video" in " ".join(map(str, info["errors"]))
+
+
+def test_a_null_first_video_row_still_reads_as_video():
+    ds = Dataset.from_dict({"video": [None, *CLIPS], "answer": [None, *ANSWERS]})
+    result = check_dataset_format(ds, is_vlm = True)
+    assert result["is_image"] is True
+    assert result["detected_format"] == "video_text"
+    out = _format(ds)
+    assert [_video_parts(row) for row in out] == [[{"type": "video", "video": c}] for c in CLIPS]
