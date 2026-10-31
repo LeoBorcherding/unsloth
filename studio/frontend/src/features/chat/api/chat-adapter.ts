@@ -5,6 +5,12 @@ import { hasChatFullAccess, withChatFullAccess } from "../utils/chat-full-access
 
 import { attachedMediaUnavailableReason } from "../lib/attached-media-gate";
 import { readGenerationProgress } from "../lib/generation-progress";
+import {
+  consumePendingFiller,
+  consumePendingReplace,
+  replaceSystemNote,
+  fillerSystemNote,
+} from "@/features/chat/voice/thinking-filler";
 import { externalModelLabel } from "../lib/external-model-label";
 import { mlxRuntimeStateFrom } from "../lib/mlx-runtime-state";
 import { minPSamplingPayload } from "../lib/min-p-policy";
@@ -5417,6 +5423,15 @@ export function createOpenAIStreamAdapter(
       const videoBase64 = findLatestUserVideoBase64(survivingMessages);
 
       addSystemInstruction(outboundMessages, disabledToolGuard);
+      // Voice mode may have spoken a thinking filler for this turn; the model
+      // continues from it instead of contradicting it.
+      const spokenFiller = consumePendingFiller();
+      addSystemInstruction(
+        outboundMessages,
+        spokenFiller ? fillerSystemNote(spokenFiller.phrase) : null,
+      );
+      // The user cut in to change direction: the bubbles before it are withdrawn.
+      addSystemInstruction(outboundMessages, consumePendingReplace() ? replaceSystemNote() : null);
 
       const blockAttachmentRun = (reason: string): never => {
         toast.error(reason);
