@@ -306,10 +306,11 @@ function FlowNodeViewImpl({ id }: NodeProps<RfNode>) {
           {Body ? <Body node={node} /> : null}
           {fields && <NodeFieldRows rows={fields.rows} />}
           {fields && <NodeDisclosure sections={fields.long} />}
-          {(runtime.outputs ||
-            runtime.partial ||
-            runtime.text ||
-            runtime.preview) && (
+          {!look.ownsOutputs &&
+            (runtime.outputs ||
+              runtime.partial ||
+              runtime.text ||
+              runtime.preview) && (
             <div className="flow-detail px-3">
               <OutputPreview runtime={runtime} spec={spec} />
             </div>
