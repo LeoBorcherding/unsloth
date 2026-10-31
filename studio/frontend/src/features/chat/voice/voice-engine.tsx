@@ -499,7 +499,9 @@ export const VoiceEngine: FC = () => {
     queuedUtteranceRef.current = [];
     const text = held.length ? [...held, said].join(" ") : said;
     if (held.length) voiceTrace("engine.foldHeld", { held, text });
-    const turnAudio = speaksWithChatModel() ? takeVoiceTurnAudio() : null;
+    // Drained on every send, so speech kept while the model could not answer in it never rides along later.
+    const taken = takeVoiceTurnAudio();
+    const turnAudio = speaksWithChatModel() ? taken : null;
     // Barge-in: the instant the user speaks, cut the audio and the in-flight run.
     // This utterance supersedes whatever the model was saying. Cover the tail
     // clip (isPlaying) too, not just an active streaming session (isSpeaking).

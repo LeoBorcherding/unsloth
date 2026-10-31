@@ -48,7 +48,7 @@ import {
   reportLayaOutcome,
 } from "@/features/chat/voice/voice-models-client";
 import { createTurnAudio } from "@/features/chat/voice/turn-audio";
-import { isChatModelVoice } from "@/features/chat/voice/voice-models";
+import { chatModelSpeaks, isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { attachInputSpectrum, detachInputSpectrum } from "@/features/chat/voice/voice-spectrum";
 import { voiceTrace } from "@/features/chat/voice/voice-trace";
 import { requestSttDownload } from "@/features/settings/stores/stt-download-prompt-store";
@@ -740,7 +740,8 @@ export class StudioVoiceLoopAdapter implements DictationAdapter {
           return;
         }
         settleFinished(Boolean(transcript));
-        if (transcript && isChatModelVoice(useChatRuntimeStore.getState().selectedVoiceModelId)) {
+        const rt = useChatRuntimeStore.getState();
+        if (transcript && isChatModelVoice(rt.selectedVoiceModelId) && chatModelSpeaks(rt)) {
           turnAudio.add(merged, sampleRate);
         }
         // Clicked into: what was said joins the box and waits for the user's send.
