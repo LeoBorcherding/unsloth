@@ -934,11 +934,19 @@ def format_and_template_dataset(
 
             # The text-role loop above keeps the last one; a clip needs the answer and question kept apart.
             video_answer_column = next(
-                (c for c, r in custom_format_mapping.items() if r in ("assistant", "text", "caption")),
+                (
+                    c
+                    for c, r in custom_format_mapping.items()
+                    if r in ("assistant", "text", "caption")
+                ),
                 user_vlm_text_column,
             )
             video_question_column = next(
-                (c for c, r in custom_format_mapping.items() if r == "user" and c != video_answer_column),
+                (
+                    c
+                    for c, r in custom_format_mapping.items()
+                    if r == "user" and c != video_answer_column
+                ),
                 None,
             )
             first = next(iter(dataset), None)

@@ -793,7 +793,14 @@ _AUDIO_EXTENSIONS = (
 # .webm is also an audio container, so it counts as video only in a column named video.
 _VIDEO_EXTENSIONS = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg")
 _VIDEO_TEXT_KEYWORDS = (
-    "answer", "completion", "text", "caption", "description", "output", "response", "label",
+    "answer",
+    "completion",
+    "text",
+    "caption",
+    "description",
+    "output",
+    "response",
+    "label",
 )
 _VIDEO_QUESTION_KEYWORDS = ("question", "prompt", "instruction", "query")
 
@@ -819,7 +826,11 @@ def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
     return value.strip().lower().split("?")[0].endswith(extensions)
 
 
-def video_sample(dataset, sample: dict, rows: int = 32) -> dict:
+def video_sample(
+    dataset,
+    sample: dict,
+    rows: int = 32,
+) -> dict:
     """``sample`` with each null or blank cell taken from the next rows, so a sparse first row still shows its columns."""
     import itertools
 
@@ -878,11 +889,7 @@ def detect_video_structure(sample: dict):
             "video_column": None,
             "text_column": None,
         }
-    flat = [
-        col
-        for col in detect_video_columns(sample)
-        if not isinstance(sample[col], list)
-    ]
+    flat = [col for col in detect_video_columns(sample) if not isinstance(sample[col], list)]
     if not flat:
         return None
 

@@ -849,7 +849,11 @@ class _HubClips:
     def __init__(self, dataset_name):
         self.repo, self.files = dataset_name, None
         # A repo id only: "local" and local folders have nothing to list.
-        if not isinstance(dataset_name, str) or dataset_name.count("/") != 1 or os.path.exists(dataset_name):
+        if (
+            not isinstance(dataset_name, str)
+            or dataset_name.count("/") != 1
+            or os.path.exists(dataset_name)
+        ):
             self.repo = None
 
     def resolve(self, path):
@@ -891,7 +895,11 @@ class _HubClips:
         )
 
 
-def _own_video_part(video, account, hub = None):
+def _own_video_part(
+    video,
+    account,
+    hub = None,
+):
     from .format_detection import encoded_video
 
     video = encoded_video(video)
@@ -967,7 +975,8 @@ def convert_video_to_vlm_format(
         clip_columns = video_columns or [video_column]
         # Detection probes a few rows; an image further down would otherwise be dropped silently.
         images = [
-            c for c, v in row.items()
+            c
+            for c, v in row.items()
             if c not in clip_columns and (_is_image_value(v) or _holds_images(v))
         ]
         if images:
@@ -1000,7 +1009,9 @@ def convert_video_to_vlm_format(
             }
         )
     if not converted:
-        raise ValueError(f"No rows have both a video in '{video_column}' and text in '{text_column}'")
+        raise ValueError(
+            f"No rows have both a video in '{video_column}' and text in '{text_column}'"
+        )
     skipped = len(dataset) - len(converted) if hasattr(dataset, "__len__") else 0
     if skipped:
         logger.info(f"Skipping {skipped} rows without a video or text")

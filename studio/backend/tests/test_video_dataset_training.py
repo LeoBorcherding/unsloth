@@ -87,7 +87,9 @@ def test_flat_video_rows_become_video_messages():
         assert assistant["content"] == [{"type": "text", "text": answer}]
 
 
-@pytest.mark.parametrize("clip", ["clips/a.webm", {"bytes": None, "path": "clips/a.webm"}], ids = ["str", "dict"])
+@pytest.mark.parametrize(
+    "clip", ["clips/a.webm", {"bytes": None, "path": "clips/a.webm"}], ids = ["str", "dict"]
+)
 def test_webm_in_a_video_column_is_video_not_audio(clip):
     ds = Dataset.from_list([{"video": clip, "answer": "red moves left"}] * 2)
     result = check_dataset_format(ds, is_vlm = True)
@@ -116,7 +118,9 @@ def _mlx_adapter():
     import ast
     from pathlib import Path
 
-    source = (Path(__file__).parents[1] / "core" / "training" / "worker.py").read_text()
+    source = (Path(__file__).parents[1] / "core" / "training" / "worker.py").read_text(
+        encoding = "utf-8"
+    )
     node = next(
         n
         for n in ast.parse(source).body
@@ -195,7 +199,9 @@ def test_a_blank_first_answer_still_finds_the_answer_column():
     ds = Dataset.from_dict({"video": CLIPS, "answer": ["  ", ANSWERS[1]]})
     assert check_dataset_format(ds, is_vlm = True)["detected_format"] == "video_text"
     out = _format(ds)
-    assert len(out) == 1 and out[0]["messages"][1]["content"] == [{"type": "text", "text": ANSWERS[1]}]
+    assert len(out) == 1 and out[0]["messages"][1]["content"] == [
+        {"type": "text", "text": ANSWERS[1]}
+    ]
 
 
 def test_every_video_column_reaches_the_message():
@@ -224,7 +230,9 @@ def test_decoded_hf_video_cells_are_video():
     rows = [{"clip": _DecodedVideo(c), "answer": a} for c, a in zip(CLIPS, ANSWERS)]
     structure = detect_video_structure(rows[0])
     assert structure["format"] == "video_text" and structure["video_column"] == "clip"
-    out = convert_video_to_vlm_format(rows, "clip", "answer", video_columns = structure["video_columns"])
+    out = convert_video_to_vlm_format(
+        rows, "clip", "answer", video_columns = structure["video_columns"]
+    )
     assert [_video_parts(row) for row in out] == [[{"type": "video", "video": c}] for c in CLIPS]
 
 
@@ -288,11 +296,21 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
     calls = []
 
     class Api:
-        def list_repo_files(self, repo_id, repo_type = None):
+        def list_repo_files(
+            self,
+            repo_id,
+            repo_type = None,
+        ):
             assert (repo_id, repo_type) == ("someone/clips", "dataset")
             return ["videos/clip00.mp4", "videos/clip01.mp4", "README.md"]
 
-    def download(repo_id, filename, repo_type = None, cache_dir = None, **kw):
+    def download(
+        repo_id,
+        filename,
+        repo_type = None,
+        cache_dir = None,
+        **kw,
+    ):
         calls.append(filename)
         return str(tmp_path / filename)
 
@@ -300,7 +318,9 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
     rows = [{"video": f"videos/clip0{i}.mp4", "answer": a} for i, a in enumerate(ANSWERS)]
     out = convert_video_to_vlm_format(rows, "video", "answer", dataset_name = "someone/clips")
-    assert [_video_parts(r)[0]["video"] for r in out] == [str(tmp_path / f"videos/clip0{i}.mp4") for i in range(2)]
+    assert [_video_parts(r)[0]["video"] for r in out] == [
+        str(tmp_path / f"videos/clip0{i}.mp4") for i in range(2)
+    ]
     messages = [
         {"messages": [{"role": "user", "content": [{"type": "video", "video": "clip01.mp4"}]}]}
     ]
@@ -310,7 +330,6 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
 
 def test_a_lone_column_of_clip_paths_is_not_raw_text():
     from utils.datasets.format_detection import is_plain_text_dataset
-
     assert not is_plain_text_dataset(Dataset.from_dict({"clip": CLIPS}))
     assert is_plain_text_dataset(Dataset.from_dict({"text": ["a story", "another"]}))
 
@@ -321,14 +340,22 @@ def test_an_ambiguous_bare_clip_name_is_refused(monkeypatch, tmp_path):
     from utils.datasets.format_conversion import convert_video_to_vlm_format
 
     class Api:
-        def list_repo_files(self, repo_id, repo_type = None):
+        def list_repo_files(
+            self,
+            repo_id,
+            repo_type = None,
+        ):
             return ["train/clip.mp4", "test/clip.mp4"]
 
     monkeypatch.setattr(huggingface_hub, "HfApi", Api)
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", lambda *a, **k: str(tmp_path / "x.mp4"))
     with pytest.raises(ValueError, match = "train/clip.mp4"):
-        convert_video_to_vlm_format([{"video": "clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
-    out = convert_video_to_vlm_format([{"video": "test/clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
+        convert_video_to_vlm_format(
+            [{"video": "clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips"
+        )
+    out = convert_video_to_vlm_format(
+        [{"video": "test/clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips"
+    )
     assert _video_parts(out[0])[0]["video"] == str(tmp_path / "x.mp4")
 
 
@@ -354,5 +381,8 @@ def test_a_manual_video_mapping_uses_the_video_converter():
     assert info["success"], info["errors"]
     for row, clip, answer in zip(info["dataset"], CLIPS, ANSWERS):
         user, assistant = row["messages"]
-        assert user["content"] == [{"type": "video", "video": clip}, {"type": "text", "text": QUESTION}]
+        assert user["content"] == [
+            {"type": "video", "video": clip},
+            {"type": "text", "text": QUESTION},
+        ]
         assert assistant["content"] == [{"type": "text", "text": answer}]
