@@ -1525,6 +1525,7 @@ class UnslothTrainer:
 
             elif self.is_audio_vlm:
                 from unsloth import FastModel
+
                 audio_vlm_kwargs = _audio_vlm_auto_model_kwargs(vision)
                 self.model, self.tokenizer = FastModel.from_pretrained(
                     **audio_vlm_kwargs,
