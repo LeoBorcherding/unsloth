@@ -848,6 +848,11 @@ def _own_video_part(video, account):
 
     video = encoded_video(video)
     if isinstance(video, dict):
+        if not video.get("path") and video.get("bytes"):
+            raise ValueError(
+                "A video is stored as embedded bytes with no file path; training reads clips from "
+                "files, so save the clips to files and point the column at their paths."
+            )
         video = video.get("path")
     if not isinstance(video, str) or not video.strip():
         raise ValueError("Row has no video")
@@ -895,12 +900,25 @@ def convert_video_to_vlm_format(
     """Flat video + text rows to VLM messages, one video part per clip column; the collator decodes the clip, so the path stays a path."""
     from utils.account_context import current_account
 
+    from .format_detection import _holds_images, _is_image_value
+
     account = current_account()
     default_instruction = instruction or "Describe this video."
     converted = []
     for row in dataset:
         answer = row.get(text_column)
-        clips = [row[c] for c in (video_columns or [video_column]) if row.get(c) is not None]
+        clip_columns = video_columns or [video_column]
+        # Detection probes a few rows; an image further down would otherwise be dropped silently.
+        images = [
+            c for c, v in row.items()
+            if c not in clip_columns and (_is_image_value(v) or _holds_images(v))
+        ]
+        if images:
+            raise ValueError(
+                f"Rows mix video with image columns {images}; video conversion would drop the images, "
+                "so remove those columns or split the dataset."
+            )
+        clips = [row[c] for c in clip_columns if row.get(c) is not None]
         if not clips or answer is None or not str(answer).strip():
             continue
         question = row.get(question_column) if question_column else None

@@ -804,6 +804,11 @@ def encoded_video(value):
     return encoded if isinstance(encoded, dict) else value
 
 
+def _is_hf_video(value) -> bool:
+    # A decoded datasets Video cell is video whatever it holds, a path or only embedded bytes.
+    return isinstance(getattr(value, "_hf_encoded", None), dict)
+
+
 def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
     """A video file path or URL, or an undecoded {"path": ...} or decoded ``Video`` cell naming one."""
     value = encoded_video(value)
@@ -853,7 +858,7 @@ def detect_video_columns(sample: dict) -> list:
     """Columns holding videos: a flat path column, or messages carrying video parts."""
     columns = []
     for col_name, value in sample.items():
-        if _is_video_value(value) or video_parts(value):
+        if _is_video_value(value) or video_parts(value) or _is_hf_video(value):
             columns.append(col_name)
         elif _keyword_in_column("video", col_name) and _is_video_value(
             value, _VIDEO_EXTENSIONS + (".webm",)

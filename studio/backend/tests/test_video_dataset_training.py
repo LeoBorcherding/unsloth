@@ -254,3 +254,27 @@ def test_rows_mixing_video_and_image_columns_are_refused():
 def test_a_text_column_named_image_is_not_an_image():
     ds = Dataset.from_dict({"video": CLIPS, "image_caption": ["a", "b"], "answer": ANSWERS})
     assert len(_format(ds)) == 2
+
+
+def test_byte_backed_hf_video_is_refused_with_a_clear_message():
+    from utils.datasets.format_conversion import convert_video_to_vlm_format
+    from utils.datasets.format_detection import detect_video_structure
+
+    clip = _DecodedVideo(None)
+    clip._hf_encoded["bytes"] = b"\x00\x00\x00\x18ftypmp42"
+    row = {"clip": clip, "answer": "red"}
+    structure = detect_video_structure(row)
+    assert structure["video_column"] == "clip"
+    with pytest.raises(ValueError, match = "embedded bytes"):
+        convert_video_to_vlm_format([row], "clip", "answer")
+
+
+def test_an_image_past_the_detection_probe_is_still_refused():
+    from PIL import Image
+
+    from utils.datasets.format_conversion import convert_video_to_vlm_format
+
+    rows = [{"video": CLIPS[0], "image": None, "answer": "a"}] * 40
+    rows = rows + [{"video": CLIPS[1], "image": Image.new("RGB", (4, 4)), "answer": "b"}]
+    with pytest.raises(ValueError, match = "image"):
+        convert_video_to_vlm_format(rows, "video", "answer")
