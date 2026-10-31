@@ -808,18 +808,21 @@ def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
 
 
 def video_sample(dataset, sample: dict, rows: int = 32) -> dict:
-    """``sample`` with each null cell taken from the next rows, so a sparse first row still shows its video column."""
+    """``sample`` with each null or blank cell taken from the next rows, so a sparse first row still shows its columns."""
     import itertools
 
-    if all(value is not None for value in sample.values()):
+    def _missing(value):
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    if not any(_missing(value) for value in sample.values()):
         return sample
     filled = dict(sample)
     try:
         for row in itertools.islice(iter(dataset), 1, rows):
             for key, value in row.items():
-                if filled.get(key) is None and value is not None:
+                if _missing(filled.get(key)) and not _missing(value):
                     filled[key] = value
-            if all(value is not None for value in filled.values()):
+            if not any(_missing(value) for value in filled.values()):
                 break
     except Exception:  # noqa: BLE001 -- unreadable rows: detect from the first one
         return sample

@@ -189,3 +189,10 @@ def test_a_null_first_video_row_still_reads_as_video():
     assert result["detected_format"] == "video_text"
     out = _format(ds)
     assert [_video_parts(row) for row in out] == [[{"type": "video", "video": c}] for c in CLIPS]
+
+
+def test_a_blank_first_answer_still_finds_the_answer_column():
+    ds = Dataset.from_dict({"video": CLIPS, "answer": ["  ", ANSWERS[1]]})
+    assert check_dataset_format(ds, is_vlm = True)["detected_format"] == "video_text"
+    out = _format(ds)
+    assert len(out) == 1 and out[0]["messages"][1]["content"] == [{"type": "text", "text": ANSWERS[1]}]

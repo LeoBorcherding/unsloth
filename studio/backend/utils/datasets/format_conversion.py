@@ -896,7 +896,7 @@ def convert_video_to_vlm_format(
     converted = []
     for row in dataset:
         answer = row.get(text_column)
-        if row.get(video_column) is None or answer is None:
+        if row.get(video_column) is None or answer is None or not str(answer).strip():
             continue
         question = row.get(question_column) if question_column else None
         if not isinstance(question, str) or not question.strip():
