@@ -119,7 +119,12 @@ import {
 import { type HoldToStop, createHoldToStop } from "./hold-to-stop";
 import { type OrbDwell, createOrbDwell } from "./orb-dwell";
 import { ORB_WIDGET_LONG_PRESS_MS, pendingApproval } from "./orb-widget";
-import { lastUserTurnHasAudio, voiceTurnAttachment, withoutAudioPlayer } from "./turn-audio";
+import {
+  coalescedTurnAudio,
+  lastUserTurnHasAudio,
+  voiceTurnAttachment,
+  withoutAudioPlayer,
+} from "./turn-audio";
 import { isRevealPrefix, isTypedVoiceSubmit } from "./typed-send";
 
 // Tracks the previous thread-running state across the first-send remount, so the
@@ -576,7 +581,14 @@ export const VoiceEngine: FC = () => {
         role: "user",
         content: [{ type: "text", text }],
         ...(turnAudio
-          ? { attachments: [voiceTurnAttachment(turnAudio, `voice-${Date.now()}`)] }
+          ? {
+              attachments: [
+                voiceTurnAttachment(
+                  coalescedTurnAudio(auiRef.current.thread().getState().messages, turnAudio),
+                  `voice-${Date.now()}`,
+                ),
+              ],
+            }
           : {}),
         createdAt: new Date(),
         startRun: false,

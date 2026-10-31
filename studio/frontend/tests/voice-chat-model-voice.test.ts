@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { joinWavBase64, pcmWavBase64 } from "../src/features/chat/utils/wav-chunks.ts";
 import {
+  coalescedTurnAudio,
   createTurnAudio,
   lastUserTurnHasAudio,
   voiceTurnAttachment,
@@ -105,4 +106,20 @@ test("whether the loaded chat model speaks comes from its status", () => {
   assert.equal(chatModelSpeaks({ models, params: { checkpoint: "LiquidAI/LFM3-Audio-2B" } }), true);
   assert.equal(chatModelSpeaks({ models, params: { checkpoint: "unsloth/Qwen3-4B" } }), false);
   assert.equal(chatModelSpeaks({ models, params: { checkpoint: "" } }), false);
+});
+
+test("bubbles coalesced into one run send all their speech on the newest", () => {
+  const a = pcmWavBase64(new Float32Array(100), 48000);
+  const b = pcmWavBase64(new Float32Array(50), 48000);
+  const c = pcmWavBase64(new Float32Array(25), 48000);
+  const reply = { role: "assistant", content: [{ type: "text" }] };
+  const bubble = (wav: string) => ({
+    role: "user",
+    content: [{ type: "text" }],
+    attachments: [voiceTurnAttachment(wav, "x")],
+  });
+  // Answered speech stays out; the unanswered bubble before this one comes first.
+  assert.equal(wavInfo(coalescedTurnAudio([bubble(a), reply, bubble(b)], c)).dataBytes, (50 + 25) * 2);
+  assert.equal(coalescedTurnAudio([bubble(a), reply], c), c);
+  assert.equal(coalescedTurnAudio([], c), c);
 });

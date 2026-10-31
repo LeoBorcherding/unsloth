@@ -5,7 +5,7 @@
 // speech goes to the model with its transcript, and the reply comes back as speech chunks.
 // Dependency-free so the node test runner loads it directly.
 
-import { pcmWavBase64 } from "../utils/wav-chunks.ts";
+import { joinWavBase64, pcmWavBase64 } from "../utils/wav-chunks.ts";
 
 /** The speech of the turn being said, fragment by fragment, until the turn is sent. */
 export function createTurnAudio() {
@@ -63,6 +63,30 @@ export function lastUserTurnHasAudio(messages: readonly Message[]): boolean {
     return parts.some((p) => p.type === "audio");
   }
   return false;
+}
+
+type AudioPart = { type: string; audio?: { data?: string } | string };
+
+function audioOf(m: { content?: readonly Part[]; attachments?: readonly { content?: readonly Part[] }[] }): string[] {
+  const parts = [...(m.content ?? []), ...(m.attachments ?? []).flatMap((a) => a.content ?? [])] as AudioPart[];
+  return parts
+    .filter((p) => p.type === "audio")
+    .map((p) => (typeof p.audio === "string" ? p.audio : (p.audio?.data ?? "")))
+    .filter(Boolean);
+}
+
+/**
+ * This turn's speech joined after the speech of the unanswered user bubbles before it: bubbles
+ * coalesced into one run are one prompt, and the request sends only the newest bubble's audio.
+ */
+export function coalescedTurnAudio(messages: readonly Message[], turn: string): string {
+  const earlier: string[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "user") break;
+    earlier.unshift(...audioOf(m));
+  }
+  return earlier.length ? joinWavBase64([...earlier, turn]) : turn;
 }
 
 const AUDIO_PLAYER = /<audio-player\b[^>]*\/>/g;
