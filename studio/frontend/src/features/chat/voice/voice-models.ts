@@ -28,6 +28,26 @@ export const VOICE_TTS_MODELS: readonly string[] = [
   ).map((model) => model.id),
 ];
 
+/**
+ * Opt-in pick for a chat model that speaks (LFM3-Audio / LFM3-Omni): it hears each turn and
+ * answers in its own voice, so no audio.cpp voice loads. Never picked for the user.
+ */
+export const VOICE_CHAT_MODEL_VOICE = "chat-model-voice";
+/** The chat model's TTS mode speakers (audio_options.voice on /audio/generate). */
+export const CHAT_MODEL_VOICE_SPEAKERS = ["female", "male"] as const;
+
+export function isChatModelVoice(id: string | null | undefined): boolean {
+  return id === VOICE_CHAT_MODEL_VOICE;
+}
+
+/** Whether the loaded chat model answers in speech (the inference status's `speaks`). */
+export function chatModelSpeaks(state: {
+  models: readonly { id: string; speaks?: boolean }[];
+  params: { checkpoint: string };
+}): boolean {
+  return Boolean(state.models.find((m) => m.id === state.params.checkpoint)?.speaks);
+}
+
 /** Whether the voice can speak in a saved Audio voice (the request turns into a clone). */
 export function voiceTtsCanClone(id: string | null | undefined): boolean {
   const model = audioCppModelFor(id);
@@ -41,6 +61,7 @@ export function voiceTtsCanClone(id: string | null | undefined): boolean {
  */
 export function migrateVoiceTtsModel(saved: string | null | undefined): string {
   const id = saved?.trim() ?? "";
+  if (isChatModelVoice(id)) return id;
   if (!isAudioCppFolderId(id)) return VOICE_DEFAULT_TTS_MODEL;
   return VOICE_TTS_MODELS.some((m) => m.toLowerCase() === id.toLowerCase())
     ? id

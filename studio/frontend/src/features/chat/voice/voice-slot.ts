@@ -10,10 +10,18 @@ import {
   unloadModel,
 } from "@/features/chat/api/chat-api";
 import { getHfToken, hfApiToken } from "@/features/hub/stores/hf-token-store";
-import { servedVoiceTtsModel, voiceIdServes, voiceLoadNeedsCpu } from "./voice-models";
+import { translate } from "@/i18n";
+import {
+  isChatModelVoice,
+  servedVoiceTtsModel,
+  voiceIdServes,
+  voiceLoadNeedsCpu,
+} from "./voice-models";
 
 export async function voiceServing(id: string): Promise<boolean> {
   const status = await getInferenceStatus();
+  // The chat model's own voice is up whenever the loaded chat model speaks.
+  if (isChatModelVoice(id)) return Boolean(status.speaks);
   return (status.serving ?? status.loaded ?? []).some((s) => voiceIdServes(s, id));
 }
 
@@ -23,6 +31,11 @@ export async function servedVoice(): Promise<string | null> {
 }
 
 export async function loadVoice(id: string): Promise<void> {
+  // Nothing to load beside the chat model; it either speaks or it cannot.
+  if (isChatModelVoice(id)) {
+    if (await voiceServing(id)) return;
+    throw new Error(translate("voicePanel.chatModelCannotSpeak"));
+  }
   const load = (audio_device: "auto" | "cpu") =>
     loadModel(
       {
@@ -47,6 +60,7 @@ export async function loadVoice(id: string): Promise<void> {
 }
 
 export async function unloadVoice(id: string): Promise<void> {
+  if (isChatModelVoice(id)) return;
   // Voice mode is the only thing speaking with it, so a sentence still synthesizing
   // is its own and is cancelled rather than turning the unload into a 409.
   if (await voiceServing(id)) await unloadModel({ model_path: id, force_cancel_active: true });

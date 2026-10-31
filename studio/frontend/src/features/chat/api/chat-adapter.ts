@@ -5,6 +5,8 @@ import { hasChatFullAccess, withChatFullAccess } from "../utils/chat-full-access
 
 import { attachedMediaUnavailableReason } from "../lib/attached-media-gate";
 import { readGenerationProgress } from "../lib/generation-progress";
+import { joinWavBase64 } from "../utils/wav-chunks";
+import { publishVoiceSpokenAudio } from "../voice/voice-loop-bridge";
 import {
   consumePendingFiller,
   consumePendingReplace,
@@ -6141,6 +6143,7 @@ export function createOpenAIStreamAdapter(
             })) ?? []);
       // A spoken reply's audio, kept apart from the text so the player renders on its own.
       let spokenReplyPart: { type: "text"; text: string } | null = null;
+      const spokenAudioChunks: string[] = [];
       const buildAssistantContent = (rawText: string) => {
         const positionedTools = toolCallParts
           .map((part, index) => {
@@ -7892,9 +7895,13 @@ export function createOpenAIStreamAdapter(
                   | undefined
               )?.audio?.data;
               if (typeof spokenAudio === "string" && spokenAudio) {
+                // The backend streams the speech in chunks: play them as they come in voice
+                // mode, and keep one player of all of them on the reply.
+                spokenAudioChunks.push(spokenAudio);
+                publishVoiceSpokenAudio(resolvedThreadId ?? null, spokenAudio);
                 spokenReplyPart = {
                   type: "text",
-                  text: `<audio-player src="data:audio/wav;base64,${spokenAudio}" />`,
+                  text: `<audio-player src="data:audio/wav;base64,${joinWavBase64(spokenAudioChunks)}" />`,
                 };
                 replayStateChanged = true;
               }

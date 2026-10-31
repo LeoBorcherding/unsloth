@@ -47,6 +47,8 @@ import {
   judgeTurnComplete,
   reportLayaOutcome,
 } from "@/features/chat/voice/voice-models-client";
+import { createTurnAudio } from "@/features/chat/voice/turn-audio";
+import { isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { attachInputSpectrum, detachInputSpectrum } from "@/features/chat/voice/voice-spectrum";
 import { voiceTrace } from "@/features/chat/voice/voice-trace";
 import { requestSttDownload } from "@/features/settings/stores/stt-download-prompt-store";
@@ -286,8 +288,21 @@ export function getHeldTurnText(): string {
   return heldTurn?.text ?? "";
 }
 
+// The recorded speech of the turn, kept only while voice mode speaks with the chat model.
+const turnAudio = createTurnAudio();
+
+/** The turn's speech as one WAV (base64), emptied; null when none was kept. */
+export function takeVoiceTurnAudio(): string | null {
+  return turnAudio.take();
+}
+
+export function clearVoiceTurnAudio(): void {
+  turnAudio.clear();
+}
+
 /** Drop a fragment waiting for its continuation: a thread switch or voice going off. */
 export function clearHeldTurn(): void {
+  turnAudio.clear();
   heldEpoch += 1;
   heldTurn = null;
   heldJudgeId = null;
@@ -324,6 +339,7 @@ export function isComposerHeldForEdit(): boolean {
 
 /** End the open session without delivering what it captured: a typed send replaces it. */
 export function cancelVoiceSession(): void {
+  turnAudio.clear();
   liveSession?.cancel();
 }
 
@@ -632,6 +648,9 @@ export class StudioVoiceLoopAdapter implements DictationAdapter {
       let firstVoiced = chunkVoiced.indexOf(true);
       const lastVoiced = chunkVoiced.lastIndexOf(true);
       while (firstVoiced > 0 && chunkNotSilent[firstVoiced - 1]) firstVoiced--;
+      voiceTrace("session.finalize", {
+        trailingMs: Math.round(Math.max(0, chunks.length - 1 - lastVoiced) * frameMs),
+      });
       const start = Math.max(0, firstVoiced - padFrames);
       const end = Math.min(chunks.length - 1, lastVoiced + padFrames);
       const span = chunks.slice(start, end + 1);
@@ -721,6 +740,9 @@ export class StudioVoiceLoopAdapter implements DictationAdapter {
           return;
         }
         settleFinished(Boolean(transcript));
+        if (transcript && isChatModelVoice(useChatRuntimeStore.getState().selectedVoiceModelId)) {
+          turnAudio.add(merged, sampleRate);
+        }
         // Clicked into: what was said joins the box and waits for the user's send.
         const editing = !heldEdit.autoSend();
         if (transcript && heldTurn) {

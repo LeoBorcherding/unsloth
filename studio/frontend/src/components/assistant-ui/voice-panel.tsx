@@ -12,6 +12,7 @@ import {
   useVoiceDecision,
   type VoiceLoadState,
 } from "@/features/chat/voice/decision-checkpoint";
+import { isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { voicePillIconClass } from "@/features/chat/voice/voice-pill-tone";
 import { DotTag } from "@/features/hub";
 // Deep import: through the eager model-picker index it would land in the startup bundle.
@@ -155,7 +156,11 @@ export const VoicePanel: FC<VoicePanelProps> = ({
           ? `${decideName}: ${decision.status.error}`
           : undefined,
     },
-    speak: { name: shortName(ttsModelId), state: ttsState, enabled: true },
+    speak: {
+      name: isChatModelVoice(ttsModelId) ? t("voicePanel.chatModelVoice") : shortName(ttsModelId),
+      state: ttsState,
+      enabled: true,
+    },
     voice: {
       name:
         preset.label ??
