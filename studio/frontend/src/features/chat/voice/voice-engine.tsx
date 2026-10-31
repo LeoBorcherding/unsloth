@@ -546,6 +546,26 @@ export const VoiceEngine: FC = () => {
       fresh.setText("");
       if (n < 5) setTimeout(() => deferredClear(n + 1), DEFERRED_CLEAR_MS);
     };
+    const sendNow = () => {
+      composer.setText(text);
+      composer.send();
+      composer.setText("");
+      setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
+    };
+    // The composer's own send, with the turn's speech attached first when it goes to the chat model.
+    const sendThroughComposer = () => {
+      if (!turnAudio) {
+        sendNow();
+        return;
+      }
+      const bytes = Uint8Array.from(atob(turnAudio), (c) => c.charCodeAt(0));
+      void composer
+        .addAttachment(new File([bytes], "voice.wav", { type: "audio/wav" }))
+        .catch((error: unknown) => voiceTrace("engine.turnAudioAttachFailed", { message: String(error) }))
+        .then(() => {
+          if (voiceModeRef.current === "active") sendNow();
+        });
+    };
 
     // First message of a thread: the append + delayed-startRun coalescing path
     // can't reliably drive a brand-new thread -- its runtime remounts on the first
@@ -555,23 +575,7 @@ export const VoiceEngine: FC = () => {
     if (thread.getState().messages.length === 0) {
       // send() takes the box, not `text`: parked turns were never in it (the re-arm
       // clears it), so an empty box here sent nothing at all.
-      const sendFirst = () => {
-        composer.setText(text);
-        composer.send();
-        composer.setText("");
-        setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
-      };
-      if (!turnAudio) {
-        sendFirst();
-        return;
-      }
-      const bytes = Uint8Array.from(atob(turnAudio), (c) => c.charCodeAt(0));
-      void composer
-        .addAttachment(new File([bytes], "voice.wav", { type: "audio/wav" }))
-        .catch((error: unknown) => voiceTrace("engine.turnAudioAttachFailed", { message: String(error) }))
-        .then(() => {
-          if (voiceModeRef.current === "active") sendFirst();
-        });
+      sendThroughComposer();
       return;
     }
 
@@ -600,10 +604,7 @@ export const VoiceEngine: FC = () => {
 
     if (!appended) {
       // Fallback: old immediate-send behavior.
-      composer.setText(text);
-      composer.send();
-      composer.setText("");
-      setTimeout(() => deferredClear(1), DEFERRED_CLEAR_MS);
+      sendThroughComposer();
       return;
     }
 

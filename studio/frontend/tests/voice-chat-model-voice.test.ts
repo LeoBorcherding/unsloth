@@ -120,6 +120,9 @@ test("bubbles coalesced into one run send all their speech on the newest", () =>
   });
   // Answered speech stays out; the unanswered bubble before this one comes first.
   assert.equal(wavInfo(coalescedTurnAudio([bubble(a), reply, bubble(b)], c)).dataBytes, (50 + 25) * 2);
+  // Three in one window: the middle bubble already holds the first's speech, so it is not doubled.
+  const ab = coalescedTurnAudio([reply, bubble(a)], b);
+  assert.equal(wavInfo(coalescedTurnAudio([reply, bubble(a), bubble(ab)], c)).dataBytes, (100 + 50 + 25) * 2);
   assert.equal(coalescedTurnAudio([bubble(a), reply], c), c);
   assert.equal(coalescedTurnAudio([], c), c);
 });

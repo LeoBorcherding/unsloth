@@ -78,15 +78,16 @@ function audioOf(m: { content?: readonly Part[]; attachments?: readonly { conten
 /**
  * This turn's speech joined after the speech of the unanswered user bubbles before it: bubbles
  * coalesced into one run are one prompt, and the request sends only the newest bubble's audio.
+ * Each bubble already carries the run's speech so far, so only the nearest one is joined.
  */
 export function coalescedTurnAudio(messages: readonly Message[], turn: string): string {
-  const earlier: string[] = [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role !== "user") break;
-    earlier.unshift(...audioOf(m));
+    const earlier = audioOf(m);
+    if (earlier.length) return joinWavBase64([...earlier, turn]);
   }
-  return earlier.length ? joinWavBase64([...earlier, turn]) : turn;
+  return turn;
 }
 
 const AUDIO_PLAYER = /<audio-player\b[^>]*\/>/g;
