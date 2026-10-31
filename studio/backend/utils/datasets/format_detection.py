@@ -798,8 +798,15 @@ _VIDEO_TEXT_KEYWORDS = (
 _VIDEO_QUESTION_KEYWORDS = ("question", "prompt", "instruction", "query")
 
 
+def encoded_video(value):
+    """A decoded datasets ``Video`` cell as its source {"path", "bytes"} (datasets keeps it on the decoder)."""
+    encoded = getattr(value, "_hf_encoded", None)
+    return encoded if isinstance(encoded, dict) else value
+
+
 def _is_video_value(value, extensions = _VIDEO_EXTENSIONS) -> bool:
-    """A video file path or URL, or an undecoded {"path": ...} cell naming one."""
+    """A video file path or URL, or an undecoded {"path": ...} or decoded ``Video`` cell naming one."""
+    value = encoded_video(value)
     if isinstance(value, dict):
         value = value.get("path")
     if not isinstance(value, str) or len(value) >= 1000:

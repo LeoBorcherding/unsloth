@@ -208,3 +208,21 @@ def test_every_video_column_reaches_the_message():
         {"type": "video", "video": "clips/side0.mp4"},
     ]
     assert _video_parts(out[1]) == [{"type": "video", "video": CLIPS[1]}]
+
+
+class _DecodedVideo:
+    """What a datasets `Video` feature yields with decoding on: a decoder carrying its source."""
+
+    def __init__(self, path):
+        self._hf_encoded = {"path": path, "bytes": None}
+
+
+def test_decoded_hf_video_cells_are_video():
+    from utils.datasets.format_conversion import convert_video_to_vlm_format
+    from utils.datasets.format_detection import detect_video_structure
+
+    rows = [{"clip": _DecodedVideo(c), "answer": a} for c, a in zip(CLIPS, ANSWERS)]
+    structure = detect_video_structure(rows[0])
+    assert structure["format"] == "video_text" and structure["video_column"] == "clip"
+    out = convert_video_to_vlm_format(rows, "clip", "answer", video_columns = structure["video_columns"])
+    assert [_video_parts(row) for row in out] == [[{"type": "video", "video": c}] for c in CLIPS]

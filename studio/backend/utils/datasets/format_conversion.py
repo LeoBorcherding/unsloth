@@ -844,6 +844,9 @@ def convert_to_vlm_format(
 
 
 def _own_video_part(video, account):
+    from .format_detection import encoded_video
+
+    video = encoded_video(video)
     if isinstance(video, dict):
         video = video.get("path")
     if not isinstance(video, str) or not video.strip():
