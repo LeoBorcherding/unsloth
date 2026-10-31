@@ -14,7 +14,8 @@ SPEECH_GGUF_ARCHS = frozenset({"llama-csm", "csm", "csm-tts", "mimi"})
 _VOCODER_MARKERS = ("--model-vocoder", "cannot be used as llm")
 
 
-# No vocab output head in llama.cpp, so a missing output.weight is not tying. A blocklist:
+# Archs where a missing output.weight allocates no duplicate (no LM head, or bitnet's
+# in-place tok_embd), so it is not tying. A blocklist:
 # an unlisted arch is charged, and over-counting is the safe direction.
 NO_VOCAB_OUTPUT_GGUF_ARCHS = frozenset(
     {
@@ -32,7 +33,7 @@ NO_VOCAB_OUTPUT_GGUF_ARCHS = frozenset(
 
 
 # Drafters that inherit the target's output projection when output.weight is absent
-# (TENSOR_NOT_REQUIRED, dflash.cpp:775, eagle3.cpp:312); DSpark shares the dflash arch.
+# (TENSOR_NOT_REQUIRED in dflash.cpp / eagle3.cpp); DSpark shares the dflash arch.
 INHERITS_TARGET_OUTPUT_GGUF_ARCHS = frozenset({"dflash", "eagle3"})
 
 

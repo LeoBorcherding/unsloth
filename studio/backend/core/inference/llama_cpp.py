@@ -5403,9 +5403,9 @@ _TARGET_KV_EXCLUDES_NEXTN_ARCHS = frozenset(
 )
 
 # GLM-5.2 indexer layout llama.cpp assumes when a glm-dsa GGUF with a >= 1M training
-# context has no attention.indexer.types (GLM_5_2_DEFAULT_INDEXER_TYPES, glm-dsa.cpp:6):
+# context has no attention.indexer.types (GLM_5_2_DEFAULT_INDEXER_TYPES in glm-dsa.cpp):
 # layers 0-2 then every 4th own an indexer, over the 78 listed entries. Older GLM-5 /
-# 5.1 (n_ctx_train < 1M) default to an indexer on every layer (glm-dsa.cpp:59-66).
+# 5.1 (n_ctx_train < 1M) default to an indexer on every layer (load_arch_hparams).
 _GLM_DSA_PRE_5_2_MAX_CTX = 1048576
 _GLM_5_2_DEFAULT_INDEXER_LAYERS = 78
 
@@ -6716,8 +6716,9 @@ def _extra_args_discount_draft_device_pin(extra_args: Optional[Iterable[str]]) -
     """Devices a separate drafter's host-pinned discount must be proved on.
 
     As ``_extra_args_effective_draft_device_pin``, except that a user-owned --spec-type
-    with no draft-device flag still follows the main --device (llama.cpp's draft
-    devices default to it), so that device has to be proved discrete too.
+    with no draft-device flag also needs the main --device proved discrete. llama.cpp
+    doesn't copy it to the drafter (an unset draft list means every device): a
+    conservative extra.
     """
     pin = _extra_args_effective_draft_device_pin(extra_args)
     if (
@@ -10833,8 +10834,7 @@ class LlamaCppBackend:
         for spec in values:
             for mapping in spec.split(","):
                 pattern, sep, buft = mapping.rpartition("=")
-                # An empty pattern is legal (arg.cpp splits at the first '=') and
-                # std::regex_search matches every tensor with it.
+                # An empty pattern is legal: std::regex_search matches every tensor with it.
                 if not sep:
                     continue
                 mappings.append((pattern, buft.strip()))
@@ -10953,7 +10953,8 @@ class LlamaCppBackend:
     def _tied_output_bytes(model_path: str) -> int:
         """Bytes llama.cpp allocates ON TOP of the file for a tied-embedding model; 0 if unreadable.
 
-        The output tensor is re-created as TENSOR_DUPLICATED, not reused (models/llama.cpp:41-45).
+        llama.cpp duplicates token_embd into the output's buffer unless both share one
+        (TENSOR_DUPLICATED).
         """
         identity = LlamaCppBackend._gguf_load_source_identity(model_path)
         if identity is None:
@@ -11006,8 +11007,8 @@ class LlamaCppBackend:
 
     # GGML types some CPU extra buffer accepts for MUL_MAT but not GET_ROWS, so a tied
     # output on the CPU gets its own (repacked) copy while token_embd stays plain CPU.
-    # Union over b5178 / b10472 / b11541 / master: ggml-cpu repack.cpp (aarch64 at
-    # b5178), kleidiai repack(), amx supports_op (F16 too), spacemit ime.
+    # Union across the llama.cpp builds Studio launches: ggml-cpu repack, kleidiai,
+    # amx supports_op (F16 too), spacemit ime.
     _CPU_REPACK_GGML_TYPES = frozenset({0, 1, 2, 3, 6, 7, 8, 10, 11, 12, 13, 14, 20, 23, 39, 41})
 
     @staticmethod
@@ -11079,7 +11080,7 @@ class LlamaCppBackend:
     def _gguf_scan_output_tensors(path: str) -> tuple[Optional[str], bool, int]:
         """(architecture, ships output.weight, token_embd bytes) from one GGUF header.
 
-        Not GGUFReader: it materialises the vocab (12.1 s vs 30-90 ms) under ``self._lock``.
+        Not GGUFReader: it materialises the vocab, seconds slower, under ``self._lock``.
         """
         from gguf.constants import GGML_QUANT_SIZES
 
@@ -28057,7 +28058,7 @@ class LlamaCppBackend:
                             if need_mib > budget_mib:
                                 _metal_alongside_shortfall = (need_mib, budget_mib)
 
-                    # Auto stays conservative unless every visible device is proved discrete.
+                    # Discounts apply only when every selected device is proved discrete.
                     _apply_candidate_discounts(gpu_indices)
 
                     # Prefer fewer serving slots on GPU over --fit on offload: when the extra
