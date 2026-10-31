@@ -330,3 +330,12 @@ def test_an_ambiguous_bare_clip_name_is_refused(monkeypatch, tmp_path):
         convert_video_to_vlm_format([{"video": "clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
     out = convert_video_to_vlm_format([{"video": "test/clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
     assert _video_parts(out[0])[0]["video"] == str(tmp_path / "x.mp4")
+
+
+def test_a_classlabel_answer_trains_on_the_class_name():
+    from datasets import ClassLabel, Features, Value
+
+    features = Features({"video": Value("string"), "label": ClassLabel(names = ["cat", "dog"])})
+    ds = Dataset.from_dict({"video": CLIPS, "label": [1, 0]}, features = features)
+    out = _format(ds)
+    assert [row["messages"][1]["content"][0]["text"] for row in out] == ["dog", "cat"]

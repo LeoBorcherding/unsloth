@@ -957,6 +957,9 @@ def convert_video_to_vlm_format(
 
     account = current_account()
     hub = _HubClips(dataset_name)
+    answer_feature = (getattr(dataset, "features", None) or {}).get(text_column)
+    # A ClassLabel column stores ids; train on the class name.
+    as_label = getattr(answer_feature, "int2str", None)
     default_instruction = instruction or "Describe this video."
     converted = []
     for row in dataset:
@@ -975,6 +978,7 @@ def convert_video_to_vlm_format(
         clips = [row[c] for c in clip_columns if row.get(c) is not None]
         if not clips or answer is None or not str(answer).strip():
             continue
+        answer = as_label(answer) if as_label and isinstance(answer, int) else str(answer)
         question = row.get(question_column) if question_column else None
         if not isinstance(question, str) or not question.strip():
             question = default_instruction
@@ -991,7 +995,7 @@ def convert_video_to_vlm_format(
                             {"type": "text", "text": question},
                         ],
                     },
-                    {"role": "assistant", "content": [{"type": "text", "text": str(answer)}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": answer}]},
                 ]
             }
         )
