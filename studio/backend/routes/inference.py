@@ -1455,6 +1455,27 @@ def _speech_reply_audio(item: dict) -> dict:
     return {"data": item.get("speech"), "format": "wav", "sample_rate": item.get("sample_rate")}
 
 
+def _joined_speech_reply(items: list) -> dict:
+    """The message ``audio`` part for a reply whose speech arrived in chunks: one WAV of them all."""
+    if len(items) < 2:
+        return _speech_reply_audio(items[0]) if items else {}
+    import base64
+    import io
+    import wave
+
+    pcm, params = [], None
+    for item in items:
+        with wave.open(io.BytesIO(base64.b64decode(item.get("speech") or ""))) as clip:
+            params = params or clip.getparams()
+            pcm.append(clip.readframes(clip.getnframes()))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as out:
+        out.setparams(params)
+        out.writeframes(b"".join(pcm))
+    joined = base64.b64encode(buf.getvalue()).decode("ascii")
+    return _speech_reply_audio({"speech": joined, "sample_rate": items[-1].get("sample_rate")})
+
+
 def _chat_reasoning_chunk(completion_id, created, model_name, text) -> str:
     """Reasoning delta with empty content alongside, so strict OpenAI adapters do not drop it."""
     return _chat_chunk_sse(
@@ -31664,7 +31685,7 @@ async def produce_openai_chat_completions(
                 _tracker = _TrackedCancel.for_payload(cancel_event, payload, *_cancel_keys)
                 _tracker.__enter__()
                 try:
-                    _speech_reply = {}
+                    _speech_chunks: list = []
 
                     def _drain_audio_input():
                         text_parts = []
@@ -31672,7 +31693,7 @@ async def produce_openai_chat_completions(
                             if isinstance(chunk_text, GenStreamError):
                                 return chunk_text
                             if isinstance(chunk_text, dict):
-                                _speech_reply.update(_speech_reply_audio(chunk_text))
+                                _speech_chunks.append(chunk_text)
                                 continue
                             text_parts.append(chunk_text)
                         return "".join(text_parts)
@@ -31742,7 +31763,7 @@ async def produce_openai_chat_completions(
                         CompletionChoice(
                             message = CompletionMessage(
                                 content = _audio_msg["content"],
-                                audio = _speech_reply or None,
+                                audio = _joined_speech_reply(_speech_chunks) or None,
                                 tool_calls = _audio_msg.get("tool_calls"),
                             ),
                             finish_reason = _audio_json_finish,
