@@ -169,10 +169,11 @@ function ToolbarImpl({
   const snap = useUiStore((s) => s.snapToGrid);
   const wireStyle = useUiStore((s) => s.wireStyle);
 
+  // In the titlebar row it must sit above the navbar's z-40 window-drag strip, or that strip eats its clicks.
   return (
     <div
       data-tauri-drag-region={titlebar || undefined}
-      className={`grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-2 text-foreground transition-[padding] duration-200 ease-out ${titlebar ? "bg-background" : "bg-sidebar"} ${clearNav ? "pl-[var(--studio-collapsed-chat-controls-inset,0.5rem)]" : ""}`}
+      className={`grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-2 text-foreground transition-[padding] duration-200 ease-out ${titlebar ? "relative z-50 bg-background" : "bg-sidebar"} ${clearNav ? "pl-[var(--studio-collapsed-chat-controls-inset,0.5rem)]" : ""}`}
     >
       <div className="flex min-w-0 items-center gap-2">
         {/* Sized to the name: the hidden copy sets the width, the input fills it. */}

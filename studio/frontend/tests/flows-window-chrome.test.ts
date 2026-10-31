@@ -59,7 +59,7 @@ test("the titlebar strip and toolbar share the sidebar's colour with no rule und
   assert.match(page, /origin-top-left bg-\[radial-gradient\(circle_at_100%_100%,transparent_11px,var\(--color-sidebar\)_12px\)\] transition-transform duration-200 ease-out \$\{sidebarBeside && !macChrome \? "scale-100" : "scale-0"\}/, "a painted corner that eases in and out with the sidebar");
   assert.doesNotMatch(page, /rounded-tl-xl/, "no clipped radius: WebKit repaints it late");
   const bar = read("features/flows/editor/toolbar.tsx");
-  assert.match(bar, /\$\{titlebar \? "bg-background" : "bg-sidebar"\}/);
+  assert.match(bar, /\$\{titlebar \? "relative z-50 bg-background" : "bg-sidebar"\}/, "above the navbar's z-40 drag strip");
   assert.doesNotMatch(bar, /border-b bg-background px-2/);
   assert.match(bar, /rounded-full bg-background p-\[3px\]/);
   assert.match(bar, /wireStyle === style \? "bg-sidebar-accent/);
