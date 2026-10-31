@@ -443,14 +443,16 @@ export const BUDGET = {
   // 1,849,311 -> 1,849,948 B transfer against b80df648bf, one machine and build, Node 22, 85 chunks both): the app
   // provider reports a ready renderer through the setting's API module at startup, plus the setting's strings in
   // the eager English catalog and its search rows. Raised by that.
-  // DPO, ORPO and GRPO in Studio (#12601): +28,688 B raw / +9,032 B transfer over main at 4089c57a82 (5,373,852 ->
-  // 5,402,540 B raw, 1,661,918 -> 1,670,950 B transfer, Node 26, 78 chunks): the RL strings in the eager catalog
+  // Chat wallpaper prefs, reset and English strings: +6,365 B raw / +3,589 B transfer (Node 24,
+  // 85 -> 89 eager chunks). Renderer, contrast and pixel worker stay lazy.
+  // DPO, ORPO and GRPO in Studio (#12601): +28,678 B raw / +8,925 B transfer over main at 4b9a0ebcca (5,395,833 ->
+  // 5,424,511 B raw, 1,669,625 -> 1,678,550 B transfer, Node 26, 80 chunks): the RL strings in the eager catalog
   // and the RL settings and role mapping in the eager training store. Raised by that growth.
-  // Python rewards (#12995): +4,364 B raw / +1,455 B transfer over #12601 (5,402,540 -> 5,406,904 B raw,
-  // 1,670,950 -> 1,672,405 B transfer, Node 26): the isolation switch, Start gating and per-reward Try it
+  // Python rewards (#12995): +4,355 B raw / +1,480 B transfer over #12601 (5,424,511 -> 5,428,866 B raw,
+  // 1,678,550 -> 1,680,030 B transfer, Node 26): the isolation switch, Start gating and per-reward Try it
   // errors in the eager rewards section and catalog. Raised by that growth.
-  transferBytes: 1_860_897,
-  rawBytes: 6_024_442,
+  transferBytes: 1_864_404,
+  rawBytes: 6_030_788,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.
