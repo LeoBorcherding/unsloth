@@ -1,0 +1,363 @@
+{
+ "format": "unsloth-flow",
+ "version": 1,
+ "id": "showcase-caption-it",
+ "name": "Showcase: Caption it (meme machine)",
+ "description": "FLUX.2 paints a photo, a vision model describes it, a chat model writes a two-line meme for it, and Text on Image stamps it top and bottom.",
+ "kind": "pipeline",
+ "seed": 7,
+ "params": [],
+ "requirements": {
+  "models": [
+   {
+    "ref": "painter",
+    "kind": "image",
+    "repo": "black-forest-labs/FLUX.2-klein-9B",
+    "variant": null,
+    "optional": false,
+    "note": "Paints the photo; swap in an Image upload card to caption your own."
+   },
+   {
+    "ref": "judge",
+    "kind": "vision",
+    "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+    "variant": "Q4_K_M",
+    "optional": false,
+    "note": "Describes the picture (Qwen3.5 35B reads images)."
+   },
+   {
+    "ref": "writer",
+    "kind": "chat",
+    "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+    "variant": "Q4_K_M",
+    "optional": false,
+    "note": "Writes the caption as JSON."
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "photo",
+   "type": "image.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "black-forest-labs/FLUX.2-klein-9B",
+     "variant": null
+    },
+    "size": "1024x1024",
+    "seed": 31337,
+    "prompt": "Candid office photo: a golden retriever in a tiny navy business suit and tie sits at a desk, staring in horror at a laptop showing a crashing red stock chart, coffee spilled, papers everywhere, fluorescent lighting, shallow depth of field"
+   },
+   "pos": [
+    0.0,
+    0.0
+   ],
+   "size": [
+    300.0,
+    560.0
+   ],
+   "label": "Photo",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "look",
+   "type": "llm.vision",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+     "variant": "Q4_K_M"
+    },
+    "question": "Describe this picture in 3 sentences: who is in it, what they are doing, and the mood. Mention any funny details.",
+    "max_tokens": 300
+   },
+   "pos": [
+    360.0,
+    0.0
+   ],
+   "size": [
+    320.0,
+    360.0
+   ],
+   "label": "Describe Image (Qwen3.5 35B)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "joke",
+   "type": "llm.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+     "variant": "Q4_K_M"
+    },
+    "system": "You write viral, wholesome image macros. Short, punchy, surprising. Classic top/bottom meme format: the top line sets it up, the bottom line lands the joke. Each line at most 7 words, ALL CAPS.",
+    "prompt": "The picture: {{prompt}}\n\nWrite the meme about exactly what is in this picture (nothing that is not shown).",
+    "json_schema": {
+     "type": "object",
+     "properties": {
+      "top": {
+       "type": "string"
+      },
+      "bottom": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "top",
+      "bottom"
+     ]
+    },
+    "temperature": 1.0,
+    "max_tokens": 200
+   },
+   "pos": [
+    720.0,
+    0.0
+   ],
+   "size": [
+    320.0,
+    280.0
+   ],
+   "label": "Meme writer",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "top",
+   "type": "json.get",
+   "v": 1,
+   "params": {
+    "path": "top"
+   },
+   "pos": [
+    1080.0,
+    -40.0
+   ],
+   "size": null,
+   "label": "Top line",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "bottom",
+   "type": "json.get",
+   "v": 1,
+   "params": {
+    "path": "bottom"
+   },
+   "pos": [
+    1080.0,
+    500.0
+   ],
+   "size": null,
+   "label": "Bottom line",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "stamp_top",
+   "type": "image.text",
+   "v": 1,
+   "params": {
+    "size": 72,
+    "position": "top",
+    "color": "#ffffff",
+    "outline": 5
+   },
+   "pos": [
+    1440.0,
+    -40.0
+   ],
+   "size": [
+    300.0,
+    480.0
+   ],
+   "label": "Text on Image (top)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "stamp_bottom",
+   "type": "image.text",
+   "v": 1,
+   "params": {
+    "size": 72,
+    "position": "bottom",
+    "color": "#ffffff",
+    "outline": 5
+   },
+   "pos": [
+    1440.0,
+    500.0
+   ],
+   "size": [
+    300.0,
+    480.0
+   ],
+   "label": "Text on Image (bottom)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "meme",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1800.0,
+    200.0
+   ],
+   "size": [
+    480.0,
+    560.0
+   ],
+   "label": "Meme",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "source": "photo",
+   "source_port": "image",
+   "target": "look",
+   "target_port": "image",
+   "kind": "data"
+  },
+  {
+   "id": "e2",
+   "source": "look",
+   "source_port": "text",
+   "target": "joke",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e3",
+   "source": "joke",
+   "source_port": "json",
+   "target": "top",
+   "target_port": "json",
+   "kind": "data"
+  },
+  {
+   "id": "e4",
+   "source": "joke",
+   "source_port": "json",
+   "target": "bottom",
+   "target_port": "json",
+   "kind": "data"
+  },
+  {
+   "id": "e_rr_photo",
+   "source": "photo",
+   "source_port": "image",
+   "target": "stamp_top",
+   "target_port": "image",
+   "kind": "data"
+  },
+  {
+   "id": "e6",
+   "source": "top",
+   "source_port": "value",
+   "target": "stamp_top",
+   "target_port": "text",
+   "kind": "data"
+  },
+  {
+   "id": "e7",
+   "source": "stamp_top",
+   "source_port": "image",
+   "target": "stamp_bottom",
+   "target_port": "image",
+   "kind": "data"
+  },
+  {
+   "id": "e8",
+   "source": "bottom",
+   "source_port": "value",
+   "target": "stamp_bottom",
+   "target_port": "text",
+   "kind": "data"
+  },
+  {
+   "id": "e9",
+   "source": "stamp_bottom",
+   "source_port": "image",
+   "target": "meme",
+   "target_port": "value",
+   "kind": "data"
+  }
+ ],
+ "groups": [],
+ "notes": [
+  {
+   "id": "about",
+   "text": "**Caption it**\n\nGenerate → Describe Image → LLM writes {top, bottom} as JSON → two Text on Image passes. Replace Photo with an Image upload card to meme your own pictures.",
+   "rect": [
+    0.0,
+    380.0,
+    340.0,
+    170.0
+   ],
+   "color": "#fde68a"
+  }
+ ],
+ "assets": [],
+ "baked": {},
+ "editor": {
+  "viewport": {
+   "x": 60,
+   "y": 120,
+   "zoom": 0.7
+  },
+  "reroutes": [
+   {
+    "id": "rr_photo",
+    "pos": [
+     1120.0,
+     320.0
+    ]
+   }
+  ],
+  "reroute_wires": [
+   {
+    "id": "w_rr_photo_in",
+    "source": "photo",
+    "source_port": "image",
+    "target": "rr_photo",
+    "target_port": "in"
+   },
+   {
+    "id": "e_rr_photo",
+    "source": "rr_photo",
+    "source_port": "out",
+    "target": "stamp_top",
+    "target_port": "image"
+   }
+  ]
+ },
+ "meta": {
+  "tags": [
+   "image",
+   "vision",
+   "llm",
+   "meme",
+   "showcase"
+  ],
+  "author": "Leo"
+ }
+}

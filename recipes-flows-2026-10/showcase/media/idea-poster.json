@@ -1,0 +1,180 @@
+{
+ "format": "unsloth-flow",
+ "version": 1,
+ "id": "showcase-idea-poster",
+ "name": "Showcase: Idea → Poster",
+ "description": "Type a one-line idea; a 35B chat model turns it into a full art-director prompt and FLUX.2 paints the poster.",
+ "kind": "pipeline",
+ "seed": 7,
+ "params": [],
+ "requirements": {
+  "models": [
+   {
+    "ref": "writer",
+    "kind": "chat",
+    "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+    "variant": "Q4_K_M",
+    "optional": false,
+    "note": "Writes the image prompt; any instruct chat model works."
+   },
+   {
+    "ref": "painter",
+    "kind": "image",
+    "repo": "black-forest-labs/FLUX.2-klein-9B",
+    "variant": null,
+    "optional": false,
+    "note": "FLUX.2 klein 9B, 4-step distilled; any image model works."
+   }
+  ]
+ },
+ "nodes": [
+  {
+   "id": "idea",
+   "type": "input.text",
+   "v": 1,
+   "params": {
+    "value": "A sloth runs a 24-hour ramen bar on the Moon. Astronauts queue outside. Make it a vintage space-tourism poster that says \"LUNAR NOODLES\"."
+   },
+   "pos": [
+    0.0,
+    0.0
+   ],
+   "size": [
+    300.0,
+    200.0
+   ],
+   "label": "Your idea",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "writer",
+   "type": "llm.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "unsloth/Qwen3.5-35B-A3B-GGUF",
+     "variant": "Q4_K_M"
+    },
+    "system": "You are an award-winning art director who writes prompts for the FLUX image model. Given an idea, write ONE vivid prompt of 70 to 110 words: subject, composition, lighting, palette, art style and era, and any poster text in double quotes exactly as it should be spelled. No preamble, no lists, no markdown: output only the prompt.",
+    "prompt": "Idea: {{prompt}}",
+    "temperature": 0.9,
+    "max_tokens": 400
+   },
+   "pos": [
+    360.0,
+    0.0
+   ],
+   "size": [
+    340.0,
+    420.0
+   ],
+   "label": "Art director (Qwen3.5 35B)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "paint",
+   "type": "image.generate",
+   "v": 1,
+   "params": {
+    "model": {
+     "repo": "black-forest-labs/FLUX.2-klein-9B",
+     "variant": null
+    },
+    "size": "768x1024",
+    "seed": 314
+   },
+   "pos": [
+    740.0,
+    0.0
+   ],
+   "size": [
+    300.0,
+    640.0
+   ],
+   "label": "Generate Image (FLUX.2)",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  },
+  {
+   "id": "poster",
+   "type": "output.preview",
+   "v": 1,
+   "params": {},
+   "pos": [
+    1100.0,
+    0.0
+   ],
+   "size": [
+    420.0,
+    640.0
+   ],
+   "label": "Poster",
+   "group": null,
+   "collapsed": false,
+   "disabled": false
+  }
+ ],
+ "edges": [
+  {
+   "id": "e1",
+   "source": "idea",
+   "source_port": "text",
+   "target": "writer",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e2",
+   "source": "writer",
+   "source_port": "text",
+   "target": "paint",
+   "target_port": "prompt",
+   "kind": "data"
+  },
+  {
+   "id": "e3",
+   "source": "paint",
+   "source_port": "image",
+   "target": "poster",
+   "target_port": "value",
+   "kind": "data"
+  }
+ ],
+ "groups": [],
+ "notes": [
+  {
+   "id": "about",
+   "text": "**Idea → Poster**\n\nOne sentence in, a finished poster out. The chat model writes the long, specific prompt image models love, including the exact poster text.",
+   "rect": [
+    0.0,
+    240.0,
+    300.0,
+    170.0
+   ],
+   "color": "#fde68a"
+  }
+ ],
+ "assets": [],
+ "baked": {},
+ "editor": {
+  "viewport": {
+   "x": 60,
+   "y": 120,
+   "zoom": 0.7
+  }
+ },
+ "meta": {
+  "tags": [
+   "image",
+   "llm",
+   "poster",
+   "showcase"
+  ],
+  "author": "Leo"
+ }
+}
