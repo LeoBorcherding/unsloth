@@ -71,6 +71,16 @@ _RPC_LIST = ["--rpc", "10.0.0.2:50052", "--device", "Vulkan0,RPC0"]
 _ONE = _RPC_LIST + ["--split-mode", "none"]
 
 
+@pytest.fixture(autouse = True)
+def _classified_discrete_host(monkeypatch):
+    """Every mocked card here is a classified discrete GPU; the CI host's torch cannot say so."""
+    monkeypatch.setattr(
+        LlamaCppBackend,
+        "_torch_unified_memory_classification_known",
+        staticmethod(lambda gpu_indices = None: True),
+    )
+
+
 def _scan_backend(arch, named):
     backend = LlamaCppBackend()
     backend._gguf_tensor_scan = lambda _path: (arch, dict(named), 0)
@@ -345,6 +355,18 @@ def test_gemma3n_fits_a_small_card_once_its_tables_leave_the_vram_charge(tmp_pat
     _backend, cmd = _gemma3n_launch(tmp_path, memory = [(0, 9_000, 10_240)], ram_gib = 16)
     assert (_arg(cmd, "--fit"), _arg(cmd, "-ngl")) == ("off", "-1"), cmd
     assert _lazy_values(cmd) == [], cmd
+
+
+def test_an_unclassified_card_keeps_the_table_charged(tmp_path, _moe_cache_host, monkeypatch):
+    # A card torch cannot classify may be a unified-memory APU, whose "VRAM" is the host
+    # pool the table already sits in: the same small card no longer holds it.
+    monkeypatch.setattr(
+        LlamaCppBackend,
+        "_torch_unified_memory_classification_known",
+        staticmethod(lambda gpu_indices = None: False),
+    )
+    _backend, cmd = _gemma3n_launch(tmp_path, memory = [(0, 9_000, 10_240)], ram_gib = 16)
+    assert _arg(cmd, "--fit") == "on", cmd
 
 
 def test_an_override_moving_the_table_to_the_gpu_keeps_it_charged(tmp_path, _moe_cache_host):

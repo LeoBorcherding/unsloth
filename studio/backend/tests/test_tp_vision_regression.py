@@ -225,6 +225,7 @@ def test_vision_downgrade_preserves_multi_gpu_intent():
     assert "_layer_min_gpus = max(_layer_min_gpus, len(gpus))" in src
     assert src.count("min_gpus = _layer_min_gpus") >= 2
     assert re.search(r"_tiered_subsets\(\s*ranked,\s*_auto_min_gpus[,)]", src)
+    assert "for count in range(min_count, len(ranked) + 1):" in src
     auto = src.find("_auto_min_gpus = max(")
     assert auto != -1 and "_layer_min_gpus" in src[auto : auto + 200]
 
@@ -431,7 +432,9 @@ def test_auto_context_layer_loops_capped_to_usable_gpus():
         "range(max(1, _layer_min_gpus), len(ranked) + 1)" not in src
     ), "auto-context loops must cap _layer_min_gpus to usable GPUs, not use it raw"
     assert "_auto_min_gpus" in src
+    # The raw _layer_min_gpus check above guards #6659.
     assert re.search(r"_tiered_subsets\(\s*ranked,\s*_auto_min_gpus[,)]", src)
+    assert "for count in range(min_count, len(ranked) + 1):" in src
     # the eligibility threshold is the per-device layer overhead, not bare > 0
     auto = src.find("_auto_min_gpus = max(")
     assert auto != -1

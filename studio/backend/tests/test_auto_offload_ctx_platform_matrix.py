@@ -75,7 +75,8 @@ ARM_ANCHORS = {
 
 SITE_A = _one_anchor("effective_ctx = min(_AUTO_OFFLOAD_CTX, effective_ctx)")
 _AWARDS = _anchor_lines("gpu_indices = sorted(idx for idx, _ in subset)")
-assert len(_AWARDS) == 2 and max(_AWARDS) > SITE_A, (_AWARDS, SITE_A)
+# The LAST one (the fallback re-check) is needed; the count is deliberately not pinned.
+assert _AWARDS and max(_AWARDS) > SITE_A, (_AWARDS, SITE_A)
 SITE_A_AWARD = max(_AWARDS)
 SITE_B = _one_anchor("if use_fit and not explicit_ctx:")
 

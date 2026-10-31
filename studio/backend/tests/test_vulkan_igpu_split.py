@@ -91,7 +91,8 @@ def test_a_card_too_full_for_its_split_buffers_does_not_outrank_the_igpu():
 def test_every_auto_placement_sort_ranks_discrete_first():
     src = inspect.getsource(LlamaCppBackend.load_model)
     assert "key = lambda g: _gpu_usable(" not in src
-    assert src.count("key = lambda g: _gpu_rank(") == 3
+    # Auto placement, the drafter probe and the projector probe.
+    assert src.count("key = lambda g: _gpu_rank(") == 4
     assert "_gpu_rank(g, pin_fraction, _rank_floor_mib)" in src
 
 

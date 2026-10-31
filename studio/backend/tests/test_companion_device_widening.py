@@ -200,8 +200,11 @@ def test_the_arch_crash_retry_refits_companions_in_source():
     import inspect
 
     src = inspect.getsource(llama_cpp.LlamaCppBackend.load_model)
-    retry = src.index("_arch_crash_retry_gpu_ids(")
-    window = src[retry : retry + 12000]
-    assert "_companion_fit_mask" in window
-    assert "list(_companion_fit_mask)" in window
-    assert '",".join(str(i) for i in _retry_mask)' in window
+    # In order after the retry call, not a fixed window: the retry block grows.
+    at = src.index("_arch_crash_retry_gpu_ids(")
+    for needle in (
+        "_companion_fit_mask",
+        "list(_companion_fit_mask)",
+        '",".join(str(i) for i in _retry_mask)',
+    ):
+        at = src.index(needle, at)

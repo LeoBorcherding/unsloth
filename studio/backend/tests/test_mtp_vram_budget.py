@@ -572,7 +572,8 @@ class TestExtraArgsMtpDetection:
         # A CPU-offloaded separate drafter uses no GPU; an embedded head stays on GPU only if it runs.
         compact = "".join(inspect.getsource(LlamaCppBackend.load_model).split())
         assert (
-            "_draft_on_cpu=_extra_args_draft_offloaded_to_cpu(extra_args,env=os.environ)" in compact
+            "_draft_on_cpu=_extra_args_draft_offloaded_to_cpu("
+            "_placement_extras,env=_placement_env,)" in compact
         )
         assert "if_draft_on_cpu:_mtp_draft_for_budget=None" in compact
         assert "_draft_cpu_no_embedded=_draft_on_cpuand(" in compact

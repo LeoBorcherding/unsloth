@@ -1829,42 +1829,10 @@ def _ensure_mamba_ssm(
     )
 
 
-# Integrated-only Radeon names for the other APU targets, as whole tokens (a substring would read "RX 7600M" as "600M"):
-# 820M Krackan Point 2 (gfx1153), 8040S Strix Halo (gfx1151), 780M / 760M / 740M Phoenix / Hawk Point (gfx1103),
-# 680M / 660M Rembrandt (gfx1035), 610M Raphael / Dragon Range / Mendocino (gfx1036 / gfx1037).
-_ROCM_APU_NAME_RE = re.compile(r"(?<![\w-])(?:820m|8040s|780m|760m|740m|680m|660m|610m)(?!\w)")
-
-
-def _rocm_classify_unified_memory(props: Any) -> tuple[str, bool]:
-    """Trusts props.is_integrated first (it only upgrades to unified); name match is the last resort."""
-    gcn_arch = ""
-    for _attr in ("gcnArchName", "gcn_arch_name", "arch_name", "gfx_arch_name"):
-        _v = (getattr(props, _attr, "") or "").split(":")[0].strip()
-        if _v:
-            gcn_arch = _v
-            break
-
-    # Driver's is_integrated flag can only upgrade to unified, never downgrade the known APU set.
-    if getattr(props, "is_integrated", 0):
-        return gcn_arch, True
-
-    if gcn_arch:
-        # gfx1152 (Krackan Point) shares system RAM like gfx1150/gfx1151.
-        return gcn_arch, gcn_arch.lower() in {"gfx1150", "gfx1151", "gfx1152"}
-
-    # Without arch attrs, match device name, only under _hw.IS_ROCM so NVIDIA 840M cannot hit Krackan.
-    dev_lower = (getattr(props, "name", "") or "").lower()
-    is_unified = (
-        "890m" in dev_lower
-        or "880m" in dev_lower
-        or "8065s" in dev_lower
-        or "8060s" in dev_lower
-        or "8050s" in dev_lower
-        or "860m" in dev_lower
-        or "840m" in dev_lower
-        or _ROCM_APU_NAME_RE.search(dev_lower) is not None
-    )
-    return gcn_arch, is_unified
+# Re-exported from the torch-free utils.rocm_topology for existing importers.
+from utils.rocm_topology import (  # noqa: E402,F401
+    rocm_classify_unified_memory as _rocm_classify_unified_memory,
+)
 
 
 # Fixed 16 GiB reserve: a flat 20% on 128 GiB Strix Halo is wasteful, 10% starved the OS.

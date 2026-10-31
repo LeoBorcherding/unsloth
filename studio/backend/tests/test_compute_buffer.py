@@ -1289,8 +1289,9 @@ class TestSplitRateRecheckAfterSelection:
             for keyword in node.keywords
             if keyword.arg in ("split_extra_bytes", "split_extra_for_slots")
         ]
-        # Five sites; a sixth has to say which context it prices at.
-        assert len(wired) == 5, wired
+        # Five sites plus the per-candidate re-selection over proved-discrete GPUs, priced
+        # at effective_ctx; a seventh has to say which context it prices at.
+        assert len(wired) == 6, wired
         for expression in wired:
             assert re.fullmatch(
                 r"_cc_split_extra\(\w+\)|lambda s: _cc_split_extra\(\w+, s\)"
