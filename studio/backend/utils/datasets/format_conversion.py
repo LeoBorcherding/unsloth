@@ -860,7 +860,7 @@ class _HubClips:
 
             from .format_detection import _VIDEO_EXTENSIONS
 
-            self.files = {}
+            self.files, ambiguous = {}, {}
             try:
                 repo_files = HfApi().list_repo_files(self.repo, repo_type = "dataset")
             except Exception as e:  # noqa: BLE001 -- not a Hub repo or offline: paths stay local
@@ -868,10 +868,20 @@ class _HubClips:
                 repo_files = []
             for f in repo_files:
                 if f.lower().endswith(_VIDEO_EXTENSIONS + (".webm",)):
-                    self.files.setdefault(os.path.basename(f), f)
+                    ambiguous.setdefault(os.path.basename(f), []).append(f)
+            for f in repo_files:
+                if f.lower().endswith(_VIDEO_EXTENSIONS + (".webm",)):
+                    name = os.path.basename(f)
+                    # A name in several folders resolves to its list, refused below: one copy is a guess.
+                    self.files.setdefault(name, f if len(ambiguous[name]) == 1 else ambiguous[name])
                     self.files[f] = f
         if path not in self.files:
             return None
+        if isinstance(self.files[path], list):
+            raise ValueError(
+                f"Video '{path}' matches several files in {self.repo} ({', '.join(self.files[path])}); "
+                "use the repo-relative path."
+            )
         from huggingface_hub import hf_hub_download
 
         from utils.hf_cache_settings import active_hf_hub_cache

@@ -306,3 +306,27 @@ def test_hub_relative_clips_resolve_from_the_dataset_repo(monkeypatch, tmp_path)
     ]
     out = own_message_videos(messages, dataset_name = "someone/clips")
     assert _video_parts(out[0])[0]["video"] == str(tmp_path / "videos/clip01.mp4")
+
+
+def test_a_lone_column_of_clip_paths_is_not_raw_text():
+    from utils.datasets.format_detection import is_plain_text_dataset
+
+    assert not is_plain_text_dataset(Dataset.from_dict({"clip": CLIPS}))
+    assert is_plain_text_dataset(Dataset.from_dict({"text": ["a story", "another"]}))
+
+
+def test_an_ambiguous_bare_clip_name_is_refused(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    from utils.datasets.format_conversion import convert_video_to_vlm_format
+
+    class Api:
+        def list_repo_files(self, repo_id, repo_type = None):
+            return ["train/clip.mp4", "test/clip.mp4"]
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", lambda *a, **k: str(tmp_path / "x.mp4"))
+    with pytest.raises(ValueError, match = "train/clip.mp4"):
+        convert_video_to_vlm_format([{"video": "clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
+    out = convert_video_to_vlm_format([{"video": "test/clip.mp4", "answer": "a"}], "video", "answer", dataset_name = "someone/clips")
+    assert _video_parts(out[0])[0]["video"] == str(tmp_path / "x.mp4")
