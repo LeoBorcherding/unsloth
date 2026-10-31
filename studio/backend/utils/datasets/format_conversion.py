@@ -885,6 +885,7 @@ class _HubClips:
                     name = os.path.basename(f)
                     # A name in several folders resolves to its list, refused below: one copy is a guess.
                     self.files.setdefault(name, f if len(ambiguous[name]) == 1 else ambiguous[name])
+                    # A full repo path is exact, so a root-level clip.mp4 is its own path, not a guess.
                     self.files[f] = f
         if path not in self.files:
             return None

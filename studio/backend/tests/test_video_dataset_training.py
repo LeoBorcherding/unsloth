@@ -402,6 +402,33 @@ def test_an_ambiguous_bare_clip_name_is_refused(monkeypatch, tmp_path):
     assert _video_parts(out[0])[0]["video"] == str(tmp_path / "x.mp4")
 
 
+@pytest.mark.parametrize("repo_files", [["clip.mp4", "sub/clip.mp4"], ["sub/clip.mp4", "clip.mp4"]])
+def test_a_root_level_clip_is_its_own_repo_path(monkeypatch, tmp_path, repo_files):
+    import huggingface_hub
+
+    from utils.datasets.format_conversion import convert_video_to_vlm_format
+
+    class Api:
+        def list_repo_files(
+            self,
+            repo_id,
+            repo_type = None,
+            revision = None,
+        ):
+            return repo_files
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(
+        huggingface_hub, "hf_hub_download", lambda repo, filename, **k: str(tmp_path / filename)
+    )
+    # "clip.mp4" is the root file's repo-relative path, so it is exact whatever the listing order.
+    for name in ("clip.mp4", "sub/clip.mp4"):
+        out = convert_video_to_vlm_format(
+            [{"video": name, "answer": "a"}], "video", "answer", dataset_name = "someone/clips"
+        )
+        assert _video_parts(out[0])[0]["video"] == str(tmp_path / name)
+
+
 def test_a_classlabel_answer_trains_on_the_class_name():
     from datasets import ClassLabel, Features, Value
 
