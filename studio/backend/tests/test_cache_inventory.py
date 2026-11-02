@@ -425,6 +425,42 @@ def test_an_explicit_hub_cache_outside_a_hub_folder_stays_clearable(
         assert_purgeable_root(isolated_caches)
 
 
+@pytest.mark.parametrize("shared_blob", [False, True])
+def test_an_active_hub_nested_in_a_remembered_hub_stays_clearable(
+    tmp_path, monkeypatch, isolated_caches, shared_blob
+):
+    from utils import hf_cache_settings
+
+    old_hub = isolated_caches / "hub"
+    active = old_hub / "new-downloads"
+    old_blob = _write(old_hub / "models--test--old" / "blobs" / "weights", "o" * 256)
+    active_blob = _write(active / "models--test--active" / "blobs" / "weights", "a" * 128)
+    if shared_blob:
+        os.link(active_blob, old_blob.parent / "shared")
+    paths = hf_cache_settings.HuggingFaceCachePaths(
+        active, active, isolated_caches / "xet", "environment", "HF_HUB_CACHE"
+    )
+    monkeypatch.setattr(hf_cache_settings, "get_hf_cache_paths", lambda: paths)
+    monkeypatch.setattr(hf_cache_settings, "known_hf_hub_caches", lambda: [active, old_hub])
+
+    described = describe_cache(definition_for("hf_hub"))
+    assert described["purgeable"] is True, described["blocked_reason"]
+    assert described["size_bytes"] == 384
+    assert described["clear_size_bytes"] == (0 if shared_blob else 128)
+    assert described["clear_entry_count"] == 1
+
+    rows = {row["name"]: row for row in cache_inventory.cache_breakdown("hf_hub")["entries"]}
+    assert set(rows) == {"models--test--old", "models--test--active"}
+    assert rows["models--test--active"]["size_bytes"] == 128
+    assert rows["models--test--active"]["cache_path"] == str(
+        (active / "models--test--active").resolve()
+    )
+
+    purge_caches(["hf_hub"])
+    assert not active_blob.exists()
+    assert old_blob.exists()
+
+
 def test_the_inductor_cache_follows_the_account_name_torch_uses(
     tmp_path, monkeypatch, isolated_caches
 ):
