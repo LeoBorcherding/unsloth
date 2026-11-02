@@ -745,6 +745,7 @@ def _vllm_runtime_blocker() -> Optional[str]:
     if not hip and torch.cuda.get_device_capability()[0] < 7:
         return "vLLM needs compute capability 7.0 or newer"
     import importlib.util
+
     if importlib.util.find_spec("vllm") is None:
         return "this ROCm install has no vLLM build" if hip else "vLLM is not installed"
     # Unsloth disables an installed vLLM at import when it can't work (ABI break, wrong transformers).
@@ -762,6 +763,7 @@ def vllm_rollout_blocker(
     diffusion: bool = False,
     offload_layers: Any = 0,
     gpu_count: int = 1,
+    lora_rank: Optional[int] = None,
     runtime: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[str]:
     """Why this GRPO run can't generate with vLLM, or None when it can."""
@@ -777,7 +779,19 @@ def vllm_rollout_blocker(
         return "vLLM rollouts can't run with layer offloading"
     if gpu_count > 1:
         return "vLLM rollouts run on a single GPU"
+    if lora_rank and lora_rank > VLLM_LORA_RANKS[-1]:
+        return f"vLLM holds LoRA ranks up to {VLLM_LORA_RANKS[-1]}"
     return (runtime or _vllm_runtime_blocker)()
+
+
+# vLLM's accepted max_lora_rank values (vllm/config/lora.py, MaxLoRARanks).
+VLLM_LORA_RANKS = (1, 8, 16, 32, 64, 128, 256, 320, 512)
+
+
+def vllm_lora_rank(lora_r) -> int:
+    """The smallest rank vLLM accepts that still holds the adapter (never below 16)."""
+    r = max(int(lora_r or 16), 16)
+    return next((x for x in VLLM_LORA_RANKS if x >= r), r)
 
 
 def vllm_fallback_message(reason: str) -> str:
@@ -791,7 +805,7 @@ def vllm_load_kwargs(settings: dict, lora_r: int) -> dict:
         "fast_inference": True,
         "gpu_memory_utilization": float(fraction),
         # vLLM sizes its LoRA slots at load; a smaller max rank rejects the adapter at the first sync.
-        "max_lora_rank": max(int(lora_r or 16), 16),
+        "max_lora_rank": vllm_lora_rank(lora_r),
     }
 
 

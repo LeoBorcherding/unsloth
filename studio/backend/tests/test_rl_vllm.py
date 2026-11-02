@@ -19,11 +19,23 @@ from core.training.rl import (
 from core.training.worker import _grpo_vllm_load_kwargs
 from models.training import TrainingStartRequest
 
-BASE = {"model_name": "unsloth/Qwen2.5-3B-Instruct", "training_type": "LoRA/QLoRA", "format_type": "auto"}
-REWARD = {"name": "r", "rule": {"type": "length", "max_chars": 9, "score": {"over": -1.0, "under": 0.0}}}
+BASE = {
+    "model_name": "unsloth/Qwen2.5-3B-Instruct",
+    "training_type": "LoRA/QLoRA",
+    "format_type": "auto",
+}
+REWARD = {
+    "name": "r",
+    "rule": {"type": "length", "max_chars": 9, "score": {"over": -1.0, "under": 0.0}},
+}
 
 
-def _fake_torch(*, cuda = True, hip = None, capability = (8, 0)):
+def _fake_torch(
+    *,
+    cuda = True,
+    hip = None,
+    capability = (8, 0),
+):
     return types.SimpleNamespace(
         version = types.SimpleNamespace(hip = hip),
         cuda = types.SimpleNamespace(
@@ -36,7 +48,12 @@ def _fake_torch(*, cuda = True, hip = None, capability = (8, 0)):
 def host(monkeypatch):
     """Pin the runtime probe to a described host instead of asking this machine."""
 
-    def set_host(platform = "linux", vllm = True, disabled = None, **torch_kw):
+    def set_host(
+        platform = "linux",
+        vllm = True,
+        disabled = None,
+        **torch_kw,
+    ):
         monkeypatch.setattr(sys, "platform", platform)
         monkeypatch.setitem(sys.modules, "torch", _fake_torch(**torch_kw))
         real = importlib.util.find_spec
@@ -46,7 +63,9 @@ def host(monkeypatch):
             lambda name, *a: (object() if vllm else None) if name == "vllm" else real(name, *a),
         )
         monkeypatch.setitem(
-            sys.modules, "unsloth.import_fixes", types.SimpleNamespace(VLLM_DISABLED_REASON = disabled)
+            sys.modules,
+            "unsloth.import_fixes",
+            types.SimpleNamespace(VLLM_DISABLED_REASON = disabled),
         )
         return rl._vllm_runtime_blocker()
 
@@ -86,6 +105,7 @@ def test_runtime_blockers_name_the_reason(host, described, expected):
         ({"diffusion": True}, "text-diffusion"),
         ({"offload_layers": "auto"}, "offloading"),
         ({"gpu_count": 2}, "single GPU"),
+        ({"lora_rank": 640}, "up to 512"),
     ],
 )
 def test_run_shapes_vllm_cannot_take_never_probe_the_runtime(kwargs, expected):
@@ -97,7 +117,9 @@ def test_run_shapes_vllm_cannot_take_never_probe_the_runtime(kwargs, expected):
 
 def test_a_supported_run_defers_to_the_runtime():
     assert vllm_rollout_blocker(runtime = lambda: None) is None
-    assert vllm_rollout_blocker(runtime = lambda: "vLLM runs on Linux only") == "vLLM runs on Linux only"
+    assert (
+        vllm_rollout_blocker(runtime = lambda: "vLLM runs on Linux only") == "vLLM runs on Linux only"
+    )
 
 
 def test_fallback_message_says_what_generates_instead():
@@ -114,7 +136,18 @@ def test_load_kwargs_follow_the_notebooks():
     }
     # vLLM rejects an adapter above max_lora_rank at the first sync, so never size it below the run's rank.
     assert vllm_load_kwargs({"vllm_gpu_memory_utilization": 0.7}, 8)["max_lora_rank"] == 16
-    assert vllm_load_kwargs({"vllm_gpu_memory_utilization": 0.7}, 8)["gpu_memory_utilization"] == 0.7
+    assert (
+        vllm_load_kwargs({"vllm_gpu_memory_utilization": 0.7}, 8)["gpu_memory_utilization"] == 0.7
+    )
+
+
+@pytest.mark.parametrize(
+    "lora_r, slots", [(16, 16), (24, 32), (48, 64), (200, 256), (300, 320), (512, 512), (640, 640)]
+)
+def test_load_rounds_the_rank_up_to_one_vllm_accepts(lora_r, slots):
+    # vLLM 0.26 takes only 1/8/16/32/64/128/256/320/512; above 512 the blocker falls back instead.
+    assert vllm_load_kwargs({}, lora_r)["max_lora_rank"] == slots
+    assert (vllm_rollout_blocker(lora_rank = slots, runtime = lambda: None) is None) == (slots <= 512)
 
 
 @pytest.mark.parametrize(
@@ -262,4 +295,23 @@ def test_a_load_that_comes_back_without_an_engine_warns(requested, engine, warne
     UnslothTrainer._check_vllm_engine(trainer, requested)
     assert bool(warnings) == warned
     if warned:
-        assert warnings[0].startswith("vLLM rollouts are off: Unsloth loaded this model without vLLM")
+        assert warnings[0].startswith(
+            "vLLM rollouts are off: Unsloth loaded this model without vLLM"
+        )
+
+
+@pytest.mark.parametrize("objective", ["grpo", "dpo", "orpo"])
+def test_mlx_worker_refuses_rl_instead_of_training_sft(monkeypatch, objective):
+    import queue
+    from core.training import worker
+
+    monkeypatch.setattr(worker, "_validate_training_worker_config", lambda *args: True)
+    monkeypatch.setattr(
+        worker, "_resolve_cached_model_load_name", lambda config: pytest.fail("loaded")
+    )
+    events = queue.Queue()
+    config = {**BASE, "objective": objective, "rl_settings": {"use_vllm": True}}
+    worker.run_mlx_training_process(event_queue = events, stop_queue = queue.Queue(), config = config)
+    event = events.get_nowait()
+    assert event["type"] == "error"
+    assert event["error"] == f"{objective.upper()} is not available on Apple Silicon (MLX) yet."

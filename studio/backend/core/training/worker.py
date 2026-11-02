@@ -1968,6 +1968,7 @@ def _grpo_vllm_load_kwargs(config: dict) -> "dict | None":
     if config.get("objective") != "grpo" or not settings.get("use_vllm"):
         return None
     from core.training.rl import vllm_load_kwargs
+
     return vllm_load_kwargs(settings, config.get("lora_r"))
 
 
@@ -3844,6 +3845,18 @@ def run_mlx_training_process(
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
     if not config_prevalidated and not _validate_training_worker_config(config, event_queue):
+        return
+    # The MLX trainer only does SFT; without this a GRPO/DPO/ORPO run (and its vLLM opt-in) would train as SFT.
+    objective = config.get("objective") or "sft"
+    if objective != "sft":
+        event_queue.put(
+            {
+                "type": "error",
+                "error": f"{objective.upper()} is not available on Apple Silicon (MLX) yet.",
+                "stack": "",
+                "ts": time.time(),
+            }
+        )
         return
     model_load_target = _resolve_cached_model_load_name(config)
 

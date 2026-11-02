@@ -947,6 +947,7 @@ class UnslothTrainer:
         if not requested:
             return {}
         from core.training.rl import vllm_fallback_message, vllm_rollout_blocker
+
         blocker = vllm_rollout_blocker(
             full_finetuning = full_finetuning,
             vision = bool(self.model_has_vision),
@@ -954,6 +955,7 @@ class UnslothTrainer:
             diffusion = bool(self.diffusion_lm_profile),
             offload_layers = self._offload_layers,
             gpu_count = gpu_count,
+            lora_rank = requested.get("max_lora_rank"),
         )
         if blocker:
             self._record_warning(vllm_fallback_message(blocker))
@@ -1812,6 +1814,7 @@ class UnslothTrainer:
                         **self._offload_load_kwargs(device_map),
                         **extra,
                     )
+
                 try:
                     self.model, self.tokenizer = load_text(**vllm_kwargs)
                 except Exception as e:
@@ -1819,6 +1822,7 @@ class UnslothTrainer:
                     if not vllm_kwargs or self.should_stop or isinstance(e, OSError):
                         raise
                     from core.training.rl import vllm_fallback_message
+
                     reason = (str(e).strip().splitlines() or [type(e).__name__])[0][:200]
                     self._record_warning(
                         vllm_fallback_message(f"vLLM could not load this model ({reason})")
