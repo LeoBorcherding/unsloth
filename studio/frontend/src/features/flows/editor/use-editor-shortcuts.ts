@@ -13,29 +13,24 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import type { FlowEdge, FlowNode } from "../types";
 import { addFileNodes } from "./file-drop";
+import { usePlacement } from "./placement";
+import { turnReroutes } from "./reroutes";
 import { runFlow } from "./run-controller";
+import { historyAction, isTyping } from "./history-keys";
+import { selectAllIds, selectedBlocks } from "./super-cards";
 import { flushSave } from "./use-autosave";
 
 const CLIPBOARD_KIND = "unsloth-flow-fragment";
 let clipboard: GraphFragment | null = null;
 let pointer: { x: number; y: number } | null = null;
 
-function isTyping(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  return (
-    el.isContentEditable ||
-    el.tagName === "INPUT" ||
-    el.tagName === "TEXTAREA" ||
-    el.tagName === "SELECT"
-  );
-}
-
 export function copySelection(): GraphFragment | null {
-  const { graph } = useDocStore.getState();
-  const ids = useUiStore
-    .getState()
-    .selectedNodes.filter((id) => graph.nodes[id]);
+  const { graph, meta } = useDocStore.getState();
+  const ids = selectedBlocks(
+    useUiStore.getState().selectedNodes,
+    meta.editor,
+    graph,
+  );
   if (!ids.length) return null;
   const set = new Set(ids);
   const fragment: GraphFragment = {
@@ -125,13 +120,22 @@ export function useEditorShortcuts(active: boolean): void {
         [],
       );
     };
+    const onHistoryKey = (event: KeyboardEvent) => {
+      const action = historyAction(event);
+      if (!action || isTyping(event.target)) return;
+      event.preventDefault();
+      useDocStore.getState()[action]();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (key === "escape") {
         const ui = useUiStore.getState();
         if (ui.quickAdd) ui.setQuickAdd(null);
-        else if (!isTyping(event.target)) ui.setSelection([], []);
+        else if (!isTyping(event.target)) {
+          ui.setSelection([], []);
+          ui.openInspector(null);
+        }
         return;
       }
       if (mod && key === "s") {
@@ -150,18 +154,14 @@ export function useEditorShortcuts(active: boolean): void {
       }
       if (isTyping(event.target)) return;
       const doc = useDocStore.getState();
-      if (mod && key === "z" && !event.shiftKey) {
-        event.preventDefault();
-        doc.undo();
-      } else if (mod && ((key === "z" && event.shiftKey) || key === "y")) {
-        event.preventDefault();
-        doc.redo();
-      } else if (mod && key === "c") {
+      if (mod && key === "c") {
         if (copySelection()) event.preventDefault();
       } else if (mod && key === "x") {
-        if (copySelection()) {
+        const fragment = copySelection();
+        if (fragment) {
           event.preventDefault();
-          doc.removeElements({ nodes: useUiStore.getState().selectedNodes });
+          // Cut what was copied, so a closed super card's blocks go too.
+          doc.removeElements({ nodes: fragment.nodes.map((n) => n.id) });
           useUiStore.getState().setSelection([], []);
         }
       } else if (mod && key === "v") {
@@ -187,9 +187,11 @@ export function useEditorShortcuts(active: boolean): void {
         });
       } else if (mod && key === "d") {
         event.preventDefault();
-        const ids = useUiStore
-          .getState()
-          .selectedNodes.filter((id) => doc.graph.nodes[id]);
+        const ids = selectedBlocks(
+          useUiStore.getState().selectedNodes,
+          doc.meta.editor,
+          doc.graph,
+        );
         if (!ids.length) return;
         const fragment = cloneFragment(doc.graph, ids, [40, 40]);
         doc.insertFragment(fragment);
@@ -201,7 +203,18 @@ export function useEditorShortcuts(active: boolean): void {
         event.preventDefault();
         useUiStore
           .getState()
-          .setSelection([...doc.graph.nodeOrder], [...doc.graph.edgeOrder]);
+          .setSelection(
+            selectAllIds(doc.meta.editor, doc.graph),
+            [...doc.graph.edgeOrder],
+          );
+      } else if (!mod && key === "i") {
+        const ui = useUiStore.getState();
+        const [only, ...rest] = ui.selectedNodes;
+        if (only && !rest.length && doc.graph.nodes[only]) ui.toggleInspector(only);
+        else if (ui.inspectorNodeId) ui.openInspector(null);
+      } else if (!mod && key === "r" && !usePlacement.getState().armed) {
+        if (turnReroutes(useUiStore.getState().selectedNodes))
+          event.preventDefault();
       } else if (!mod && key === "f") {
         event.preventDefault();
         void fitView({ padding: 0.2, duration: 300, maxZoom: 1.1 });
@@ -212,9 +225,12 @@ export function useEditorShortcuts(active: boolean): void {
     };
     window.addEventListener("pointermove", onPointerMove, { passive: true });
     window.addEventListener("keydown", onKeyDown);
+    // Undo/redo in the capture phase, so a focused card or control cannot swallow them.
+    window.addEventListener("keydown", onHistoryKey, true);
     return () => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onHistoryKey, true);
     };
   }, [active, fitView, screenToFlowPosition]);
 }
@@ -223,9 +239,12 @@ export function groupSelection(
   rectFallback?: [number, number, number, number],
 ): void {
   const doc = useDocStore.getState();
-  const ids = useUiStore
-    .getState()
-    .selectedNodes.filter((id) => doc.graph.nodes[id]);
+  // A selected closed card groups the blocks in it.
+  const ids = selectedBlocks(
+    useUiStore.getState().selectedNodes,
+    doc.meta.editor,
+    doc.graph,
+  );
   let rect: [number, number, number, number];
   if (ids.length) {
     const xs = ids.map((id) => doc.graph.nodes[id].pos[0]);
