@@ -308,6 +308,24 @@ async def resident_name(ctx: Any, model_kind: str) -> Optional[str]:
     return name
 
 
+async def resident_identity(ctx: Any, model_kind: str) -> dict:
+    """The model a slot holds and, for chat, the GGUF quant it was loaded at: a cache key part."""
+    from core.flows.engine import MODEL_SLOT
+    from studio_mcp import loading
+
+    slot = MODEL_SLOT.get(model_kind, model_kind)
+    try:
+        slots, status = await loading._resident(_caller(ctx))
+    except Exception:
+        return {"local": None}
+    names = slots.get(slot) or []
+    name = names[0] if names else None
+    if ctx is not None:
+        ctx.resident[slot] = name
+    variant = status.get("gguf_variant") if slot == "llm" else None
+    return {"local": name, "variant": variant.lower() if isinstance(variant, str) else None}
+
+
 # slot -> (repo, variant, owner load count): a media reload outside Flows changes the count.
 _LOADED_VARIANT: dict[str, tuple[str, str, Optional[int]]] = {}
 
@@ -596,6 +614,7 @@ async def llm_text(
     thinking: bool = False,
     seed: Optional[int] = None,
     stream_port: Optional[str] = "text",
+    use_adapter: Optional[bool] = None,
 ) -> str:
     from core.flows import caller as flow_caller
     from state.tool_policy import tools_force_disabled
@@ -613,6 +632,9 @@ async def llm_text(
         seed = seed,
         stream = bool(stream_port),
     )
+    if use_adapter is not None:
+        # The server keeps the last request's adapter switch (a Benchmark judge turns it off), so say it every time.
+        body["use_adapter"] = use_adapter
     ctx.check_cancelled()
     if not stream_port:
         with tools_force_disabled():
