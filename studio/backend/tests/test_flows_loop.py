@@ -588,6 +588,7 @@ def test_a_question_shared_by_test_rows_still_bans_its_failure():
     leaked = {"question": question, "model_output": "x"}
     assert loop_rounds.drop_test_rows([probe, leaked], test_rows) == [probe]
 
+
 def test_an_alpaca_failure_is_fed_back_with_its_input():
     row = loop_rounds.failure_row(
         {

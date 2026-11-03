@@ -136,7 +136,10 @@ def drop_test_rows(failures: list[dict], test_rows: list[dict]) -> list[dict]:
 
 def _asked(row: Any) -> set[str]:
     picked = failure_row(row) or {}
-    found = {_text(picked.get("failed_prompt")).strip(), _text(picked.get("failed_reference")).strip()}
+    found = {
+        _text(picked.get("failed_prompt")).strip(),
+        _text(picked.get("failed_reference")).strip(),
+    }
     if isinstance(row, dict):
         extra = {str(k).lower(): v for k, v in row.items()}.get("input")
         if isinstance(extra, str):
