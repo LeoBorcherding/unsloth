@@ -3385,7 +3385,7 @@ export const de = {
         choose: "Tools auswählen",
         dialogTitle: "Unsloth MCP-Tools",
         turnAllOn: "Alle einschalten",
-        groupToggle: "Alle Tools in {group}",
+        turnAllOff: "Alle ausschalten",
         description: "Agenten sehen ein deaktiviertes Tool nie, und Aufrufe dafür werden abgelehnt. Bereits verbundene Agenten sehen die Änderung, sobald sie sich neu verbinden.",
         saveError: "Die Einstellung für das Unsloth MCP-Tool konnte nicht gespeichert werden.",
         groups: {

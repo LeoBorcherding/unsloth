@@ -3421,7 +3421,7 @@ export const he = {
         choose: "בחירת כלים",
         dialogTitle: "כלי Unsloth MCP",
         turnAllOn: "הפעל הכול",
-        groupToggle: "כל הכלים של {group}",
+        turnAllOff: "כבה הכול",
         description: "סוכנים אף פעם לא רואים כלי שכיבית, וקריאות אליו נדחות. סוכנים שכבר מחוברים רואים את השינוי כשהם מתחברים מחדש.",
         saveError: "לא ניתן לשמור את הגדרת הכלי של Unsloth MCP.",
         groups: {

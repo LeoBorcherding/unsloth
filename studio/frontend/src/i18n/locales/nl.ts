@@ -3858,7 +3858,7 @@ export const nl = {
         choose: "Tools kiezen",
         dialogTitle: "Unsloth MCP-tools",
         turnAllOn: "Alles aanzetten",
-        groupToggle: "Alle {group}-tools",
+        turnAllOff: "Alles uitzetten",
         description: "Agents zien nooit een tool die je uitzet, en aanroepen ervan worden geweigerd. Agents die al verbonden zijn, zien de wijziging zodra ze opnieuw verbinden.",
         saveError: "Kon de instelling voor Unsloth MCP-tools niet opslaan.",
         groups: {

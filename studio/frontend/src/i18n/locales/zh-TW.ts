@@ -3626,7 +3626,7 @@ export const zhTW = {
         choose: "選擇工具",
         dialogTitle: "Unsloth MCP 工具",
         turnAllOn: "全部開啟",
-        groupToggle: "所有{group}工具",
+        turnAllOff: "全部關閉",
         description: "代理程式永遠看不到你關閉的工具，對它的呼叫也會被拒絕。已連線的代理程式會在重新連線後看到變更。",
         saveError: "無法儲存 Unsloth MCP 工具設定。",
         groups: {

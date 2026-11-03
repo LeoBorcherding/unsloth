@@ -3519,7 +3519,7 @@ export const sv = {
         choose: "Välj verktyg",
         dialogTitle: "Unsloth MCP-verktyg",
         turnAllOn: "Slå på alla",
-        groupToggle: "Alla verktyg i {group}",
+        turnAllOff: "Stäng av alla",
         description: "Agenter ser aldrig ett verktyg som du stänger av, och anrop till det nekas. Agenter som redan är anslutna ser ändringen när de ansluter igen.",
         saveError: "Det gick inte att spara inställningen för verktyget i Unsloth MCP.",
         groups: {

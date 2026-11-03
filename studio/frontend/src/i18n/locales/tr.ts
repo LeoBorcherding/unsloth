@@ -3810,7 +3810,7 @@ export const tr = {
         choose: "Araçları seç",
         dialogTitle: "Unsloth MCP araçları",
         turnAllOn: "Tümünü aç",
-        groupToggle: "Tüm {group} araçları",
+        turnAllOff: "Tümünü kapat",
         description: "Ajanlar kapattığınız bir aracı asla görmez ve o araca yapılan çağrılar reddedilir. Zaten bağlı olan ajanlar değişikliği yeniden bağlandıklarında görür.",
         saveError: "Unsloth MCP araç ayarı kaydedilemedi.",
         groups: {

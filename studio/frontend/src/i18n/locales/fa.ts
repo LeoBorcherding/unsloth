@@ -3800,7 +3800,7 @@ export const fa = {
         choose: "انتخاب ابزارها",
         dialogTitle: "ابزارهای Unsloth MCP",
         turnAllOn: "روشن کردن همه",
-        groupToggle: "همه ابزارهای {group}",
+        turnAllOff: "خاموش کردن همه",
         description: "عامل‌ها هرگز ابزاری را که خاموش کرده‌اید نمی‌بینند و فراخوانی آن رد می‌شود. عامل‌هایی که از قبل متصل هستند، پس از اتصال دوباره تغییر را می‌بینند.",
         saveError: "ذخیره تنظیم ابزارهای Unsloth MCP ممکن نشد.",
         groups: {

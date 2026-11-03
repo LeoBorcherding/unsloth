@@ -3339,7 +3339,7 @@ export const ar = {
         choose: "اختيار الأدوات",
         dialogTitle: "أدوات Unsloth MCP",
         turnAllOn: "تفعيل الكل",
-        groupToggle: "كل أدوات {group}",
+        turnAllOff: "إيقاف الكل",
         description: "لا يرى الوكلاء أي أداة تعطّلها، ويُرفض أي استدعاء لها. الوكلاء المتصلون بالفعل يرون التغيير عند إعادة الاتصال.",
         saveError: "تعذّر حفظ إعداد أداة Unsloth MCP.",
         groups: {

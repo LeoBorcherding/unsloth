@@ -3352,7 +3352,7 @@ export const ptBR = {
         choose: "Escolher ferramentas",
         dialogTitle: "Ferramentas MCP do Unsloth",
         turnAllOn: "Ativar todas",
-        groupToggle: "Todas as ferramentas de {group}",
+        turnAllOff: "Desativar todas",
         description: "Os agentes nunca veem uma ferramenta que você desativa, e as chamadas a ela são recusadas. Agentes já conectados veem a mudança quando se reconectam.",
         saveError: "Não foi possível salvar a configuração da ferramenta do Unsloth MCP.",
         groups: {

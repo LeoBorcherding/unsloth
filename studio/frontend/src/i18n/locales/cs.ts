@@ -3831,7 +3831,7 @@ export const cs = {
         choose: "Vybrat nástroje",
         dialogTitle: "Nástroje Unsloth MCP",
         turnAllOn: "Zapnout vše",
-        groupToggle: "Všechny nástroje skupiny {group}",
+        turnAllOff: "Vypnout vše",
         description: "Agenti nikdy neuvidí nástroj, který vypnete, a jeho volání jsou odmítnuta. Již připojení agenti uvidí změnu po opětovném připojení.",
         saveError: "Nastavení nástrojů Unsloth MCP se nepodařilo uložit.",
         groups: {

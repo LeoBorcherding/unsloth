@@ -3873,7 +3873,7 @@ export const es419 = {
         choose: "Elegir herramientas",
         dialogTitle: "Herramientas de Unsloth MCP",
         turnAllOn: "Activar todas",
-        groupToggle: "Todas las herramientas de {group}",
+        turnAllOff: "Desactivar todas",
         description: "Los agentes nunca ven una herramienta que desactives, y las llamadas a ella se rechazan. Los agentes que ya están conectados ven el cambio cuando se vuelven a conectar.",
         saveError: "No se pudo guardar la configuración de herramientas de Unsloth MCP.",
         groups: {

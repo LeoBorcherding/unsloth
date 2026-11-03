@@ -3813,7 +3813,7 @@ export const id = {
         choose: "Pilih alat",
         dialogTitle: "Alat Unsloth MCP",
         turnAllOn: "Aktifkan semua",
-        groupToggle: "Semua alat {group}",
+        turnAllOff: "Matikan semua",
         description: "Agen tidak pernah melihat alat yang Anda matikan, dan panggilan ke alat itu ditolak. Agen yang sudah terhubung melihat perubahan saat terhubung ulang.",
         saveError: "Tidak dapat menyimpan pengaturan alat Unsloth MCP.",
         groups: {
