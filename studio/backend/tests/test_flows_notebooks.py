@@ -850,3 +850,18 @@ def test_a_notebooks_lora_rank_reaches_training_unchanged(rank):
     doc, _ = notebook_import.read_notebook(nb, "Qwen3_(4B).ipynb")
     node = next(n for n in doc["nodes"] if n["type"] == "train.finetune")
     assert param_values(SPECS_BY_TYPE["train.finetune"], node)["lora_r"] == rank
+
+
+@pytest.mark.parametrize("alpha", [1, 512])
+def test_a_notebooks_lora_alpha_reaches_training_unchanged(alpha):
+    from core.flows.engine import param_values
+    from core.flows.specs import SPECS_BY_TYPE
+
+    nb = _nb(
+        "model, tokenizer = FastLanguageModel.from_pretrained(model_name = 'unsloth/Qwen3-4B')\n"
+        f"model = FastLanguageModel.get_peft_model(model, r = 256, lora_alpha = {alpha})",
+        "dataset = load_dataset('mlabonne/FineTome-100k', split = 'train')",
+    )
+    doc, _ = notebook_import.read_notebook(nb, "Qwen3_(4B).ipynb")
+    node = next(n for n in doc["nodes"] if n["type"] == "train.finetune")
+    assert param_values(SPECS_BY_TYPE["train.finetune"], node)["lora_alpha"] == alpha

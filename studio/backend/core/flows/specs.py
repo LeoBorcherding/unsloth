@@ -1690,8 +1690,9 @@ NODE_SPECS: list[dict] = [
                 "int",
                 32,
                 "Alpha",
-                min = 4,
-                max = 256,
+                # Training's own range: r=256 with alpha=512 must not be clamped to half its scaling.
+                min = 1,
+                max = 32768,
                 step = 4,
                 help = "Scaling factor for LoRA updates. Usually 2x rank.",
                 show_when = LORA,
