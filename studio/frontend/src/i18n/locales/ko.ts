@@ -3329,7 +3329,7 @@ export const ko = {
         choose: "도구 선택",
         dialogTitle: "Unsloth MCP 도구",
         turnAllOn: "모두 켜기",
-        groupToggle: "{group}의 모든 도구",
+        turnAllOff: "모두 끄기",
         description: "끈 도구는 에이전트에게 보이지 않으며 해당 도구 호출은 거부됩니다. 이미 연결된 에이전트는 다시 연결할 때 변경 사항이 반영됩니다.",
         saveError: "Unsloth MCP 도구 설정을 저장하지 못했습니다.",
         groups: {

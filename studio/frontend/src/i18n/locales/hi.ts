@@ -3348,7 +3348,7 @@ export const hi = {
         choose: "टूल चुनें",
         dialogTitle: "Unsloth MCP टूल",
         turnAllOn: "सभी चालू करें",
-        groupToggle: "{group} के सभी टूल",
+        turnAllOff: "सभी बंद करें",
         description: "आपके बंद किए गए टूल को एजेंट कभी नहीं देखते, और उसके कॉल अस्वीकार कर दिए जाते हैं। पहले से जुड़े एजेंट दोबारा कनेक्ट होने पर बदलाव देखते हैं।",
         saveError: "Unsloth MCP टूल की सेटिंग सहेजी नहीं जा सकी।",
         groups: {

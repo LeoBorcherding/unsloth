@@ -3859,7 +3859,7 @@ export const pl = {
         choose: "Wybierz narzędzia",
         dialogTitle: "Narzędzia Unsloth MCP",
         turnAllOn: "Włącz wszystkie",
-        groupToggle: "Wszystkie narzędzia: {group}",
+        turnAllOff: "Wyłącz wszystkie",
         description: "Agenci nigdy nie widzą narzędzia, które wyłączysz, a jego wywołania są odrzucane. Już połączeni agenci zobaczą zmianę po ponownym połączeniu.",
         saveError: "Nie udało się zapisać ustawienia narzędzi Unsloth MCP.",
         groups: {

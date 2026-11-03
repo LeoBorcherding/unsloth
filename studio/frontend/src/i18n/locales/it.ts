@@ -3280,7 +3280,7 @@ export const it = {
         choose: "Scegli gli strumenti",
         dialogTitle: "Strumenti MCP di Unsloth",
         turnAllOn: "Attiva tutti",
-        groupToggle: "Tutti gli strumenti di {group}",
+        turnAllOff: "Disattiva tutti",
         description: "Gli agenti non vedono mai uno strumento che disattivi, e le chiamate a quello strumento vengono rifiutate. Gli agenti già connessi vedono la modifica quando si riconnettono.",
         saveError: "Impossibile salvare l’impostazione dello strumento di Unsloth MCP.",
         groups: {

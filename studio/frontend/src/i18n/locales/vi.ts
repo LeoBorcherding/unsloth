@@ -3814,7 +3814,7 @@ export const vi = {
         choose: "Chọn công cụ",
         dialogTitle: "Công cụ Unsloth MCP",
         turnAllOn: "Bật tất cả",
-        groupToggle: "Tất cả công cụ {group}",
+        turnAllOff: "Tắt tất cả",
         description: "Tác tử sẽ không bao giờ thấy công cụ bạn đã tắt và mọi lệnh gọi đến công cụ đó đều bị từ chối. Các tác tử đã kết nối sẽ thấy thay đổi khi kết nối lại.",
         saveError: "Không thể lưu cài đặt công cụ Unsloth MCP.",
         groups: {

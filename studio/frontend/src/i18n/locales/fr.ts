@@ -3385,7 +3385,7 @@ export const fr = {
         choose: "Choisir les outils",
         dialogTitle: "Outils MCP d'Unsloth",
         turnAllOn: "Tout activer",
-        groupToggle: "Tous les outils {group}",
+        turnAllOff: "Tout désactiver",
         description: "Les agents ne voient jamais un outil que vous désactivez, et les appels vers cet outil sont refusés. Les agents déjà connectés voient le changement lorsqu’ils se reconnectent.",
         saveError: "Impossible d’enregistrer le paramètre de l’outil d’Unsloth MCP.",
         groups: {

@@ -3527,7 +3527,7 @@ export const en = {
         choose: "Choose tools",
         dialogTitle: "Unsloth MCP tools",
         turnAllOn: "Turn all on",
-        groupToggle: "All {group} tools",
+        turnAllOff: "Turn all off",
         description: "Agents never see a tool you turn off, and calls to it are refused. Agents already connected see the change when they reconnect.",
         saveError: "Couldn't save the Unsloth MCP tool setting.",
         groups: {

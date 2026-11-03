@@ -3315,7 +3315,7 @@ export const ja = {
         choose: "ツールを選択",
         dialogTitle: "Unsloth MCP ツール",
         turnAllOn: "すべてオンにする",
-        groupToggle: "{group} のすべてのツール",
+        turnAllOff: "すべてオフにする",
         description: "オフにしたツールはエージェントに表示されず、呼び出しも拒否されます。すでに接続中のエージェントには、再接続したときに変更が反映されます。",
         saveError: "Unsloth MCP のツール設定を保存できませんでした。",
         groups: {

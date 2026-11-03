@@ -146,14 +146,25 @@ test("tools fall into the five groups in order, with unknown areas last", () => 
   }
 });
 
-test("a group switch is on only when all its tools are, and every change sends the full off list", () => {
-  assert.match(TOOLS, /checked=\{on === group\.tools\.length\}/);
+test("a group button turns its tools all off once all are on, all on otherwise, and sends only those", () => {
+  assert.match(TOOLS, /const allOn = on === group\.tools\.length;/);
+  assert.match(
+    TOOLS,
+    /setEnabled\(\s+group\.tools\.map\(\(tool\) => tool\.name\),\s+!allOn,/,
+  );
+  assert.match(
+    TOOLS,
+    /allOn\s+\? "settings\.mcp\.tools\.turnAllOff"\s+: "settings\.mcp\.tools\.turnAllOn"/,
+  );
+  // A button, so the section header doesn't read as one more tool switch.
+  assert.doesNotMatch(TOOLS, /checked=\{on === group\.tools\.length\}/);
+  assert.match(TOOLS, /aria-describedby=\{`mcp-group-\$\{group\.id\}`\}/);
+  assert.equal(en.settings.mcp.tools.turnAllOff, "Turn all off");
   // Only the changed tools go to the server, which merges them into its stored list.
   assert.match(
     TOOLS,
     /onSave\(Object\.fromEntries\(names\.map\(\(name\) => \[name, on\]\)\)\)/,
   );
-  assert.match(TOOLS, /t\("settings\.mcp\.tools\.groupToggle", \{\s*group: label,/);
   // "Turn all on" is disabled until something is off, and turns on only the tools that are off.
   assert.match(
     TOOLS,

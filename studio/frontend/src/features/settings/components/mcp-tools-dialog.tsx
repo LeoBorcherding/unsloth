@@ -168,6 +168,7 @@ export function McpToolsDialog({
           ) : null}
           {groups.map((group) => {
             const on = group.tools.filter((tool) => tool.enabled).length;
+            const allOn = on === group.tools.length;
             const label = t(group.labelKey);
             return (
               <section
@@ -176,27 +177,34 @@ export function McpToolsDialog({
                 className="flex flex-col"
               >
                 <div className="flex items-center gap-2.5 px-3 pb-1">
-                  <h3 className="min-w-0 flex-1 text-ui-12 font-medium text-muted-foreground">
+                  <h3
+                    id={`mcp-group-${group.id}`}
+                    className="min-w-0 flex-1 text-ui-12 font-medium text-muted-foreground">
                     {label}
                     <span className="ml-1.5 tabular-nums">
                       {on}/{group.tools.length}
                     </span>
                   </h3>
-                  {/* On only when every tool in the group is on; flipping it sets them all. */}
-                  <Switch
+                  {/* A button, not a switch, so the section doesn't read as one more tool. */}
+                  <Button
+                    variant="ghost"
                     size="sm"
-                    aria-label={t("settings.mcp.tools.groupToggle", {
-                      group: label,
-                    })}
-                    checked={on === group.tools.length}
+                    className="h-6 px-2 text-ui-12 text-muted-foreground"
+                    aria-describedby={`mcp-group-${group.id}`}
                     disabled={saving}
-                    onCheckedChange={(next) =>
+                    onClick={() =>
                       setEnabled(
                         group.tools.map((tool) => tool.name),
-                        next,
+                        !allOn,
                       )
                     }
-                  />
+                  >
+                    {t(
+                      allOn
+                        ? "settings.mcp.tools.turnAllOff"
+                        : "settings.mcp.tools.turnAllOn",
+                    )}
+                  </Button>
                 </div>
                 <div className="flex flex-col rounded-xl border border-border/70 p-1">
                   {group.tools.map((tool) => (

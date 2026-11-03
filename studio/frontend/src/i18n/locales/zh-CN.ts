@@ -3285,7 +3285,7 @@ export const zhCN = {
         choose: "选择工具",
         dialogTitle: "Unsloth MCP 工具",
         turnAllOn: "全部开启",
-        groupToggle: "{group}中的全部工具",
+        turnAllOff: "全部关闭",
         description: "智能体看不到你关闭的工具，对它的调用也会被拒绝。已连接的智能体会在重新连接后看到变化。",
         saveError: "无法保存 Unsloth MCP 工具设置。",
         groups: {
