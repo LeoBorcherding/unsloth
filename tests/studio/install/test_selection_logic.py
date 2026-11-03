@@ -3666,6 +3666,144 @@ class TestWindowsMixedAmdUncoveredActiveCard:
             self._resolve(("gfx1010",))
 
 
+class TestWindowsMixedRocmFamilies:
+    """RX 7900 XTX (gfx1100) beside a Radeon AI PRO R9700 (gfx1201): each family bundle carries
+    kernels for one card only, so llama-server aborts on the other. The multi-family bundle runs
+    both; single-family hosts keep their own family bundle."""
+
+    TAG = "b11541-mix-2500203"
+    FAMILIES = {
+        "gfx103X": ["gfx1030", "gfx1031", "gfx1032", "gfx1034"],
+        "gfx110X": ["gfx1100", "gfx1101", "gfx1102", "gfx1103"],
+        "gfx120X": ["gfx1200", "gfx1201"],
+        "gfx1151": ["gfx1151"],
+    }
+    MULTI = f"app-{TAG}-windows-x64-rocm-gfxmulti.zip"
+    MULTI_TARGETS = [*FAMILIES["gfx103X"], *FAMILIES["gfx110X"], *FAMILIES["gfx120X"]]
+    VULKAN = f"app-{TAG}-windows-x64-vulkan.zip"
+    CPU = f"app-{TAG}-windows-x64-cpu.zip"
+
+    def _rocm(self, family):
+        return f"app-{self.TAG}-windows-x64-rocm-{family}.zip"
+
+    def _release(self, with_multi = True):
+        artifacts = [
+            make_cpu_artifact(
+                self._rocm(family),
+                install_kind = "windows-rocm",
+                rank = 1000,
+                gfx_target = family,
+                mapped_targets = targets,
+            )
+            for family, targets in self.FAMILIES.items()
+        ]
+        if with_multi:
+            # Last, like the manifest's sorted asset order, so picking it is a choice, not an accident.
+            artifacts.append(
+                make_cpu_artifact(
+                    self.MULTI,
+                    install_kind = "windows-rocm",
+                    rank = 1000,
+                    gfx_target = "gfxmulti",
+                    mapped_targets = self.MULTI_TARGETS,
+                )
+            )
+        artifacts += [
+            make_cpu_artifact(self.VULKAN, install_kind = "windows-vulkan", rank = 1000),
+            make_cpu_artifact(self.CPU, install_kind = "windows-cpu", rank = 1000),
+        ]
+        return make_release(artifacts, release_tag = self.TAG, upstream_tag = "b9457")
+
+    def _host(self, targets):
+        return make_host(
+            system = "Windows",
+            machine = "AMD64",
+            nvidia_smi = None,
+            driver_cuda_version = None,
+            compute_caps = [],
+            has_physical_nvidia = False,
+            has_usable_nvidia = False,
+            has_rocm = True,
+            rocm_gfx_target = INSTALL_LLAMA_PREBUILT._pick_rocm_gfx_target(" ".join(targets)),
+            rocm_gfx_targets = list(targets),
+        )
+
+    def _resolve(
+        self,
+        targets,
+        backend = None,
+        with_multi = True,
+    ):
+        release = self._release(with_multi)
+        route = INSTALL_LLAMA_PREBUILT.route_backend_request(
+            backend = backend,
+            published_repo = INSTALL_LLAMA_PREBUILT.DEFAULT_PUBLISHED_REPO,
+            published_release_tag = self.TAG,
+            host = self._host(targets),
+        )
+        return resolve_release_asset_choice(
+            route.host, self.TAG, release, make_checksums(list(release.assets))
+        )
+
+    @pytest.fixture(autouse = True)
+    def _unpinned(self, monkeypatch):
+        for var in (
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+            "CUDA_VISIBLE_DEVICES",
+            "UNSLOTH_ROCM_GFX_ARCH",
+            "UNSLOTH_LLAMA_CPP_BACKEND",
+            "UNSLOTH_FORCE_VULKAN",
+        ):
+            monkeypatch.delenv(var, raising = False)
+        monkeypatch.setattr(INSTALL_LLAMA_PREBUILT, "_rocm_torch_preferred", lambda: False)
+        monkeypatch.setattr(
+            INSTALL_LLAMA_PREBUILT,
+            "github_release_assets",
+            lambda repo, tag: pytest.fail("listed an upstream release"),
+        )
+
+    @pytest.mark.parametrize(
+        "targets",
+        [
+            ("gfx1100", "gfx1201"),
+            ("gfx1201", "gfx1100"),
+            # The iGPU llama.cpp skips beside a dGPU does not change the answer.
+            ("gfx1036", "gfx1201", "gfx1100"),
+            ("gfx1030", "gfx1200"),
+        ],
+    )
+    def test_mixed_families_take_the_multi_family_bundle(self, targets):
+        result = self._resolve(targets)
+        assert [c.name for c in result] == [self.MULTI]
+        # The marker's mapped_targets must name every built arch, or the arch gate drops a card.
+        assert result[0].gfx_target == "gfxmulti"
+        assert result[0].mapped_targets == self.MULTI_TARGETS
+        assert "span ROCm families" in result[0].selection_log[-1]
+
+    @pytest.mark.parametrize(
+        "targets, family",
+        [
+            (("gfx1201", "gfx1201"), "gfx120X"),
+            (("gfx1036", "gfx1201", "gfx1201"), "gfx120X"),
+            (("gfx1100", "gfx1101"), "gfx110X"),
+            (("gfx1201",), "gfx120X"),
+            # Strix Halo alone keeps its own bundle: it is the only GPU llama.cpp has.
+            (("gfx1151",), "gfx1151"),
+        ],
+    )
+    def test_single_family_hosts_keep_their_family_bundle(self, targets, family):
+        assert [c.name for c in self._resolve(targets)] == [self._rocm(family)]
+
+    def test_a_release_without_the_multi_family_bundle_keeps_the_active_family(self):
+        result = self._resolve(("gfx1100", "gfx1201"), with_multi = False)
+        assert [c.name for c in result] == [self._rocm("gfx110X")]
+
+    def test_an_explicit_vulkan_backend_still_wins(self):
+        result = self._resolve(("gfx1100", "gfx1201"), backend = "vulkan")
+        assert [c.name for c in result][0] == self.VULKAN
+
+
 class TestPublishedRocmBundleCoverage:
     """Every arch the installer routes torch for needs a llama.cpp bundle or a KNOWN_GAPS entry. The gap is silent:
     the GPU trains fine and inference drops to a HIP source build, which is correct but much slower to install."""

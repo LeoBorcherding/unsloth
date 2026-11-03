@@ -140,6 +140,9 @@ SHADOWING_INTEGRATED_GFX = frozenset(
     }
 )
 
+# llama.cpp skips integrated GPUs when a discrete one is present, so beside a dGPU these need no kernels.
+ROCM_INTEGRATED_GFX = SHADOWING_INTEGRATED_GFX | {"gfx1150", "gfx1151", "gfx1152"}
+
 # Exactly ggml-org release.yml's windows-hip gpu_targets; fork-only archs are excluded.
 UPSTREAM_WINDOWS_HIP_GFX_TARGETS = frozenset(
     {
@@ -3945,39 +3948,54 @@ def published_rocm_choice_for_host(
 
     The manifest's gfx_target uses umbrella family labels (gfx110X, gfx120X,
     ...). A host's detected gfx is matched against the bundle's concrete
-    mapped_targets list, or against the family label itself. Returns None when no
-    published bundle covers the GPU, so the caller falls back to a HIP source
-    build."""
+    mapped_targets list, or against the family label itself. When the host's discrete
+    GPUs span families no one family bundle covers, the multi-family bundle is taken
+    instead. Returns None when no published bundle covers the GPU, so the caller falls
+    back to a HIP source build."""
     if not host.rocm_gfx_target:
         return None
     gfx = host.rocm_gfx_target.lower().strip()
-    for artifact in release.artifacts:
-        if artifact.install_kind != install_kind:
-            continue
-        # Match concrete built archs so an unbuilt in-family arch (gfx1033) is not served; also accept
-        # the family label, which the update path forwards.
-        mapped = {target.lower() for target in artifact.mapped_targets}
-        if gfx not in mapped and gfx != (artifact.gfx_target or "").lower():
-            continue
-        asset_url = release.assets.get(artifact.asset_name)
-        if not asset_url:
-            continue
-        return AssetChoice(
-            repo = release.repo,
-            tag = release.release_tag,
-            name = artifact.asset_name,
-            url = asset_url,
-            source_label = "published",
-            install_kind = install_kind,
-            gfx_target = artifact.gfx_target,
-            mapped_targets = list(artifact.mapped_targets),
-            selection_log = list(release.selection_log)
-            + [
-                f"rocm_selection: gpu={host.rocm_gfx_target} "
-                f"selected published {artifact.asset_name}"
-            ],
-        )
-    return None
+
+    def covers(artifact: PublishedLlamaArtifact, target: str) -> bool:
+        # Concrete built archs, so an unbuilt in-family arch (gfx1033) is not served; also the
+        # family label, which the update path forwards.
+        mapped = {t.lower() for t in artifact.mapped_targets}
+        return target in mapped or target == (artifact.gfx_target or "").lower()
+
+    candidates = [
+        artifact
+        for artifact in release.artifacts
+        if artifact.install_kind == install_kind and release.assets.get(artifact.asset_name)
+    ]
+    # Fewest archs first, so a single-family host keeps its family bundle over the multi-family one.
+    candidates.sort(key = lambda artifact: len(artifact.mapped_targets) or 1)
+    chosen = next((a for a in candidates if covers(a, gfx)), None)
+    if chosen is None:
+        return None
+    # Every discrete card llama.cpp will run on, not only the active one: one bundle has to carry
+    # kernels for all of them, or a mixed-family host (gfx1100 + gfx1201) aborts on the other card.
+    discrete = [t for t in _host_rocm_gfx_targets(host) if t not in ROCM_INTEGRATED_GFX]
+    needed = list(dict.fromkeys([gfx, *discrete]))
+    note = f"rocm_selection: gpu={host.rocm_gfx_target} selected published {{}}"
+    if not all(covers(chosen, t) for t in needed):
+        wide = next((a for a in candidates if all(covers(a, t) for t in needed)), None)
+        if wide is not None:
+            chosen = wide
+            note = (
+                f"rocm_selection: gpus={','.join(needed)} span ROCm families; "
+                "selected published {}"
+            )
+    return AssetChoice(
+        repo = release.repo,
+        tag = release.release_tag,
+        name = chosen.asset_name,
+        url = release.assets[chosen.asset_name],
+        source_label = "published",
+        install_kind = install_kind,
+        gfx_target = chosen.gfx_target,
+        mapped_targets = list(chosen.mapped_targets),
+        selection_log = list(release.selection_log) + [note.format(chosen.asset_name)],
+    )
 
 
 def resolve_upstream_asset_choice(host: HostInfo, llama_tag: str) -> AssetChoice:
