@@ -530,6 +530,8 @@ export {
   adoptLegacyDraft,
   latestDraft,
   latestPasteDraft,
+  pastesToRestore,
+  trackPasteRestore,
   publishDraft,
   subscribeDraft,
   composerDraftKey,

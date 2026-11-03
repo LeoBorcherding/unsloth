@@ -43,6 +43,28 @@ export function latestPasteDraft(): string[] {
   return latestPastes !== null ? [...latestPastes] : readPasteDraft(PASTE_DRAFT_KEY);
 }
 
+// Composers with a paste restore under way. Restored pastes reach the composer's state only once
+// added, so another pass meanwhile (the new chat getting its id, a second composer mounting on the
+// same thread) would add them again and the draft would grow on every reload.
+const restoringPastes = new WeakSet<object>();
+
+// The saved pastes the composer lacks, or null while a restore into it is still adding them.
+export function pastesToRestore(composer: object, shown: readonly string[]): string[] | null {
+  if (restoringPastes.has(composer)) return null;
+  const left = [...shown];
+  return latestPasteDraft().filter((text) => {
+    const at = left.indexOf(text);
+    if (at === -1) return true;
+    left.splice(at, 1);
+    return false;
+  });
+}
+
+export function trackPasteRestore<T>(composer: object, adding: Promise<T>): Promise<T> {
+  restoringPastes.add(composer);
+  return adding.finally(() => restoringPastes.delete(composer));
+}
+
 // A quota error here leaves the text draft untouched, hence separate slots.
 export function writePasteDraft(key: string, pastes: readonly string[]): void {
   if (key === PASTE_DRAFT_KEY) latestPastes = [...pastes];

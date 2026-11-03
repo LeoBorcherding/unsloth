@@ -337,7 +337,8 @@ import {
   snapshotQueuedChatRunSettings,
   adoptLegacyDraft,
   latestDraft,
-  latestPasteDraft,
+  pastesToRestore,
+  trackPasteRestore,
   publishDraft,
   subscribeDraft,
   composerDraftKey,
@@ -4017,7 +4018,6 @@ const Composer: FC<{
   const lastDraftScopeRef = useRef(draftScope);
   // save only after this chat's paste restore finishes to avoid premature clearing
   const restoredPasteScopeRef = useRef<string | null | undefined>(undefined);
-  const restoringPasteScopeRef = useRef<string | null | undefined>(undefined);
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // draftScope re-runs the restore on every chat switch, though the key stays the same.
   useEffect(() => {
@@ -4102,25 +4102,22 @@ const Composer: FC<{
         const text = pastedTextOf((attachment as { file?: File }).file);
         return text === undefined ? [] : [text];
       });
-    const missing = latestPasteDraft().filter((text) => {
-      const at = shown.indexOf(text);
-      if (at === -1) return true;
-      shown.splice(at, 1);
-      return false;
-    });
+    // Keyed on aui, which every composer instance on this thread shares; a restore under way
+    // re-runs this as its attachments land.
+    const missing = pastesToRestore(aui, shown);
+    if (missing === null) return;
     if (missing.length === 0) {
       restoredPasteScopeRef.current = draftScope;
       return;
     }
-    // Its own additions re-run this; one pass per scope, or they double up.
-    if (restoringPasteScopeRef.current === draftScope) return;
-    restoringPasteScopeRef.current = draftScope;
     // Claim the chat only once the attachments are in, so the save effect
     // cannot write an empty composer over the draft still being restored.
-    void Promise.all(
-      missing.map((text) => composer.addAttachment(createPastedTextFile(text))),
+    void trackPasteRestore(
+      aui,
+      Promise.all(
+        missing.map((text) => composer.addAttachment(createPastedTextFile(text))),
+      ),
     ).finally(() => {
-      restoringPasteScopeRef.current = undefined;
       // A switch while these were added re-runs the restore for the new scope instead.
       if (draftScopeRef.current === draftScope) {
         restoredPasteScopeRef.current = draftScope;

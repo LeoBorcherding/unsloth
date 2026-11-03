@@ -31,10 +31,12 @@ const {
   composerDraftKey,
   composerPasteDraftKey,
   latestDraft,
+  pastesToRestore,
   publishDraft,
   readComposerDraft,
   readPasteDraft,
   subscribeDraft,
+  trackPasteRestore,
   writeComposerDraft,
   writePasteDraft,
 } = await import("../src/features/chat/utils/composer-draft.ts");
@@ -178,6 +180,40 @@ test("an unsent paste survives a reload", () => {
   assert.deepEqual(readPasteDraft(key), [paste, "second"]);
   writePasteDraft(key, []);
   assert.deepEqual(readPasteDraft(key), []);
+});
+
+test("restore passes that overlap an unfinished restore add each saved paste once", async () => {
+  writePasteDraft(composerPasteDraftKey(), ["long paste", "second paste"]);
+  const composer = { attachments: [] as string[], landing: [] as (() => void)[] };
+  // The composer's restore effect: a restored paste joins the attachments only once added.
+  const pass = () => {
+    const missing = pastesToRestore(composer, composer.attachments);
+    if (!missing?.length) return;
+    void trackPasteRestore(
+      composer,
+      Promise.all(
+        missing.map(
+          (text) =>
+            new Promise<void>((added) =>
+              composer.landing.push(() => {
+                composer.attachments.push(text);
+                added();
+              }),
+            ),
+        ),
+      ),
+    );
+  };
+  // A reload: the new chat, the same chat once it gets its id, then a second composer instance.
+  pass();
+  pass();
+  pass();
+  for (const land of composer.landing.splice(0)) land();
+  await new Promise((resolve) => setTimeout(resolve));
+  // The attachments landing run it once more.
+  pass();
+  assert.deepEqual(composer.attachments, ["long paste", "second paste"]);
+  assert.deepEqual(composer.landing, []);
 });
 
 test("the paste slot is separate from the text draft", () => {
