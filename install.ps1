@@ -7805,7 +7805,7 @@ exit 0
     }
 
     if (-not (Test-VenvPythonReady -PythonExe $VenvPython)) {
-        # A venv recreated at the same path is refused the same way, so a re-run cannot help.
+        # A policy refusal, not a missing interpreter: say so rather than send the user to restore Python.
         if ($script:VenvPythonLaunchBlocked) {
             return (Exit-InstallFailure (Write-ApplicationControlBlocked -Path $VenvPython))
         }
