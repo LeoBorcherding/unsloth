@@ -130,7 +130,7 @@ const DEFAULT_FONT_NAMES = {
   ui: DEFAULT_SANS_NAME,
   heading: "Hellix",
   chat: DEFAULT_SANS_NAME,
-  code: "JetBrains Mono",
+  code: "Fira Code",
 } as const;
 
 const BUNDLED_FONTS = [
