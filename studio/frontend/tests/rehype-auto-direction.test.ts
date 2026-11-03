@@ -65,6 +65,17 @@ test("code is pinned LTR in the stylesheet", () => {
   );
 });
 
+test("each line of a user message takes its own direction", () => {
+  const css = readFileSync(
+    new URL("../src/index.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    css,
+    /\.aui-user-message-content > p \{\s*unicode-bidi: plaintext;\s*text-align: start;/,
+  );
+});
+
 test("code keeps its own direction", () => {
   const html = render("```python\nprint('سلام')\n```\n\nمتن `code` متن");
   assert.doesNotMatch(html, /<(pre|code)[^>]* dir=/);

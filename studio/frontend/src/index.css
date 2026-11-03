@@ -4015,6 +4015,12 @@ html[data-chat-font] .aui-root {
 		unicode-bidi: isolate;
 	}
 
+	/* User text is plain; the bubble's dir=auto would set one direction for every line. */
+	.aui-user-message-content > p {
+		unicode-bidi: plaintext;
+		text-align: start;
+	}
+
 	.aui-reasoning-code-fragment {
 		padding-inline: calc(1rem * var(--ui-space-scale, 1));
 		background: var(--color-background);
