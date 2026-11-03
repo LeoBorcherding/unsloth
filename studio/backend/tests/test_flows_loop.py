@@ -577,6 +577,17 @@ def test_shared_boilerplate_in_test_rows_does_not_hide_probe_failures():
     assert loop_rounds.drop_test_rows([probe, leaked], test_rows) == [probe]
 
 
+def test_a_question_shared_by_test_rows_still_bans_its_failure():
+    question = "What is the capital city of the country France?"
+    answer = "Paris is the capital city of France."
+    test_rows = [
+        {"question": question, "answer": answer, "note": "first annotator wrote this one"},
+        {"question": question, "answer": answer, "note": "second annotator wrote this one"},
+    ]
+    probe = {"question": "What is the capital city of the country Spain?", "model_output": "x"}
+    leaked = {"question": question, "model_output": "x"}
+    assert loop_rounds.drop_test_rows([probe, leaked], test_rows) == [probe]
+
 def test_an_alpaca_failure_is_fed_back_with_its_input():
     row = loop_rounds.failure_row(
         {

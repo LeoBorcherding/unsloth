@@ -126,9 +126,22 @@ def drop_test_rows(failures: list[dict], test_rows: list[dict]) -> list[dict]:
         for s in strings:
             seen[s] = seen.get(s, 0) + 1
     banned = {s for s, n in seen.items() if n == 1}
+    # A row's own question and reference stay banned even when other test rows repeat them.
+    for row in test_rows:
+        banned |= _asked(row)
     if not banned:
         return list(failures)
-    return [f for f in failures if not any(s in banned for s in _strings(f))]
+    return [f for f in failures if not any(s in banned for s in {*_strings(f), *_asked(f)})]
+
+
+def _asked(row: Any) -> set[str]:
+    picked = failure_row(row) or {}
+    found = {_text(picked.get("failed_prompt")).strip(), _text(picked.get("failed_reference")).strip()}
+    if isinstance(row, dict):
+        extra = {str(k).lower(): v for k, v in row.items()}.get("input")
+        if isinstance(extra, str):
+            found.add(extra.strip())
+    return {s for s in found if len(s) >= LEAK_MIN_CHARS}
 
 
 # Words, signed numbers and arithmetic signs: "-1" and "1", or "5 - 4" and "5 + 4", stay apart.
