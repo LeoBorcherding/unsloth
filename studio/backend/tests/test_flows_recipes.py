@@ -37,6 +37,14 @@ class _Ctx:
         self.hooks = []
         self.seed = 7
         self.caller = None
+        self.refuse: dict[str, str] = {}
+
+    def capability_refusal(
+        self,
+        cap,
+        detail = None,
+    ):
+        return self.refuse.get(cap)
 
     async def call(
         self,
@@ -183,8 +191,9 @@ def test_every_learning_recipe_round_trips(path):
     payload = json.loads(path.read_text())
     graph = import_recipe(payload)
     assert graph["group"]["kind"] == "recipe"
-    assert len(graph["nodes"]) == len(payload["recipe"]["columns"])
-    assert all(n["type"] == COLUMN_TYPE for n in graph["nodes"])
+    columns = [n for n in graph["nodes"] if n["type"] == COLUMN_TYPE]
+    assert len(columns) == len(payload["recipe"]["columns"])
+    assert [n["type"] for n in graph["nodes"]].count("recipe.generate") == 1
     assert compile_recipe(graph) == normalise(payload)
 
 
@@ -295,3 +304,14 @@ def test_a_conditional_sampler_reads_its_rule_columns():
     }
     with pytest.raises(RecipeCompileError):
         compile_recipe(import_recipe(loop))
+
+
+def test_a_recipe_group_with_an_env_key_says_how_to_run_it():
+    recipe = {
+        "columns": [],
+        "model_providers": [{"name": "openai", "api_key_env": "OPENAI_API_KEY"}],
+    }
+    with pytest.raises(FlowNodeError, match = "API key field"):
+        data.runnable_recipe(recipe)
+    recipe["model_providers"][0] = {"name": "openai", "api_key": "sk-live"}
+    assert data.runnable_recipe(recipe)["model_providers"][0]["api_key"] == "sk-live"

@@ -32,7 +32,7 @@ from core.flows import assets as asset_store
 from core.flows import capabilities
 from core.flows import caller as flow_caller
 from core.flows.cache import cache_key
-from core.flows.compiler import FOR_EACH, CompileError, Plan, compile_flow
+from core.flows.compiler import FOR_EACH, RECIPE_PARAM, CompileError, Plan, compile_flow
 from core.flows.registry import FlowCancelled, FlowNodeError, load_handlers
 from core.flows.schema import MAX_FOREACH_ITEMS, MAX_GPU_OPS_PER_RUN, MAX_RUN_SECONDS
 from storage import flows_db
@@ -1764,6 +1764,14 @@ class FlowEngine:
             return
 
         ctx = NodeContextImpl(self, rs, nid, spec, params, inputs, seed, iteration)
+        # Before the cache: a run that may not use a capability does not get another run's output of it.
+        for cap, detail in capabilities.node_needs(spec, params):
+            if refused := capabilities.refusal(rs.origin, rs.approvals, cap, detail, spec["title"]):
+                state.error = refused
+                env.values[nid] = SKIPPED
+                rs.set_status(nid, "failed")
+                self._record(rs, nid, "failed", None, refused, iteration)
+                return
         key = None
         choice = params.get("model")
         cacheable = spec["cacheable"] and not (
@@ -1817,10 +1825,6 @@ class FlowEngine:
             self._record(rs, nid, "failed", None, state.error, iteration)
             return
         try:
-            for cap, detail in capabilities.node_needs(spec, params):
-                refused = capabilities.refusal(rs.origin, rs.approvals, cap, detail, spec["title"])
-                if refused:
-                    raise FlowNodeError(refused)
             if spec["lane"] == "gpu":
                 lock = self.gpu_lock()
                 if lock.locked():
@@ -1970,6 +1974,10 @@ class FlowEngine:
     async def _model_key(self, ctx: NodeContextImpl, spec: dict, params: dict) -> Optional[dict]:
         kind = spec.get("model_kind")
         if not kind:
+            if _implicit_local_model(params.get(RECIPE_PARAM)):
+                # The recipe runs on whatever Chat has loaded, so a different model is a different dataset.
+                from core.flows.nodes._common import resident_name
+                return {"local": await resident_name(ctx, "chat")}
             return None
         choice = params.get("model") or {}
         key = {"repo": choice.get("repo"), "variant": choice.get("variant")}
@@ -2171,6 +2179,25 @@ def _origin(account: AccountContext, kind: Optional[str]) -> dict:
     if account.via_api_key:
         return {"kind": "api_key", "owner": False}
     return {"kind": kind or "ui", "owner": account.is_owner}
+
+
+def _implicit_local_model(recipe: Any) -> bool:
+    """A compiled recipe with a local-provider model left to Chat's loaded one (blank or "local")."""
+    if not isinstance(recipe, dict):
+        return False
+    if isinstance(recipe.get("recipe"), dict):
+        recipe = recipe["recipe"]  # the compiler's {"recipe": ..., "run": ...}
+    local = {
+        p.get("name")
+        for p in recipe.get("model_providers") or []
+        if isinstance(p, dict) and p.get("is_local") is True
+    }
+    return any(
+        isinstance(mc, dict)
+        and mc.get("provider") in local
+        and str(mc.get("model") or "").strip().lower() in ("", "local")
+        for mc in recipe.get("model_configs") or []
+    )
 
 
 def _local_fingerprint(path: str) -> Optional[list]:
