@@ -151,6 +151,7 @@ async def recipe(ctx: NodeContext) -> dict:
         raise FlowNodeError("Pick a saved Data Recipe")
     record = await ctx.call("GET", f"{RECIPES}/recipes/{quote(recipe_id, safe = '')}")
     body = declarative_recipe(record.get("payload") if isinstance(record, dict) else None)
+    await apply_seed(ctx, body)
     return await run_recipe(ctx, body, {})
 
 
@@ -179,6 +180,12 @@ async def recipe_group(ctx: NodeContext) -> dict:
 
     if not isinstance(ctx.inputs.get("seed"), dict) and (seed := missing_seed(body)):
         raise FlowNodeError(seed)
+    local = local_model(body)
+    if local:
+        # Something earlier in the run (a Benchmark, a Loop round) may have swapped the Chat model.
+        await ctx.ensure_model("chat", local)
+    # Validate against the seed it will run on: its columns are what the prompts read.
+    await apply_seed(ctx, body)
     if not isinstance(ctx.inputs.get("seed"), dict):  # a wired seed replaces it anyway
         await resolve_hub_seed(ctx, body)
     checked = await ctx.call("POST", f"{RECIPES}/validate", json = {"recipe": body})
@@ -334,6 +341,38 @@ class RunHistory:
         )
 
 
+def local_model(recipe: dict) -> Optional[dict]:
+    """The one named model the recipe's local-provider columns use, if it names one."""
+    local = {
+        p.get("name")
+        for p in recipe.get("model_providers") or []
+        if isinstance(p, dict) and p.get("is_local") is True
+    }
+    used = {
+        c.get("model_alias")
+        for c in recipe.get("columns") or []
+        if isinstance(c, dict) and str(c.get("column_type") or "").startswith("llm-")
+    }
+    picks = {
+        (str(mc["model"]).strip(), str(mc.get("gguf_variant") or "").strip())
+        for mc in recipe.get("model_configs") or []
+        if isinstance(mc, dict)
+        and mc.get("provider") in local
+        and mc.get("alias") in used
+        and str(mc.get("model") or "").strip().lower() not in ("", "local")
+    }
+    if len(picks) != 1:
+        return None
+    repo, variant = picks.pop()
+    return {"repo": repo, "variant": variant or None}
+
+
+async def apply_seed(ctx: NodeContext, body: dict) -> None:
+    seed = ctx.inputs.get("seed")
+    if isinstance(seed, dict) and seed.get("kind") == "dataset":
+        body["seed_config"] = await seed_config(ctx, seed, body.get("seed_config"))
+
+
 async def run_recipe(
     ctx: NodeContext,
     body: dict,
@@ -341,9 +380,6 @@ async def run_recipe(
     history: Optional[RunHistory] = None,
 ) -> dict:
     """One Data Designer job for ``body``: its dataset (parquet if saved, else rows), a preview."""
-    seed = ctx.inputs.get("seed")
-    if isinstance(seed, dict) and seed.get("kind") == "dataset":
-        body["seed_config"] = await seed_config(ctx, seed, body.get("seed_config"))
     run = {**run, "execution_type": "preview" if ctx.params.get("mode") == "preview" else "full"}
     rows = int(ctx.params.get("rows") or 0)
     if rows > 0:
