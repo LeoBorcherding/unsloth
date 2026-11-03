@@ -666,7 +666,7 @@ def test_hub_eval_split_survives_the_hold_out(monkeypatch):
         start = 0,
     ):
         splits.append(dataset.get("split"))
-        return ROWS if dataset.get("split") == "train" else ROWS[:5]
+        return ROWS if str(dataset.get("split")).startswith("train") else ROWS[:5]
 
     monkeypatch.setattr(training, "_load_rows", load_rows)
     monkeypatch.setattr(
@@ -693,6 +693,16 @@ def test_hub_eval_split_survives_the_hold_out(monkeypatch):
     with pytest.raises(RuntimeError, match = "started"):
         asyncio.run(training.finetune(ctx))
     assert splits == ["train"] and "local_eval_datasets" not in started[0]
+    # An eval split the training slice reads from is the same rows, so it is not uploaded whole.
+    splits.clear()
+    started.clear()
+    ctx = _Ctx(_recipe_routes(started), holdout_percent = 10, eval_split = "train", eval_steps = 0.1)
+    ctx.inputs = {
+        "dataset": {"kind": "dataset", "source": "hf", "ref": "org/data", "split": "train[:50%]"}
+    }
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    assert "train" not in splits[1:] and "local_eval_datasets" not in started[0]
     # A blank eval split is the Hub's validation/test split, as the trainer would pick it.
     import datasets
 

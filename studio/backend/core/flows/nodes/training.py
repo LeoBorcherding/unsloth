@@ -139,7 +139,8 @@ async def finetune(ctx: NodeContext) -> dict:
             eval_split = await _off_thread(ctx, _auto_eval_split, source, train_split, token) or ""
         if (
             source.get("source") == "hf"
-            and eval_split not in ("", train_split)
+            and eval_split
+            and not _split_names(eval_split) & _split_names(train_split)
             and config["eval_steps"] > 0
         ):
             # The train half is now a local upload, so the Hub eval split has to travel the same way.
@@ -854,13 +855,21 @@ def _eval_rows(dataset: dict, token: Any, split: str) -> list[dict]:
     return _jsonable(loaded.to_list())
 
 
+def _split_names(split: str) -> set[str]:
+    """The Hub splits an instruction like `train[:500]+validation` reads."""
+    from utils.hf_dataset_options import hf_dataset_split_instruction_names
+
+    return set(hf_dataset_split_instruction_names(split)) or {
+        m.group(0) for m in [re.match(r"[\w.-]+", split)] if m
+    }
+
+
 def _auto_eval_split(dataset: dict, train_split: str, token: Any) -> Optional[str]:
     """The split the trainer would pick for a blank eval split: the first candidate the Hub has with
     enough rows."""
     from datasets import get_dataset_split_names, load_dataset, load_dataset_builder
 
     from core.training.eval_dataset import EVAL_SPLIT_CANDIDATES, MIN_EVAL_ROWS
-    from utils.hf_dataset_options import hf_dataset_split_instruction_names
 
     ref, subset = str(dataset["ref"]), dataset.get("subset") or None
     try:
@@ -872,9 +881,7 @@ def _auto_eval_split(dataset: dict, train_split: str, token: Any) -> Optional[st
     except Exception:
         sizes = {}
     # Every split the training instruction reads is excluded, as the trainer excludes them.
-    trained = set(hf_dataset_split_instruction_names(train_split)) or {
-        m.group(0) for m in [re.match(r"[\w.-]+", train_split)] if m
-    }
+    trained = _split_names(train_split)
     for candidate in EVAL_SPLIT_CANDIDATES:
         if candidate not in names or candidate in trained:
             continue
