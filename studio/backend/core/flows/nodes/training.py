@@ -858,7 +858,6 @@ def _eval_rows(dataset: dict, token: Any, split: str) -> list[dict]:
 def _split_names(split: str) -> set[str]:
     """The Hub splits an instruction like `train[:500]+validation` reads."""
     from utils.hf_dataset_options import hf_dataset_split_instruction_names
-
     return set(hf_dataset_split_instruction_names(split)) or {
         m.group(0) for m in [re.match(r"[\w.-]+", split)] if m
     }
