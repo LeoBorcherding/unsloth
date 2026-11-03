@@ -118,7 +118,7 @@ WINDOWS_HIP_PREBUILT_GFX_TARGETS = frozenset(
 )
 WINDOWS_ROCM_FAMILY_GFX_LABELS = frozenset({"gfx103x", "gfx110x", "gfx120x"})
 
-# Vulkan beats HIP on these APUs; an allowlist because CDNA ships no Vulkan ICD.
+# Vulkan beats HIP on these APUs on Linux (not on Windows, #10656); an allowlist because CDNA ships no Vulkan ICD.
 VULKAN_PREFERRED_GFX_TARGETS = frozenset({"gfx1150", "gfx1151"})
 
 # No ROCm torch wheel and no linux-rocm bundle covers these, so a HIP source build has no
@@ -10388,10 +10388,13 @@ def _should_prefer_vulkan_for_amd_igpu(host: HostInfo) -> bool:
     """True when every AMD GPU here is an integrated part Vulkan serves better.
 
     A preference, not a fallback: unlike _should_auto_vulkan_for_amd_windows these archs
-    have a working HIP prebuilt, just slower. Both platforms, the Linux fault being worse.
-    Every guard that fallback applies is applied here for the same reasons, over every
-    PHYSICAL gfx so a masked-off discrete card is not moved.
+    have a working HIP prebuilt, just slower. Linux only: the AMD Windows driver's Vulkan
+    prefill falls far behind HIP past short prompts (#10656). Every guard that fallback
+    applies is applied here for the same reasons, over every PHYSICAL gfx so a masked-off
+    discrete card is not moved.
     """
+    if host.is_windows:
+        return False
     active = _active_rocm_gfx_target(host)
     if not active:
         return False
