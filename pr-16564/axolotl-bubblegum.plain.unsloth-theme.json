@@ -1,0 +1,51 @@
+{
+  "kind": "unsloth-studio.appearance",
+  "schemaVersion": 1,
+  "meta": {
+    "name": "Axolotl Bubblegum",
+    "author": "Leo"
+  },
+  "base": {
+    "palette": "cotton-candy"
+  },
+  "colors": {
+    "light": {
+      "accent": "#d9538f",
+      "background": "#fff7fb",
+      "foreground": "#3a2546"
+    },
+    "dark": {
+      "accent": "#f49ac8",
+      "background": "#221a2c",
+      "foreground": "#f8eaf3"
+    },
+    "contrast": 60
+  },
+  "typography": {
+    "uiFont": "Figtree Variable",
+    "headingFont": "Space Grotesk Variable",
+    "chatFont": "Figtree Variable",
+    "codeFont": null,
+    "uiFontSize": null,
+    "codeFontSize": null,
+    "fontSmoothing": true
+  },
+  "code": {
+    "lineNumbers": false,
+    "wordWrap": false,
+    "ligatures": true
+  },
+  "chat": {
+    "width": "standard",
+    "composerOutline": 35
+  },
+  "glass": {
+    "material": "liquid-3d",
+    "strength": {
+      "light": 40,
+      "dark": 15
+    },
+    "lens": "off",
+    "menus": true
+  }
+}
