@@ -1845,7 +1845,7 @@ export function ImagesPage({
   const pickRecipeSuperseded = useRef<(() => boolean) | null>(null);
   // The recipe the last pick applied, so a load that reveals the family can replace a fallback.
   const pickDefaults = useRef<{ steps: number; guidance: number } | null>(null);
-  // The canvas the last pick defaulted to, so the load can move an untouched form to the engaged build's.
+  // The canvas the last pick moved the form to, so the load can move it on to the engaged build's.
   const pickCanvas = useRef<{ width: number; height: number } | null>(null);
   // Put back everything a pick optimistically applied. Setters are stable, so this never re-renders on its own.
   const revertPick = useCallback((r: PickRevert) => {
@@ -2260,7 +2260,8 @@ export function ImagesPage({
       const current = canvasNow.current;
       const canvas = canvasForPick(current, previousDefault, nextDefault);
       pickDefaults.current = recommended;
-      pickCanvas.current = nextDefault;
+      // A size the user kept stays theirs through the load too.
+      pickCanvas.current = canvas === current ? null : canvas;
       setPendingModelDefaults({ ...recommended, canvas: nextDefault });
       setSteps(recommended.steps);
       setGuidance(recommended.guidance);

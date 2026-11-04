@@ -61,6 +61,8 @@ test("the Images page pick path applies the picked model's native canvas", () =>
   assert.match(pick, /nativeCanvasFor\(key\)/);
   assert.match(pick, /pendingModelDefaults\?\.canvas \?\? residentCanvas/);
   assert.match(pick, /setCanvas\(canvas\)/);
+  // Only a canvas the pick moved is the load's to replace; a kept 1024 must not become a quant's 512.
+  assert.match(pick, /pickCanvas\.current = canvas === current \? null : canvas/);
   const revert = src.slice(src.indexOf("const revertPick = useCallback"), src.indexOf("}, [setCanvas]);"));
   assert.match(revert, /setCanvas\(r\.canvas\.prev\)/);
 });
