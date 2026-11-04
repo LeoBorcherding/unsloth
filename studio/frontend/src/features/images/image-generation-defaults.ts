@@ -168,6 +168,29 @@ const QUANTISED_CANVAS: Array<{
   },
 ];
 
+type Canvas = { width: number; height: number };
+
+/** The family's native canvas when it has one (SDXL-Turbo), else null. Known from the name alone, so a pick can use it. */
+export function nativeCanvasFor(repoId: string): Canvas | null {
+  const fold = (text: string) => text.toLowerCase().replace(/[-_.\s]+/g, "-");
+  const native = NATIVE_CANVAS.find((entry) =>
+    fold(repoId).includes(fold(entry.match)),
+  );
+  return native ? { width: native.width, height: native.height } : null;
+}
+
+/** A pick moves the canvas only while the form is still on the previous model's default; a size the user chose stays. */
+export function canvasForPick(
+  current: Canvas,
+  previousDefault: Canvas,
+  nextDefault: Canvas,
+): Canvas {
+  return current.width === previousDefault.width &&
+    current.height === previousDefault.height
+    ? { width: nextDefault.width, height: nextDefault.height }
+    : current;
+}
+
 export function resolutionFor(
   repoId: string,
   build: {
@@ -175,13 +198,10 @@ export function resolutionFor(
     transformerQuant?: string | null;
     transformerQuantSource?: string | null;
   },
-): { width: number; height: number } {
-  const fold = (text: string) => text.toLowerCase().replace(/[-_.\s]+/g, "-");
-  const native = NATIVE_CANVAS.find((entry) =>
-    fold(repoId).includes(fold(entry.match)),
-  );
+): Canvas {
+  const native = nativeCanvasFor(repoId);
   if (native) {
-    return { width: native.width, height: native.height };
+    return native;
   }
   // A GGUF resident has no family substring in repo_id, so exclude it by kind.
   if ((build.modelKind ?? "").toLowerCase() === "gguf") {

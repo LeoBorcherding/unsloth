@@ -235,10 +235,13 @@ import { MAX_UPLOAD_IMAGE_SIDE, blobToDataUrl, fitImageDataUrl } from "@/lib/ima
 import { loadGalleryUntil } from "@/lib/gallery-deep-link";
 import { subscribeModelEjected } from "@/lib/model-lifecycle-events";
 import {
+  canvasForPick,
   DEFAULT_GEN,
+  DEFAULT_RESOLUTION,
   defaultsFor,
   defaultsKeyFor,
   loadedRecipeFor,
+  nativeCanvasFor,
   residentDefaultsKey,
   residentRecipeFor,
   resolutionFor,
@@ -1582,6 +1585,7 @@ type PickRevert = {
   // A field the user changed after the pick is theirs, not ours to put back.
   appliedSteps?: number;
   appliedGuidance?: number;
+  canvas?: { prev: { width: number; height: number }; applied: { width: number; height: number } };
 };
 
 type LoadAdvanced = Pick<
@@ -1814,6 +1818,17 @@ export function ImagesPage({
   const [height, setHeight] = useState(1024);
   const [aspect, setAspect] = useState("1:1");
   const [portrait, setPortrait] = useState(false);
+  const canvasNow = useRef({ width, height });
+  useEffect(() => {
+    canvasNow.current = { width, height };
+  }, [width, height]);
+  const setCanvas = useCallback((size: { width: number; height: number }) => {
+    setWidth(size.width);
+    setHeight(size.height);
+    const matched = matchAspect(size.width, size.height);
+    setAspect(matched.key);
+    setPortrait(matched.portrait);
+  }, []);
   const [steps, setSteps] = useState(DEFAULT_GEN.steps);
   const [guidance, setGuidance] = useState(DEFAULT_GEN.guidance);
   const [samplerChoices, setSamplerChoices] = useState(readSamplerChoices);
@@ -1839,15 +1854,20 @@ export function ImagesPage({
     if (!pickRecipeSuperseded.current?.()) {
       setSteps((cur) => (cur === r.appliedSteps ? r.steps : cur));
       setGuidance((cur) => (cur === r.appliedGuidance ? r.guidance : cur));
+      const cur = canvasNow.current;
+      if (r.canvas && cur.width === r.canvas.applied.width && cur.height === r.canvas.applied.height) {
+        setCanvas(r.canvas.prev);
+      }
     }
     pickRecipeSuperseded.current = null;
     r.releaseRecipeClaim?.();
     r.releaseRecipeClaim = undefined;
-  }, []);
+  }, [setCanvas]);
   // Recipe a pick claims until status confirms it; without it Default reads as modified.
   const [pendingModelDefaults, setPendingModelDefaults] = useState<{
     steps: number;
     guidance: number;
+    canvas?: { width: number; height: number };
   } | null>(null);
   const [seed, setSeed] = useState("");
   const [maskBlur, setMaskBlur] = useState(MASK_BLUR_DEFAULT);
@@ -2169,7 +2189,7 @@ export function ImagesPage({
     const recommended = pendingModelDefaults ?? { steps: residentSteps, guidance: residentGuidance };
     // Reset restores the resident build's canvas, the same one the seed above applied. A constant
     // here would quietly undo it and put a 24 GB card back over its budget.
-    const size = resolutionFor(status?.base_repo ?? status?.repo_id ?? "", {
+    const size = pendingModelDefaults?.canvas ?? resolutionFor(status?.base_repo ?? status?.repo_id ?? "", {
       modelKind: status?.model_kind,
       transformerQuant: status?.transformer_quant,
       transformerQuantSource: status?.resolved?.transformer_quant?.source,
@@ -2232,17 +2252,35 @@ export function ImagesPage({
       }
       const claimedAt = imageFormClaimId();
       pickRecipeSuperseded.current = () => imageFormClaimId() !== claimedAt;
-      const recommended = defaultsFor(defaultsKeyFor(repoId, effectiveFamilyOverride, ggufFilename));
+      const key = defaultsKeyFor(repoId, effectiveFamilyOverride, ggufFilename);
+      const recommended = defaultsFor(key);
+      // Only the native canvas is known before the load; a quant's smaller canvas waits for the engaged build.
+      const previousDefault =
+        pendingModelDefaults?.canvas ?? nativeCanvasFor(status?.base_repo ?? status?.repo_id ?? "") ?? DEFAULT_RESOLUTION;
+      const nextDefault = nativeCanvasFor(key) ?? DEFAULT_RESOLUTION;
+      const current = canvasNow.current;
+      const canvas = canvasForPick(current, previousDefault, nextDefault);
       pickDefaults.current = recommended;
-      setPendingModelDefaults(recommended);
+      setPendingModelDefaults({ ...recommended, canvas: nextDefault });
       setSteps(recommended.steps);
       setGuidance(recommended.guidance);
+      if (canvas !== current) setCanvas(canvas);
       if (revert) {
         revert.appliedSteps = recommended.steps;
         revert.appliedGuidance = recommended.guidance;
+        revert.canvas = { prev: revert.canvas?.prev ?? current, applied: canvas };
       }
     },
-    [claimImageRecipe, familyOverride, imageFormClaimId, modelSelectionAction],
+    [
+      claimImageRecipe,
+      familyOverride,
+      imageFormClaimId,
+      modelSelectionAction,
+      pendingModelDefaults?.canvas,
+      setCanvas,
+      status?.base_repo,
+      status?.repo_id,
+    ],
   );
 
   const dismissLoadToast = useCallback(() => {
