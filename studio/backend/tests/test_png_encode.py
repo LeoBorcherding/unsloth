@@ -173,7 +173,9 @@ def test_pillow_on_another_zlib_build_keeps_pillow_even_when_the_probe_matches(m
     monkeypatch.setattr(
         png_encode,
         "_pillow",
-        lambda image, kwargs: png_encode._encode(image, image.mode, kwargs["compress_level"], kwargs),
+        lambda image, kwargs: png_encode._encode(
+            image, image.mode, kwargs["compress_level"], kwargs
+        ),
     )
     assert png_encode.encode(_image("RGB", 64, 64), compress_level = 9) is None
     assert png_encode._PROBED == {("RGB", 9): False}

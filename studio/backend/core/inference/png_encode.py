@@ -205,7 +205,6 @@ def _pillow(image: Any, save_kwargs: dict) -> bytes:
 
 def _same_zlib() -> bool:
     from PIL import features
-
     return features.version("zlib") == zlib.ZLIB_RUNTIME_VERSION
 
 
@@ -225,7 +224,9 @@ def _proven(mode: str, level: int) -> bool:
                 probe = _probe_image(mode)
                 kwargs = {"pnginfo": info, "compress_level": level}
                 # zlib-ng (Pillow's Windows wheels) matches the probe at levels 7-9 but not real images.
-                proven = _same_zlib() and _encode(probe, mode, level, kwargs) == _pillow(probe, kwargs)
+                proven = _same_zlib() and _encode(probe, mode, level, kwargs) == _pillow(
+                    probe, kwargs
+                )
             except Exception:  # noqa: BLE001 - unproven means Pillow encodes
                 proven = False
             _PROBED[key] = proven
