@@ -10,6 +10,8 @@ internal API key (the same path the MCP server uses), so auth, account scoping a
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 from core.flows.specs import SPECS_BY_TYPE
@@ -60,7 +62,13 @@ class NodeContext(Protocol):
         """Return the parsed JSON body (or raw bytes for non-JSON). Raise FlowNodeError with the route's detail on non-2xx."""
         ...
 
-    async def ensure_model(self, model_kind: str, choice: Optional[dict]) -> Optional[dict]:
+    async def ensure_model(
+        self,
+        model_kind: str,
+        choice: Optional[dict],
+        options: Optional[dict] = None,
+        primary: bool = False,
+    ) -> Optional[dict]:
         """Make `choice` ({"repo", "variant"}) the resident model for `model_kind`, loading it if needed.
         None = keep whatever is loaded (error if nothing is). Returns the resolved {"repo", "variant"} or None."""
         ...
@@ -77,6 +85,9 @@ class NodeContext(Protocol):
         thinking: bool = False,
         seed: Optional[int] = None,
         stream_port: Optional[str] = "text",
+        use_adapter: Optional[bool] = None,
+        sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
     ) -> str: ...
 
     async def llm_json(
@@ -92,6 +103,8 @@ class NodeContext(Protocol):
         images: Optional[list[dict]] = None,
         on_text: Optional[Callable[[str], None]] = None,
         retry_bad_json: bool = True,
+        sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
     ) -> Any:
         """Structured output (`response_format` json_schema); falls back to parsing the first JSON object in the text.
         With ``on_text`` the answer streams, and it gets the raw JSON written so far after every chunk."""
@@ -186,6 +199,15 @@ class NodeContext(Protocol):
 
     def text_delta(self, port: str, delta: str) -> None: ...
 
+    def partial(
+        self,
+        port: str,
+        value: Any,
+        *,
+        step: Optional[int] = None,
+        total: Optional[int] = None,
+    ) -> None: ...
+
     @property
     def cancelled(self) -> bool: ...
 
@@ -232,6 +254,31 @@ def handler(node_type: str) -> Callable[[Handler], Handler]:
         return fn
 
     return deco
+
+
+@dataclass(frozen = True)
+class CacheHook:
+    """For a node whose result lives outside the cache: `material` adds what the params and inputs
+    can't show (a dataset's content hash; None = don't cache this run), `valid` drops a hit whose
+    files are gone."""
+
+    material: Callable[[NodeContext], Awaitable[Any]]
+    valid: Callable[[NodeContext, dict], Awaitable[bool]]
+    # False for a handler that never reads the run's flow parameters: they stay out of its key.
+    flow_params: bool = True
+
+
+CACHE_HOOKS: dict[str, CacheHook] = {}
+
+
+def cache_hook(
+    node_type: str,
+    *,
+    material: Callable,
+    valid: Callable,
+    flow_params: bool = True,
+) -> None:
+    CACHE_HOOKS[node_type] = CacheHook(material, valid, flow_params)
 
 
 def load_handlers() -> dict[str, Handler]:

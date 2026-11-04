@@ -70,6 +70,8 @@ export interface FlowNode {
   v: number;
   params: Record<string, unknown>;
   pos: [number, number];
+  /** Width and height set by resizing the card; absent keeps the automatic size. */
+  size?: [number, number] | null;
   label?: string | null;
   group?: string | null;
   collapsed?: boolean;
@@ -90,6 +92,11 @@ export interface FlowGroup {
   label: string;
   color?: string | null;
   rect: [number, number, number, number];
+  /** "recipe": one Data Recipe; `config` is the recipe minus its columns (they are recipe.column nodes). */
+  kind?: "recipe" | null;
+  config?: Record<string, unknown> | null;
+  run?: Record<string, unknown> | null;
+  ui?: Record<string, unknown> | null;
 }
 
 export interface FlowNote {
@@ -136,7 +143,8 @@ export type ParamKind =
   | "story"
   | "world"
   | "schema"
-  | "lora_list";
+  | "lora_list"
+  | "reward_list";
 
 export interface ParamSpec {
   id: string;
@@ -153,6 +161,13 @@ export interface ParamSpec {
   options_path?: string;
   bindable?: boolean;
   advanced?: boolean;
+  /** Shown only while each named param holds one of these values. */
+  show_when?: Record<string, string[]>;
+  option_labels?: Record<string, string>;
+  /** Heading the param sits under inside Advanced. */
+  group?: string;
+  /** Shown on the label's info button. */
+  help?: string;
 }
 
 export interface PortSpec {
@@ -186,6 +201,8 @@ export interface NodeSpec {
   requires?: string[];
   exclusive_gpu?: boolean;
   requires_approval?: string[];
+  /** Part of something another node runs (a recipe column); never run on its own. */
+  design?: boolean;
 }
 
 export interface NodeCategory {
@@ -219,6 +236,8 @@ export interface DatasetValue {
   ref: string;
   rows?: number | null;
   columns?: string[] | null;
+  /** Which block wrote a local upload, for its label. */
+  made_by?: "preview" | "recipe" | "rows" | null;
 }
 
 export interface ModelValue {

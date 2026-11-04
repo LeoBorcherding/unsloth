@@ -1,8 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { toast } from "sonner";
 import { defaultParams, getSpec } from "../stores/catalog-store";
 import { newId, useDocStore } from "../stores/doc-store";
+import {
+  connectColumns,
+  insertStarterRecipe,
+  insideRecipeGroup,
+} from "../recipe/recipe-actions";
+import {
+  COLUMN_TYPE,
+  GENERATE_TYPE,
+  groupGenerate,
+} from "../recipe/recipe-columns";
+import { useUiStore } from "../stores/ui-store";
 import type { FlowEdge, FlowNode, PortSpec } from "../types";
 import {
   FLOW_IN_HANDLE,
@@ -13,6 +25,14 @@ import {
   outHandle,
   wouldCreateCycle,
 } from "./connection-rules";
+import {
+  REROUTE_IN_HANDLE,
+  REROUTE_OUT_HANDLE,
+  REROUTE_TYPE,
+  addReroute,
+  connectThroughReroute,
+  touchesReroute,
+} from "./reroutes";
 
 export const NODE_DRAG_MIME = "application/x-unsloth-flow-node";
 
@@ -34,6 +54,7 @@ export interface ConnectRequest {
 
 export function tryConnect(req: ConnectRequest): string | null {
   const doc = useDocStore.getState();
+  if (touchesReroute(doc.graph, req)) return connectThroughReroute(req);
   const sourceNode = doc.graph.nodes[req.source];
   const targetNode = doc.graph.nodes[req.target];
   if (!sourceNode || !targetNode) return "Missing node";
@@ -59,6 +80,8 @@ export function tryConnect(req: ConnectRequest): string | null {
   ) {
     return "That would make a loop. Use For Each to repeat steps.";
   }
+  if (sourceNode.type === COLUMN_TYPE || targetNode.type === COLUMN_TYPE)
+    return connectColumns(req.source, req.target);
   const targetPort = targetSpec?.inputs.find((p) => p.id === check.targetPort);
   const edge: FlowEdge = {
     id: newId("e"),
@@ -84,8 +107,62 @@ export function addNodeConnected(
   },
   port?: string,
 ): FlowNode | null {
+  if (type === REROUTE_TYPE) {
+    const id = addReroute({ x: pos[0] + 130, y: pos[1] + 20 });
+    if (from?.kind === "data") {
+      tryConnect(
+        from.side === "out"
+          ? {
+              source: from.nodeId,
+              sourceHandle: from.handleId,
+              target: id,
+              targetHandle: REROUTE_IN_HANDLE,
+            }
+          : {
+              source: id,
+              sourceHandle: REROUTE_OUT_HANDLE,
+              target: from.nodeId,
+              targetHandle: from.handleId,
+            },
+      );
+    }
+    useUiStore.getState().setSelection([id], []);
+    return null;
+  }
+  if (type === COLUMN_TYPE) return null;
   const node = createNode(type, pos);
   if (!node) return null;
+  const recipe =
+    type === GENERATE_TYPE
+      ? insideRecipeGroup(useDocStore.getState().graph, pos)
+      : null;
+  if (recipe) {
+    if (groupGenerate(useDocStore.getState().graph, recipe)) {
+      toast.error("This Data Recipe already has its Recipe Dataset step");
+      return null;
+    }
+    node.group = recipe;
+  } else if (type === GENERATE_TYPE) {
+    const generate = insertStarterRecipe(pos, node.params);
+    if (from && port && from.kind === "data") {
+      tryConnect(
+        from.side === "in"
+          ? {
+              source: generate.id,
+              sourceHandle: outHandle(port),
+              target: from.nodeId,
+              targetHandle: from.handleId,
+            }
+          : {
+              source: from.nodeId,
+              sourceHandle: from.handleId,
+              target: generate.id,
+              targetHandle: inHandle(port),
+            },
+      );
+    }
+    return generate;
+  }
   useDocStore.getState().addNode(node);
   if (from && port) {
     if (from.kind === "flow") {
