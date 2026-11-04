@@ -168,6 +168,51 @@ const QUANTISED_CANVAS: Array<{
   },
 ];
 
+type Canvas = { width: number; height: number };
+
+/** The family's native canvas when it has one (SDXL-Turbo), else null. Known from the name alone, so a pick can use it. */
+export function nativeCanvasFor(repoId: string): Canvas | null {
+  const fold = (text: string) => text.toLowerCase().replace(/[-_.\s]+/g, "-");
+  const native = NATIVE_CANVAS.find((entry) =>
+    fold(repoId).includes(fold(entry.match)),
+  );
+  return native ? { width: native.width, height: native.height } : null;
+}
+
+/** The canvas a pick can apply before the load: native, else 1024, else null when the quant decides it (a Qwen-Image-2.1 pipeline). */
+export function pickCanvasFor(key: string, repoId: string, gguf = false): Canvas | null {
+  const native = nativeCanvasFor(key);
+  if (native) return native;
+  const id = repoId.toLowerCase();
+  // GGUF always runs at 1024 (see resolutionFor), so only a pipeline build waits on its quant.
+  return !gguf && QUANTISED_CANVAS.some((entry) => id.includes(entry.match)) ? null : { ...DEFAULT_RESOLUTION };
+}
+
+/** A pick moves the canvas only while the form is still on the previous model's default; a size the user chose stays. */
+export function canvasForPick(
+  current: Canvas,
+  previousDefault: Canvas,
+  nextDefault: Canvas,
+): Canvas {
+  return current.width === previousDefault.width &&
+    current.height === previousDefault.height
+    ? { width: nextDefault.width, height: nextDefault.height }
+    : current;
+}
+
+/** What a failed pick may put back: only a canvas a pick moved, to the size before the first staged pick. */
+export function canvasRevertFor(
+  owned: { prev: Canvas; applied: Canvas } | undefined,
+  current: Canvas,
+  picked: Canvas,
+): { prev: Canvas; applied: Canvas } | undefined {
+  if (picked !== current) return { prev: owned?.prev ?? current, applied: picked };
+  // A pick that left the canvas alone keeps an earlier staged pick's claim while the form still holds it.
+  return owned && owned.applied.width === current.width && owned.applied.height === current.height
+    ? owned
+    : undefined;
+}
+
 export function resolutionFor(
   repoId: string,
   build: {
@@ -175,13 +220,10 @@ export function resolutionFor(
     transformerQuant?: string | null;
     transformerQuantSource?: string | null;
   },
-): { width: number; height: number } {
-  const fold = (text: string) => text.toLowerCase().replace(/[-_.\s]+/g, "-");
-  const native = NATIVE_CANVAS.find((entry) =>
-    fold(repoId).includes(fold(entry.match)),
-  );
+): Canvas {
+  const native = nativeCanvasFor(repoId);
   if (native) {
-    return { width: native.width, height: native.height };
+    return native;
   }
   // A GGUF resident has no family substring in repo_id, so exclude it by kind.
   if ((build.modelKind ?? "").toLowerCase() === "gguf") {
