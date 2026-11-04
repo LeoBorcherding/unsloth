@@ -191,6 +191,15 @@ export function canvasForPick(
     : current;
 }
 
+/** What a failed pick may put back: only a canvas the pick moved, to the size before the first staged pick. */
+export function canvasRevertFor(
+  owned: { prev: Canvas; applied: Canvas } | undefined,
+  current: Canvas,
+  picked: Canvas,
+): { prev: Canvas; applied: Canvas } | undefined {
+  return picked === current ? undefined : { prev: owned?.prev ?? current, applied: picked };
+}
+
 export function resolutionFor(
   repoId: string,
   build: {

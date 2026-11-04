@@ -18,6 +18,13 @@ const canvasForPick = (defaults as Record<string, unknown>).canvasForPick as
 const nativeCanvasFor = (defaults as Record<string, unknown>).nativeCanvasFor as
   | ((repoId: string) => { width: number; height: number } | null)
   | undefined;
+const canvasRevertFor = (defaults as Record<string, unknown>).canvasRevertFor as
+  | ((
+      owned: { prev: { width: number; height: number }; applied: { width: number; height: number } } | undefined,
+      current: { width: number; height: number },
+      picked: { width: number; height: number },
+    ) => { prev: { width: number; height: number }; applied: { width: number; height: number } } | undefined)
+  | undefined;
 const SMALL = { width: 512, height: 512 };
 
 test("picking SDXL-Turbo moves an untouched 1024 canvas to 512, and back on the next pick", () => {
@@ -61,4 +68,21 @@ test("a finished pick load moves an untouched canvas to the engaged build's", ()
   assert.match(ready, /canvasForPick\(current, pickedCanvas, engaged\)/);
   assert.match(ready, /transformerQuantSource: loaded\.resolved\?\.transformer_quant\?\.source/);
   assert.match(ready, /!pickRecipeSuperseded\.current\?\.\(\)/);
+});
+
+test("a failed pick puts back only a canvas a pick moved", () => {
+  assert.ok(canvasForPick && canvasRevertFor);
+  // First staged pick moves 1024 to 512: rollback owns it.
+  const start = { ...DEFAULT_RESOLUTION };
+  const first = canvasForPick(start, DEFAULT_RESOLUTION, SMALL);
+  const owned = canvasRevertFor(undefined, start, first);
+  assert.deepEqual(owned, { prev: DEFAULT_RESOLUTION, applied: SMALL });
+  // The user then picks 768x768 and a second pick keeps it: a failed second load must not undo that edit.
+  const chosen = { width: 768, height: 768 };
+  const second = canvasForPick(chosen, SMALL, DEFAULT_RESOLUTION);
+  assert.equal(second, chosen);
+  assert.equal(canvasRevertFor(owned, chosen, second), undefined);
+  // An untouched chain keeps the size from before the first pick.
+  const back = canvasForPick(first, SMALL, DEFAULT_RESOLUTION);
+  assert.deepEqual(canvasRevertFor(owned, first, back), { prev: DEFAULT_RESOLUTION, applied: DEFAULT_RESOLUTION });
 });

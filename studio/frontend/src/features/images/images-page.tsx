@@ -236,6 +236,7 @@ import { loadGalleryUntil } from "@/lib/gallery-deep-link";
 import { subscribeModelEjected } from "@/lib/model-lifecycle-events";
 import {
   canvasForPick,
+  canvasRevertFor,
   DEFAULT_GEN,
   DEFAULT_RESOLUTION,
   defaultsFor,
@@ -2272,7 +2273,7 @@ export function ImagesPage({
       if (revert) {
         revert.appliedSteps = recommended.steps;
         revert.appliedGuidance = recommended.guidance;
-        revert.canvas = { prev: revert.canvas?.prev ?? current, applied: canvas };
+        revert.canvas = canvasRevertFor(revert.canvas, current, canvas);
       }
     },
     [
