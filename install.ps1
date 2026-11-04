@@ -6750,8 +6750,10 @@ exit 0
     # The release being replaced, shown next to the new one at the end (#9910).
     $script:PrevPackageVersion = ""
 
+    # $script:VenvPythonLaunchBlocked: False because Application Control refused to start it.
     function Test-VenvPythonReady {
         param([Parameter(Mandatory = $true)][string]$PythonExe)
+        $script:VenvPythonLaunchBlocked = $false
         if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { return $false }
 
         $previousErrorActionPreference = $ErrorActionPreference
@@ -6761,6 +6763,7 @@ exit 0
             $null = & $PythonExe -c "import sys; sys.exit(0)" 2>$null
             return ($LASTEXITCODE -eq 0)
         } catch {
+            $script:VenvPythonLaunchBlocked = (Test-ApplicationControlBlock $_)
             return $false
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -7802,6 +7805,10 @@ exit 0
     }
 
     if (-not (Test-VenvPythonReady -PythonExe $VenvPython)) {
+        # A policy refusal, not a missing interpreter: say so rather than send the user to restore Python.
+        if ($script:VenvPythonLaunchBlocked) {
+            return (Exit-InstallFailure (Write-ApplicationControlBlocked -Path $VenvPython))
+        }
         $recordedBaseHome = Get-VenvBaseHome -VenvRoot $VenvDir
         Write-StudioLine "[ERROR] The managed Python interpreter is missing or cannot be launched." -ForegroundColor Red
         Write-StudioLine "        Managed Python: $VenvPython" -ForegroundColor Yellow

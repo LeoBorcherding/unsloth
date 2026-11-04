@@ -427,6 +427,67 @@ Write-Output (Test-VenvPythonReady -PythonExe $env:TEST_MANAGED_PYTHON)
     assert _run_powershell(shell, script, env) == expected
 
 
+@pytest.mark.skipif(not POWERSHELLS, reason = "PowerShell is unavailable")
+@pytest.mark.parametrize("shell", POWERSHELLS)
+@pytest.mark.parametrize("case", ["policy", "other_failure", "missing"])
+def test_readiness_gate_names_an_application_control_refusal(tmp_path: Path, shell: str, case: str):
+    source = INSTALL_PS1.read_text(encoding = "utf-8")
+    helpers = "\n".join(
+        _extract(rf"    function {name} \{{.*?\n    \}}\n", source)
+        for name in (
+            "Test-ApplicationControlBlock",
+            "Write-ApplicationControlBlocked",
+            "Test-VenvPythonReady",
+        )
+    )
+    gate = _extract(
+        r"    if \(-not \(Test-VenvPythonReady -PythonExe \$VenvPython\)\) \{.*?\n    \}\n",
+        source,
+    )
+    python_exe = tmp_path / "python.exe"
+    if case != "missing":
+        python_exe.write_text("stand-in", encoding = "utf-8")
+    # 4551 is the Win32Exception Windows PowerShell wraps when Smart App Control refuses the launcher.
+    code = 4551 if case == "policy" else 193
+    script = f"""
+$ErrorActionPreference = "Stop"
+function Write-StudioLine {{ param([string]$Message, [string]$ForegroundColor) Write-Host $Message }}
+function Exit-InstallFailure {{ param($Message) return "FAIL: $Message" }}
+function Get-VenvBaseHome {{ param($VenvRoot) return "base-home" }}
+{helpers}
+function Invoke-Refused {{
+    throw [System.Management.Automation.ApplicationFailedException]::new(
+        "Program 'python.exe' failed to run", [System.ComponentModel.Win32Exception]::new({code}))
+}}
+# An alias outranks the file, so `& $PythonExe` reaches the stand-in.
+Set-Alias -Name $env:TEST_MANAGED_PYTHON -Value Invoke-Refused
+function Invoke-Gate {{
+    $VenvPython = $env:TEST_MANAGED_PYTHON
+    $VenvDir = Split-Path -Parent $VenvPython
+{gate}
+    return "PASSED"
+}}
+Invoke-Gate
+"""
+    env = os.environ.copy()
+    env["TEST_MANAGED_PYTHON"] = str(python_exe)
+    out = _run_powershell(shell, script, env)
+
+    failure = [line for line in out.splitlines() if line.startswith("FAIL: ")]
+    assert len(failure) == 1, out
+    if case == "policy":
+        assert failure[0] == (
+            "FAIL: Windows Application Control blocked the managed Python runtime "
+            f"at {python_exe}."
+        ), out
+        assert "event 3077" in out, out
+        assert "missing" not in out and "re-run install.ps1" not in out, out
+    else:
+        assert failure[0].startswith("FAIL: Managed Python is unavailable at "), out
+        assert "re-run install.ps1" in out, out
+        assert "Application Control" not in out, out
+
+
 def test_readiness_gate_precedes_installs_and_names_both_interpreters():
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     gate = source.index("if (-not (Test-VenvPythonReady -PythonExe $VenvPython))")
