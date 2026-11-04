@@ -24,6 +24,7 @@ export { browserTabType, fileBarKind, textFileKind } from "./file-kind";
 export { SEARCH_ENGINES, type SearchEngineId } from "./address";
 export { useBrowserHistoryStore } from "./history-store";
 export { useNativeBrowser } from "./native-support";
+export { MIN_PAGE_WIDTHS } from "./page-width";
 export { pinBrowserPage } from "./resize-pin";
 export {
   type AnnotationScreenshots,

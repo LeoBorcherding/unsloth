@@ -189,6 +189,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsTab, TranslationKey[]> = {
     "browser.tabsTitle",
     "browser.switchToNewTabsSetting",
     "browser.defaultZoomSetting",
+    "browser.minPageWidthSetting",
     "browser.addressBarTitle",
     "browser.searchEngineSetting",
     "browser.showFullUrlSetting",
