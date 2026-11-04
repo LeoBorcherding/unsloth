@@ -517,6 +517,15 @@ FunctionEnd
 {{/each}}
 
 Function .onInit
+  ; RunningX64 is true on ARM64 too, so without this an x64 PC takes the ARM64 build and can't run it
+  !if "${ARCH}" == "arm64"
+    ${IfNot} ${IsNativeARM64}
+      MessageBox MB_ICONSTOP "This installer is for Windows on ARM. Download Unsloth-Desktop-Windows.exe for this PC instead." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+  !endif
+
   ${GetOptions} $CMDLINE "/P" $PassiveMode
   ${IfNot} ${Errors}
     StrCpy $PassiveMode 1
