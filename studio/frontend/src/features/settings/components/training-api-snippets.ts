@@ -83,6 +83,8 @@ export const TRAINING_FIELD_ROUTE: Record<keyof TrainingStartRequest, "openai" |
   grpo_mask_truncated_completions: "extra",
   grpo_epsilon_high: "extra",
   grpo_rewards: "extra",
+  grpo_use_vllm: "extra",
+  grpo_vllm_gpu_memory_utilization: "extra",
   use_lora: "derived",
   actual_model_repo_id: "host",
   hf_token: "host",
@@ -151,6 +153,8 @@ const RL_EXTRAS = [
   "grpo_mask_truncated_completions",
   "grpo_epsilon_high",
   "grpo_rewards",
+  "grpo_use_vllm",
+  "grpo_vllm_gpu_memory_utilization",
 ] as const satisfies readonly (keyof TrainingStartRequest)[];
 
 /**
