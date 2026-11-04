@@ -131,3 +131,10 @@ test("a long chain wraps into bands about a screen's shape instead of one long r
   const short = { ...request, nodes: request.nodes.slice(0, 3), edges: request.edges.slice(0, 2) };
   assert.deepEqual(computeLayout({ ...short, wrapAspect: 16 / 9 }), computeLayout(short));
 });
+
+test("the Tidy up button always lays out left to right, whatever the chevron picked last", async () => {
+  const { readFileSync } = await import("node:fs");
+  const bar = readFileSync(new URL("../src/features/flows/editor/toolbar.tsx", import.meta.url), "utf8");
+  assert.match(bar, /const direction: TidyDirection = "LR";/);
+  assert.doesNotMatch(bar, /setTidyDirection\(/);
+});

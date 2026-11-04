@@ -46,12 +46,12 @@ const SAVE_LABEL: Record<string, string> = {
 
 const TIDY_LABEL = { LR: "left to right", TB: "top to bottom" } as const;
 
-/** Tidy up, in the last direction picked; the chevron picks the other one. */
+/** Tidy up, always left to right; the chevron runs a one-off top to bottom. */
 function TidyButton({ disabled }: { disabled: boolean }) {
   const { getInternalNode, fitView } = useReactFlow();
-  const direction = useUiStore((s) => s.tidyDirection);
+  // A remembered top-to-bottom pick turned the one-click tidy into a tall column.
+  const direction: TidyDirection = "LR";
   const tidy = (next: TidyDirection) => {
-    useUiStore.getState().setTidyDirection(next);
     void autoLayout(getInternalNode, next)
       .then(() =>
         setTimeout(
