@@ -430,9 +430,7 @@ Write-Output (Test-VenvPythonReady -PythonExe $env:TEST_MANAGED_PYTHON)
 @pytest.mark.skipif(not POWERSHELLS, reason = "PowerShell is unavailable")
 @pytest.mark.parametrize("shell", POWERSHELLS)
 @pytest.mark.parametrize("case", ["policy", "other_failure", "missing"])
-def test_readiness_gate_names_an_application_control_refusal(
-    tmp_path: Path, shell: str, case: str
-):
+def test_readiness_gate_names_an_application_control_refusal(tmp_path: Path, shell: str, case: str):
     source = INSTALL_PS1.read_text(encoding = "utf-8")
     helpers = "\n".join(
         _extract(rf"    function {name} \{{.*?\n    \}}\n", source)
