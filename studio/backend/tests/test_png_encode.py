@@ -162,6 +162,23 @@ def test_a_failed_probe_keeps_pillow_for_that_mode_and_level(monkeypatch):
     assert png_encode.encode(image, compress_level = 1) is None
 
 
+def test_pillow_on_another_zlib_build_keeps_pillow_even_when_the_probe_matches(monkeypatch):
+    from PIL import features
+
+    real = features.version
+    monkeypatch.setattr(
+        features, "version", lambda name: "1.3.1.zlib-ng" if name == "zlib" else real(name)
+    )
+    # zlib-ng matches the probe at levels 7-9 on Windows: make the probe match on any host.
+    monkeypatch.setattr(
+        png_encode,
+        "_pillow",
+        lambda image, kwargs: png_encode._encode(image, image.mode, kwargs["compress_level"], kwargs),
+    )
+    assert png_encode.encode(_image("RGB", 64, 64), compress_level = 9) is None
+    assert png_encode._PROBED == {("RGB", 9): False}
+
+
 @needs_fast
 def test_an_encode_error_falls_back(monkeypatch):
     image = _image("RGB", 64, 64)
