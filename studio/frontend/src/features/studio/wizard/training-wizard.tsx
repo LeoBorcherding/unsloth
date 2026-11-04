@@ -17,7 +17,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { usePlatformStore } from "@/config/env";
 import { HfTokenIndicator } from "@/features/hub";
 import {
   DECISION_MODEL_LABELS,
@@ -28,7 +27,6 @@ import {
   type DecisionCheckpoint,
   TRAINING_METHOD_META,
   TRAINING_METHOD_ORDER,
-  isTrainingMethodSupportedOnDevice,
   useTrainingConfigStore,
   effectiveTrainingObjective,
 } from "@/features/training";
@@ -118,7 +116,6 @@ function TrainingMethodSelect() {
       s.modelType === "decision" &&
       (s.decisionLayout === "clef" || s.decisionLayout === "llm"),
   );
-  const deviceType = usePlatformStore((state) => state.deviceType);
   const activeMeta = TRAINING_METHOD_META[trainingMethod];
   const activeLabel = activeMeta ? t(activeMeta.labelKey) : trainingMethod;
   return (
@@ -162,14 +159,10 @@ function TrainingMethodSelect() {
             (decisionTakesQlora && method === "qlora"),
         ).map((method) => {
           const meta = TRAINING_METHOD_META[method];
-          const unsupportedOnMlx = !isTrainingMethodSupportedOnDevice(
-            method,
-            deviceType,
-          );
           return (
             <Tooltip key={method} delayDuration={300}>
               <TooltipTrigger asChild={true} disableClickToggle={true}>
-                <SelectItem value={method} disabled={unsupportedOnMlx}>
+                <SelectItem value={method}>
                   <span className="flex items-center gap-2">
                     <span
                       aria-hidden="true"
@@ -179,11 +172,6 @@ function TrainingMethodSelect() {
                       )}
                     />
                     {t(meta.labelKey)}
-                    {unsupportedOnMlx && (
-                      <span className="text-ui-10 text-muted-foreground">
-                        · {t("studio.params.notSupportedAppleSilicon")}
-                      </span>
-                    )}
                   </span>
                 </SelectItem>
               </TooltipTrigger>
@@ -192,9 +180,7 @@ function TrainingMethodSelect() {
                 sideOffset={10}
                 className="max-w-[calc(220px*var(--ui-space-scale,1))] text-ui-11p5 leading-snug"
               >
-                {unsupportedOnMlx
-                  ? t("studio.params.notSupportedAppleSilicon")
-                  : t(meta.hintKey)}
+                {t(meta.hintKey)}
               </TooltipContent>
             </Tooltip>
           );
