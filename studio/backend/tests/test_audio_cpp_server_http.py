@@ -244,7 +244,6 @@ def test_gpu_runs_cap_host_threads_unless_the_user_set_a_budget(fake_binary, tmp
     monkeypatch.setattr(srv.subprocess, "Popen", spy)
     monkeypatch.delenv("UNSLOTH_CPU_THREADS", raising = False)
     monkeypatch.setattr(srv.os, "cpu_count", lambda: 192)
-    monkeypatch.setattr(srv.os, "process_cpu_count", lambda: 12, raising = False)
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
     monkeypatch.setattr(srv, "select_backend", lambda binary, force_cpu: "cuda")
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
@@ -268,7 +267,9 @@ def test_cpu_runs_use_every_usable_cpu_unless_the_user_set_a_budget(
     monkeypatch.setattr(srv, "select_backend", lambda binary, force_cpu: "cpu")
     monkeypatch.delenv("UNSLOTH_CPU_THREADS", raising = False)
     monkeypatch.setattr(srv.os, "cpu_count", lambda: 16)
-    monkeypatch.setattr(srv.os, "process_cpu_count", lambda: 12, raising = False)
+    monkeypatch.setattr(srv.os, "process_cpu_count", lambda: 16, raising = False)
+    # The affinity mask, not the host count: Windows' process_cpu_count ignores it.
+    monkeypatch.setattr(srv.cpu_threads, "_usable_cpus", lambda: 12)
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
     monkeypatch.setenv("UNSLOTH_CPU_THREADS", "3")
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()

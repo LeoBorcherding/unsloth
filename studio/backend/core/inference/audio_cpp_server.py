@@ -27,6 +27,7 @@ from core.inference.audio_cpp_models import AudioCppModel
 from core.inference.audio_cpp_failures import classify_audio_cpp_failure
 from core.inference.audio_errors import sanitize_runtime_tail
 from loggers import get_logger
+from utils import cpu_threads
 from utils.prebuilt.child_env import isolate_home, scrub_env
 from utils.prebuilt.runtime_libs import dedupe_existing_dirs
 from utils.process_lifetime import (
@@ -556,7 +557,7 @@ class AudioCppServer:
         threads = _cpu_threads()
         if threads is None and backend == "cpu":
             # The runtime default can be one thread (Parakeet on the Windows CPU build: 8x slower than 12).
-            threads = getattr(os, "process_cpu_count", os.cpu_count)() or 1
+            threads = cpu_threads._usable_cpus()
         elif threads is None:
             # Host-side work only; every core thrashes on many-core hosts.
             threads = min(os.cpu_count() or 1, _GPU_HOST_THREADS)
