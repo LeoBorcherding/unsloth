@@ -179,12 +179,13 @@ export function nativeCanvasFor(repoId: string): Canvas | null {
   return native ? { width: native.width, height: native.height } : null;
 }
 
-/** The canvas a pick can apply before the load: native, else 1024, else null when the quant decides it (Qwen-Image-2.1). */
-export function pickCanvasFor(key: string, repoId: string): Canvas | null {
+/** The canvas a pick can apply before the load: native, else 1024, else null when the quant decides it (a Qwen-Image-2.1 pipeline). */
+export function pickCanvasFor(key: string, repoId: string, gguf = false): Canvas | null {
   const native = nativeCanvasFor(key);
   if (native) return native;
   const id = repoId.toLowerCase();
-  return QUANTISED_CANVAS.some((entry) => id.includes(entry.match)) ? null : { ...DEFAULT_RESOLUTION };
+  // GGUF always runs at 1024 (see resolutionFor), so only a pipeline build waits on its quant.
+  return !gguf && QUANTISED_CANVAS.some((entry) => id.includes(entry.match)) ? null : { ...DEFAULT_RESOLUTION };
 }
 
 /** A pick moves the canvas only while the form is still on the previous model's default; a size the user chose stays. */

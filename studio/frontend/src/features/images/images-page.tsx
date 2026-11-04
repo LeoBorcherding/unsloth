@@ -2252,7 +2252,7 @@ export function ImagesPage({
       const recommended = defaultsFor(key);
       const previousDefault = pendingModelDefaults?.canvas ?? residentCanvas;
       // Null when the quant decides the canvas: that's unknown before the load, so the form is left alone.
-      const nextDefault = pickCanvasFor(key, repoId);
+      const nextDefault = pickCanvasFor(key, repoId, ggufFilename != null);
       const current = canvasNow.current;
       const canvas = nextDefault ? canvasForPick(current, previousDefault, nextDefault) : current;
       pickDefaults.current = recommended;

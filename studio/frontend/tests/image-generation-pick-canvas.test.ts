@@ -16,7 +16,7 @@ const canvasForPick = (defaults as Record<string, unknown>).canvasForPick as
     ) => { width: number; height: number })
   | undefined;
 const pickCanvasFor = (defaults as Record<string, unknown>).pickCanvasFor as
-  | ((key: string, repoId: string) => { width: number; height: number } | null)
+  | ((key: string, repoId: string, gguf?: boolean) => { width: number; height: number } | null)
   | undefined;
 const canvasRevertFor = (defaults as Record<string, unknown>).canvasRevertFor as
   | ((
@@ -51,6 +51,8 @@ test("a pick leaves the canvas alone when the quant decides it", () => {
   assert.ok(canvasForPick && pickCanvasFor);
   // Qwen-Image-2.1's canvas depends on the quant, which the pick doesn't know.
   assert.equal(pick("Qwen/Qwen-Image-2.1"), null);
+  // A GGUF build's canvas is known (1024), so a GGUF pick still moves an untouched 512.
+  assert.deepEqual(pickCanvasFor("unsloth/Qwen-Image-2.1-GGUF", "unsloth/Qwen-Image-2.1-GGUF", true), DEFAULT_RESOLUTION);
   assert.deepEqual(pick("stabilityai/stable-diffusion-xl-base-1.0"), DEFAULT_RESOLUTION);
   // A resident explicit Qwen-Image-2.1 quant defaults to 512, so picking FLUX from an untouched form goes to 1024.
   const resident = resolutionFor("Qwen/Qwen-Image-2.1", { modelKind: "pipeline", transformerQuant: "fp8" });
@@ -62,7 +64,7 @@ test("the Images page pick path applies the picked model's canvas and the load d
   const src = readSrc("features/images/images-page.tsx");
   const start = src.indexOf("const applyImageModelDefaults = useCallback");
   const pickPath = src.slice(start, src.indexOf("const dismissLoadToast", start));
-  assert.match(pickPath, /pickCanvasFor\(key, repoId\)/);
+  assert.match(pickPath, /pickCanvasFor\(key, repoId, ggufFilename != null\)/);
   assert.match(pickPath, /pendingModelDefaults\?\.canvas \?\? residentCanvas/);
   assert.match(pickPath, /nextDefault \? canvasForPick\(current, previousDefault, nextDefault\) : current/);
   assert.match(pickPath, /setCanvas\(canvas\)/);
