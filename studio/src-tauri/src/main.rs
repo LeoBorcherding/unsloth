@@ -2,6 +2,7 @@
 
 mod app_layout;
 mod app_menu;
+mod app_windows;
 mod appimage_webkit;
 mod browser_capture;
 #[cfg(target_os = "macos")]
@@ -1970,10 +1971,11 @@ fn set_tray_server_status(app: tauri::AppHandle, status: String) {
 
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open = MenuItemBuilder::with_id("open", "Open Unsloth").build(app)?;
+    let new_window = MenuItemBuilder::with_id("new-window", "New Window").build(app)?;
     let toggle = MenuItemBuilder::with_id("toggle", "Start/Stop Server").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&open, &toggle, &quit])
+        .items(&[&open, &new_window, &toggle, &quit])
         .build()?;
     app.manage(TrayServerToggle(toggle));
 
@@ -1990,6 +1992,14 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "open" => show_main_window(app),
+            "new-window" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = app_windows::open(&app).await {
+                        warn!("Could not open a new window: {error}");
+                    }
+                });
+            }
             "toggle" => {
                 let _ = app.emit("tray-toggle-server", ());
             }
@@ -2500,6 +2510,7 @@ fn main() {
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             app_menu::set_app_menu_actions,
+            app_windows::open_app_window,
             browser_webview::browser_view_supported,
             browser_webview::browser_view_show,
             browser_webview::browser_view_open_background,
@@ -2705,19 +2716,21 @@ fn main() {
             }
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" {
-                match event {
-                    tauri::WindowEvent::Focused(focused) => {
-                        browser_webview::window_changed(window.app_handle(), Some(*focused))
-                    }
-                    tauri::WindowEvent::Resized(_) => {
-                        browser_webview::window_changed(window.app_handle(), None)
-                    }
-                    _ => {}
+            // Extra app windows (app_windows.rs) close like any window.
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                tauri::WindowEvent::Focused(focused) => {
+                    browser_webview::window_changed(window.app_handle(), Some(*focused))
                 }
+                tauri::WindowEvent::Resized(_) => {
+                    browser_webview::window_changed(window.app_handle(), None)
+                }
+                _ => {}
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Never close directly: the only window, so closing exits before the reap.
+                // Never close directly: the last window, so closing exits before the reap.
                 api.prevent_close();
                 let close_to_tray = window.state::<CloseToTrayState>().0.load(Ordering::SeqCst);
                 match main_window_close_action(close_to_tray) {

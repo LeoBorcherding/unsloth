@@ -446,6 +446,21 @@ async fn desktop_auth_inner(
     )
 }
 
+/// Backend port plus a fresh owner session for an extra window; no session when sign-in is needed.
+pub(crate) async fn window_session(
+    state: &tauri::State<'_, BackendState>,
+    diagnostics: &DiagnosticsState,
+) -> Result<(u16, Option<(String, String)>), String> {
+    let tokens = match desktop_auth_inner(state, diagnostics).await? {
+        DesktopAuthResponse::Tokens {
+            access_token,
+            refresh_token,
+        } => Some((access_token, refresh_token)),
+        _ => None,
+    };
+    Ok((current_backend_port(state).await?.port, tokens))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

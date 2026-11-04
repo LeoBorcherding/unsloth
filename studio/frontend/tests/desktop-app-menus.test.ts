@@ -41,7 +41,7 @@ assert.match(CHORDS, /export type AppMenuAction =\s*\| HelpAction/);
 const hookActions = [...actionsOf(CHORDS, "AppMenuAction"), ...actionsOf(HELP, "HelpAction")];
 
 test("the menus and the renderer name the same actions", () => {
-  assert.deepEqual(fileActions, ["new-chat", "new-temporary-chat", "open-folder"]);
+  assert.deepEqual(fileActions, ["new-window", "new-chat", "new-temporary-chat", "open-folder"]);
   assert.deepEqual(viewActions, [
     "toggle-sidebar",
     "find",

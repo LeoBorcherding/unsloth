@@ -103,6 +103,7 @@ import { AppProvider } from "../provider";
 import { useDesktopShellReady } from "../desktop-shell-ready";
 import { type HelpAction, helpActionAvailable, runHelpAction } from "@/components/help-actions";
 import type { SettingsMenuAction } from "../app-menu-chords";
+import { openAppWindow } from "../open-app-window";
 import { hasAppMenus, useAppMenuActions } from "../use-app-menu-actions";
 
 declare module "@tanstack/react-router" {
@@ -598,6 +599,7 @@ function RootLayout() {
     ]),
   ) as Record<SettingsMenuAction, (() => void) | null>;
   useAppMenuActions({
+    "new-window": routeShortcutEnabled ? () => void openAppWindow() : null,
     "new-chat": routeShortcutEnabled ? () => startNewChat() : null,
     "new-temporary-chat": routeShortcutEnabled
       ? () => startNewChat({ incognito: true, standalone: true })
