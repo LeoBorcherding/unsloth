@@ -179,6 +179,14 @@ export function nativeCanvasFor(repoId: string): Canvas | null {
   return native ? { width: native.width, height: native.height } : null;
 }
 
+/** The canvas a pick can apply before the load: native, else 1024, else null when the quant decides it (Qwen-Image-2.1). */
+export function pickCanvasFor(key: string, repoId: string): Canvas | null {
+  const native = nativeCanvasFor(key);
+  if (native) return native;
+  const id = repoId.toLowerCase();
+  return QUANTISED_CANVAS.some((entry) => id.includes(entry.match)) ? null : { ...DEFAULT_RESOLUTION };
+}
+
 /** A pick moves the canvas only while the form is still on the previous model's default; a size the user chose stays. */
 export function canvasForPick(
   current: Canvas,
@@ -191,13 +199,17 @@ export function canvasForPick(
     : current;
 }
 
-/** What a failed pick may put back: only a canvas the pick moved, to the size before the first staged pick. */
+/** What a failed pick may put back: only a canvas a pick moved, to the size before the first staged pick. */
 export function canvasRevertFor(
   owned: { prev: Canvas; applied: Canvas } | undefined,
   current: Canvas,
   picked: Canvas,
 ): { prev: Canvas; applied: Canvas } | undefined {
-  return picked === current ? undefined : { prev: owned?.prev ?? current, applied: picked };
+  if (picked !== current) return { prev: owned?.prev ?? current, applied: picked };
+  // A pick that left the canvas alone keeps an earlier staged pick's claim while the form still holds it.
+  return owned && owned.applied.width === current.width && owned.applied.height === current.height
+    ? owned
+    : undefined;
 }
 
 export function resolutionFor(
