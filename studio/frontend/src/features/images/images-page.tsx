@@ -2189,15 +2189,20 @@ export function ImagesPage({
     residentDefaults,
     status?.generation_defaults,
   );
+  // Reset restores the resident build's canvas, the same one the seed above applied. A constant
+  // here would quietly undo it and put a 24 GB card back over its budget.
+  const residentCanvas = useMemo(
+    () =>
+      resolutionFor(status?.base_repo ?? status?.repo_id ?? "", {
+        modelKind: status?.model_kind,
+        transformerQuant: status?.transformer_quant,
+        transformerQuantSource: status?.resolved?.transformer_quant?.source,
+      }),
+    [status?.base_repo, status?.repo_id, status?.model_kind, status?.transformer_quant, status?.resolved?.transformer_quant?.source],
+  );
   const imageDefaultRecipe = useMemo<ImageGenerationPresetParams>(() => {
     const recommended = pendingModelDefaults ?? { steps: residentSteps, guidance: residentGuidance };
-    // Reset restores the resident build's canvas, the same one the seed above applied. A constant
-    // here would quietly undo it and put a 24 GB card back over its budget.
-    const size = pendingModelDefaults?.canvas ?? resolutionFor(status?.base_repo ?? status?.repo_id ?? "", {
-      modelKind: status?.model_kind,
-      transformerQuant: status?.transformer_quant,
-      transformerQuantSource: status?.resolved?.transformer_quant?.source,
-    });
+    const size = pendingModelDefaults?.canvas ?? residentCanvas;
     return {
       negativePrompt: "",
       width: size.width,
@@ -2207,16 +2212,7 @@ export function ImagesPage({
       batchSize: 1,
       runs: 1,
     };
-  }, [
-    pendingModelDefaults,
-    residentSteps,
-    residentGuidance,
-    status?.base_repo,
-    status?.repo_id,
-    status?.model_kind,
-    status?.transformer_quant,
-    status?.resolved?.transformer_quant?.source,
-  ]);
+  }, [pendingModelDefaults, residentSteps, residentGuidance, residentCanvas]);
   const applyImagePresetParams = useCallback((params: ImageGenerationPresetParams) => {
     setNegativePrompt(params.negativePrompt);
     // A negative prompt in effect must be visible.
@@ -2259,8 +2255,7 @@ export function ImagesPage({
       const key = defaultsKeyFor(repoId, effectiveFamilyOverride, ggufFilename);
       const recommended = defaultsFor(key);
       // Only the native canvas is known before the load; a quant's smaller canvas waits for the engaged build.
-      const previousDefault =
-        pendingModelDefaults?.canvas ?? nativeCanvasFor(status?.base_repo ?? status?.repo_id ?? "") ?? DEFAULT_RESOLUTION;
+      const previousDefault = pendingModelDefaults?.canvas ?? residentCanvas;
       const nextDefault = nativeCanvasFor(key) ?? DEFAULT_RESOLUTION;
       const current = canvasNow.current;
       const canvas = canvasForPick(current, previousDefault, nextDefault);
@@ -2282,9 +2277,8 @@ export function ImagesPage({
       imageFormClaimId,
       modelSelectionAction,
       pendingModelDefaults?.canvas,
+      residentCanvas,
       setCanvas,
-      status?.base_repo,
-      status?.repo_id,
     ],
   );
 

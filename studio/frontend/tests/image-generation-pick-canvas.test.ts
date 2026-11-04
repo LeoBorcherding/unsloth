@@ -7,7 +7,7 @@ import * as defaults from "../src/features/images/image-generation-defaults.ts";
 
 import { readSrc } from "./helpers/kit.ts";
 
-const { DEFAULT_RESOLUTION } = defaults;
+const { DEFAULT_RESOLUTION, resolutionFor } = defaults;
 const canvasForPick = (defaults as Record<string, unknown>).canvasForPick as
   | ((
       current: { width: number; height: number },
@@ -42,12 +42,15 @@ test("a size the user chose survives a pick", () => {
   assert.deepEqual(canvasForPick(chosen, SMALL, DEFAULT_RESOLUTION), chosen);
 });
 
-test("only the native rule is known at pick time, so a quantised Qwen-Image-2.1 canvas is left alone", () => {
-  assert.ok(nativeCanvasFor);
-  // The quant canvas needs the engaged build; a resident Qwen quant at 512 has no native canvas, so 512 reads as chosen.
+test("only the native rule is known at pick time; the quant canvas comes from an engaged build", () => {
+  assert.ok(canvasForPick && nativeCanvasFor);
   assert.equal(nativeCanvasFor("Qwen/Qwen-Image-2.1"), null);
   assert.equal(nativeCanvasFor("stabilityai/stable-diffusion-xl-base-1.0"), null);
   assert.deepEqual(nativeCanvasFor("local/SDXL_Turbo"), SMALL);
+  // A resident explicit Qwen-Image-2.1 quant defaults to 512, so picking FLUX from an untouched form goes to 1024.
+  const resident = resolutionFor("Qwen/Qwen-Image-2.1", { modelKind: "pipeline", transformerQuant: "fp8" });
+  assert.deepEqual(resident, SMALL);
+  assert.deepEqual(canvasForPick(SMALL, resident, nativeCanvasFor("black-forest-labs/FLUX.1-dev") ?? DEFAULT_RESOLUTION), DEFAULT_RESOLUTION);
 });
 
 test("the Images page pick path applies the picked model's native canvas", () => {
@@ -56,6 +59,7 @@ test("the Images page pick path applies the picked model's native canvas", () =>
   const pick = src.slice(start, src.indexOf("const dismissLoadToast", start));
   assert.match(pick, /canvasForPick\(/);
   assert.match(pick, /nativeCanvasFor\(key\)/);
+  assert.match(pick, /pendingModelDefaults\?\.canvas \?\? residentCanvas/);
   assert.match(pick, /setCanvas\(canvas\)/);
   const revert = src.slice(src.indexOf("const revertPick = useCallback"), src.indexOf("}, [setCanvas]);"));
   assert.match(revert, /setCanvas\(r\.canvas\.prev\)/);
