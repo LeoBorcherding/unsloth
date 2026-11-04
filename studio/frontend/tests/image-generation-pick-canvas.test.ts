@@ -53,3 +53,12 @@ test("the Images page pick path applies the picked model's native canvas", () =>
   const revert = src.slice(src.indexOf("const revertPick = useCallback"), src.indexOf("}, [setCanvas]);"));
   assert.match(revert, /setCanvas\(r\.canvas\.prev\)/);
 });
+
+test("a finished pick load moves an untouched canvas to the engaged build's", () => {
+  // A picked Qwen-Image-2.1 quant only learns its 512 from the engaged build, after the load.
+  const src = readSrc("features/images/images-page.tsx");
+  const ready = src.slice(src.indexOf('if (p.phase === "ready")'), src.indexOf('if (p.phase === "error")'));
+  assert.match(ready, /canvasForPick\(current, pickedCanvas, engaged\)/);
+  assert.match(ready, /transformerQuantSource: loaded\.resolved\?\.transformer_quant\?\.source/);
+  assert.match(ready, /!pickRecipeSuperseded\.current\?\.\(\)/);
+});

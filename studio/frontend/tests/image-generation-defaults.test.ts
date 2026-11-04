@@ -155,9 +155,9 @@ test("an auto-engaged Qwen-Image-2.1 quant keeps the 1024 canvas; a picked quant
 test("every images-page canvas seed passes the quant provenance", () => {
   const source = readSrc("features/images/images-page.tsx");
   const calls = source.split("resolutionFor(").slice(1);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   for (const call of calls) {
-    assert.match(call.slice(0, 400), /transformerQuantSource: status\??\.resolved\?\.transformer_quant\?\.source/);
+    assert.match(call.slice(0, 400), /transformerQuantSource: (status\??|loaded)\.resolved\?\.transformer_quant\?\.source/);
   }
 });
 

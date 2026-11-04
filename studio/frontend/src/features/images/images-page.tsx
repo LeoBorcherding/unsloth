@@ -1844,11 +1844,14 @@ export function ImagesPage({
   const pickRecipeSuperseded = useRef<(() => boolean) | null>(null);
   // The recipe the last pick applied, so a load that reveals the family can replace a fallback.
   const pickDefaults = useRef<{ steps: number; guidance: number } | null>(null);
+  // The canvas the last pick defaulted to, so the load can move an untouched form to the engaged build's.
+  const pickCanvas = useRef<{ width: number; height: number } | null>(null);
   // Put back everything a pick optimistically applied. Setters are stable, so this never re-renders on its own.
   const revertPick = useCallback((r: PickRevert) => {
     setQuant(r.prev);
     setPendingModelDefaults(null);
     pickDefaults.current = null;
+    pickCanvas.current = null;
     // Equality alone cannot tell "nobody touched this" from "the user chose the same number": a
     // preset selected after the pick owns these fields.
     if (!pickRecipeSuperseded.current?.()) {
@@ -2261,6 +2264,7 @@ export function ImagesPage({
       const current = canvasNow.current;
       const canvas = canvasForPick(current, previousDefault, nextDefault);
       pickDefaults.current = recommended;
+      pickCanvas.current = nextDefault;
       setPendingModelDefaults({ ...recommended, canvas: nextDefault });
       setSteps(recommended.steps);
       setGuidance(recommended.guidance);
@@ -3525,6 +3529,19 @@ export function ImagesPage({
           setSteps((cur) => (cur === DEFAULT_GEN.steps ? loadedRecipe.steps : cur));
           setGuidance((cur) => (cur === DEFAULT_GEN.guidance ? loadedRecipe.guidance : cur));
         }
+        // The engaged build decides the quant canvas (a picked Qwen-Image-2.1 quant runs at 512).
+        const pickedCanvas = pickCanvas.current;
+        pickCanvas.current = null;
+        if (pickedCanvas && !pickRecipeSuperseded.current?.()) {
+          const engaged = resolutionFor(loaded.base_repo ?? loaded.repo_id ?? "", {
+            modelKind: loaded.model_kind,
+            transformerQuant: loaded.transformer_quant,
+            transformerQuantSource: loaded.resolved?.transformer_quant?.source,
+          });
+          const current = canvasNow.current;
+          const canvas = canvasForPick(current, pickedCanvas, engaged);
+          if (canvas !== current) setCanvas(canvas);
+        }
         // Load succeeded: the optimistic quant is now the real one, so drop the pending revert.
         quantRevert.current?.commitRecipeClaim?.();
         quantRevert.current = null;
@@ -3587,7 +3604,7 @@ export function ImagesPage({
     }
     if (seq !== cancelSeq.current) return;
     pollTimer.current = setTimeout(() => void pollLoadProgress(), 1000);
-  }, [dismissLoadToast, refreshStatus, cancelLoadFromToast, offerLoadAnywayFor, rememberFinishedLoad]);
+  }, [dismissLoadToast, refreshStatus, cancelLoadFromToast, offerLoadAnywayFor, rememberFinishedLoad, setCanvas]);
 
   // The unload failed, so restore the poll and toast. refreshStatus cannot: a first load is not resident.
   const restoreLoadTracking = useCallback(() => {
