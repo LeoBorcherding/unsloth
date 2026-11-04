@@ -108,6 +108,45 @@ def P(
     return d
 
 
+# Chat's sampling knobs on the LLM nodes, unset = the server's choice. The editor shows them in Chat's
+# settings panel; `use_model_settings` reads Chat's saved settings for the model at run time instead.
+_LLM_SETTINGS = [
+    P("top_p", "number", None, "Top P", min = 0, max = 1, step = 0.05, advanced = True),
+    P("top_k", "int", None, "Top K", min = 0, max = 100, advanced = True),
+    P("min_p", "number", None, "Min P", min = 0, max = 1, step = 0.01, advanced = True),
+    P(
+        "repetition_penalty",
+        "number",
+        None,
+        "Repetition penalty",
+        min = 1,
+        max = 2,
+        step = 0.05,
+        advanced = True,
+    ),
+    P(
+        "presence_penalty",
+        "number",
+        None,
+        "Presence penalty",
+        min = 0,
+        max = 2,
+        step = 0.1,
+        advanced = True,
+    ),
+    P(
+        "reasoning_effort",
+        "select",
+        None,
+        "Reasoning effort",
+        options = ["low", "medium", "high", "max"],
+        advanced = True,
+    ),
+    # Chat's run settings for the load, in its saved-override shape; empty loads the way the model loads anyway.
+    P("load", "json", None, "Load settings", advanced = True),
+    P("use_model_settings", "bool", False, "Use the model's saved settings", advanced = True),
+]
+
 BIND_TYPES = {
     "number": "number",
     "int": "number",
@@ -147,6 +186,7 @@ def spec(
     requires: Optional[list[str]] = None,
     exclusive_gpu: bool = False,
     requires_approval: Optional[list[str]] = None,
+    design: bool = False,
 ) -> dict:
     inputs = list(inputs)
     for p in params:
@@ -190,6 +230,9 @@ def spec(
     if requires_approval:
         # requires_approval: python | http | mcp | provider | trigger, owner-approved per flow (core/flows/capabilities.py).
         found["requires_approval"] = list(requires_approval)
+    if design:
+        # design: describes part of something another node runs (a recipe column); never executed itself.
+        found["design"] = True
     return found
 
 
@@ -440,6 +483,7 @@ NODE_SPECS: list[dict] = [
             P("json_schema", "schema", None, "JSON schema (optional)"),
             P("thinking", "bool", False, "Allow thinking"),
             P("seed", "seed", None, "Seed"),
+            *_LLM_SETTINGS,
         ],
         lane = "gpu",
         model_kind = "chat",
@@ -580,6 +624,11 @@ NODE_SPECS: list[dict] = [
             P("question", "textarea", "Describe this image in one paragraph.", "Question"),
             P("json_schema", "schema", None, "JSON schema (optional)"),
             P("max_tokens", "int", 512, "Max tokens", min = 1, max = 8192),
+            P("system", "textarea", "", "System prompt", advanced = True),
+            P("temperature", "number", None, "Temperature", min = 0, max = 2, step = 0.01, advanced = True),
+            P("seed", "seed", None, "Seed", advanced = True),
+            P("thinking", "bool", False, "Allow thinking", advanced = True),
+            *_LLM_SETTINGS,
         ],
         lane = "gpu",
         model_kind = "vision",
@@ -1393,9 +1442,10 @@ NODE_SPECS: list[dict] = [
     ),
     spec(
         "data.recipe",
-        "Data Recipe",
+        "Run a saved recipe",
         "data",
-        "Run a saved Data Recipe and output its dataset.",
+        "Run a Data Recipe saved on the Data Recipes page and output its dataset. To edit a recipe here, "
+        "bring it into Flows as a Data Recipe group.",
         inputs = [inp("seed", "dataset", "Seed dataset", optional = True)],
         outputs = [out("dataset", "dataset"), out("preview", "json")],
         params = [
@@ -1413,6 +1463,36 @@ NODE_SPECS: list[dict] = [
         lane = "gpu",
         side_effect = True,
         icon = "flask",
+    ),
+    spec(
+        "recipe.generate",
+        "Recipe Dataset",
+        "data",
+        "Runs the Data Recipe group it sits in as one job and outputs the dataset; select it to edit the "
+        "recipe's models, seed and processors. Added on its own, it starts a new recipe group.",
+        inputs = [inp("seed", "dataset", "Seed dataset", optional = True)],
+        outputs = [out("dataset", "dataset"), out("preview", "json")],
+        params = [
+            P("rows", "int", 5, "Rows", min = 1, max = 200000),
+            P("mode", "select", "preview", "Mode", options = ["preview", "full"]),
+        ],
+        lane = "gpu",
+        # Cached on the compiled recipe, rows, mode and seed input: an unchanged recipe hands back its
+        # last dataset; Re-roll forces a new job.
+        icon = "flask",
+    ),
+    spec(
+        "recipe.column",
+        "Recipe column",
+        "data",
+        "One column of a Data Recipe group. Double-click it to edit it in the inspector; wires show "
+        "which columns its prompt reads.",
+        inputs = [inp("in", "text", "Reads", optional = True, multi = True)],
+        outputs = [out("out", "text", "Column")],
+        params = [P("column", "json", None, "Column (JSON)", advanced = True)],
+        cacheable = False,
+        icon = "table",
+        design = True,
     ),
     spec(
         "data.rows_to_dataset",

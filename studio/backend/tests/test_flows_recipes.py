@@ -37,6 +37,14 @@ class _Ctx:
         self.hooks = []
         self.seed = 7
         self.caller = None
+        self.refuse: dict[str, str] = {}
+
+    def capability_refusal(
+        self,
+        cap,
+        detail = None,
+    ):
+        return self.refuse.get(cap)
 
     async def call(
         self,
@@ -49,6 +57,16 @@ class _Ctx:
     ):
         self.calls.append((method, path, params, json, files))
         return self.routes(method, path, params, json)
+
+    async def ensure_model(
+        self,
+        kind,
+        choice,
+        options = None,
+        primary = False,
+    ):
+        self.loaded = choice
+        self.primary = primary
 
     def on_cancel(self, fn):
         self.hooks.append(fn)
@@ -183,8 +201,9 @@ def test_every_learning_recipe_round_trips(path):
     payload = json.loads(path.read_text())
     graph = import_recipe(payload)
     assert graph["group"]["kind"] == "recipe"
-    assert len(graph["nodes"]) == len(payload["recipe"]["columns"])
-    assert all(n["type"] == COLUMN_TYPE for n in graph["nodes"])
+    columns = [n for n in graph["nodes"] if n["type"] == COLUMN_TYPE]
+    assert len(columns) == len(payload["recipe"]["columns"])
+    assert [n["type"] for n in graph["nodes"]].count("recipe.generate") == 1
     assert compile_recipe(graph) == normalise(payload)
 
 
@@ -295,3 +314,43 @@ def test_a_conditional_sampler_reads_its_rule_columns():
     }
     with pytest.raises(RecipeCompileError):
         compile_recipe(import_recipe(loop))
+
+
+def test_a_recipe_group_with_an_env_key_says_how_to_run_it():
+    recipe = {
+        "columns": [],
+        "model_providers": [{"name": "openai", "api_key_env": "OPENAI_API_KEY"}],
+    }
+    with pytest.raises(FlowNodeError, match = "API key field"):
+        data.runnable_recipe(recipe)
+    recipe["model_providers"][0] = {"name": "openai", "api_key": "sk-live"}
+    assert data.runnable_recipe(recipe)["model_providers"][0]["api_key"] == "sk-live"
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_a_base_model_picked_on_device_trains_on_that_copy(tmp_path, exists):
+    copy = tmp_path / "models--unsloth--tiny"
+    if exists:
+        copy.mkdir()
+    sent = {}
+
+    def train_routes(method, path, params, body):
+        if path == "/api/train/start":
+            sent.update(body)
+            raise RuntimeError("started")
+        raise AssertionError(path)
+
+    dataset = {"kind": "dataset", "source": "local", "ref": "recipes/recipe_one/parquet-files"}
+    params = {
+        "base_model": "unsloth/tiny",
+        "base_model_cache": {"known_cached": True, "local_path": str(copy)},
+    }
+    ctx = _Ctx(train_routes, params = params, inputs = {"dataset": dataset})
+    with pytest.raises(RuntimeError, match = "started"):
+        asyncio.run(training.finetune(ctx))
+    assert sent["model_name"] == "unsloth/tiny"
+    if exists:
+        assert sent["model_known_cached"] is True and sent["model_local_path"] == str(copy)
+    else:
+        # A flow from another machine: that copy is not here, so the repo trains as typed.
+        assert "model_known_cached" not in sent and "model_local_path" not in sent

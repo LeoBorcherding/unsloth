@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 FORMAT = "unsloth-flow"
 FORMAT_VERSION = 1
@@ -89,6 +89,8 @@ class FlowNode(_Strict):
     v: int = Field(default = 1, ge = 1)
     params: dict[str, Any] = Field(default_factory = dict)
     pos: tuple[float, float] = (0.0, 0.0)
+    # Width and height after a resize in the editor; None keeps the automatic size.
+    size: Optional[tuple[float, float]] = None
     label: Optional[str] = Field(default = None, max_length = 200)
     group: Optional[str] = Field(default = None, max_length = 64)
     collapsed: bool = False
@@ -105,10 +107,27 @@ class FlowEdge(_Strict):
 
 
 class FlowGroup(_Strict):
+    """A frame around nodes. A "recipe" group is one Data Recipe: its `recipe.column` nodes, the
+    recipe-level `config` (seed, model providers and configs, processors), `run` settings and the
+    Recipe Studio `ui` hints its seed editor reads. A `recipe.generate` node inside runs it."""
+
     id: str = Field(pattern = r"^[A-Za-z0-9_-]{1,64}$")
     label: str = Field(default = "Group", max_length = 200)
     color: Optional[str] = Field(default = None, pattern = r"^#[0-9a-fA-F]{6}$")
     rect: tuple[float, float, float, float] = (0.0, 0.0, 400.0, 300.0)
+    kind: Optional[Literal["recipe"]] = None
+    config: Optional[dict[str, Any]] = None
+    run: Optional[dict[str, Any]] = None
+    ui: Optional[dict[str, Any]] = None
+
+    @model_serializer(mode = "wrap")
+    def _drop_unset_recipe(self, handler):
+        # A plain group saves exactly as before.
+        data = handler(self)
+        for key in ("kind", "config", "run", "ui"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class FlowNote(_Strict):
@@ -156,6 +175,8 @@ class DatasetValue(_Strict):
     ref: str
     rows: Optional[int] = None
     columns: Optional[list[str]] = None
+    # Which block wrote a local upload, for its label: a recipe preview, a full recipe, Rows to Dataset.
+    made_by: Optional[Literal["preview", "recipe", "rows"]] = None
 
 
 class ModelValue(_Strict):

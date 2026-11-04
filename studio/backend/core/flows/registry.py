@@ -60,7 +60,13 @@ class NodeContext(Protocol):
         """Return the parsed JSON body (or raw bytes for non-JSON). Raise FlowNodeError with the route's detail on non-2xx."""
         ...
 
-    async def ensure_model(self, model_kind: str, choice: Optional[dict]) -> Optional[dict]:
+    async def ensure_model(
+        self,
+        model_kind: str,
+        choice: Optional[dict],
+        options: Optional[dict] = None,
+        primary: bool = False,
+    ) -> Optional[dict]:
         """Make `choice` ({"repo", "variant"}) the resident model for `model_kind`, loading it if needed.
         None = keep whatever is loaded (error if nothing is). Returns the resolved {"repo", "variant"} or None."""
         ...
@@ -77,6 +83,8 @@ class NodeContext(Protocol):
         thinking: bool = False,
         seed: Optional[int] = None,
         stream_port: Optional[str] = "text",
+        sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
     ) -> str: ...
 
     async def llm_json(
@@ -92,6 +100,8 @@ class NodeContext(Protocol):
         images: Optional[list[dict]] = None,
         on_text: Optional[Callable[[str], None]] = None,
         retry_bad_json: bool = True,
+        sampling: Optional[dict] = None,
+        load: Optional[dict] = None,
     ) -> Any:
         """Structured output (`response_format` json_schema); falls back to parsing the first JSON object in the text.
         With ``on_text`` the answer streams, and it gets the raw JSON written so far after every chunk."""
