@@ -244,13 +244,35 @@ def test_gpu_runs_cap_host_threads_unless_the_user_set_a_budget(fake_binary, tmp
     monkeypatch.setattr(srv.subprocess, "Popen", spy)
     monkeypatch.delenv("UNSLOTH_CPU_THREADS", raising = False)
     monkeypatch.setattr(srv.os, "cpu_count", lambda: 192)
+    monkeypatch.setattr(srv.os, "process_cpu_count", lambda: 12, raising = False)
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
     monkeypatch.setattr(srv, "select_backend", lambda binary, force_cpu: "cuda")
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
     monkeypatch.setenv("UNSLOTH_CPU_THREADS", "32")
     srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
-    assert "--threads" not in seen[0]
     assert seen[1][-2:] == ["--threads", "8"] and seen[2][-2:] == ["--threads", "32"]
+
+
+def test_cpu_runs_use_every_usable_cpu_unless_the_user_set_a_budget(
+    fake_binary, tmp_path, monkeypatch
+):
+    """Parakeet's runtime default is one thread on the Windows CPU build: 327 s for a 53 s clip, 42 s on 12."""
+    seen = []
+    launch = srv.subprocess.Popen
+
+    def spy(command, *args, **kwargs):
+        seen.append(command)
+        return launch(command, *args, **kwargs)
+
+    monkeypatch.setattr(srv.subprocess, "Popen", spy)
+    monkeypatch.setattr(srv, "select_backend", lambda binary, force_cpu: "cpu")
+    monkeypatch.delenv("UNSLOTH_CPU_THREADS", raising = False)
+    monkeypatch.setattr(srv.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(srv.os, "process_cpu_count", lambda: 12, raising = False)
+    srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
+    monkeypatch.setenv("UNSLOTH_CPU_THREADS", "3")
+    srv.AudioCppServer.start(KOKORO, str(tmp_path / "m.gguf")).stop()
+    assert seen[0][-2:] == ["--threads", "12"] and seen[1][-2:] == ["--threads", "3"]
 
 
 def test_a_custom_build_launches_on_a_backend_it_was_compiled_with(tmp_path, monkeypatch):

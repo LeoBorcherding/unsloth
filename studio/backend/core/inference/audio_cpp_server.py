@@ -554,8 +554,11 @@ class AudioCppServer:
         log_path = config_dir / "server.log"
         command = [binary, "--config", str(config_path), "--no-ui"]
         threads = _cpu_threads()
-        if threads is None and backend != "cpu":
-            # The runtime default (every core) thrashes on many-core hosts.
+        if threads is None and backend == "cpu":
+            # The runtime default can be one thread (Parakeet on the Windows CPU build: 8x slower than 12).
+            threads = getattr(os, "process_cpu_count", os.cpu_count)() or 1
+        elif threads is None:
+            # Host-side work only; every core thrashes on many-core hosts.
             threads = min(os.cpu_count() or 1, _GPU_HOST_THREADS)
         if threads:
             command += ["--threads", str(threads)]
