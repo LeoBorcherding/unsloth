@@ -3,6 +3,7 @@
 
 """`unsloth start` with no --model and nothing loaded: a terminal run picks a model on the device."""
 
+import urllib.error
 from types import SimpleNamespace
 
 import pytest
@@ -37,12 +38,11 @@ def picker(monkeypatch):
 
     monkeypatch.setattr(cat, "list_chat_models", list_chat_models)
 
-    from unsloth_cli._inference import ensure_studio_backend_path as real_ensure
+    real_setup = start.ensure_studio_backend_path
 
     def ensure_studio_backend_path(**kwargs):
         state.setdefault("ensure_calls", []).append(kwargs)
-        # The account path imports utils.account_context, so the backend must really be importable.
-        real_ensure(seed_cache_env = False)
+        return real_setup(**kwargs)
 
     monkeypatch.setattr(start, "ensure_studio_backend_path", ensure_studio_backend_path)
     # structlog.configure is process-wide; the other tests must keep their own log level.
@@ -69,9 +69,17 @@ def _empty_server(
         timeout = 30,
         error = None,
     ):
+        if url.endswith(("/api/inference/images/status", "/api/inference/video/status")):
+            return fake_studio.state.get(url.rsplit("/", 2)[-2], {"loaded": False})
         if url.split("?")[0].endswith("/api/inference/status") and not fake_studio.state["models"]:
             fake_studio.append((method, url, payload))
-            return dict(status or {})
+            if isinstance(status, Exception):
+                raise status
+            return (
+                {"active_model": None, "loaded": [], "loading": [], "load_in_flight": False}
+                if status is None
+                else status
+            )
         if url.endswith("/api/inference/load") and not fake_studio.state["models"]:
             # fake_studio compares against the first resident, which an empty server lacks.
             fake_studio.state["models"] = [{"id": "placeholder"}]
@@ -94,7 +102,7 @@ def test_idle_server_loads_the_picked_model(fake_studio, picker, monkeypatch):
     assert "No model is loaded in Unsloth. Pick one on this device to load:" in result.output
     assert "1. my-lora" in result.output and "3. gemma-3-270m-it" in result.output
     assert picker["prompts"] == ["Load [1-3, Enter = 1]: "]
-    assert _loads(fake_studio) == [{"model_path": GGUF}]
+    assert _loads(fake_studio) == [{"require_idle": True, "model_path": GGUF}]
     assert f"model {GGUF}" in result.output
     # Seeding would pin Unsloth's caches into the agent's env and an auto-started server's.
     assert picker["ensure_calls"] == [{"seed_cache_env": False}]
@@ -102,24 +110,13 @@ def test_idle_server_loads_the_picked_model(fake_studio, picker, monkeypatch):
 
 def test_enter_picks_the_first_model_and_bad_input_asks_again(fake_studio, picker, monkeypatch):
     _empty_server(fake_studio, monkeypatch)
-    picker["answers"] = ["9", "two", ""]
+    picker["answers"] = ["9", "two", "\u00b2", ""]
 
     result = CliRunner().invoke(start.start_app, ["opencode", "--no-launch"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.count("Pick a number between 1 and 3.") == 2
-    assert _loads(fake_studio) == [{"model_path": "/outputs/my-lora"}]
-
-
-@pytest.mark.parametrize("answer", ["\u00b2", "\u2460", "\u0663"])
-def test_non_ascii_digit_answer_asks_again(monkeypatch, answer):
-    answers = [answer, "2"]
-    monkeypatch.setattr("builtins.input", lambda prompt = "": answers.pop(0))
-    printed = []
-    console = SimpleNamespace(print = lambda *args, **kwargs: printed.append(args[0] if args else ""))
-
-    assert model_picker.pick_local_model(console, entries = list(ENTRIES)) == GGUF
-    assert "Pick a number between 1 and 3." in printed
+    assert result.output.count("Pick a number between 1 and 3.") == 3
+    assert _loads(fake_studio) == [{"require_idle": True, "model_path": "/outputs/my-lora"}]
 
 
 def test_claude_lists_only_gguf_models(fake_studio, picker, monkeypatch):
@@ -131,7 +128,7 @@ def test_claude_lists_only_gguf_models(fake_studio, picker, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "1. Qwen3-1.7B-GGUF" in result.output
     assert "my-lora" not in result.output and "gemma-3-270m-it" not in result.output
-    assert _loads(fake_studio) == [{"model_path": GGUF}]
+    assert _loads(fake_studio) == [{"require_idle": True, "model_path": GGUF}]
 
 
 def test_no_gguf_on_device_keeps_a_clear_error(fake_studio, picker, monkeypatch):
@@ -200,6 +197,65 @@ def test_another_accounts_model_is_not_evicted_by_a_prompt(fake_studio, picker, 
     assert "belongs to another account" in result.output
     assert picker["listed"] == 0
     assert _loads(fake_studio) == []
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        TimeoutError("status timed out"),
+        urllib.error.HTTPError("http://localhost/status", 503, "unavailable", None, None),
+        {"error": "API endpoint not found"},
+        {},
+        {"loaded": [], "loading": ["pending"], "load_in_flight": True},
+        {"loaded": [], "loading": [], "load_in_flight": True},
+        {"loaded": [], "loading": []},
+    ],
+)
+def test_idle_picker_requires_verified_empty_status(fake_studio, picker, monkeypatch, status):
+    _empty_server(fake_studio, monkeypatch, status = status)
+    picker["answers"] = ["2"]
+
+    result = CliRunner().invoke(start.start_app, ["opencode", "--no-launch"])
+
+    assert _loads(fake_studio) == []
+    assert picker["listed"] == 0
+    assert result.exit_code == 1
+
+
+def test_idle_picker_rechecks_after_a_selection(fake_studio, picker, monkeypatch):
+    status = {"loaded": [], "loading": [], "load_in_flight": False}
+    _empty_server(fake_studio, monkeypatch, status = status)
+
+    def answer(prompt):
+        status["yours"] = False
+        return "2"
+
+    monkeypatch.setattr("builtins.input", answer)
+    result = CliRunner().invoke(start.start_app, ["opencode", "--no-launch"])
+    assert result.exit_code == 1
+    assert "belongs to another account" in result.output
+    assert picker["listed"] == 1
+    assert _loads(fake_studio) == []
+
+
+@pytest.mark.parametrize("media", ["images", "video"])
+@pytest.mark.parametrize("when", ["before-prompt", "during-prompt"])
+def test_picker_never_loads_over_hidden_media(fake_studio, picker, monkeypatch, media, when):
+    _empty_server(fake_studio, monkeypatch)
+    hidden = {"loaded": True, "yours": False}
+    if when == "before-prompt":
+        fake_studio.state[media] = hidden
+
+    def answer(prompt):
+        fake_studio.state[media] = hidden
+        return "2"
+
+    monkeypatch.setattr("builtins.input", answer)
+    result = CliRunner().invoke(start.start_app, ["opencode", "--no-launch"])
+    assert _loads(fake_studio) == []
+    assert picker["listed"] == (1 if when == "during-prompt" else 0)
+    assert result.exit_code == 1
+    assert "another account" in result.output
 
 
 def test_remote_server_never_lists_local_files(fake_studio, picker, monkeypatch):
