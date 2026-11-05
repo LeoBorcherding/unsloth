@@ -165,7 +165,6 @@ class SampleRecorder:
 def _process_group() -> tuple[int, int]:
     try:
         import torch.distributed as dist
-
         if dist.is_available() and dist.is_initialized():
             return dist.get_rank(), dist.get_world_size()
     except Exception:  # noqa: BLE001 - no torch: one process
@@ -175,7 +174,6 @@ def _process_group() -> tuple[int, int]:
 
 def _all_gather(out: list, value) -> None:
     import torch.distributed as dist
-
     dist.all_gather_object(out, value)
 
 
