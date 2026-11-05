@@ -148,7 +148,6 @@ def test_rl_is_refused_for_an_audio_vlm(trainer, tmp_path):
     path.write_text(json.dumps({"prompt": "q", "answer": "a"}) + "\n", encoding = "utf-8")
     trainer.is_audio_vlm = True
     assert (
-        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo")
-        is None
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo") is None
     )
     assert "audio" in (trainer.training_progress.error or "")
