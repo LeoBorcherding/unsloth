@@ -326,6 +326,10 @@ export const uk = {
     defaultZoomSetting: "Масштаб за замовчуванням",
     defaultZoomSettingDescription:
       "Розмір сторінок під час відкриття. Скидання масштабу сторінки повертає до цього значення.",
+    minPageWidthSetting: "Мінімальна ширина сторінки",
+    minPageWidthSettingDescription: "У вузькій панелі зменшувати масштаб сторінок, щоб сайти показували версію для комп’ютера, а не для телефона.",
+    minPageWidthPanel: "Ширина панелі",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Сторінка нової вкладки",
     showSuggestedSetting: "Показувати рекомендовані сайти",
     showSuggestedSettingDescription:

@@ -324,6 +324,10 @@ export const fa = {
     defaultZoomSetting: "بزرگ‌نمایی پیش‌فرض",
     defaultZoomSettingDescription:
       "اندازهٔ صفحه‌ها هنگام باز شدن. بازنشانی بزرگ‌نمایی یک صفحه به این مقدار برمی‌گردد.",
+    minPageWidthSetting: "حداقل عرض صفحه",
+    minPageWidthSettingDescription: "در پنل باریک، صفحه‌ها را کوچک‌نمایی کن تا سایت‌ها چیدمان دسکتاپ را به‌جای چیدمان موبایل نشان دهند.",
+    minPageWidthPanel: "عرض پنل",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "صفحهٔ زبانهٔ جدید",
     showSuggestedSetting: "نمایش سایت‌های پیشنهادی",
     showSuggestedSettingDescription:

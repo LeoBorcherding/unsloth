@@ -27,6 +27,8 @@ interface BrowserPrefsState {
   /** Show ⌘/Ctrl-clicked links' tabs at once instead of in the background. */
   switchToNewTabs: boolean;
   defaultZoom: number;
+  /** Desktop pages: narrowest layout width in a narrow panel (MIN_PAGE_WIDTHS); 0 for the panel's. */
+  minPageWidth: number;
   showSuggestedSites: boolean;
   showRecentPages: boolean;
   saveHistory: boolean;
@@ -48,6 +50,7 @@ interface BrowserPrefsState {
   restoreSuggestions: () => void;
   setSwitchToNewTabs: (value: boolean) => void;
   setDefaultZoom: (value: number) => void;
+  setMinPageWidth: (value: number) => void;
   setShowSuggestedSites: (value: boolean) => void;
   setShowRecentPages: (value: boolean) => void;
   setSaveHistory: (value: boolean) => void;
@@ -71,6 +74,7 @@ export const useBrowserPrefsStore = create<BrowserPrefsState>()(
       hiddenSuggestions: [],
       switchToNewTabs: false,
       defaultZoom: 1,
+      minPageWidth: 0,
       showSuggestedSites: true,
       showRecentPages: true,
       saveHistory: true,
@@ -95,6 +99,7 @@ export const useBrowserPrefsStore = create<BrowserPrefsState>()(
       restoreSuggestions: () => set({ hiddenSuggestions: [] }),
       setSwitchToNewTabs: (switchToNewTabs) => set({ switchToNewTabs }),
       setDefaultZoom: (defaultZoom) => set({ defaultZoom }),
+      setMinPageWidth: (minPageWidth) => set({ minPageWidth }),
       setShowSuggestedSites: (showSuggestedSites) => set({ showSuggestedSites }),
       setShowRecentPages: (showRecentPages) => set({ showRecentPages }),
       setSaveHistory: (saveHistory) => set({ saveHistory }),

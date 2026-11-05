@@ -325,6 +325,10 @@ export const tr = {
     defaultZoomSetting: "Varsayılan yakınlaştırma",
     defaultZoomSettingDescription:
       "Sayfaların açıldığında ne kadar büyük görüneceği. Bir sayfanın yakınlaştırmasını sıfırlamak bu değere döndürür.",
+    minPageWidthSetting: "Minimum sayfa genişliği",
+    minPageWidthSettingDescription: "Dar bir panelde sayfaları uzaklaştırarak sitelerin telefon yerine masaüstü düzenini göstermesini sağla.",
+    minPageWidthPanel: "Panel genişliği",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Yeni sekme sayfası",
     showSuggestedSetting: "Önerilen siteleri göster",
     showSuggestedSettingDescription:

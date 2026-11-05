@@ -21,6 +21,7 @@ import { useBrowserHistoryStore } from "./history-store";
 import { decideNativeDownload } from "./native-downloads";
 import { outsideThread } from "./outside-thread";
 import { callNative as call, localOriginGranted, nativeClearing, onNativeViewsClosed, setLocalViewCloser } from "./native-support";
+import { fitPageWidth } from "./page-width";
 import { useBrowserPrefsStore } from "./prefs-store";
 import { type BrowserEntry, type BrowserTab, currentEntry, entryKey, useBrowserStore } from "./store";
 
@@ -727,7 +728,12 @@ function desiredView(): Desired {
     tabId: tab.id,
     url: entry.url,
     entry: entryKey(entry),
-    zoom: tab.zoom,
+    // The view is the panel's width in points: under the app's zoom, its CSS width times that zoom.
+    zoom: fitPageWidth(
+      tab.zoom,
+      rect.width * (getAppliedInterfaceZoom() || 1),
+      useBrowserPrefsStore.getState().minPageWidth,
+    ),
     bounds: {
       x: Math.round(rect.left),
       y: Math.round(rect.top),
@@ -1147,6 +1153,7 @@ export function startNativeViews(): () => void {
   };
 
   const unsubscribe = useBrowserStore.subscribe(schedule);
+  const unsubscribePrefs = useBrowserPrefsStore.subscribe(schedule);
   // The zoom lands after the resize it causes is measured, so the hole is placed again then.
   const unzoom = subscribeAppliedInterfaceZoom(() => {
     placeHole();
@@ -1179,6 +1186,7 @@ export function startNativeViews(): () => void {
   return () => {
     cancelAnimationFrame(frame);
     unsubscribe();
+    unsubscribePrefs();
     unzoom();
     overlays.disconnect();
     resizeObserver.disconnect();

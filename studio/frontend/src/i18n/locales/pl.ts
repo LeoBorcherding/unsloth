@@ -326,6 +326,10 @@ export const pl = {
     defaultZoomSetting: "Domyślne powiększenie",
     defaultZoomSettingDescription:
       "Jak duże są strony po otwarciu. Zresetowanie powiększenia strony przywraca tę wartość.",
+    minPageWidthSetting: "Minimalna szerokość strony",
+    minPageWidthSettingDescription: "W wąskim panelu pomniejszaj strony, aby witryny pokazywały układ na komputer zamiast układu na telefon.",
+    minPageWidthPanel: "Szerokość panelu",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Strona nowej karty",
     showSuggestedSetting: "Pokazuj sugerowane witryny",
     showSuggestedSettingDescription:

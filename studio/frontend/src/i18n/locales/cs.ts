@@ -326,6 +326,10 @@ export const cs = {
     defaultZoomSetting: "Výchozí přiblížení",
     defaultZoomSettingDescription:
       "Jak velké se stránky zobrazí při otevření. Obnovení přiblížení stránky se vrátí na tuto hodnotu.",
+    minPageWidthSetting: "Minimální šířka stránky",
+    minPageWidthSettingDescription: "V úzkém panelu stránky oddálit, aby weby zobrazily rozvržení pro počítač místo mobilního.",
+    minPageWidthPanel: "Šířka panelu",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Stránka nové karty",
     showSuggestedSetting: "Zobrazovat navrhované weby",
     showSuggestedSettingDescription:

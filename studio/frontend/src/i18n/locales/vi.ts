@@ -326,6 +326,10 @@ export const vi = {
     defaultZoomSetting: "Mức thu phóng mặc định",
     defaultZoomSettingDescription:
       "Kích thước hiển thị của trang khi mở. Đặt lại mức thu phóng của trang sẽ trở về giá trị này.",
+    minPageWidthSetting: "Chiều rộng trang tối thiểu",
+    minPageWidthSettingDescription: "Trong bảng hẹp, thu nhỏ trang để các trang web hiển thị bố cục máy tính thay vì bố cục điện thoại.",
+    minPageWidthPanel: "Chiều rộng bảng",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Trang thẻ mới",
     showSuggestedSetting: "Hiển thị trang web đề xuất",
     showSuggestedSettingDescription:

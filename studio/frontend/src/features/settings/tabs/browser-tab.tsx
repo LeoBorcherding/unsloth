@@ -19,6 +19,7 @@ import {
   DEFAULT_ZOOM_STEPS,
   HISTORY_RETENTION_DAYS,
   MAX_BOOKMARKS,
+  MIN_PAGE_WIDTHS,
   SEARCH_ENGINES,
   type SearchEngineId,
   browserPanelAvailable,
@@ -156,6 +157,8 @@ export function BrowserTab() {
   const showBookmarkEditor = useBrowserPrefsStore((state) => state.showBookmarkEditor);
   const switchToNewTabs = useBrowserPrefsStore((state) => state.switchToNewTabs);
   const defaultZoom = useBrowserPrefsStore((state) => state.defaultZoom);
+  const minPageWidth = useBrowserPrefsStore((state) => state.minPageWidth);
+  const setMinPageWidth = useBrowserPrefsStore((state) => state.setMinPageWidth);
   const showSuggestedSites = useBrowserPrefsStore((state) => state.showSuggestedSites);
   const showRecentPages = useBrowserPrefsStore((state) => state.showRecentPages);
   const hiddenSuggestions = useBrowserPrefsStore((state) => state.hiddenSuggestions.length);
@@ -338,6 +341,26 @@ export function BrowserTab() {
             </SelectContent>
           </Select>
         </SettingsRow>
+        {/* Desktop pages only: the web runtime's page frame has no layout zoom. */}
+        {native ? (
+          <SettingsRow
+            label={t("browser.minPageWidthSetting")}
+            description={t("browser.minPageWidthSettingDescription")}
+          >
+            <Select value={String(minPageWidth)} onValueChange={(value) => setMinPageWidth(Number(value))}>
+              <SelectTrigger className="w-40" aria-label={t("browser.minPageWidthSetting")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MIN_PAGE_WIDTHS.map((width) => (
+                  <SelectItem key={width} value={String(width)}>
+                    {width === 0 ? t("browser.minPageWidthPanel") : t("browser.minPageWidthPixels", { width })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        ) : null}
       </SettingsSection>
 
       <SettingsSection title={t("browser.addressBarTitle")}>
