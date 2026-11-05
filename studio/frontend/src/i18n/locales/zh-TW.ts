@@ -312,6 +312,10 @@ export const zhTW = {
     defaultZoomSetting: "預設縮放",
     defaultZoomSettingDescription:
       "頁面開啟時的顯示大小。重設頁面縮放後會回到這個值。",
+    minPageWidthSetting: "最小頁面寬度",
+    minPageWidthSettingDescription: "面板較窄時縮小頁面，讓網站顯示桌面版版面而不是手機版。",
+    minPageWidthPanel: "面板寬度",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "新分頁頁面",
     showSuggestedSetting: "顯示建議網站",
     showSuggestedSettingDescription:

@@ -326,6 +326,10 @@ export const id = {
     defaultZoomSetting: "Zoom default",
     defaultZoomSettingDescription:
       "Seberapa besar halaman tampil saat dibuka. Mengatur ulang zoom halaman akan kembali ke nilai ini.",
+    minPageWidthSetting: "Lebar halaman minimum",
+    minPageWidthSettingDescription: "Di panel yang sempit, perkecil halaman agar situs menampilkan tata letak desktop, bukan tata letak ponsel.",
+    minPageWidthPanel: "Lebar panel",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Halaman tab baru",
     showSuggestedSetting: "Tampilkan situs yang disarankan",
     showSuggestedSettingDescription:

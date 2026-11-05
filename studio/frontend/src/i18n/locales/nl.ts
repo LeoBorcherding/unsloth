@@ -327,6 +327,10 @@ export const nl = {
     defaultZoomSetting: "Standaardzoom",
     defaultZoomSettingDescription:
       "Hoe groot pagina's worden weergegeven als ze openen. Als je de zoom van een pagina opnieuw instelt, wordt deze waarde weer gebruikt.",
+    minPageWidthSetting: "Minimale paginabreedte",
+    minPageWidthSettingDescription: "Zoom pagina's in een smal paneel uit, zodat sites hun desktopindeling tonen in plaats van de telefoonindeling.",
+    minPageWidthPanel: "Paneelbreedte",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Pagina Nieuw tabblad",
     showSuggestedSetting: "Voorgestelde sites weergeven",
     showSuggestedSettingDescription:

@@ -314,6 +314,10 @@ export const th = {
     defaultZoomSetting: "การซูมเริ่มต้น",
     defaultZoomSettingDescription:
       "ขนาดของหน้าเว็บเมื่อเปิด การรีเซ็ตการซูมของหน้าจะกลับมาใช้ค่านี้",
+    minPageWidthSetting: "ความกว้างหน้าขั้นต่ำ",
+    minPageWidthSettingDescription: "ในแผงที่แคบ ให้ย่อหน้าเว็บเพื่อให้เว็บไซต์แสดงเลย์เอาต์สำหรับเดสก์ท็อปแทนโทรศัพท์",
+    minPageWidthPanel: "ความกว้างของแผง",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "หน้าแท็บใหม่",
     showSuggestedSetting: "แสดงไซต์ที่แนะนำ",
     showSuggestedSettingDescription: "ไซต์ที่คุณเข้าชมบ่อยจะแสดงเป็นทางลัดในแท็บใหม่",

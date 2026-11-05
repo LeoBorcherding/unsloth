@@ -328,6 +328,10 @@ export const es419 = {
     defaultZoomSetting: "Zoom predeterminado",
     defaultZoomSettingDescription:
       "El tamaño de las páginas al abrirse. Restablecer el zoom de una página vuelve a este valor.",
+    minPageWidthSetting: "Ancho mínimo de página",
+    minPageWidthSettingDescription: "En un panel angosto, reduce el zoom de las páginas para que los sitios muestren su diseño de escritorio en lugar del de celular.",
+    minPageWidthPanel: "Ancho del panel",
+    minPageWidthPixels: "{width} px",
     newTabPageTitle: "Página de nueva pestaña",
     showSuggestedSetting: "Mostrar sitios sugeridos",
     showSuggestedSettingDescription:
