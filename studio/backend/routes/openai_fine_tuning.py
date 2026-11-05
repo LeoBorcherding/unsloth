@@ -1146,6 +1146,19 @@ def _ordered_jobs(
     yield from ((job, False) for job in remaining)
 
 
+def _started_row(
+    job: dict[str, Any], live: dict[str, dict[str, Any]], via_api_key: bool
+) -> dict[str, Any]:
+    # Queued in the snapshot but started since: keep its place, report its run's status.
+    record = None if job["id"] in _ALIASES else _ALIAS_RUN.get(job["id"])
+    if record is None:
+        return job
+    if record[0] in live:
+        return live[record[0]]
+    run = get_run(record[0])
+    return _for_caller(_job_from_run(run), via_api_key) if run is not None else job
+
+
 def _list_job_page(
     pending: list[dict[str, Any]],
     live: dict[str, dict[str, Any]],
@@ -1154,6 +1167,7 @@ def _list_job_page(
     limit: int,
     via_api_key: bool,
 ) -> dict[str, Any]:
+    pending = [_started_row(job, live, via_api_key) for job in pending]
     jobs, seen = [], set()
     for row, is_run in _ordered_jobs(pending, live):
         # A job that starts mid-request: listed once, its queue id still matches the cursor.
@@ -1180,8 +1194,17 @@ async def list_fine_tuning_jobs(
 ):
     await asyncio.to_thread(_load_aliases)
     after_run = await _resolve(after) if after else None
+
     status = await _current_status(current_subject, via_api_key)
     live_id = _status_field(status, "job_id") if status is not None else None
+
+    # Snapshot queued jobs before awaiting individual run lookups.
+    pending = [
+        _for_caller(_queued_job(entry), via_api_key)
+        for entry in reversed(_ALIASES.values())
+        if _own_alias(entry.alias) is not None
+    ]
+
     live = {}
     if live_id and _status_field(status, "phase") != "idle":
         for run_id in reversed(_BATCHES.get(live_id, [live_id])):
@@ -1191,12 +1214,6 @@ async def list_fine_tuning_jobs(
                 if run_id == after_run:
                     after = job["id"]
 
-    # After the awaits, so a job that started meanwhile is listed as its run.
-    pending = [
-        _for_caller(_queued_job(entry), via_api_key)
-        for entry in reversed(_ALIASES.values())
-        if _own_alias(entry.alias) is not None
-    ]
     return await asyncio.to_thread(
         _list_job_page, pending, live, after, after_run, limit, via_api_key
     )
