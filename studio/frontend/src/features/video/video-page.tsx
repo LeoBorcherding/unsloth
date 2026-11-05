@@ -143,6 +143,13 @@ import {
   videoDimOptions,
   videoSizeLimits,
 } from "./video-size";
+import {
+  keptNumFrames,
+  resolveVideoFps,
+  restoredClipDuration,
+  videoDurationOptions,
+  videoFpsOptions,
+} from "./video-fps";
 import { usePersistedChoice } from "@/hooks/use-persisted-choice";
 import { useScrollFades } from "@/hooks/use-scroll-fades";
 import { ModelSelector } from "@/features/model-picker/components/model-selector";
@@ -1255,6 +1262,8 @@ function VideoGenerator({
   const [durationIntentSeconds, setDurationIntentSeconds] = useState(
     numFrames / FALLBACK_FPS,
   );
+  // A frame rate picked on a family that offers several; null keeps the family default.
+  const [pickedFps, setPickedFps] = useState<number | null>(null);
   const [advancedOpen, setAdvancedOpen] = usePersistedToggle(
     "unsloth_video_advanced_open",
   );
@@ -1486,24 +1495,19 @@ function VideoGenerator({
 
   const frameStep = status?.defaults?.frame_step ?? FALLBACK_FRAME_STEP;
   const frameOffset = status?.defaults?.frame_offset ?? FALLBACK_FRAME_OFFSET;
-  const fps = status?.defaults?.fps ?? FALLBACK_FPS;
+  const fpsOptions = useMemo(() => videoFpsOptions(status?.defaults), [status?.defaults]);
+  const fps = resolveVideoFps(status?.defaults, pickedFps);
   const durationTargets =
     status?.defaults?.duration_presets ?? FALLBACK_DURATION_TARGETS;
+  const minFrames = status?.defaults?.min_num_frames;
+  const maxFrames = status?.defaults?.max_num_frames;
 
-  // Frame counts closest to ~1s/2s/3s/5s at the current fps, deduped.
-  const durationOptions = useMemo<Array<{ frames: number; seconds: number }>>(() => {
-    const seen = new Set<number>();
-    const out: Array<{ frames: number; seconds: number }> = [];
-    for (const t of durationTargets) {
-      const desired = t * fps;
-      const k = Math.max(1, Math.round((desired - frameOffset) / frameStep));
-      const frames = k * frameStep + frameOffset;
-      if (seen.has(frames)) continue;
-      seen.add(frames);
-      out.push({ frames, seconds: frames / fps });
-    }
-    return out;
-  }, [frameStep, frameOffset, fps, durationTargets]);
+  // Frame counts closest to ~1s/2s/3s/5s at the current fps, inside the family's window, deduped.
+  const durationOptions = useMemo<Array<{ frames: number; seconds: number }>>(
+    () =>
+      videoDurationOptions(durationTargets, fps, frameStep, frameOffset, minFrames, maxFrames),
+    [frameStep, frameOffset, fps, durationTargets, minFrames, maxFrames],
+  );
 
   const { first: supportsFirstFrame, last: supportsLastFrame } = keyframeSupport(status);
   const supportsKeyframes = supportsFirstFrame || supportsLastFrame;
@@ -1704,10 +1708,17 @@ function VideoGenerator({
   }, [canvasKeyframe, matchedResolution]);
 
   const loadedFamily = status?.loaded ? status.family : null;
+  // A picked rate belongs to the family it was picked on.
+  useEffect(() => {
+    setPickedFps(null);
+  }, [loadedFamily]);
   const prevFamilyRef = useRef<string | null>(null);
+  const prevFpsRef = useRef(fps);
   useEffect(() => {
     const familyChanged = loadedFamily !== prevFamilyRef.current;
     prevFamilyRef.current = loadedFamily;
+    const fpsChanged = fps !== prevFpsRef.current;
+    prevFpsRef.current = fps;
     // Apply the family's default clip length, or every default run stays a ~1s clip.
     const applyFamilyDefault = shouldApplyModelDefaults(
       familySeeded.current,
@@ -1726,14 +1737,9 @@ function VideoGenerator({
         return;
       }
     }
-    setNumFrames((cur) => {
-      if (!familyChanged && durationOptions.some((o) => o.frames === cur)) return cur;
-      return (
-        durationOptions[
-          closestDurationIndex(durationOptions, durationIntentSeconds)
-        ]?.frames ?? cur
-      );
-    });
+    setNumFrames((cur) =>
+      keptNumFrames(durationOptions, cur, durationIntentSeconds, familyChanged || fpsChanged),
+    );
   }, [
     durationIntentSeconds,
     durationOptions,
@@ -2372,14 +2378,27 @@ function VideoGenerator({
       setAspect(matched.key);
       setPortrait(matched.portrait);
       setMatchSource(false);
-      // Restore the frame count when it lies on the current lattice.
-      if (durationOptions.some((o) => o.frames === video.num_frames)) {
+      // A family with a frame-rate picker takes the clip's rate back; its duration options follow.
+      if (fpsOptions?.includes(video.fps)) {
+        // The options at the clip's rate: its count only when this family's window takes it.
+        const option = restoredClipDuration(
+          videoDurationOptions(durationTargets, video.fps, frameStep, frameOffset, minFrames, maxFrames),
+          video.num_frames,
+          video.fps,
+        );
+        setPickedFps(video.fps);
+        if (option) {
+          setDurationIntentSeconds(option.seconds);
+          setNumFrames(option.frames);
+        }
+      } else if (durationOptions.some((o) => o.frames === video.num_frames)) {
+        // Restore the frame count when it lies on the current lattice.
         setDurationIntentSeconds(video.num_frames / fps);
         setNumFrames(video.num_frames);
       }
       toast.success("Settings restored to inputs");
     },
-    [sizeLimits, durationOptions, fps],
+    [sizeLimits, durationOptions, fps, fpsOptions, durationTargets, frameStep, frameOffset, minFrames, maxFrames],
   );
 
   // No periodic poll corrects a stale read, so only the newest ticket may write.
@@ -4556,13 +4575,43 @@ function VideoGenerator({
             </Select>
           </Field>
 
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-              Frame rate
-              <InfoHint>Playback frame rate, fixed per model.</InfoHint>
-            </span>
-            <span className="font-mono text-xs font-medium text-foreground">{fps} fps</span>
-          </div>
+          {fpsOptions == null ? (
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                Frame rate
+                <InfoHint>Playback frame rate, fixed per model.</InfoHint>
+              </span>
+              <span className="font-mono text-xs font-medium text-foreground">{fps} fps</span>
+            </div>
+          ) : status?.defaults?.fps_choices?.length ? (
+            <Field
+              label="Frame rate"
+              hint="Frames per second the model generates and the clip plays at. Durations above follow it."
+            >
+              <Select value={String(fps)} onValueChange={(v) => setPickedFps(Number(v))}>
+                <SelectTrigger aria-label="Frame rate">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {fpsOptions.map((f) => (
+                    <SelectItem key={f} value={String(f)}>
+                      {f} fps
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : (
+            <SliderField
+              label="Frame rate"
+              hint={`Frames per second the model generates and the clip plays at (${fpsOptions[0]} to ${fpsOptions[fpsOptions.length - 1]}). Durations above follow it.`}
+              value={fps}
+              min={fpsOptions[0]}
+              max={fpsOptions[fpsOptions.length - 1]}
+              step={1}
+              onChange={(v) => setPickedFps(Math.round(v))}
+            />
+          )}
 
           <SliderField
             label="Steps"
