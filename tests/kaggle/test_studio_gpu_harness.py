@@ -2680,3 +2680,52 @@ class TestTheTwoRulersAreReadInTheRightOrder:
         )
         assert failure is None
         assert detail["process_vram_mib"] == 2600
+
+
+def _backend_repo(tmp_path):
+    """A repo whose first commit has the single-file backend and whose second has the package."""
+    repo = tmp_path / "repo"
+    inference = repo / "studio" / "backend" / "core" / "inference"
+    inference.mkdir(parents = True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@example.invalid",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    }
+
+    def git(*a):
+        return subprocess.run(
+            ["git", "-C", str(repo), *a], check = True, capture_output = True, text = True, env = env
+        ).stdout.strip()
+
+    git("init", "-q")
+    (inference / "llama_cpp.py").write_text("LAYOUT = 'module'\n")
+    git("add", "-A")
+    git("commit", "-qm", "module")
+    base = git("rev-parse", "HEAD")
+    git("rm", "-q", "studio/backend/core/inference/llama_cpp.py")
+    (inference / "llama_cpp").mkdir(parents = True)  # git rm took the emptied directory
+    (inference / "llama_cpp" / "__init__.py").write_text("LAYOUT = 'package'\n")
+    git("add", "-A")
+    git("commit", "-qm", "package")
+    return repo, inference, base
+
+
+def test_base_leg_swaps_the_package_out_for_the_old_module(tmp_path):
+    repo, inference, base = _backend_repo(tmp_path)
+    (inference / "llama_cpp" / "__pycache__").mkdir()
+    payload = run_studio_gpu.Payload.__new__(run_studio_gpu.Payload)
+    payload.repo_root = repo
+
+    ok, blob = payload._checkout_tp_file(base)
+    assert ok, blob
+    # A package next to the module would shadow it, so the base leg must leave only the module.
+    assert (inference / "llama_cpp.py").read_text() == "LAYOUT = 'module'\n"
+    assert not (inference / "llama_cpp").exists()
+
+    ok, blob = payload._checkout_tp_file("HEAD")
+    assert ok, blob
+    assert not (inference / "llama_cpp.py").exists()
+    assert (inference / "llama_cpp" / "__init__.py").read_text() == "LAYOUT = 'package'\n"

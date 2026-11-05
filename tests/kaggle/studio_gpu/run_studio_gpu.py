@@ -919,6 +919,9 @@ class Payload:
         return self.record("server_flags", not failures, detail)
 
     _TP_FILE = "studio/backend/core/inference/llama_cpp.py"
+    # The backend is a package now, and a package shadows a module of the same name, so a leg
+    # swaps whichever of the two the ref has and removes the other.
+    _TP_PATHS = (_TP_FILE, "studio/backend/core/inference/llama_cpp")
 
     def _auto_tp_load(self, ratio: list[float] | None, *, force: bool) -> dict:
         """One auto-mode tensor-parallel load; uses force_reload, as LoadRequest silently drops force."""
@@ -977,18 +980,35 @@ class Payload:
         }
 
     def _checkout_tp_file(self, ref: str) -> tuple[bool, str]:
-        """Put ONE file at ``ref``. The two legs then differ by the PR, and by
+        """Put the llama.cpp backend at ``ref``. The two legs then differ by the PR, and by
         nothing else: same install, same binary, same weights, same session."""
         fetch = run(
             ["git", "-C", str(self.repo_root), "fetch", "--depth", "1", "origin", ref],
             timeout = 600,
         )
+        listed = run(
+            ["git", "-C", str(self.repo_root), "ls-tree", "--name-only", ref, "--", *self._TP_PATHS],
+            timeout = 120,
+        )
+        present = [p for p in (listed.stdout or "").split() if p in self._TP_PATHS]
+        if listed.returncode != 0 or not present:
+            return False, f"ls-tree rc={listed.returncode} fetch rc={fetch.returncode}: no backend at {ref}"
+        run(
+            ["git", "-C", str(self.repo_root), "rm", "-r", "-q", "-f", "--ignore-unmatch", "--", *self._TP_PATHS],
+            timeout = 120,
+        )
+        for rel in self._TP_PATHS:  # leftover __pycache__, or a file git rm refused
+            target = self.repo_root / rel
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors = True)
+            elif target.exists():
+                target.unlink()
         checkout = run(
-            ["git", "-C", str(self.repo_root), "checkout", ref, "--", self._TP_FILE],
+            ["git", "-C", str(self.repo_root), "checkout", ref, "--", *present],
             timeout = 120,
         )
         blob = run(
-            ["git", "-C", str(self.repo_root), "hash-object", self._TP_FILE],
+            ["git", "-C", str(self.repo_root), "rev-parse", f"{ref}:{present[0]}"],
             timeout = 120,
         )
         ok = checkout.returncode == 0
@@ -2677,7 +2697,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--base-sha",
         default = "",
         help = "run the auto tensor-parallel check against this revision FIRST, with "
-        "only studio/backend/core/inference/llama_cpp.py swapped, so the two "
+        "only the llama_cpp backend (module or package) swapped, so the two "
         "legs differ by the change under test and by nothing else. The base "
         "leg must reproduce the defect or the comparison is void.",
     )
