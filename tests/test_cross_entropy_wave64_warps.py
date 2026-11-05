@@ -4,6 +4,7 @@
 """Cross entropy launches must fit 1024 threads per block: 16 warps on wave64 AMD (gfx906 / gfx908 / gfx90a
 as well as the CDNA 3 / 4 archs is_cdna lists), 32 on NVIDIA and wave32 RDNA."""
 
+import contextlib
 import types
 
 import pytest
@@ -17,36 +18,62 @@ from unsloth.kernels import utils as utils_mod
 from unsloth.kernels.utils import MAX_FUSED_SIZE
 
 
-def _fake_target(
-    monkeypatch,
-    hip,
-    warp_size = None,
-):
-    target = types.SimpleNamespace(arch = "gfx906", warp_size = warp_size)
-    driver = types.SimpleNamespace(active = types.SimpleNamespace(get_current_target = lambda: target))
+def _fake_targets(monkeypatch, hip, warp_sizes):
+    # warp_sizes[i] is device i's warp size; the fake target reads whichever device is current.
+    current = [0]
+
+    @contextlib.contextmanager
+    def device(index):
+        previous, current[0] = current[0], index
+        try:
+            yield
+        finally:
+            current[0] = previous
+
+    def get_current_target():
+        return types.SimpleNamespace(arch = "gfx906", warp_size = warp_sizes[current[0]])
+
+    driver = types.SimpleNamespace(active = types.SimpleNamespace(get_current_target = get_current_target))
     monkeypatch.setattr(utils_mod, "is_hip", lambda: hip)
     monkeypatch.setattr(
         utils_mod, "triton", types.SimpleNamespace(runtime = types.SimpleNamespace(driver = driver))
     )
+    monkeypatch.setattr(torch.cuda, "device", device)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: current[0])
+
+
+@pytest.fixture
+def clear_warp_cache():
+    utils_mod._max_num_warps_at.cache_clear()
+    yield
+    utils_mod._max_num_warps_at.cache_clear()
 
 
 @pytest.mark.parametrize(
     "hip, warp_size, expected", [(False, None, 32), (True, 64, 16), (True, 32, 32)]
 )
-def test_max_num_warps_is_1024_threads_over_the_warp_size(hip, warp_size, expected, monkeypatch):
-    _fake_target(monkeypatch, hip, warp_size)
-    utils_mod.max_num_warps.cache_clear()
-    try:
-        assert utils_mod.max_num_warps() == expected
-    finally:
-        utils_mod.max_num_warps.cache_clear()
+def test_max_num_warps_is_1024_threads_over_the_warp_size(
+    hip, warp_size, expected, monkeypatch, clear_warp_cache
+):
+    _fake_targets(monkeypatch, hip, [warp_size])
+    assert utils_mod.max_num_warps() == expected
+    assert utils_mod.max_num_warps(0) == expected
+
+
+def test_max_num_warps_is_per_device_on_mixed_wave32_wave64(monkeypatch, clear_warp_cache):
+    # A wave32 device read first must not leave its cap of 32 on a wave64 device.
+    _fake_targets(monkeypatch, True, [32, 64])
+    assert utils_mod.max_num_warps(torch.device("cuda", 0)) == 32
+    assert utils_mod.max_num_warps(torch.device("cuda", 1)) == 16
+    assert utils_mod.max_num_warps(1) == 16
+    assert utils_mod.max_num_warps() == 32  # current device is still 0
 
 
 @pytest.mark.parametrize("warps", [16, 32])
 @pytest.mark.parametrize("vocab", [65537, 128256, 262144])
 def test_chunked_forward_on_hip_uses_the_warp_limit(warps, vocab, monkeypatch):
     monkeypatch.setattr(torch.version, "hip", "6.3")
-    monkeypatch.setattr(ce_mod, "max_num_warps", lambda: warps)
+    monkeypatch.setattr(ce_mod, "max_num_warps", lambda device = None: warps)
     ce_mod._chunked_forward_config_at.cache_clear()
     try:
         assert ce_mod._chunked_forward_config_at("cuda", 0, vocab) == (MAX_FUSED_SIZE, warps)

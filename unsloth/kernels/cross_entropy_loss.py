@@ -145,7 +145,7 @@ def _chunked_forward_config_at(device_type, index, vocab_size):
         if config is not None and (config[2] is None or vocab_size <= config[2]):
             return config[0], config[1]
     # 16 on wave64 AMD (gfx906 / gfx908 / gfx90a too): 32 warps would be 2048 threads, past the 1024 limit.
-    return MAX_FUSED_SIZE, max_num_warps()
+    return MAX_FUSED_SIZE, max_num_warps(index)
 
 
 def _chunked_forward_config(device, vocab_size):
@@ -364,7 +364,7 @@ class Fast_CrossEntropyLoss(torch.autograd.Function):
             BLOCK_SIZE, num_warps = calculate_settings(vocab_size)
             if is_cdna():
                 num_warps = num_warps // 2
-            num_warps = min(num_warps, max_num_warps())
+            num_warps = min(num_warps, max_num_warps(device))
             logsumexp = torch.empty(n_rows, dtype = torch.float32, device = device)
 
             with torch_gpu_device(device):
