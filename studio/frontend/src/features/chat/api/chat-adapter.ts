@@ -5581,6 +5581,7 @@ export function createOpenAIStreamAdapter(
       );
       const generationCandidate = isDurableRunCandidate({
         externalProvider: isExternalRequest,
+        savedConnection: Boolean(externalProvider?.id) && !externalApiKey,
         modelIsAudio: activeModel?.isAudio,
         loadedIsDiffusion: runtime.loadedIsDiffusion,
         // Turn-scoped, not thread-scoped: see currentTurnCarriesMedia above.

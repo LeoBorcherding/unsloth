@@ -263,6 +263,18 @@ test("an older backend's unknown-field refusal selects the legacy stream", async
   );
 });
 
+test("a refused external turn (inline key, older backend) selects the legacy stream", async () => {
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ detail: "Durable chat runs are available only for local inference" }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  await assert.rejects(
+    createChatGenerationRun(createInput()),
+    (error: unknown) => isLegacyFallbackChatGenerationAdmissionError(error),
+  );
+});
+
 test("missing history rows select the legacy stream", async () => {
   for (const [status, detail] of [
     [404, "Thread not found"],

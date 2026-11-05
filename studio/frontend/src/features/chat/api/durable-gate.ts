@@ -41,8 +41,10 @@ export function turnRequiresLegacyStream(requestPayload: unknown): boolean {
 
 /** Plain values the adapter already resolved, so the gate is a truth table. */
 export type DurableRunCandidate = {
-  /** A passthrough/external-provider turn: its own client owns the stream, so there is nothing to make durable. */
+  /** An external-provider turn. Durable only over a saved connection, whose key the server holds. */
   externalProvider?: boolean;
+  /** The connection is saved on the server and this turn sends no key, so the server can resume it alone. */
+  savedConnection?: boolean;
   /** The resolved model is an audio model - it runs on its own legacy path regardless of the gate. */
   modelIsAudio?: boolean;
   /** A diffusion model is loaded: that path has no durable run to join. */
@@ -64,7 +66,7 @@ export type DurableRunCandidate = {
 /** The adapter's durability conjunction, extracted unchanged so it can be tested as a truth table. */
 export function isDurableRunCandidate(input: DurableRunCandidate): boolean {
   return Boolean(
-    !input.externalProvider &&
+    (!input.externalProvider || input.savedConnection === true) &&
       input.modelIsAudio !== true &&
       input.loadedIsDiffusion !== true &&
       // Turn-scoped, not thread-scoped: a stale blob from an earlier turn must not refuse this one.

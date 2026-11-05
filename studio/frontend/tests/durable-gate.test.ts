@@ -68,11 +68,19 @@ test("a plain text turn on a persisted thread is a durable-run candidate", () =>
   assert.equal(isDurableRunCandidate(durableTurn), true);
 });
 
+test("a turn over a saved connection is a durable-run candidate", () => {
+  // The server holds the key, so the run and its tools outlive the tab (a locked phone).
+  assert.equal(
+    isDurableRunCandidate({ ...durableTurn, externalProvider: true, savedConnection: true }),
+    true,
+  );
+});
+
 const legacyCases: [string, Record<string, unknown>, string][] = [
   [
-    "an external-provider turn",
-    { externalProvider: true },
-    "its own client owns that stream, so there is no server run to reattach to",
+    "an external-provider turn whose key lives in the browser",
+    { externalProvider: true, savedConnection: false },
+    "the server cannot resume a turn without the key, and it never persists one",
   ],
   [
     "an audio model",
