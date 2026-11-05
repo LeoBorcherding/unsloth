@@ -440,6 +440,9 @@ const HUGGING_FACE_ONLY_ENTRIES: ReadonlySet<TranslationKey> = new Set([
 
 const FULL_INSTALL_ENTRY: TranslationKey = "settings.general.fullInstall.label";
 
+// Rows that render only when browser pages are native views (not on macOS 13 and earlier).
+const NATIVE_PAGES_ONLY_ENTRIES: ReadonlySet<TranslationKey> = new Set(["browser.minPageWidthSetting"]);
+
 // owner-only rows on tabs visible to every account.
 const OWNER_ONLY_ENTRIES: ReadonlySet<TranslationKey> = new Set([
   "settings.general.mlWarmup.sectionTitle",
@@ -463,12 +466,14 @@ export function renderedSearchEntries(
   hubSource: HubSource,
   isOwner = true,
   canUpgradeToFullInstall = false,
+  nativePages = true,
 ): TranslationKey[] {
   return index[tab].filter(
     (key) =>
       !(hubSource === "modelscope" && HUGGING_FACE_ONLY_ENTRIES.has(key)) &&
       (isOwner || !OWNER_ONLY_ENTRIES.has(key)) &&
-      (canUpgradeToFullInstall || key !== FULL_INSTALL_ENTRY),
+      (canUpgradeToFullInstall || key !== FULL_INSTALL_ENTRY) &&
+      (nativePages || !NATIVE_PAGES_ONLY_ENTRIES.has(key)),
   );
 }
 

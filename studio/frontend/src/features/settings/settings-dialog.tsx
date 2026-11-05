@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { type TranslationKey, useT } from "@/i18n";
 import { useHubSource } from "@/lib/hf-endpoint";
+import { useNativeBrowser } from "@/features/browser/native-support";
 import { MicIcon } from "@/lib/mic-icon";
 import { cn } from "@/lib/utils";
 import { useFullInstallUpgrade } from "@/hooks/use-full-install-upgrade";
@@ -295,6 +296,7 @@ export function SettingsDialog() {
   const stacked = useStackedLayout();
   const hubSource = useHubSource();
   const canUpgradeToFullInstall = useFullInstallUpgrade() !== null;
+  const nativePages = useNativeBrowser((state) => state.enabled);
   const { attach: attachRail, onScroll: onRailScroll, className: railFadeClass } = useScrollFades();
   // The list's own scroll bar width, so the tab pills keep equal side insets with or without one.
   const railRef = useCallback(
@@ -359,6 +361,7 @@ export function SettingsDialog() {
         hubSource,
         isOwner,
         canUpgradeToFullInstall,
+        nativePages,
       )
         .filter((key) => {
           if (t(key).toLowerCase().includes(q)) {
@@ -376,7 +379,7 @@ export function SettingsDialog() {
         tabMatches: tabLabel.toLowerCase().includes(q),
       };
     }).filter((r) => r.tabMatches || r.entries.length > 0);
-  }, [query, t, visibleTabs, hubSource, isOwner, canUpgradeToFullInstall]);
+  }, [query, t, visibleTabs, hubSource, isOwner, canUpgradeToFullInstall, nativePages]);
 
   const [pendingScroll, setPendingScroll] = useState<{
     tab: SettingsTab;

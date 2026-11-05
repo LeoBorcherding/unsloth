@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { fitPageWidth, MIN_PAGE_WIDTHS } from "../src/features/browser/page-width.ts";
-import { createSettingsSearchIndex } from "../src/features/settings/settings-search.ts";
+import { createSettingsSearchIndex, renderedSearchEntries } from "../src/features/settings/settings-search.ts";
 import { readSrc } from "./helpers/kit.ts";
 
 test("off keeps the tab's zoom whatever the panel width", () => {
@@ -41,5 +41,12 @@ test("settings search finds the row only where it renders", () => {
   const web = createSettingsSearchIndex({ desktop: false, closeToTray: false, menuBarIcon: false });
   assert.ok(desktop.browser.includes("browser.minPageWidthSetting"));
   assert.ok(!web.browser.includes("browser.minPageWidthSetting"));
+  // A desktop app without native pages (macOS 13 and earlier) hides the row too.
+  const rendered = (native: boolean) =>
+    renderedSearchEntries(desktop, "browser", "huggingface", true, false, native);
+  assert.ok(rendered(true).includes("browser.minPageWidthSetting"));
+  assert.ok(!rendered(false).includes("browser.minPageWidthSetting"));
+  assert.ok(rendered(false).includes("browser.downloadLocationSetting"));
+  assert.match(readSrc("features/settings/settings-dialog.tsx"), /canUpgradeToFullInstall,\s*nativePages,\s*\)/);
   assert.match(readSrc("features/settings/tabs/browser-tab.tsx"), /\{native \? \(\s*<SettingsRow\s*label=\{t\("browser\.minPageWidthSetting"\)\}/);
 });
