@@ -142,7 +142,6 @@ def test_picked_cached_row_loads_the_listed_quant_asked_for(
     cached_gguf_pick, picker, fake_studio, monkeypatch, mode, variant
 ):
     from pathlib import Path
-
     wanted = str(Path(cached_gguf_pick).parent / "tiny-Q8_0.gguf")
     _expect_pick_loads(
         mode, start.LoadOptions(gguf_variant = variant), wanted, picker, fake_studio, monkeypatch

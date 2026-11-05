@@ -5016,7 +5016,9 @@ def _snapshot_gguf_for_variant(model: str, variant: str) -> Optional[str]:
         v.filename
         for v in variants
         if v.quant in complete
-        and _answer_offers_variant([{"quant": v.quant, "filename": v.filename}], variant, strict = True)
+        and _answer_offers_variant(
+            [{"quant": v.quant, "filename": v.filename}], variant, strict = True
+        )
     ]
     best = pick_best_gguf(matches) if matches else None
     candidate = snapshot / best if best else None
