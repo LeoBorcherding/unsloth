@@ -5,7 +5,6 @@
 
 import re
 import textwrap
-from pathlib import Path
 
 import pytest
 from llama_cpp_source import PACKAGE_DIR

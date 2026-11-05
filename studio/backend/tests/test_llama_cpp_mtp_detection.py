@@ -72,7 +72,6 @@ from core.inference.llama_cpp import (
     _mla_mtp_auto_enabled,
     _swa_full_from_args_or_env,
 )
-from core.inference import llama_cpp as mod
 import subprocess as _subprocess
 from llama_cpp_source import package_source, package_tree
 

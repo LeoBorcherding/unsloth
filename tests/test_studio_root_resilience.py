@@ -14,7 +14,16 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STORAGE_ROOTS = REPO_ROOT / "studio" / "backend" / "utils" / "paths" / "storage_roots.py"
-LLAMA_CPP = REPO_ROOT / "studio" / "backend" / "core" / "inference" / "llama_cpp.py"
+LLAMA_CPP = REPO_ROOT / "studio" / "backend" / "core" / "inference" / "llama_cpp"
+
+
+def _llama_cpp_source() -> str:
+    """The llama_cpp package's modules joined in name order, as tests/_shared/llama_cpp_source does."""
+    return "\n".join(
+        path.read_text(encoding = "utf-8")
+        for path in sorted(LLAMA_CPP.glob("*.py"))
+        if path.name != "__init__.py"
+    )
 
 
 # storage_roots.py imports `loggers` from studio/backend, so put it on sys.path explicitly.
@@ -123,7 +132,7 @@ def test_kill_orphan_catches_oserror_from_studio_root():
     """Cleanup must not crash when studio_root() raises. _kill_orphaned_servers
     resolves the install root through the shared _resolved_studio_root_and_is_legacy()
     classifier, which swallows (ImportError, OSError, ValueError) on the probe."""
-    src = LLAMA_CPP.read_text(encoding = "utf-8")
+    src = _llama_cpp_source()
     assert "LlamaCppBackend._resolved_studio_root_and_is_legacy()" in _method_body(
         src, "_kill_orphaned_servers"
     ), "_kill_orphaned_servers must resolve the root via _resolved_studio_root_and_is_legacy()"
@@ -145,7 +154,7 @@ def _exec_search_roots_block(
     """Run _find_llama_server_binary's search_roots derivation -- plus the shared
     _resolved_studio_root_and_is_legacy() classifier it delegates to -- with a
     controlled studio_root() and resolve(), without importing the heavy module."""
-    src = LLAMA_CPP.read_text(encoding = "utf-8")
+    src = _llama_cpp_source()
     # End at the next sibling def so a docstring mentioning a decorator cannot truncate it.
     helper_start = src.index("def _resolved_studio_root_and_is_legacy")
     indent = " " * (helper_start - src.rfind("\n", 0, helper_start) - 1)

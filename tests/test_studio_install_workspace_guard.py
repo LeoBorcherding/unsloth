@@ -1746,9 +1746,12 @@ def test_main_py_read_studio_install_id_validates_hex_and_handles_missing(tmp_pa
 
 def test_llama_cpp_search_roots_handles_studio_root_oserror():
     """The shared _resolved_studio_root_and_is_legacy() handles studio_root() failures for both callers."""
-    llama_cpp = (
-        REPO_ROOT / "studio" / "backend" / "core" / "inference" / "llama_cpp.py"
-    ).read_text(encoding = "utf-8")
+    package = REPO_ROOT / "studio" / "backend" / "core" / "inference" / "llama_cpp"
+    llama_cpp = "\n".join(
+        path.read_text(encoding = "utf-8")
+        for path in sorted(package.glob("*.py"))
+        if path.name != "__init__.py"
+    )
 
     def _method_body(name: str) -> str:
         start = llama_cpp.index(f"def {name}")

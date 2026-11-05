@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 from llama_cpp_source import package_source
 
 
