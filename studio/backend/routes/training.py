@@ -2197,9 +2197,7 @@ async def _admit_training_request(
             normalize_reward_name,
         )
 
-        stored_specs = (
-            _stored_reward_specs(training_run_config(resume_run)) if resume_run else {}
-        )
+        stored_specs = _stored_reward_specs(training_run_config(resume_run)) if resume_run else {}
         if resume_run and _resume_reward_mismatch(stored_specs, request.grpo_rewards):
             raise HTTPException(
                 status_code = 409,
