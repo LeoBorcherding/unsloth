@@ -685,7 +685,8 @@ def test_an_explicit_delete_still_removes_a_detached_generated_assistant(chat_ho
 @pytest.mark.parametrize(
     "override,detail",
     [
-        ({"provider_id": "external"}, "only for local"),
+        ({"provider_id": "external", "encrypted_api_key": "inline"}, "only for local"),
+        ({"provider_type": "openai", "provider_base_url": "http://x/v1"}, "only for local"),
         ({"rag_scope": {"access_token": "secret"}}, "Credentials"),
         ({"rag_scope": {"signing_key": "secret"}}, "Credentials"),
         ({"rag_scope": {"ssh_key": "secret"}}, "Credentials"),

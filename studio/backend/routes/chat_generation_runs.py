@@ -75,6 +75,8 @@ _EXTERNAL_ROUTING_FIELDS = {
     "encrypted_api_key",
     "provider_base_url",
 }
+# What a saved-connection run persists; the key, base URL and headers stay in the saved row.
+_SAVED_PROVIDER_FIELDS = {"provider_id", "provider_type", "external_model"}
 # Attachments the composer sends inline. Durable replay has no representation for them.
 _MEDIA_FIELDS = {
     "image_base64",
@@ -200,7 +202,9 @@ def _sanitize_request(payload: CreateChatGenerationRun) -> dict[str, Any]:
     ]
     if _contains_sensitive_key(durable_config) or _contains_sensitive_key(message_envelopes):
         raise HTTPException(status_code = 400, detail = "Credentials cannot be persisted")
-    if any(raw.get(field) not in (None, "") for field in _EXTERNAL_ROUTING_FIELDS):
+    external = any(raw.get(field) not in (None, "") for field in _EXTERNAL_ROUTING_FIELDS)
+    # A saved connection resumes with no browser: the producer re-reads its key from the server's store.
+    if external and (not raw.get("provider_id") or raw.get("encrypted_api_key")):
         raise HTTPException(
             status_code = 400,
             detail = "Durable chat runs are available only for local inference",
@@ -249,8 +253,11 @@ def _sanitize_request(payload: CreateChatGenerationRun) -> dict[str, Any]:
     if request.permission_mode == "off" and not request._off_confirm_opt_out:
         # Persisted False would read as an explicit opt-out and skip the no-sandbox confirm gate.
         sanitized.pop("confirm_tool_calls", None)
-    for field in _EXTERNAL_ROUTING_FIELDS:
+    for field in _EXTERNAL_ROUTING_FIELDS - (_SAVED_PROVIDER_FIELDS if external else set()):
         sanitized.pop(field, None)
+    if external:
+        # The saved row supplies base URL and headers; request headers only ride an inline key.
+        sanitized.pop("extra_headers", None)
     sanitized["stream"] = True
     sanitized["thread_id"] = payload.threadId
     sanitized["cancel_id"] = payload.runId
@@ -360,7 +367,14 @@ async def create_chat_generation_run(
 ):
     sanitized = _sanitize_request(payload)
     images = detach_embedded_images(sanitized)
-    from routes.inference import _request_used_api_key
+    from routes.inference import _request_has_api_key, _request_used_api_key
+
+    # The producer spends the saved key as a UI session would, so an API-key caller keeps the live stream.
+    if sanitized.get("provider_id") and _request_has_api_key(request):
+        raise HTTPException(
+            status_code = 400,
+            detail = "Durable chat runs are available only for local inference",
+        )
 
     sanitized[db.API_MONITOR_ORIGIN_FIELD] = _request_used_api_key(request)
     if timezone_headers := _timezone_headers(request):

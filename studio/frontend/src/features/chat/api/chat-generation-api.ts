@@ -155,6 +155,10 @@ export function isLegacyFallbackChatGenerationAdmissionError(
     (error instanceof ChatGenerationApiError &&
       error.status === 400 &&
       error.message.startsWith("Unsupported durable request fields:")) ||
+    // An inline key or an API-key caller, or a backend that predates saved-connection runs.
+    (error instanceof ChatGenerationApiError &&
+      error.status === 400 &&
+      error.message === "Durable chat runs are available only for local inference") ||
     (error instanceof ChatGenerationApiError &&
       error.status === 404 &&
       error.message === "Thread not found") ||
