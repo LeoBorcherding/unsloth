@@ -55,18 +55,18 @@ def _connect_picked(mode, load, picker, fake_studio, monkeypatch, attempts):
 
 
 @pytest.mark.parametrize("mode", ["idle-server", "auto-start"])
-def test_picked_file_rejects_conflicting_quant_before_load(
+def test_picked_file_rejects_quant_its_snapshot_lacks(
     cached_gguf_pick, picker, fake_studio, monkeypatch, capsys, mode
 ):
     from utils.models.model_config import _direct_gguf_for_variant, detect_gguf_model
 
     assert detect_gguf_model(cached_gguf_pick) == cached_gguf_pick
-    assert _direct_gguf_for_variant(cached_gguf_pick, "Q8_0") is None
+    assert _direct_gguf_for_variant(cached_gguf_pick, "Q5_K_M") is None
     attempts = []
     with pytest.raises(typer.Exit) as error:
         _connect_picked(
             mode,
-            start.LoadOptions(gguf_variant = "Q8_0"),
+            start.LoadOptions(gguf_variant = "Q5_K_M"),
             picker,
             fake_studio,
             monkeypatch,
@@ -76,7 +76,7 @@ def test_picked_file_rejects_conflicting_quant_before_load(
     assert not attempts
     assert not _loads(fake_studio)
     output = capsys.readouterr()
-    assert "--gguf-variant Q8_0" in output.out + output.err
+    assert "--gguf-variant Q5_K_M" in output.out + output.err
     assert "--model" in output.out + output.err
 
 
@@ -122,3 +122,83 @@ def test_picked_directory_keeps_explicit_quant(
     else:
         _connect_picked(mode, load, picker, fake_studio, monkeypatch, attempts)
         assert _loads(fake_studio) == [{"model_path": directory, "gguf_variant": "Q8_0"}]
+
+
+def _expect_pick_loads(mode, load, expected, picker, fake_studio, monkeypatch):
+    attempts = []
+    if mode == "auto-start":
+        with pytest.raises(typer.Exit) as error:
+            _connect_picked(mode, load, picker, fake_studio, monkeypatch, attempts)
+        assert error.value.exit_code == 7
+        assert attempts == [(expected, load)]
+    else:
+        _connect_picked(mode, load, picker, fake_studio, monkeypatch, attempts)
+        assert _loads(fake_studio) == [{"model_path": expected, "gguf_variant": load.gguf_variant}]
+
+
+@pytest.mark.parametrize("mode", ["idle-server", "auto-start"])
+@pytest.mark.parametrize("variant", ["Q8_0", "q8_0"])
+def test_picked_cached_row_loads_the_listed_quant_asked_for(
+    cached_gguf_pick, picker, fake_studio, monkeypatch, mode, variant
+):
+    from pathlib import Path
+
+    wanted = str(Path(cached_gguf_pick).parent / "tiny-Q8_0.gguf")
+    _expect_pick_loads(
+        mode, start.LoadOptions(gguf_variant = variant), wanted, picker, fake_studio, monkeypatch
+    )
+
+
+@pytest.mark.parametrize("mode", ["idle-server", "auto-start"])
+def test_picked_ud_row_loads_the_ud_quant_asked_for(
+    tmp_path, picker, fake_studio, monkeypatch, mode
+):
+    ensure_studio_backend_path(seed_cache_env = False)
+    repo = tmp_path / "models--Org--Tiny-GGUF"
+    snapshot = repo / "snapshots" / ("b" * 40)
+    snapshot.mkdir(parents = True)
+    (repo / "refs").mkdir()
+    (repo / "refs" / "main").write_text("b" * 40)
+    for quant in ("UD-Q4_K_XL", "UD-Q6_K_XL"):
+        (snapshot / f"Tiny-{quant}.gguf").write_bytes(b"GGUF" + b"\0" * 4092)
+    row = {"repo_id": "Org/Tiny-GGUF", "cache_path": str(repo)}
+    target = catalog._cached_gguf_load_id(row)
+    assert target == str(snapshot / "Tiny-UD-Q4_K_XL.gguf")
+    monkeypatch.setattr(
+        catalog,
+        "list_chat_models",
+        lambda: [catalog.ModelEntry("Downloaded", "Tiny-GGUF", "UD-Q4_K_XL, UD-Q6_K_XL", target)],
+    )
+    _expect_pick_loads(
+        mode,
+        start.LoadOptions(gguf_variant = "UD-Q6_K_XL"),
+        str(snapshot / "Tiny-UD-Q6_K_XL.gguf"),
+        picker,
+        fake_studio,
+        monkeypatch,
+    )
+
+
+@pytest.mark.parametrize("mode", ["idle-server", "auto-start"])
+def test_picked_file_outside_a_cache_snapshot_still_rejects_other_quant(
+    tmp_path, picker, fake_studio, monkeypatch, capsys, mode
+):
+    ensure_studio_backend_path(seed_cache_env = False)
+    export = tmp_path / "exports"
+    export.mkdir()
+    for quant in ("Q4_K_M", "Q8_0"):
+        (export / f"tiny-{quant}.gguf").write_bytes(b"GGUF" + b"\0" * 4092)
+    target = str(export / "tiny-Q4_K_M.gguf")
+    monkeypatch.setattr(
+        catalog,
+        "list_chat_models",
+        lambda: [catalog.ModelEntry("Fine-tunes", "tiny-Q4_K_M", "gguf", target)],
+    )
+    attempts = []
+    with pytest.raises(typer.Exit) as error:
+        _connect_picked(
+            mode, start.LoadOptions(gguf_variant = "Q8_0"), picker, fake_studio, monkeypatch, attempts
+        )
+    assert error.value.exit_code == 1
+    assert not attempts
+    assert not _loads(fake_studio)

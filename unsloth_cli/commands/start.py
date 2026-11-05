@@ -4994,20 +4994,55 @@ def _can_ask_for_model() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _check_picked_gguf_variant(model: Optional[str], variant: Optional[str]) -> None:
+def _snapshot_gguf_for_variant(model: str, variant: str) -> Optional[str]:
+    """The file in a cached row's snapshot that *variant* names, if that quant is complete there.
+
+    A cached row lists every complete quant in its snapshot but loads one file, so an explicit
+    --gguf-variant for another listed quant has to move to that quant's file.
+    """
+    snapshot = next((p for p in Path(model).parents if p.parent.name == "snapshots"), None)
+    if snapshot is None:
+        return None
+    try:
+        from hub.utils.gguf import list_local_gguf_variants, pick_best_gguf
+        from hub.utils.inventory_scan import complete_snapshot_variants
+        from unsloth_cli._model_catalog import _gguf_file_as_the_loader_opens_it
+
+        variants, _ = list_local_gguf_variants(str(snapshot))
+        complete = complete_snapshot_variants(str(snapshot))
+    except Exception:
+        return None
+    matches = [
+        v.filename
+        for v in variants
+        if v.quant in complete
+        and _answer_offers_variant([{"quant": v.quant, "filename": v.filename}], variant, strict = True)
+    ]
+    best = pick_best_gguf(matches) if matches else None
+    candidate = snapshot / best if best else None
+    if candidate is None or not candidate.is_file():
+        return None
+    return _gguf_file_as_the_loader_opens_it(str(candidate))
+
+
+def _check_picked_gguf_variant(model: Optional[str], variant: Optional[str]) -> Optional[str]:
+    """The picked model to load with --gguf-variant, failing when the pick cannot serve it."""
     if not model or not variant:
-        return
+        return model
     from unsloth_cli._model_catalog import _is_gguf_file
 
     if not _is_gguf_file(model):
-        return
+        return model
     filename = Path(model).name
     labels = _direct_gguf_variant_labels(model)
     rows = [{"quant": label, "filename": filename} for label in labels]
     if variant.strip().lower() == filename.lower() or _answer_offers_variant(
         rows, variant, strict = True
     ):
-        return
+        return model
+    swapped = _snapshot_gguf_for_variant(model, variant)
+    if swapped:
+        return swapped
     _fail(
         f"Selected GGUF file {model} cannot use --gguf-variant {variant}. "
         "Choose the matching file, or pass --model naming the repository or directory "
@@ -5142,8 +5177,9 @@ def _connect(
     _refuse_npu_model(model)
     local_model_picked = False
     if model is None:
-        model = _pick_model_to_auto_start(serve, launch, gguf_only)
-        _check_picked_gguf_variant(model, load.gguf_variant)
+        model = _check_picked_gguf_variant(
+            _pick_model_to_auto_start(serve, launch, gguf_only), load.gguf_variant
+        )
         local_model_picked = model is not None
     requested = model
     explicit_connection = bool(model) and model.startswith(_CONNECTION_MODEL_PREFIX)
@@ -5176,8 +5212,7 @@ def _connect(
         if model is None and server is None:
             picked = _pick_model_for_idle_server(base, key, gguf_only)
             if picked is not None:
-                _check_picked_gguf_variant(picked, load.gguf_variant)
-                model = requested = picked
+                model = requested = _check_picked_gguf_variant(picked, load.gguf_variant)
                 local_model_picked = True
         connection = (
             None

@@ -37,8 +37,12 @@ def picker(monkeypatch):
 
     monkeypatch.setattr(cat, "list_chat_models", list_chat_models)
 
+    from unsloth_cli._inference import ensure_studio_backend_path as real_ensure
+
     def ensure_studio_backend_path(**kwargs):
         state.setdefault("ensure_calls", []).append(kwargs)
+        # The account path imports utils.account_context, so the backend must really be importable.
+        real_ensure(seed_cache_env = False)
 
     monkeypatch.setattr(start, "ensure_studio_backend_path", ensure_studio_backend_path)
     # structlog.configure is process-wide; the other tests must keep their own log level.
@@ -105,6 +109,17 @@ def test_enter_picks_the_first_model_and_bad_input_asks_again(fake_studio, picke
     assert result.exit_code == 0, result.output
     assert result.output.count("Pick a number between 1 and 3.") == 2
     assert _loads(fake_studio) == [{"model_path": "/outputs/my-lora"}]
+
+
+@pytest.mark.parametrize("answer", ["\u00b2", "\u2460", "\u0663"])
+def test_non_ascii_digit_answer_asks_again(monkeypatch, answer):
+    answers = [answer, "2"]
+    monkeypatch.setattr("builtins.input", lambda prompt = "": answers.pop(0))
+    printed = []
+    console = SimpleNamespace(print = lambda *args, **kwargs: printed.append(args[0] if args else ""))
+
+    assert model_picker.pick_local_model(console, entries = list(ENTRIES)) == GGUF
+    assert "Pick a number between 1 and 3." in printed
 
 
 def test_claude_lists_only_gguf_models(fake_studio, picker, monkeypatch):
