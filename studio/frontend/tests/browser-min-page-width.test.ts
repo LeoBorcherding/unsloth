@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { fitPageWidth, MIN_PAGE_WIDTHS } from "../src/features/browser/page-width.ts";
+import { createSettingsSearchIndex } from "../src/features/settings/settings-search.ts";
 import { readSrc } from "./helpers/kit.ts";
 
 test("off keeps the tab's zoom whatever the panel width", () => {
@@ -33,4 +34,12 @@ test("the desktop page view sends the fitted zoom, and re-syncs when the setting
   const view = readSrc("features/browser/native-view.ts");
   assert.match(view, /zoom: fitPageWidth\(\s*tab\.zoom,\s*rect\.width \* \(getAppliedInterfaceZoom\(\) \|\| 1\),\s*useBrowserPrefsStore\.getState\(\)\.minPageWidth,/);
   assert.match(view, /useBrowserPrefsStore\.subscribe\(schedule\)/);
+});
+
+test("settings search finds the row only where it renders", () => {
+  const desktop = createSettingsSearchIndex({ desktop: true, closeToTray: false, menuBarIcon: false });
+  const web = createSettingsSearchIndex({ desktop: false, closeToTray: false, menuBarIcon: false });
+  assert.ok(desktop.browser.includes("browser.minPageWidthSetting"));
+  assert.ok(!web.browser.includes("browser.minPageWidthSetting"));
+  assert.match(readSrc("features/settings/tabs/browser-tab.tsx"), /\{native \? \(\s*<SettingsRow\s*label=\{t\("browser\.minPageWidthSetting"\)\}/);
 });

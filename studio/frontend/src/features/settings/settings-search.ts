@@ -189,7 +189,6 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsTab, TranslationKey[]> = {
     "browser.tabsTitle",
     "browser.switchToNewTabsSetting",
     "browser.defaultZoomSetting",
-    "browser.minPageWidthSetting",
     "browser.addressBarTitle",
     "browser.searchEngineSetting",
     "browser.showFullUrlSetting",
@@ -422,7 +421,12 @@ export function createSettingsSearchIndex({
         ? (["settings.appearance.gpuRendering.label", key] as const)
         : [key],
     ),
-    browser: [...SETTINGS_SEARCH_INDEX.browser, "browser.downloadLocationSetting"],
+    // Desktop only: the rows render only when pages are native views.
+    browser: [
+      ...SETTINGS_SEARCH_INDEX.browser,
+      "browser.downloadLocationSetting",
+      "browser.minPageWidthSetting",
+    ],
     about: SETTINGS_SEARCH_INDEX.about.filter(
       (key) => key !== "settings.about.updates",
     ),
