@@ -105,8 +105,18 @@ async def test_an_api_key_caller_cannot_spend_the_saved_key_from_a_durable_run(t
 
 
 @pytest.mark.asyncio
-async def test_saved_connection_tool_run_finishes_with_no_client(thread, monkeypatch):
+@pytest.mark.parametrize("keyless_scope", ["off", "full"])
+async def test_saved_connection_tool_run_finishes_with_no_client(
+    thread, monkeypatch, keyless_scope
+):
     """The phone locks mid tool call: nothing follows the run, and the tool and reply still land."""
+    from auth import policy as auth_policy
+    from utils import keyless_api_access
+
+    # Full keyless access must not reclassify the producer's credential-less request as keyless.
+    monkeypatch.setattr(keyless_api_access, "get_keyless_api_access_scope", lambda: keyless_scope)
+    monkeypatch.setattr(keyless_api_access, "keyless_transport_allowed", lambda *_a: True)
+    monkeypatch.setattr(auth_policy, "installation_has_managed_accounts", lambda: False)
     _install(monkeypatch, "openai")
     seen = {}
 

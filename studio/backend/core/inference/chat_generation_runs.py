@@ -21,6 +21,7 @@ from core.inference.llama_keepwarm import InferenceActivityReservation
 from core.training.account_jobs import sweepable_job_accounts
 from utils.account_context import current_account_id, run_as
 from utils.first_token_timeout import FirstTokenWait, track_first_token_wait
+from utils.keyless_api_access import KEYLESS_ADMISSION_STATE_KEY
 from loggers import get_logger
 from models.inference import ChatCompletionRequest
 from state import active_generations
@@ -69,6 +70,7 @@ def _background_request(
     timezone_headers: dict[str, str] | None = None,
     *,
     via_api_key: bool | None = None,
+    saved_connection: bool = False,
 ) -> Request:
     scope = {
         "type": "http",
@@ -94,6 +96,8 @@ def _background_request(
         "state": {
             "generation_cancel_event": cancel_event,
             "api_monitor_via_api_key": via_api_key,
+            # Admission refused keyless and API-key callers, so full keyless access must not reclassify this credential-less request.
+            **({KEYLESS_ADMISSION_STATE_KEY: False} if saved_connection else {}),
         },
     }
 
@@ -742,7 +746,12 @@ class ChatGenerationSupervisor:
                 response = await produce_openai_chat_completions(
                     payload,
                     _background_request(
-                        self.app, run_id, cancel_event, timezone_headers, via_api_key = via_api_key
+                        self.app,
+                        run_id,
+                        cancel_event,
+                        timezone_headers,
+                        via_api_key = via_api_key,
+                        saved_connection = bool(request_payload.get("provider_id")),
                     ),
                     owner,
                     cancel_on_disconnect = False,
