@@ -65,12 +65,7 @@ def chat_load_in_flight():
 
 
 def chat_load_active() -> bool:
-    """Whether a chat load is in flight, spawned or not.
-
-    ``is_active`` only covers a live llama-server process, which an HF load does not have
-    until its GGUF finished downloading -- minutes during which the arbiter's evictor would
-    find nothing to cancel and grant the GPU to a second workload.
-    """
+    """Whether any chat load is in flight, spawned or not; is_active misses loads still downloading."""
     with _LOADS_IN_FLIGHT_LOCK:
         return _CHAT_LOADS_IN_FLIGHT > 0
 
@@ -82,24 +77,11 @@ def zero_vram_chat_load(
     needs_mmproj: bool = False,
     speculative_type: Optional[str] = None,
 ) -> bool:
-    """Whether a GGUF load will hold no VRAM at all, decided from the request.
-
-    A deliberate manual zero-offload load runs on the CPU and is launched with the GPUs hidden
-    from the child (see ``_cpu_only_zero_offload``), so it neither needs the GPU arbiter nor
-    should evict an image/video pipeline for it. This mirrors that launch-time mask so both
-    agree: an mmproj, a GPU drafter, a device pin or a surviving tensor mode all keep the GPUs
-    visible, and the mask is skipped on Vulkan. ``--mmproj`` and ``--model-draft`` are added by
-    the backend rather than being present in ``extra_args``, so their intent is passed in.
-    """
+    """Mirrors the launch GPU mask so a CPU-only load does not evict an image or video pipeline; mmproj and drafter intent are passed in."""
     if gpu_memory_mode != "manual" or gpu_layers != 0:
         return False
-    # Any speculative mode may launch a GPU drafter and only the request's own knobs are known here, so treat every selection as GPU-bearing except
-    # "off". Canonicalize first: the UI sends the literal "off", which a bare truthiness test read as "speculation requested".
-    # ...and an ABSENT mode is not a quiet "off": every consumer resolves None to
-    # "auto", where a sidecar can still be discovered and GPU-offloaded. Grouping None
-    # with "off" let a defaulted load skip acquire_for(CHAT) while the launch-time mask
+    # Every spec mode but off may launch a GPU drafter: canonicalize first, and an absent mode is auto, not off, or the arbiter is skipped.
     # -- reading the FINISHED argv, drafter included -- kept the GPUs visible: no
-    # arbiter, real VRAM, free to OOM a resident image pipeline.
     spec_mode = _canonicalize_spec_mode(speculative_type) or "auto"
     if needs_mmproj or spec_mode != "off":
         return False
@@ -134,14 +116,7 @@ def _with_gguf_load_marker(load: Callable):
             if hf_repo and _hub_download_blocks_gguf_load(
                 hf_repo,
                 intent.hf_variant,
-                # Mirrors the download gate below EXACTLY, which is the whole point:
-                # this load fetches the projector whenever the repo ships one and the
-                # extras have not opted out, switch or no switch, because only the
-                # file's metadata says whether it is an image tower or an audio
-                # encoder. So the switch must not relax the interlock here. It did
-                # briefly, and the two together let a vision-off load skip the 409 and
-                # then write into the shared Hub cache next to a running download job,
-                # which is the race this check exists to stop.
+                # Must mirror the download gate below exactly, or a vision-off load races a download job.
                 require_mmproj = bool(
                     intent.is_vision and not extra_args_disable_mmproj(intent.extra_args)
                 ),

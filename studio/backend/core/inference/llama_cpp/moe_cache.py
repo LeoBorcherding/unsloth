@@ -25,6 +25,20 @@ from .memory_policy import (
     _CPU_FFN_COUNT_FLAGS,
     _TENSOR_SPLIT_FLAGS,
 )
+from core.inference.llama_server_args import _flag_name
+from core.inference.lookup_tables import HOST_FORCED_TABLE_ARCHS as _HOST_FORCED_TABLE_ARCHS
+from core.inference.lookup_tables import HOST_FORCED_TABLE_MARKER as _HOST_FORCED_TABLE_MARKER
+from core.inference.lookup_tables import LAZY_READ_AUTO_MIN_BYTES as _LOOKUP_LAZY_READ_AUTO_MIN_BYTES
+from core.inference.lookup_tables import LAZY_READ_TENSORS as _LOOKUP_LAZY_READ_TENSORS
+from core.inference.lookup_tables import is_per_layer_embedding as _is_per_layer_embedding
+from core.inference.lookup_tables import lazy_read_bytes as _lookup_lazy_read_bytes
+import contextlib
+import contextvars
+import functools
+import sys
+from .batch_args import (
+    _override_targets_host,
+)
 
 # GPU cache of host-resident experts (ggml-org/llama.cpp#29887); "auto" is sized by the
 # fork's fitter (unslothai/llama.cpp#251). One run, so a retry can strip it.
@@ -133,13 +147,11 @@ _MOE_CACHE_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
-# TENSOR_READ_LAZY tensors (src/models/gemma4.cpp, qwen4exp.cpp): under --lazy-mode auto one
-# over 4 GiB stays mmap'd under every load mode (lazy_read::add), needing no pinned RAM or VRAM.
-_LAZY_READ_TENSORS: dict[str, tuple[str, ...]] = {
-    "gemma4": ("per_layer_token_embd.weight",),
-    "qwen4exp": ("per_layer_token_embd.weight",),
-}
-_LAZY_READ_AUTO_MIN_BYTES = 4 * 1024**3
+_LAZY_READ_TENSORS = _LOOKUP_LAZY_READ_TENSORS
+_LAZY_READ_AUTO_MIN_BYTES = _LOOKUP_LAZY_READ_AUTO_MIN_BYTES
+
+
+_LAZY_RESIDENT_MARGIN_FRAC = 0.10
 # Embedded NextN/MTP heads llama.cpp skips at load unless --spec-type draft-mtp, measured:
 # Nemotron 3.5 Super loads 2987 MiB less with MTP off (b11642 + ggml-org#30520).
 _NEXTN_SKIPPED_WITHOUT_MTP_ARCHS = frozenset({"nemotron_h_moe"})
@@ -189,6 +201,29 @@ def _argv_loads_pinned(argv: Iterable[str], env: Optional[Mapping[str, str]] = N
     return bool(reserves_ram and not mlock and not direct_io)
 
 
+@contextlib.contextmanager
+def _without_torch_gpu_probe():
+    token = _GPU_MEMORY_SKIP_TORCH.set(True)
+    try:
+        yield
+    finally:
+        _GPU_MEMORY_SKIP_TORCH.reset(token)
+
+
+def _gpu_device_node_present() -> bool:
+    """Whether this host exposes a GPU device node (ROCm, NVIDIA, WSL)."""
+    if sys.platform == "darwin":
+        return False
+    if os.name == "nt":
+        return True
+    return any(os.path.exists(p) for p in ("/dev/kfd", "/dev/nvidiactl", "/dev/dxg"))
+
+
+_GPU_MEMORY_SKIP_TORCH: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_GPU_MEMORY_SKIP_TORCH", default = False
+)
+
+
 def _effective_lazy_mode(
     extra_args: Optional[Iterable[str]],
     env: Optional[Mapping[str, str]] = None,
@@ -218,11 +253,106 @@ def _lazy_read_bytes(
     architecture: Optional[str], tensor_bytes: Mapping[str, int], mode: str
 ) -> int:
     """Bytes of ``tensor_bytes`` llama.cpp reads lazily under ``mode``."""
-    if mode not in ("auto", "on"):
+    return _lookup_lazy_read_bytes(architecture, tensor_bytes, mode)
+
+
+def _host_pinned_input_bytes(
+    scan: "Optional[tuple[Optional[str], Mapping[str, int], int]]",
+    extra_args: Optional[Iterable[str]] = None,
+    env: Optional[Mapping[str, str]] = None,
+    *,
+    lazy_mode: str = "off",
+    host_forced: Iterable[str] = (),
+) -> int:
+    """Bytes llama.cpp keeps on the host however many layers it offloads."""
+    if not scan:
         return 0
-    names = _LAZY_READ_TENSORS.get(architecture or "", ())
-    return sum(
-        int(size)
-        for name, size in tensor_bytes.items()
-        if name in names and (mode == "on" or int(size) > _LAZY_READ_AUTO_MIN_BYTES)
+    architecture, named, _experts = scan
+    streamed = _lazy_read_names(architecture, named, lazy_mode)
+    total = 0
+    for name, size in (named or {}).items():
+        if _is_per_layer_embedding(name):
+            if (
+                name in streamed
+                or architecture in host_forced
+                or not _override_places_tensor_on_device(name, extra_args, env)
+            ):
+                total += int(size)
+    token_embd = int((named or {}).get("token_embd.weight") or 0)
+    if token_embd and int((named or {}).get("output.weight") or 0):
+        if not _override_places_tensor_on_device("token_embd.weight", extra_args, env):
+            total += token_embd
+    return total
+
+
+def _lazy_read_names(
+    architecture: Optional[str], tensor_bytes: Mapping[str, int], mode: str
+) -> frozenset[str]:
+    """Names of ``tensor_bytes`` llama.cpp reads lazily under ``mode``. It picks the lazy
+    (CPU) buffer before applying ``-ot``, so these stay on the host whatever an override says."""
+    return frozenset(
+        name
+        for name, size in (tensor_bytes or {}).items()
+        if _lazy_read_bytes(architecture, {name: size}, mode)
     )
+
+
+@functools.lru_cache(maxsize = 8)
+def _host_forced_in_files(key: tuple) -> frozenset[str]:
+    """``_host_forced_table_archs`` for the files ``key`` names (path, size, mtime)."""
+    import mmap
+
+    for path, _size, _mtime in key:
+        try:
+            with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access = mmap.ACCESS_READ) as m:
+                if m.find(_HOST_FORCED_TABLE_MARKER) >= 0:
+                    return _HOST_FORCED_TABLE_ARCHS
+        except (OSError, ValueError):
+            continue
+    return frozenset()
+
+
+def _override_places_tensor_on_device(
+    name: str,
+    extra_args: Optional[Iterable[str]] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Whether an ``--override-tensor`` (argv or env) may put ``name`` on a device."""
+    source_env = os.environ if env is None else env
+    values: list[str] = []
+    env_value = str(source_env.get("LLAMA_ARG_OVERRIDE_TENSOR") or "").strip()
+    if env_value:
+        values.append(env_value)
+    args = [str(a) for a in extra_args or ()]
+    for i, raw in enumerate(args):
+        if _flag_name(raw) in {"-ot", "--override-tensor"}:
+            _, eq, inline = raw.partition("=")
+            value = inline if eq else (args[i + 1] if i + 1 < len(args) else "")
+            if value:
+                values.append(value)
+    for value in values:
+        for part in value.split(","):
+            pattern, eq, target = part.rpartition("=")
+            if not eq or not pattern:
+                continue
+            on_host = _override_targets_host(f"{pattern}={target}")
+            if "[:" in pattern:
+                # A POSIX class is std::regex syntax Python reads literally: unknown, so a host
+                if not on_host:
+                    return True
+                continue
+            try:
+                if not re.search(pattern, name):
+                    continue
+            except re.error:
+                return True
+            return not on_host
+    return False
+
+
+def _is_host_input_or_head_tensor(name: str) -> bool:
+    """token_embd, output.weight and any per-layer lookup table: the host-pinned input tensors."""
+    return name in _HOST_INPUT_HEAD_NAMES or _is_per_layer_embedding(name)
+
+
+_HOST_INPUT_HEAD_NAMES = frozenset({"token_embd.weight", "output.weight"})

@@ -19,6 +19,11 @@ from .launch_support import (
     _local_ssl_context,
 )
 from .log import logger
+from core.inference.inference_gate import holds_inference
+from .launch_support import (
+    _COUNT_TIMEOUT_FLOOR_S,
+    _count_timeout,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -37,22 +42,9 @@ class _TokenCountingMixin:
         continue_final_message: bool = False,
         should_abort = None,
         prefer_native: bool = False,
+        template_options = None,
     ) -> int:
-        """Count prompt tokens for a chat request via llama-server.
-
-        Non-strict callers keep the historical best-effort behavior and get 0 when a
-        count cannot be determined. Strict callers (public count_tokens endpoints)
-        raise instead: the text-only fallback is an approximation, not a count.
-
-        ``chat_template_kwargs`` reaches /apply-template unchanged, so a caller can
-        price a request rendered in a non-default reasoning mode.
-
-        ``should_abort`` is polled between the two llama-server calls. Admission is the
-        caller's job; this only stops a count that was admitted while idle from spending its
-        second round trip once the answer stopped mattering. Raises when it fires.
-
-        ``prefer_native`` tries /v1/chat/completions/input_tokens first (one round trip).
-        """
+        """Strict callers raise: the text-only fallback is an approximation, not a count; others get 0."""
         if not self.is_loaded:
             if strict:
                 raise RuntimeError("llama-server is not loaded")
@@ -88,10 +80,7 @@ class _TokenCountingMixin:
 
         _profile = self.markup_profile
         messages = neutralize_control_markup_in_messages(messages, None, _profile)
-        # The model's own profile, like its two neighbours. The curated sweep here made the
-        # count describe a different prompt from the one generation sends: a Llama profile
-        # has no "</think>", so generation leaves that text byte-exact while the count path
-        # was turning it into "< /think>" before /apply-template (#7066).
+        # Use the model's own profile so the count matches what generation sends.
         system_text = (
             neutralize_control_markup(system_text)
             if _profile is None
@@ -101,7 +90,9 @@ class _TokenCountingMixin:
 
         try:
             with httpx.Client(
-                timeout = 10,
+                timeout = httpx.Timeout(
+                    _COUNT_TIMEOUT_FLOOR_S, read = _count_timeout(messages, system_text, tools)
+                ),
                 headers = self._auth_headers,
                 trust_env = False,
                 verify = _local_ssl_context(),
@@ -143,6 +134,10 @@ class _TokenCountingMixin:
                         template_body = {"messages": render_messages}
                         if tools:
                             template_body["tools"] = llama_grammar_tools(tools)
+                        # These can affect the prompt rendered for a client-owned tool call.
+                        for key in ("tool_choice", "parallel_tool_calls", "response_format"):
+                            if template_options and key in template_options:
+                                template_body[key] = template_options[key]
                         # Layered over the load-time --chat-template-kwargs: only keys sent here move.
                         if chat_template_kwargs:
                             template_body["chat_template_kwargs"] = chat_template_kwargs
@@ -177,15 +172,18 @@ class _TokenCountingMixin:
                                 raise CountAborted()
                             return _tokenize(prompt), False
                     except CountAborted:
-                        # Not a template failure: swallowed, the text fallback tokenizes anyway,
-                        # which is the work being declined. Must precede the generic except.
+                        # Not a template failure. Must precede the generic except.
                         raise
+                    except httpx.TimeoutException:
+                        if strict:
+                            raise RuntimeError(
+                                "llama-server timed out counting the prompt"
+                            ) from None
                     except Exception:
                         pass
                     return None, False
 
-                # Qwen3.5+ templates raise on an empty render (#12327); a lone assistant turn is
-                # stripped as a prefill, so renders empty too. Retry behind an empty user turn.
+                # Qwen3.5+ templates raise on an empty render; retry behind an empty user turn.
                 renders_empty = not template_messages or (
                     len(template_messages) == 1
                     and isinstance(template_messages[0], dict)
@@ -210,9 +208,7 @@ class _TokenCountingMixin:
                 if strict:
                     raise RuntimeError("llama-server could not render the chat template")
 
-                # 2. Fallback: concatenate plain text and tokenize. Append a
-                # serialized form of the tools so they still contribute to the
-                # count when /apply-template is unavailable.
+                # Fallback: plain text plus serialized tools.
                 parts = []
                 if system_text:
                     parts.append(system_text)
@@ -268,8 +264,7 @@ class _TokenCountingMixin:
                     self._codec_failure.message = modelscope_missing(exc)
                     return False
         elif detected:
-            # csm / whisper / audio_vlm: track type but keep _is_audio False --
-            # GGUF TTS routing only fires for snac/bicodec/dac.
+            # Track the type but keep _is_audio False: GGUF TTS routing only fires for snac/bicodec/dac.
             with self._lock:
                 if not self._healthy:
                     return False
@@ -286,11 +281,15 @@ class _TokenCountingMixin:
         """Codec name on match, None on non-audio, raises on transport/JSON errors."""
         if not self.is_loaded:
             return None
-        with httpx.Client(timeout = 10, headers = self._auth_headers, trust_env = False) as client:
+        with httpx.Client(
+            timeout = 10,
+            headers = self._auth_headers,
+            trust_env = False,
+            verify = _local_ssl_context(),
+        ) as client:
 
             def _detok(tid: int) -> str:
-                # Non-200 means "marker not in vocab" -- keep probing.
-                # Transport / JSON errors still raise.
+                # Non-200 means marker not in vocab; transport/JSON errors still raise.
                 r = client.post(f"{self.base_url}/detokenize", json = {"tokens": [tid]})
                 if r.status_code != 200:
                     return ""
@@ -326,8 +325,7 @@ class _TokenCountingMixin:
                 return "dac"
         return None
 
-    # Prompt format per codec: (template, stop_tokens, needs_token_ids).
-    # Matches InferenceBackend._generate_snac/bicodec/dac.
+    # (template, stop_tokens, needs_token_ids); matches InferenceBackend._generate_*.
     _TTS_PROMPTS = {
         "snac": (
             "<custom_token_3>{text}<|eot_id|><custom_token_4>",
@@ -371,9 +369,7 @@ class _TokenCountingMixin:
         if LlamaCppBackend._codec_mgr is None:
             LlamaCppBackend._codec_mgr = AudioCodecManager()
 
-        # A second allocation: on CUDA for a zero-offload server it would hold VRAM the
-        # load is classified as not holding, which is what lets the route skip
-        # arbitration and survive training.
+        # Returns (wav_bytes, sample_rate); a watcher closes the client on cancel since the decode is one blocking POST; raises RuntimeError once cancelled.
         device = "cuda" if torch.cuda.is_available() and not self.holds_no_vram else "cpu"
         model_repo_path = audio_codec_path
 
@@ -390,6 +386,7 @@ class _TokenCountingMixin:
         LlamaCppBackend._codec_mgr.load_codec(audio_type, device, model_repo_path = model_repo_path)
         logger.info(f"Loaded audio codec for GGUF TTS: {audio_type}")
 
+    @holds_inference
     def generate_audio_response(
         self,
         text: str,
@@ -404,14 +401,7 @@ class _TokenCountingMixin:
         stats_holder: Optional[dict] = None,
         audio_options: Optional[dict] = None,
     ) -> tuple:
-        """
-        Generate TTS audio via llama-server /completion + codec decode.
-        Returns (wav_bytes, sample_rate).
-
-        ``cancel_event`` lets a Stop or a forced model swap end the request: the
-        decode is one blocking POST, so a watcher closes the client out from under
-        it rather than polling. Raises RuntimeError once cancelled.
-        """
+        """Imported here to avoid a cycle; scale from its own 300s floor, since a wedged server holds the inference count up and blocks unload and training."""
         if audio_type not in self._TTS_PROMPTS:
             raise RuntimeError(f"GGUF TTS does not support '{audio_type}' codec.")
 
@@ -466,8 +456,7 @@ class _TokenCountingMixin:
                 def _close_when_cancelled() -> None:
                     while not finished.wait(0.05):
                         if cancel_event.is_set():
-                            # Closing mid-request makes the blocking post raise
-                            # httpx.RequestError, the only way out of it.
+                            # Closing mid-request is the only way to unblock the post.
                             with contextlib.suppress(Exception):
                                 client.close()
                             return
@@ -487,8 +476,7 @@ class _TokenCountingMixin:
             if resp.status_code != 200:
                 raise RuntimeError(f"llama-server returned {resp.status_code}: {resp.text}")
 
-        # The codec decode below is GPU work with no interruption point, so check here:
-        # cancelling after this only wastes the decode it cannot stop.
+        # Codec decode can't be interrupted, so check cancel first.
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("Audio generation cancelled")
 

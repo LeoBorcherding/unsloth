@@ -42,6 +42,23 @@ from .server_log import (
     _llama_line_is_warning_or_error,
 )
 from .swa_cache import _resolve_swa_pattern
+from .binary_runtime import (
+    _HOST_RAM_HEADROOM_MIB,
+)
+from .core_types import (
+    _DRAFT_CONTEXT_FAILURE_MARKERS,
+    _METAL_BACKEND_POISONED_MARKERS,
+)
+from .draft_args import (
+    _extra_args_device,
+)
+from .hf_offline import (
+    _GGUF_MARKUP_FIRST_BYTES,
+)
+from .server_log import (
+    _LOOPBACK_REACHABLE_BIND_IPS,
+    _socket_owner_is_always_named,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -57,22 +74,116 @@ class _ProcessIoMixin:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
+    @staticmethod
+    def _health_listener_is_ours(
+        process,
+        port,
+        bind_host = None,
+    ) -> bool:
+        """False when the port answering /health is demonstrably not held by our child's tree.
+
+        _find_free_port releases the port before llama-server binds it, so another local user could
+        answer /health and receive every prompt plus the per-launch key. Their socket shows no pid
+        on Linux/macOS, so our own (readable) tree not listening counts as foreign. Unreadable
+        ownership keeps today's behaviour. On Windows psutil can report our live listener as NONE
+        and/or pid 0 (#15022), so only a named foreign pid refuses there."""
+        pid = getattr(process, "pid", None)
+        if not isinstance(pid, int) or not isinstance(port, int):
+            return True
+        # A child that already exited cannot be the server that answered.
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is not None:
+            return False
+        try:
+            import psutil
+            from core.inference.sd_cpp_server import _has_ancestor
+        except Exception:  # noqa: BLE001 -- optional dependency
+            return True
+        try:
+            root = psutil.Process(pid)
+            tree = [root, *root.children(recursive = True)]
+        except psutil.NoSuchProcess:
+            return False
+        except Exception:  # noqa: BLE001 -- access denied / platform quirk
+            return True
+
+        windows = _socket_owner_is_always_named()
+        bind_ips = set(_LOOPBACK_REACHABLE_BIND_IPS)
+        if bind_host:
+            try:
+                bind_ips.update(a[4][0] for a in socket.getaddrinfo(bind_host, port))
+            except OSError:
+                pass
+
+        def _listens(conn) -> bool:
+            laddr = getattr(conn, "laddr", None)
+            if not (
+                bool(laddr)
+                and getattr(laddr, "port", None) == port
+                and getattr(laddr, "ip", None) in bind_ips
+            ):
+                return False
+            if conn.status == psutil.CONN_LISTEN:
+                return True
+            # Windows can report the live listener as NONE: a TCP socket with no peer still is one.
+            return (
+                windows
+                and conn.status == psutil.CONN_NONE
+                and not getattr(conn, "raddr", None)
+                and getattr(conn, "type", socket.SOCK_STREAM) == socket.SOCK_STREAM
+            )
+
+        tree_readable = True
+        for member in tree:
+            try:
+                read = getattr(member, "net_connections", None) or member.connections
+                if any(_listens(c) for c in read(kind = "inet")):
+                    return True
+            except psutil.NoSuchProcess:
+                continue
+            except Exception:  # noqa: BLE001 -- access denied / platform quirk
+                tree_readable = False
+        tree_pids = {m.pid for m in tree}
+        foreign = None
+        try:
+            # Scan every listener: a foreign one listed before ours must not refuse our start.
+            for conn in psutil.net_connections(kind = "inet"):
+                # pid 0 is the System Idle Process on Windows: psutil's other "unknown owner".
+                if not _listens(conn) or conn.pid is None or (windows and conn.pid == 0):
+                    continue
+                if conn.pid in tree_pids or _has_ancestor(conn.pid, pid):
+                    return True
+                foreign = conn.pid
+        except Exception as exc:  # noqa: BLE001 -- permissions / platform quirks
+            logger.debug("llama-server port ownership check unavailable: %s", exc)
+        if foreign is not None:
+            logger.error(
+                "llama-server port %s is held by pid %s, not our child %s; refusing to use it",
+                port,
+                foreign,
+                pid,
+            )
+            return False
+        if tree_readable and not windows:
+            logger.error(
+                "llama-server port %s answered /health but our child %s is not listening on it; "
+                "refusing to use it",
+                port,
+                pid,
+            )
+            return False
+        return True
+
     # ── Stdout drain (prevents pipe deadlock on Windows) ─────────
 
     def _drain_stdout(self):
-        """Read subprocess stdout lines in a background thread.
-
-        Prevents a pipe-buffer deadlock on Windows (~4 KB buffer): without
-        draining, llama-server blocks on writes and never becomes healthy.
-        Each line is also teed to ``self._llama_log_fh`` when set, so a
-        post-mortem has the full output even if the crash predates the
-        drain-thread join in ``_wait_for_health``.
-        """
+        """Drains llama-server stdout in a background thread so a full ~4 KB Windows pipe cannot block it; tees each line to _llama_log_fh when set."""
         startup_len: Optional[int] = None
         log_bytes = 0
         levelled = to_info = False
         proc = self._process
         device_lost_seen = False
+        metal_poison = {"draft": False}
         try:
             for line in proc.stdout:
                 line = line.rstrip()
@@ -84,8 +195,7 @@ class _ProcessIoMixin:
                         head = _STDOUT_HEAD_MAX if startup_len is None else startup_len
                         head = min(head, _STDOUT_HEAD_MAX, len(lines))
                         del lines[head : len(lines) - _STDOUT_TAIL_KEEP]
-                    # Two forms across llama.cpp builds. Only readiness lines wake the
-                    # probe: waking on every tensor-load log spins startup.
+                    # Only readiness lines wake the probe; waking per tensor-load line spins startup.
                     line_lower = line.lower()
                     ready = "server is listening" in line_lower or "model loaded" in line_lower
                     if ready:
@@ -100,13 +210,30 @@ class _ProcessIoMixin:
                         levelled = True
                         to_info = level.group(1) in "WE" or (ready and level.group(1) == "I")
                         # E lines only: unprefixed lines can be a request dump with user text.
-                        if (
-                            not device_lost_seen
-                            and level.group(1) == "E"
-                            and any(marker in line for marker in _GPU_DEVICE_LOST_MARKERS)
-                        ):
-                            device_lost_seen = True
-                            self._retire_device_lost_server_soon(proc)
+                        if level.group(1) == "E":
+                            if any(m in line for m in _DRAFT_CONTEXT_FAILURE_MARKERS):
+                                metal_poison["draft"] = True
+                            # Startup OOM has its own retries; this one is a served child's.
+                            if startup_len is not None and self._is_gpu_memory_start_failure(line):
+                                self._gpu_oom_process = proc
+                            if not device_lost_seen and any(
+                                marker in line for marker in _GPU_DEVICE_LOST_MARKERS
+                            ):
+                                device_lost_seen = True
+                                self._retire_device_lost_server_soon(proc)
+                            elif (
+                                not device_lost_seen
+                                and not metal_poison.get("pending")
+                                and any(
+                                    marker in line for marker in _METAL_BACKEND_POISONED_MARKERS
+                                )
+                            ):
+                                # Not latched: a request can echo this text, so retirement confirms
+                                # a compute failure first.
+                                metal_poison["pending"] = True
+                                self._retire_device_lost_server_soon(
+                                    proc, metal_poison = metal_poison
+                                )
                     elif not levelled:
                         to_info = ready or _llama_line_is_warning_or_error(line, line_lower)
                     try:
@@ -144,8 +271,7 @@ class _ProcessIoMixin:
                                 except Exception:
                                     pass
         except Exception:
-            # Never let the drain thread die: a full stdout pipe can deadlock
-            # llama-server (Windows). Pipe-closed on exit is the common case.
+            # Never let the drain die: a full stdout pipe can deadlock llama-server on Windows.
             logger.debug("llama-server stdout drain stopped", exc_info = True)
         finally:
             # EOF means the process exited; wake the health loop immediately.
@@ -184,7 +310,8 @@ class _ProcessIoMixin:
             if elem_sz is not None:
                 f.seek(elem_sz * alen, 1)
             elif atype == 8:
-                for _ in range(alen):
+                from utils.models.gguf_metadata import skip_gguf_strings
+                for _ in range(alen - skip_gguf_strings(f, alen)):
                     slen = struct.unpack("<Q", f.read(8))[0]
                     f.seek(slen, 1)
             else:
@@ -205,22 +332,23 @@ class _ProcessIoMixin:
 
         if atype == 8:  # STRING: kept only for the delimiter-shaped entries (#7066).
             from core.inference.chat_template_helpers import delimiter_shaped_tokens
+            from utils.models.gguf_metadata import take_gguf_strings_by_first_byte
 
+            done, raws = take_gguf_strings_by_first_byte(f, alen, _GGUF_MARKUP_FIRST_BYTES)
             kept: list = []
-            for _ in range(alen):
+            for raw in raws:
+                try:
+                    kept.append(raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    continue
+            for _ in range(alen - done):
                 n = struct.unpack("<Q", f.read(8))[0]
                 raw = f.read(n)
-                # Only "<...>" / "[...]" entries survive delimiter_shaped_tokens, so skip
-                # the decode for the rest. UTF-8 is self-synchronising, so no multi-byte
-                # character starts with either byte and the first one settles it. The
-                # bytes are still read rather than seeked past: seeking would move the
-                # cursor differently on a short read, raise a different error on a bad
-                # length, and fail outright on a non-seekable stream. Decoding a
-                # six-figure vocabulary is the cost here, not reading it.
+                # Only <...> / [...] entries are kept, so skip decoding the rest; UTF-8 makes the first byte
+                # decisive. Still read, not seeked, so short reads and non-seekable streams behave the same.
                 if raw[:1] != b"<" and raw[:1] != b"[":
                     continue
-                # A vocabulary holds arbitrary bytes; a marker is text, so undecodable
-                # entries are simply not markers.
+                # Undecodable entries are not markers.
                 try:
                     kept.append(raw.decode("utf-8"))
                 except UnicodeDecodeError:
@@ -241,21 +369,7 @@ class _ProcessIoMixin:
 
     @classmethod
     def _gguf_path_wants_nested_mtp(cls, gguf_path: str) -> bool:
-        """May this target take a drafter from the ``MTP/`` folder?
-
-        Only ``qwen4exp``, and only with no head of its own. Both come from one
-        header read, via the same probe-instance trick as
-        ``_gguf_path_is_diffusion``: this runs before the load reads metadata into
-        ``self`` and must not overwrite the live model's.
-
-        Architecture gates it rather than the head count alone, because a repo can
-        publish an ``MTP/`` folder for a subset of its quants: Qwen3.8-27B writes
-        ``qwen35.nextn_predict_layers`` on all 24, 0 on the four whose head was
-        dropped, and ships one sidecar for those four. Head count alone would hand
-        it to them, a wider change than intended.
-
-        Fails closed on an unreadable header, onto the path every model took before
-        this fallback existed."""
+        """May this target take an MTP/ drafter? Only qwen4exp with no head of its own; arch-gated since MTP/ may cover some quants only; fails closed."""
         try:
             probe = object.__new__(cls)
             probe._model_identifier = "mtp-head-probe"
@@ -276,11 +390,7 @@ class _ProcessIoMixin:
     def _non_chat_gguf_refusal_for_path(
         cls, gguf_path: str, model_identifier: Optional[str]
     ) -> Optional[str]:
-        """``_non_chat_gguf_refusal`` for a file on disk, so it can be raised before Phase 1
-        tears the running model down -- refusing after costs the user their resident chat
-        model to answer a question the header already answers. Same probe-instance trick as
-        ``_gguf_path_is_diffusion``: reading into ``self`` would overwrite the live model's
-        metadata with a file we are about to reject."""
+        """Header check on a probe object, not self (which would overwrite live metadata), run before Phase 1 teardown so a refusal costs no resident model."""
         probe = object.__new__(cls)
         probe._model_identifier = model_identifier
         probe._read_gguf_metadata(gguf_path)
@@ -315,8 +425,7 @@ class _ProcessIoMixin:
                 return None
         except (OSError, ValueError):
             return None
-        # Recheck the recorded byte count of every shard against the set this
-        # snapshot still holds. Both are local, so reuse still avoids Hub calls.
+        # Recheck every shard's recorded size against this snapshot; both local, no Hub calls.
         try:
             if _cached_variant_sizes(_resolve_repo_id_casing(repo), variant, path) != sizes:
                 return None
@@ -326,12 +435,8 @@ class _ProcessIoMixin:
 
     @classmethod
     def non_chat_gguf_refusal_for_intent(cls, intent) -> Optional[str]:
-        """The header verdict for a resolved load intent, or None.
-
-        ``load_model``'s copy runs before its own teardown, but by then the ROUTE has already
-        evicted a resident Images/Video pipeline via ``acquire_for(CHAT)`` and cancelled the
-        running generations. Asking here first spares both; the in-load checks stay as the
-        backstop for paths that skip the route. Fails open exactly as they do."""
+        """Asks before the route evicts a resident Images/Video pipeline; fails open like the in-
+        load checks."""
         try:
             gguf_path = getattr(intent, "gguf_path", None)
             hf_repo = getattr(intent, "hf_repo", None)
@@ -345,9 +450,7 @@ class _ProcessIoMixin:
                     verdict = cls._non_chat_gguf_refusal_for_path(verified, identifier)
                     cls._hand_over_route_verdict(hf_repo, hf_variant, verdict)
                     return verdict
-                # Same offline window as the download: the probe asks the Hub before reading
-                # any local header, and those calls would otherwise wait out their retry
-                # backoff on an unreachable Hub.
+                # Same offline window as the download, so Hub calls do not wait out retry backoff.
                 with _hf_offline_if_unreachable():
                     verdict = cls._remote_non_chat_gguf_verdict(
                         hf_repo = hf_repo,
@@ -362,28 +465,7 @@ class _ProcessIoMixin:
         return None
 
     def host_offload_warning_for_intent(self, intent) -> Optional[str]:
-        """The host-RAM advisory for a resolved load intent, or None.
-
-        Advisory, never a refusal: the route LOGS this and loads anyway. It does not
-        reach the load response -- it records nothing, and ``load_model`` clears the
-        previous notice at its teardown anyway; the response carries the launch-time
-        notice instead. What this buys is a line in the log before ``acquire_for(CHAT)``
-        evicts a resident Images/Video pipeline, rather than only from deep inside
-        ``load_model`` once that teardown has happened.
-
-        Both capacities are read as PHYSICAL TOTALS, not as what is free right now. The
-        resident llama-server, Unsloth model and Images/Video pipeline hold VRAM and, through
-        a host KV cache, CPU-offloaded weights and locked mappings, host RAM as well, and the
-        route and ``load_model`` reclaim all of it after this runs. Pricing against the free
-        readings would warn about a switch to a model the reclaimed machine holds easily. Each
-        total is the ceiling on what the launch can ever see, and every narrowing the launch
-        applies to the pool (the ROCm arch gate, the Vulkan discrete preference, a ``gpu_ids``
-        pin) only shrinks it further, so this charges no more than the launch copy and can
-        warn about nothing the launch would call comfortable.
-
-        Only a local path is priced. An HF repo may not be downloaded yet, and resolving one
-        here would start a download the route has not committed to.
-        """
+        """Advisory only, never a refusal: prices physical RAM and VRAM totals, not free memory; local paths only, never a download."""
         try:
             gguf_path = getattr(intent, "gguf_path", None)
             if not gguf_path or getattr(intent, "hf_repo", None):
@@ -403,6 +485,8 @@ class _ProcessIoMixin:
             total_ram_mib = self._total_system_memory_mib()
             if total_ram_mib is None:
                 return None
+            if self._host_offload_fits_without_gpus(argv, total_ram_mib):
+                return None
             probed = self._get_gpu_memory(binary)
             # an igpu and a MIG/vGPU line report total 0, leaving the ceiling unknown
             if any(total <= 0 for _idx, _free, total in probed):
@@ -416,11 +500,24 @@ class _ProcessIoMixin:
             logger.debug("Host-RAM preflight failed for the route: %s", e)
         return None
 
-    # Each ask is a repo listing, a cache verification and a range request, every one bounded
-    # at 15s, so the route HANDS OVER what it learned rather than making a slow Hub pay twice.
-    # Written only by the route entry point and taken once by the load it belongs to, so a
-    # verdict can never outlive its load; the age bound only covers a route ask no load
-    # ever came for.
+    def _host_offload_fits_without_gpus(self, argv: list[str], total_ram_mib: int) -> bool:
+        """Whole GGUF fits RAM less headroom: every credit (VRAM, lazy read) only lowers the
+        priced bytes, so no GPU probe can warn. False when unsure or opted out (that path logs)."""
+        if self._host_offload_warning_opted_out():
+            return False
+        model_path = _extra_args_device(argv, self._ARGV_MODEL)
+        if not model_path:
+            return False
+        try:
+            model_bytes = self._get_gguf_size_bytes(model_path)
+        except Exception:  # noqa: BLE001
+            return False
+        return 0 < model_bytes and model_bytes / (1024 * 1024) <= (
+            total_ram_mib - _HOST_RAM_HEADROOM_MIB
+        )
+
+    # Each ask may take several 15s Hub calls, so the route hands its verdict to the load.
+    # Taken once by its own load; the TTL only covers a route ask no load came for.
     _HANDOFF_TTL_S = 120.0
     _route_verdict_handoff: Optional[
         tuple[tuple[Optional[str], Optional[str]], Optional[str], float]
@@ -451,26 +548,7 @@ class _ProcessIoMixin:
         hf_token: Optional[str],
         model_identifier: Optional[str],
     ) -> Optional[str]:
-        """``_non_chat_gguf_refusal_for_path`` for a repo load, decided from a header-sized
-        BYTE RANGE instead of the checkpoint, so the verdict lands before Phase 1 tears the
-        resident model down. The Model Hub sends a repo id for every Hub model, so leaving
-        this to the post-download check meant a media GGUF opened into a chat killed the
-        live model to answer a question its own header answers; downloading first would
-        trade the teardown for tens of GB.
-
-        A 256 KiB prefix is decisive for exactly the files this refuses: measured over the
-        Hub, flux / flux2 / cosmos / wan / sd3 finish the KV walk in 144-145 bytes and
-        LTX-2, the largest seen, in 3,987, while a chat model's ``tokenizer.ggml.tokens``
-        pushes its KV block into the megabytes (Qwen3-0.6B 5.93 MB, Llama-3.2-1B 7.82 MB) --
-        so a chat prefix cuts mid-KV, ``_gguf_header_parsed`` stays False and there is no
-        verdict.
-
-        Fails open at every step (no filename, unreachable Hub, a 200 instead of a 206, too
-        short a prefix) since the post-download check is the backstop. It can only make a
-        refusal cheaper, never refuse a load the full-file check would have allowed.
-
-        Takes the route's verdict for this intent when there is one, rather than repeating
-        the listing, cache verification and range request it just paid for."""
+        """Decides a repo load from a 256 KiB header prefix before Phase 1 teardown, without a download; fails open, never stricter than the full-file check."""
         handed_over = cls._take_route_verdict(hf_repo, hf_variant)
         if handed_over is not _MISS:
             logger.debug("Reusing the header verdict the route already took for %s", hf_repo)
@@ -504,21 +582,12 @@ class _ProcessIoMixin:
             gguf_filename, shards = _resolve_variant_gguf_files(hf_repo, hf_variant, hf_token)
             if not gguf_filename:
                 return None
-            # A cached copy answers this with no request, and is the only thing that can
-            # answer it with the Hub down. Resolved with the SAME precedence AND the same
-            # verification _download_gguf uses -- cached_gguf_for_load at
-            # verify_sizes = True, then the listing's filename -- because that is the file
-            # the load will open. Anything else (a truncated snapshot judged here but
-            # skipped there, a repo that renamed the file for a quant) lets the probe judge
-            # one GGUF and the load open another. verify_sizes fails open on unreachable
-            # metadata, so the probe still answers offline.
+            # Resolve with the same precedence and verification as _download_gguf so the probe judges
+            # the file the load will open. verify_sizes fails open offline.
             local = cached_gguf_for_load(hf_repo, hf_variant, verify_sizes = True, hf_token = hf_token)
             if local is None and not hf_variant:
-                # No variant means cached_gguf_for_load declines outright, so mirror the other
-                # half of _download_gguf: the complete candidate for this filename, size-checked
-                # against its own revision. Never the bare local path -- a candidate the verified
-                # lookup just REJECTED would come straight back through it, and the probe would
-                # judge a truncated snapshot the load is about to redownload.
+                # No variant: mirror _download_gguf's other half. Never the bare local path, which would
+                # bring back a candidate the verified lookup rejected.
                 candidate = _cached_complete_candidate(hf_repo, gguf_filename, list(shards))
                 if candidate is not None and _cached_candidate_matches_revision_size(
                     hf_repo, candidate, hf_token
@@ -533,8 +602,7 @@ class _ProcessIoMixin:
             if len(prefix) < 24:
                 return None
             with tempfile.TemporaryDirectory(prefix = "unsloth-gguf-probe-") as probe_dir:
-                # Named after the real file: a GGUF declaring no architecture is judged by
-                # its name, and a temp name would lose the page pointer.
+                # Named after the real file: a GGUF declaring no architecture is judged by its name, and a temp name would lose the page pointer.
                 probe_path = os.path.join(probe_dir, os.path.basename(gguf_filename))
                 with open(probe_path, "wb") as handle:
                     handle.write(prefix)
@@ -544,13 +612,8 @@ class _ProcessIoMixin:
             return None
 
     def _read_gguf_metadata(self, gguf_path: str) -> None:
-        """Read context_length, architecture params, and chat_template from a GGUF header.
-
-        Parses only the KV pairs we need (~30ms even for multi-GB files).
-        For split GGUFs, metadata is always in shard 1.
-        """
-        # Reset metadata so stale flags (e.g. _supports_reasoning) don't
-        # carry over when switching models.
+        """Metadata lives in shard 1 of split GGUFs; per-model flags are reset first so none carry over."""
+        # Reset so stale flags do not carry over when switching models.
         self._context_length = None
         self._chat_template = None
         self._empty_chat_render_refused = False
@@ -599,6 +662,7 @@ class _ProcessIoMixin:
         self._shared_kv_layers = None
         self._nextn_predict_layers = None
         self._architecture = None
+        self._gguf_type = None
         self._is_diffusion = False
         self._gguf_header_parsed = False
         self._gguf_split_index = None
@@ -607,6 +671,7 @@ class _ProcessIoMixin:
             canvas_seen = False
             WANTED = {
                 "general.architecture",
+                "general.type",
                 "tokenizer.chat_template",
                 # Vocab size = tokens array length (no vocab_size key in many GGUFs).
                 "tokenizer.ggml.tokens",
@@ -643,9 +708,7 @@ class _ProcessIoMixin:
                 # Set by the loop's `else` below: True only if no truncation `break` fired.
                 kv_complete = False
                 for _ in range(kv_count):
-                    # Tolerate truncated input (e.g. a partial header from an
-                    # HTTP byte-range fetch): bail out so the resolver
-                    # fallback runs on whatever we parsed.
+                    # Tolerate truncated input (partial HTTP range header): stop and let the resolver fallback run on what was parsed.
                     try:
                         key_len_bytes = f.read(8)
                         if len(key_len_bytes) < 8:
@@ -659,12 +722,9 @@ class _ProcessIoMixin:
                         if len(vtype_bytes) < 4:
                             break
                         vtype = struct.unpack("<I", vtype_bytes)[0]
-                        # gguf-split puts the whole metadata block in shard 1 and gives every
-                        # later shard only split.no / split.count / split.tensors.count
-                        # (measured on unsloth/DeepSeek-R1-GGUF: shard 1 has 48 KV pairs from
-                        # general.architecture = "deepseek2", shard 2 has those 3). Read the
-                        # INDEX, not the presence: shard 1 carries these keys too, so presence
-                        # alone would cover a whole set rather than its tail.
+                        # gguf-split puts all metadata in shard 1; later shards carry only split.*
+                        # keys. Read the index,
+                        # not presence, since shard 1 has these keys too.
                         if key == "split.no":
                             width = _GGUF_UINT_WIDTHS.get(vtype)
                             if width is not None:
@@ -688,6 +748,8 @@ class _ProcessIoMixin:
                                 val_s = f.read(slen).decode("utf-8")
                                 if key.startswith("general.") and key != "general.architecture":
                                     general[key] = val_s
+                                if key == "general.type":
+                                    self._gguf_type = val_s.strip().lower()
                                 if key == "general.architecture":
                                     arch = val_s
                                     self._architecture = val_s
@@ -753,10 +815,7 @@ class _ProcessIoMixin:
                                     self._vocab_size = int(alen)
                                 val_a = self._gguf_read_array_value(f, atype, alen)
                                 if key == "tokenizer.ggml.tokens" and val_a is not None:
-                                    # Only the delimiter-shaped entries are kept, a few
-                                    # hundred out of a six-figure vocab, so the sweep can
-                                    # tell this model's own sentinels from another family's
-                                    # without holding the whole vocabulary (#7066).
+                                    # Keep only delimiter-shaped entries, a few hundred of a six-figure vocab, not the whole vocabulary, enough to separate sentinels across model families.
                                     from core.inference.chat_template_helpers import (
                                         delimiter_shaped_tokens,
                                     )
@@ -800,8 +859,7 @@ class _ProcessIoMixin:
                     self._nextn_predict_layers,
                 )
 
-            # Decide diffusion routing before the SWA resolver below: it can raise on an arch transformers
-            # does not know, which would otherwise drop a DiffusionGemma model to plain llama-server.
+            # Decide diffusion routing before the SWA resolver: it can raise on an unknown arch and drop DiffusionGemma to plain llama-server.
             self._is_diffusion = bool(
                 (arch and arch.lower().startswith("diffusion")) or canvas_seen
             )
@@ -821,8 +879,7 @@ class _ProcessIoMixin:
                     (i + 1) % sliding_window_pattern_period != 0 for i in range(self._n_layers)
                 ]
 
-            # Otherwise hand off to the resolver (cache / bootstrap / transformers / HF). Diffusion models
-            # skip it: they do not use Unsloth's SWA pattern and the resolver can raise for them.
+            # Diffusion models skip the resolver: no SWA pattern, and it can raise for them.
             if (
                 self._sliding_window_pattern is None
                 and self._sliding_window
@@ -855,14 +912,10 @@ class _ProcessIoMixin:
                     hf_repo_candidates,
                 )
 
-            # Only with the whole walk done does ``_architecture is None`` mean "declares no
-            # architecture" rather than "the read stopped early" -- what the preflight needs.
+            # Only a complete walk means _architecture None is 'declares none', not 'read stopped early'.
             self._gguf_header_parsed = kv_complete
 
-            # Ten call sites reach this, each via its own throwaway probe, and one
-            # estimate-memory POST walks the header 3-5 times: 140 of 296 log lines
-            # over a 20s four-tab session. The facts are identical every time, so only
-            # the first read of a given file says them out loud.
+            # Many call sites re-read the header per request; only log the first read of a file.
             first_read = _note_gguf_metadata_read(gguf_path)
             level = "info" if first_read else "debug"
             log_at = logger.info if first_read else logger.debug

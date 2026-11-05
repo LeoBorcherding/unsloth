@@ -69,49 +69,12 @@ class _KvCacheEstimateMixin:
         flash_attn: bool = True,
         cache_type_kv: Optional[str] = None,
     ) -> "list[int]":
-        """Relative KV size per layer, or [] when the shape is uniform/unknown.
-
-        Only the RATIOS matter: the planner scales this to the byte-accurate total
-        it already has, so it never becomes a second, competing estimate of the
-        cache size. It exists because the total says nothing about WHERE the big
-        caches land, which on a multi-device split is the whole question -- a
-        sliding-window layer holds a window's worth of cells while a
-        full-attention layer holds the entire context, ~100x more at 128K against
-        a 1K window (llama-kv-cache-iswa.cpp:69-104).
-
-        The cell geometry MUST be the one the total was priced at, so the launch
-        knobs that change it travel too: ``--swa-full`` collapses the two cache
-        sizes into one, and the compact SWA allowance is per-slot plus a
-        micro-batch and padded (_estimate_kv_cache_bytes path 3), not a bare
-        ``min(window, n_ctx)``. Pricing a ratio the total does not have moves cache
-        bytes onto the wrong card, a per-device shortfall under the ``--fit off``
-        the plan pins.
-
-        Trailing layers that reuse an earlier layer's cache get weight 0: Gemma 3n
-        / Gemma 4 set ``n_layer_kv_from_start = n_layer_all - shared_kv_layers``
-        and ``llama_hparams::has_kv`` is false past it (llama-hparams.cpp:275-279),
-        so they allocate nothing. Giving them weight would spread the same total
-        over layers that hold no cache.
-
-        Only ever describes _estimate_kv_cache_bytes PATH 3, which picks its path
-        before it looks at the window. The earlier paths price a different
-        quantity: path 1 (MLA) caches one compressed K latent per layer with NO V
-        and no window/full distinction, path 2 (hybrid recurrent) caches only 1 in
-        full_attention_interval layers. A window-shaped vector against either is a
-        different model of the cache, not an approximation, so answer [] and let
-        the planner abstain. Reachable, not hypothetical: dots3note reads
-        KV_LORA_RANK and ATTENTION_SLIDING_WINDOW(_PATTERN) in the same loader.
-
-        Omits the per-slot context-checkpoint extra deliberately: llama.cpp's
-        checkpoints are HOST buffers (common/common.cpp:2282-2297), so no VRAM
-        total this is scaled against contains them either.
-        """
+        """Only ratios, scaled to the byte total, so cell geometry must match it (incl --swa-full); [] off the SWA path; shared-cache layers weight 0."""
         pattern = self._sliding_window_pattern
         n_layers = self._n_layers or 0
         if not pattern or n_layers <= 0:
             return []
-        # Mirror _estimate_kv_cache_bytes' branch order: anything it returns before
-        # path 3 is a shape this vector cannot describe.
+        # Mirror _estimate_kv_cache_bytes' branch order.
         if self._kv_lora_rank is not None:
             return []
         if self._ssm_inner_size is not None and self._full_attention_interval is not None:
@@ -137,13 +100,8 @@ class _KvCacheEstimateMixin:
             ubatch = max(0, int(self._DEFAULT_N_UBATCH if n_ubatch is None else n_ubatch))
             swa_limit = int(swa) * (slots if kv_unified else 1) + ubatch
             swa_cells = max(1, _pad_kv_cells(min(cells_per_stream, swa_limit)) * streams)
-        # With flash attention OFF llama.cpp cannot use a ragged V cache: every
-        # layer's V is padded to hparams.n_embd_v_gqa_max() over the WHOLE model,
-        # which is what _estimate_kv_cache_bytes charges (_max_kv_value_width). The
-        # V half goes constant while K stays per-layer, so an unpadded vector
-        # prices a ratio the total does not have. bpe_v is floored at f16 for a quantised
-        # cache, and with V constant that asymmetry moves the ratio too, so carry both
-        # rather than cancelling one.
+        # With FA off llama.cpp pads every layer's V to the model-wide max, as the byte total does,
+        # and floors V at f16; carry both K and V so the vector matches the total.
         bpe_k = _kv_bytes_per_elem(cache_type_kv)
         bpe_v = bpe_k if flash_attn else max(bpe_k, _kv_bytes_per_elem("f16"))
         padded_v_width = None if flash_attn else self._max_kv_value_width(val_len, val_len_swa)
@@ -170,19 +128,7 @@ class _KvCacheEstimateMixin:
         return fallback
 
     def _recurrent_state_bytes(self, n_parallel: int = 1) -> int:
-        """VRAM for the conv + recurrent state of linear-attention layers.
-
-        Hybrids pair an MLA/attention cache with llama_memory_recurrent, which
-        allocates per recurrent layer and per sequence, always f32, offloaded
-        beside the KV cache. Unlike KV this does not scale with context, so it
-        is the whole reservation at short contexts and the bisection in
-        _fit_context_to_vram cannot shrink it away.
-
-        Sizes follow llama_hparams::n_embd_r/n_embd_s. This helper covers the
-        per-layer KDA layout; Hybrid Mamba uses its architecture-level interval
-        and group count in _mamba_recurrent_state_bytes.
-        """
-        # Lightweight probes may omit fields used only by other architectures.
+        """VRAM for linear-attention conv and recurrent state (per-layer KDA layout; Hybrid Mamba uses _mamba_recurrent_state_bytes); does not scale with context."""
         heads_by_layer = getattr(self, "_n_kv_heads_by_layer", None)
         n_layers_raw = getattr(self, "_n_layers", None)
         kda_head_dim = getattr(self, "_kda_head_dim", None)
@@ -275,20 +221,7 @@ class _KvCacheEstimateMixin:
         return bounded
 
     def _target_kv_excludes_nextn(self) -> bool:
-        """Whether this model's TARGET KV cache skips the embedded MTP blocks.
-
-        See _TARGET_KV_EXCLUDES_NEXTN_ARCHS for why this is per-architecture
-        rather than a property of the nextn key.
-
-        A hybrid recurrent header answers yes without consulting that list. Every
-        hybrid Mamba architecture llama.cpp accepts a nextn key from -- Qwen3-Next,
-        Qwen3.5, Qwen3.5-MoE, Nemotron-H -- is filtered at llama-model.cpp:2289,
-        and the recurrent half is sized on n_layer() regardless
-        (llama-memory-recurrent.cpp:29), so the ssm dims are sufficient evidence
-        and a GGUF whose header names an arch this build has never heard of still
-        gets the right answer. Everything else must be named, so an unreadable or
-        unknown architecture keeps every block.
-        """
+        """Whether target KV skips MTP blocks: hybrid recurrent yes; other archs only if listed in _TARGET_KV_EXCLUDES_NEXTN_ARCHS; unknown keeps all."""
         if not self._nextn_predict_layers:
             return False
         if self._ssm_inner_size is not None and self._full_attention_interval is not None:
@@ -320,13 +253,7 @@ class _KvCacheEstimateMixin:
         n_parallel: int = 1,
         n_rs_seq: int = 0,
     ) -> int:
-        """VRAM for Hybrid Mamba conv/SSM state, including rollback copies.
-
-        llama.cpp allocates one f32 recurrent state per parallel sequence. MTP
-        additionally keeps ``--spec-draft-n-max`` rollback states per sequence
-        while verifying draft tokens, so its allocation is ``1 + n_rs_seq``
-        times the base state.
-        """
+        """Under MTP each sequence keeps --spec-draft-n-max rollback states: 1 + n_rs_seq times the base."""
         n_layers_raw = getattr(self, "_n_layers", None)
         d_inner_raw = getattr(self, "_ssm_inner_size", None)
         d_state_raw = getattr(self, "_ssm_state_size", None)
@@ -344,8 +271,7 @@ class _KvCacheEstimateMixin:
             )
         ) or (fai_raw is not None and n_group_raw is None):
             return 0
-        # Excludes the embedded MTP blocks, as _estimate_kv_cache_bytes does and
-        # for the same reason: llama.cpp keeps them out of the target's n_layer.
+        # Exclude embedded MTP blocks: llama.cpp keeps them out of the target's n_layer.
         n_layers = max(
             0,
             int(n_layers_raw or 0) - int(getattr(self, "_nextn_predict_layers", None) or 0),
@@ -437,25 +363,19 @@ class _KvCacheEstimateMixin:
         if not self._can_estimate_kv() or n_ctx <= 0:
             return 0
 
-        # GGUF block_count includes embedded MTP blocks, and llama.cpp keeps
-        # those out of the target context for SOME architectures only -- see
-        # _TARGET_KV_EXCLUDES_NEXTN_ARCHS. Where it does, their KV lives in the
-        # draft context and _mtp_draft_kv_bytes prices it separately; where it
-        # does not, the target cache still allocates them and subtracting here
-        # would under-reserve.
+        # block_count includes MTP blocks; only _TARGET_KV_EXCLUDES_NEXTN_ARCHS keep them out of the
+        # target context (priced in _mtp_draft_kv_bytes). Elsewhere subtracting would under-reserve.
         n_layers = self._n_layers  # type: ignore[assignment]
         if self._target_kv_excludes_nextn():
             n_layers = max(1, n_layers - (self._nextn_predict_layers or 0))
-        # Gemma 3n / Gemma 4 reuse earlier KV in the last ``shared_kv_layers``
-        # blocks (no cache). Floor at 1 so a bad GGUF can't zero out KV.
+        # Gemma 3n/4 reuse earlier KV in the last shared_kv_layers blocks. Floor at 1.
         shared = self._shared_kv_layers or 0
         n_layers_kv = max(1, n_layers - shared)
         n_kv = self._n_kv_heads or self._n_heads or 1  # type: ignore[assignment]
 
         # Bytes per element depends on KV cache quantization
         bpe_k = _kv_bytes_per_elem(cache_type_kv)
-        # The automatic FA-off retry rewrites an invalid quantized V cache to
-        # f16. Pricing that viable retry here avoids under-reserving it.
+        # The FA-off retry rewrites a quantized V cache to f16; price that retry.
         bpe_v = bpe_k if flash_attn else max(bpe_k, _kv_bytes_per_elem("f16"))
 
         slots, streams, cells_per_stream = _kv_cache_cell_layout(n_ctx, n_parallel, kv_unified)
@@ -468,21 +388,13 @@ class _KvCacheEstimateMixin:
         # A hybrid snapshot is the whole recurrent state, not a context-scaled window.
         recurrent_checkpoints = slots * max(0, ctx_checkpoints) * self._rollback_state_bytes(1)
 
-        # Path 1: MLA (DeepSeek-V2/V3, GLM-4.7, GLM-5, Kimi-K2.5)
-        # One compressed KV latent per token/layer (shared across heads); V is
-        # reconstructed from it, no separate V cache. key_length = kv_lora_rank
-        # + rope_dim. MLA GGUFs set head_count_kv=1; default to 1 if absent to
-        # avoid falling back to n_heads (e.g. 128 for DeepSeek-V3) which 128x's.
+        # Path 1: MLA. One compressed latent per token/layer, no V cache. Default head_count_kv to 1,
+        # not n_heads, which would overcount 128x on DeepSeek-V3.
         if self._kv_lora_rank is not None:
             n_kv_mla = self._n_kv_heads or 1
             rope_dim = self._key_length_mla or 64
             key_len = self._kv_key_length or (self._kv_lora_rank + rope_dim)
-            # Hybrid MLA (Kimi-K3): head_count_kv is a per-layer array whose KDA
-            # linear-attention layers are 0 and hold a constant-size state instead
-            # of a growing cache. Only the non-zero layers allocate KV, so counting
-            # every block overstates it by the hybrid ratio (93 blocks vs 24 real
-            # ones is 3.9x, or 78 GiB of phantom cache at 1M context) and shrinks
-            # the auto-fit context for no reason. Uniform MLA keeps n_layers_kv.
+            # Hybrid MLA (Kimi-K3): linear-attention layers have head_count_kv 0 and no growing cache.
             n_mla_layers = n_layers_kv
             if self._n_kv_heads_by_layer:
                 attn = sum(
@@ -498,8 +410,7 @@ class _KvCacheEstimateMixin:
         key_len = self._kv_key_length
         val_len = self._kv_value_length
 
-        # Path 2: Hybrid Mamba/Attention (Qwen3.5-27B, Qwen3.5-35B-A3B)
-        # Only 1 in N layers is attention; the rest are Mamba (no KV cache).
+        # Path 2: hybrid Mamba/attention; only 1 in N layers has KV.
         if self._ssm_inner_size is not None and self._full_attention_interval is not None:
             fai = self._full_attention_interval
             n_attn = -(-n_layers // fai) if fai > 0 else n_layers  # ceiling division
@@ -518,13 +429,8 @@ class _KvCacheEstimateMixin:
                 + recurrent_checkpoints
             )
 
-        # Path 3: Sliding window (Gemma 2/3/3n/4, gpt-oss, Cohere2 ...). Pattern
-        # from the resolver; if absent, falls through to the legacy 1/4-global
-        # heuristic. --parallel N accounting (verified against llama-server):
-        # non-SWA cells total n_ctx across streams. Compact SWA adds one processing
-        # micro-batch to the window allowance and pads to 256 cells; unified mode
-        # holds all slots in one stream, while non-unified mode has one stream per
-        # slot. --swa-full expands SWA to each stream's full context.
+        # Path 3: sliding window. Compact SWA adds one micro-batch and pads to 256 cells; unified mode
+        # has one stream, non-unified one per slot; --swa-full expands SWA to full context.
         if (
             self._sliding_window is not None
             and self._sliding_window > 0
@@ -658,10 +564,7 @@ class _KvCacheEstimateMixin:
         n_ubatch: Optional[int] = None,
         flash_attn: bool = True,
     ) -> Optional[int]:
-        """Draft KV cache bytes at n_ctx, sized from GGUF dims (K and V types are
-        independent). Separate drafter (Gemma): its own KV via _estimate_kv_cache_bytes
-        at the heavier type. Embedded head (Qwen): nextn_predict_layers attention
-        layers from the main dims. None when dims are missing (flat fallback)."""
+        """Draft KV bytes at n_ctx from GGUF dims (separate drafter at heavier type, embedded head from main dims); None when dims missing (flat fallback)."""
         if n_ctx <= 0:
             return None
         bpe_k = _kv_bytes_per_elem(draft_cache_type_k)
@@ -670,13 +573,11 @@ class _KvCacheEstimateMixin:
             db = self._draft_backend_for(drafter_path)
             if db is None or not db._can_estimate_kv():
                 return None
-            # Gemma 4 assistant layers share the target context's final global
-            # and SWA KV tensors, so only the drafter weights add memory.
+            # Gemma 4 assistant layers share the target's KV, so only drafter weights add memory.
             if getattr(db, "_architecture", None) == "gemma4-assistant":
                 return 0
             heavier = draft_cache_type_k if bpe_k >= bpe_v else draft_cache_type_v
-            # The drafter uses the main model's slot and stream layout, so its
-            # compact SWA and per-stream padding must follow the same settings.
+            # The drafter follows the main model's slot and stream layout.
             kv = db._estimate_kv_cache_bytes(
                 n_ctx,
                 heavier,
@@ -693,10 +594,7 @@ class _KvCacheEstimateMixin:
         v_len = self._kv_value_length
         if not (nextn and n_kv and k_len and v_len):
             return None
-        # The embedded MTP head is one draft layer, so a quantized draft KV can't
-        # amortize its overhead and fits *less* context than f16 (llama.cpp#24102).
-        # Floor it at f16: a quantized override is priced as f16, f32 keeps its 4
-        # bytes. The separate-drafter branch is multi-layer, so it keeps its type.
+        # A one-layer MTP head fits less context with a quantized KV than f16, so floor it at f16.
         f16_bpe = _kv_bytes_per_elem("f16")
         bpe_k = max(bpe_k, f16_bpe)
         bpe_v = max(bpe_v, f16_bpe)
@@ -722,23 +620,7 @@ class _KvCacheEstimateMixin:
         n_ubatch: Optional[int] = None,
         flash_attn: bool = True,
     ) -> Optional[int]:
-        """Host-RAM footprint of a SEPARATE drafter pinned to the CPU (``-ngld 0``).
-
-        The VRAM budget drops such a drafter, and rightly: none of it is on the
-        GPU. The load-mode fit asks the other question -- is the whole load
-        resident without demand paging -- and there the bytes have not gone
-        anywhere, they have moved to host RAM. llama.cpp carries the process-wide
-        load mode into the draft model: ``common_base_params_to_speculative``
-        starts from ``result = params`` and overrides only devices/model/
-        n_gpu_layers, and ``--load-mode none`` clears ``use_mmap``
-        (llama-model-loader.cpp), so the draft GGUF becomes a real anonymous
-        allocation rather than an evictable file mapping. Charging it is the same
-        reasoning that keeps a CPU-pinned projector in the footprint.
-
-        0 when no separate drafter is CPU-pinned. ``None`` when the drafter is
-        there but cannot be priced, so the caller abstains instead of claiming a
-        fit that is short a whole draft GGUF.
-        """
+        """A CPU-pinned drafter is charged to host RAM, since --load-mode none makes it anonymous memory; None when unpriceable so the caller abstains."""
         if not drafter_path:
             return 0
         try:
@@ -760,9 +642,7 @@ class _KvCacheEstimateMixin:
         )
         if kv is None:
             return None
-        # The drafter has a llama_context of its own, so its decode graph is allocated
-        # wherever it runs -- here, the host. _soft_overhead charges that constant only
-        # while _mtp_reserves_gpu, which is False for exactly this placement.
+        # The drafter's own context allocates its decode graph on the host here.
         return int(weights) + max(0, int(kv)) + self._MTP_DRAFT_COMPUTE_BYTES
 
     def _estimate_mtp_overhead_bytes(
@@ -782,18 +662,7 @@ class _KvCacheEstimateMixin:
         n_ubatch: Optional[int] = None,
         flash_attn: bool = True,
     ) -> Optional[int]:
-        """MTP draft reserve at ``n_ctx`` = draft KV (grows with ctx) + separate-
-        drafter weights + target verification state. MLA duplicates the target
-        KV context, while Hybrid Mamba adds recurrent rollback copies. The other
-        verify buffers ride in the ctx-fit headroom (no tuned constant). None when
-        the draft KV can't be sized (caller keeps the flat fallback).
-        ``draft_weights_bytes`` is the drafter file size (0 for embedded).
-        ``mtp_keeps_target_ctx`` is True for MTP draft modes (which keep the
-        duplicated target context) and False for separate-drafter spec modes
-        (draft-simple/draft-eagle3), which do not. ``target_rollback`` is the
-        wider set: every draft-model type llama.cpp gives the target n_rs_seq for
-        (draft-mtp/eagle3/dflash/dspark), which is all of them but draft-simple.
-        Both default to charging, so an unsure caller over-reserves."""
+        """MTP draft reserve: draft KV + drafter weights + verify state (MLA repeats target KV, hybrids add rollback); None if KV unsized, caller keeps flat fallback."""
         draft_kv = self._mtp_draft_kv_bytes(
             n_ctx,
             drafter_path = drafter_path,
@@ -806,19 +675,8 @@ class _KvCacheEstimateMixin:
             flash_attn = flash_attn,
         )
         weights = max(0, draft_weights_bytes)
-        # MLA models (GLM-5.x, DeepSeek, Kimi-K2) under MTP keep a *second* full copy
-        # of the target model's KV context for draft verification -- llama.cpp's
-        # `ctx_tgt=yes` -- allocated at f16 regardless of the main cache type. It is
-        # ~the main KV again and dwarfs the embedded draft head (GLM-5.2 @ 1M ctx:
-        # a ~2 GiB head next to a ~89 GiB target copy), so omitting it lets auto-fit
-        # pick a context that fits on paper but OOMs cublasCreate at the first
-        # decode. Gated on both MLA (kv_lora_rank present) and the engaged mode
-        # actually being MTP: non-MLA MTP (Qwen/Gemma) keeps no such copy, and the
-        # separate-drafter spec modes (draft-simple/draft-eagle3) load a small
-        # distinct drafter with its own KV -- already counted in draft_kv/weights --
-        # rather than duplicating the target, so they must not be charged for it.
-        # Third gate: a NextN-only MTP context allocates no copy, and charging one
-        # trips drafter_no_vram, losing the MTP being reserved for.
+        # MLA models under MTP keep a second f16 copy of the target KV (ctx_tgt=yes), about the size of
+        # the main KV. Not charged for non-MLA MTP, separate drafters, or NextN-only contexts.
         target_ctx_copy = 0
         if (
             mtp_keeps_target_ctx
@@ -834,12 +692,8 @@ class _KvCacheEstimateMixin:
                 n_ubatch = n_ubatch,
                 flash_attn = flash_attn,
             )
-        # Hybrid Mamba targets keep one recurrent state in the normal target
-        # context, counted by _estimate_kv_cache_bytes. Verification adds one
-        # rollback copy per drafted token, in the TARGET context, so a separate
-        # drafter file pays it exactly like the embedded head: ``target_rollback``
-        # decides, not ``drafter_path`` (see _TARGET_ROLLBACK_SPEC_TYPES). The
-        # dominant hidden cost on Qwen3.5/3.8 at multiple parallel slots.
+        # Hybrid Mamba targets add one rollback state copy per drafted token in the target context;
+        # target_rollback decides, not drafter_path.
         target_recurrent_copies = 0
         if target_rollback and spec_draft_n_max > 0:
             target_recurrent_copies = self._rollback_state_bytes(n_parallel) * spec_draft_n_max
@@ -851,10 +705,7 @@ class _KvCacheEstimateMixin:
             spec_draft_n_max = spec_draft_n_max,
         )
         if draft_kv is None:
-            # KV unsized (exotic/remote drafter): still reserve known weights + any
-            # MLA target copy so a large config can't launch over budget (the small
-            # unsized draft KV rides in the cushion). Nothing known -> None, so the
-            # caller keeps the flat fallback.
+            # KV unsized: still reserve known weights and target copies. Nothing known -> None.
             total = weights + target_ctx_copy + target_recurrent_copies
             return total + spec_compute if total > 0 else None
         return draft_kv + weights + target_ctx_copy + target_recurrent_copies + spec_compute
@@ -881,6 +732,18 @@ class _KvCacheEstimateMixin:
             draft_width = getattr(db, "_compute_activation_width", lambda: 0)()
             if draft_width > 0:
                 width = draft_width + 2 * (getattr(self, "_embedding_length", None) or 0)
+            if getattr(db, "_architecture", None) == "dflash" and draft_width > 0:
+                # The DSpark/DFlash prompt graph grows with -ub (DeepSeek-V4.1 DSpark: 725.5 MiB at
+                # 512, 2900.5 MiB at 2048).
+                vocab = (
+                    getattr(db, "_vocab_size", None)
+                    or getattr(self, "_vocab_size", None)
+                    or _ASSUMED_MAX_VOCAB
+                )
+                heads = (getattr(db, "_n_heads", None) or 0) * (
+                    getattr(db, "_kv_key_length", None) or 0
+                )
+                width = max(width, 2 * vocab + 2 * heads + draft_width)
         activations = int(width * ub * 4 * self._COMPUTE_BUFFER_SAFETY)
         spec = verify_rows + max(0, ub * 2 * n_ctx + activations - self._MTP_DRAFT_COMPUTE_BYTES)
         if getattr(db, "_architecture", None) == "dflash":
@@ -909,14 +772,7 @@ class _KvCacheEstimateMixin:
         flat_fallback: bool,
         reprice: Optional[Callable[[int, int], int]] = None,
     ) -> str:
-        """The MTP reserve line, naming only the dimensions that move the number.
-
-        Which ones bite is per-model, so ``reprice`` (the estimator the reserve came
-        from) is asked rather than re-deriving its branches; without it every
-        dimension is named, as before. n_max is not one of its arguments, so that one
-        stays structural. A None micro-batch is rendered as llama.cpp's default, since
-        "ubatch None" names no parameter.
-        """
+        """Names only the dimensions that move the reserve, as judged by reprice; otherwise all of them."""
         ubatch = self._DEFAULT_N_UBATCH if n_ubatch is None else n_ubatch
 
         def _moves(*candidates: tuple[int, int]) -> bool:
@@ -933,8 +789,7 @@ class _KvCacheEstimateMixin:
                 return True
             return False
 
-        # Every slot count DIVIDING the padded total reproduces it: at 12288 cells 2, 3
-        # and 4 price the same, only 5 moves. The last candidate exceeds it, so cannot.
+        # Slot counts dividing the padded total price the same; the last candidate exceeds it, so moves.
         _cells = _pad_kv_cells(max(1, n_ctx)) // 256
         slots_named = _moves(
             (n_parallel + 1, ubatch),
@@ -966,9 +821,7 @@ class _KvCacheEstimateMixin:
     # Soft VRAM the modeled terms omit; charged to the fit budget on tight tiers (#6682).
     _CUDA_CONTEXT_RESERVE_BYTES = 320 * 1024 * 1024  # CUDA ctx + cuBLAS workspace (~330 MiB)
     _MMPROJ_VRAM_SAFETY = 1.4  # mmproj worst-case buffer vs file size (runtime ~1.3x)
-    # Context the projector's residency is priced at. The placement loop shrinks the
-    # context to this floor long before it would spill a layer, so this is the length
-    # at which "does it fit" means "does every layer stay on the GPU".
+    # Context the projector's residency is priced at: the length where fitting means no layer spills.
     _MMPROJ_FIT_FLOOR_CTX = 8192
     _MTP_DRAFT_COMPUTE_BYTES = 224 * 1024 * 1024  # MTP draft decode graph beyond its KV
     # A DFlash/DSpark draft context re-reserves a flat block graph once the drafter initialises,
@@ -985,38 +838,30 @@ class _KvCacheEstimateMixin:
     _UNKNOWN_SPEC_DRAFT_N_MAX = 16
     # Vocabulary-wide float32 copies per verified draft token (logits and sampling).
     _SPEC_VERIFY_ROW_COPIES = 3
-    # Pipeline parallelism uses GGML_SCHED_MAX_COPIES input copies per device.
-    # This applies only when _pipeline_parallel_disabled_by_args is false.
+    # GGML_SCHED_MAX_COPIES input copies per device, unless pipeline parallel is disabled.
     _CTX_COMPUTE_SPLIT_MULT = 4
-    # DeepSeek-V4 (deepseek4): its lightning indexer + sparse attention reserve a large
-    # context-scaling compute buffer the rates above miss (present even with an f16
-    # cache). Measured on UD-Q4_K_XL (ub=512): ~2 GiB at 16k -> ~65.5 GiB at 1M. Without
-    # it auto-fit commits the full 1M train context, OOMs the reserve, and spills to CPU.
+    # DeepSeek-V4 indexer + sparse attention reserve a ctx-scaling compute buffer the rates miss
+    # (~65.5 GiB at 1M, any KV type); without it auto-fit OOMs at full context.
     _DSV4_CTX_COMPUTE_FLAT_BYTES = 2 * 1024**3  # ctx-independent indexer scratch
     _DSV4_CTX_COMPUTE_BYTES_PER_TOK = 72000  # per token at ub=512 (~72 GiB at 1M)
 
-    # Inkling (inkling): with the reserve fix in the bundled llama.cpp (full-cache
-    # reserve context reports the whole cache as position-contiguous, so the
-    # worst-case graph is the banded flash path instead of the dense-bias
-    # fallback), the ctx-linear compute term is just the banded KQ-mask cont:
-    # measured on UD-IQ1_S (ub=512) 64K -> 1M total-VRAM slope of 50.6 KiB/tok,
-    # of which 45,056 B/tok is KV -> ~5.6 KiB/tok compute. 8192 adds ~1.5x
-    # headroom. (Pre-fix builds reserved the dense fallback at ~402 KiB/tok and
-    # could not load large contexts at all.)
+    _DSV41_CTX_COMPUTE_BYTES_PER_TOK = 9600  # per token at ub=512 (~11.4 GiB at 1M)
+
+    # DeepSeek-V4.1 (deepseek41): its own sparse-attention graph, far smaller than DSV4's but
+    # not linear in context. Measured CUDA0 compute buffer, UD-IQ1_S with experts + Engram on
+    # CPU, f16 cache: ub=512 2102 / 2198 / 3094 / 11197 MiB at 16k / 64k / 256k / 1M; ub=2048
+    # 9751 / 37143 MiB at 256k / 1M. Flat + linear (rate ub-scaled) is the chord to the 1M
+    # point, so it stays above every measurement (convex curve; 1M is the trained maximum).
+    _DSV41_CTX_COMPUTE_FLAT_BYTES = 2 * 1024**3
+
+    # Inkling banded flash path, valid only with the bundled llama.cpp reserve fix: ~5.6 KiB/tok compute at ub=512; 8192 adds ~1.5x headroom.
     _INKLING_CTX_COMPUTE_BYTES_PER_TOK = 8192  # per token at ub=512
-    # Dense relative-bias fallback rate (quantized KV cache disables the banded
-    # path): measured 402.5 GiB reserve at 1M ctx pre-fix, ~402 KiB per token.
+    # Dense relative-bias fallback (quantized KV disables the banded path): ~402 KiB/tok measured.
     _INKLING_CTX_COMPUTE_DENSE_BYTES_PER_TOK = 402470  # per token at ub=512
 
     def _compute_activation_width(self) -> int:
-        """Float32 activations the compute graph keeps live per micro-batch token.
+        """Widest dense, expert or recurrent block plus per-layer embeddings, floored at 12 * n_embd."""
 
-        Take the widest dense, expert or recurrent block, then add per-layer
-        embeddings. The 12 * n_embd floor covers attention and residual buffers.
-        Return 0 without embedding dimensions.
-        """
-
-        # getattr: a backend built with __new__ carries only the dims it was given.
         def dim(name: str) -> int:
             return getattr(self, name, None) or 0
 
@@ -1054,15 +899,7 @@ class _KvCacheEstimateMixin:
         per_device_tensor: bool = False,
         vocab_ceiling: Optional[int] = None,
     ) -> int:
-        """Per-device compute-graph buffer (bytes) that does not grow with context.
-
-        Includes activations, output rows, sliding-window masks and recurrent state.
-        Since b9460 (#23861), output rows are capped at min(ubatch, slots); older
-        builds reserve ubatch rows. Extra verification rows belong to the MTP reserve.
-
-        Tensor splits use the same buffer per device, so per_device_tensor does not
-        change the result. Return 0 for missing dimensions; vocab_ceiling supplies
-        a fallback vocabulary size."""
+        """Per-device compute-graph bytes not growing with context; output rows min(ubatch, slots) in newer llama.cpp, else ubatch; MTP verify rows go in MTP reserve."""
         width = self._compute_activation_width()
         n_vocab = self._vocab_size or vocab_ceiling or 0
         if width <= 0 or n_vocab <= 0:
@@ -1076,8 +913,7 @@ class _KvCacheEstimateMixin:
         if self.is_embedding_gguf:
             outputs = (self._embedding_length or 0) * ub * 4
         elif getattr(self, "_reserves_micro_batch_outputs", False):
-            # Before ggml-org/llama.cpp#23861: a row for every micro-batch token, once.
-            # Measured on b9415 Vulkan: Gemma 4 E2B 515 MiB at ubatch 512, 137 on b10909.
+            # Before llama.cpp#23861: a row for every micro-batch token, once.
             outputs = n_vocab * ub * 4
         else:
             outputs = n_vocab * min(ub, par) * 4
@@ -1085,8 +921,7 @@ class _KvCacheEstimateMixin:
         sliding_window = self._effective_sliding_window()
         if sliding_window > 0:
             swa_mask = _pad_kv_cells(sliding_window * par + ub) * ub * 2
-        # A recurrent block works on every slot's state at once: Qwen3.5 4B's buffer
-        # grows 19.5 MiB from one slot to eight at the same micro-batch.
+        # A recurrent block works on every slot's state at once.
         inner = getattr(self, "_ssm_inner_size", None) or 0
         recurrent = 0
         if inner > 0:
@@ -1109,10 +944,7 @@ class _KvCacheEstimateMixin:
         return window if not context or window < context else 0
 
     def _attention_dequant_width(self) -> int:
-        """K+V elements per cell copied to f16 from a quantized cache.
-
-        Use the widest global layer: sliding-window layers do not scale with
-        context. MLA uses compressed K only. Fall back to n_embd without head dims."""
+        """K+V elements per cell copied to f16 from a quantized cache, from the widest global layer (SWA does not scale with context); MLA has K only."""
         n_heads = getattr(self, "_n_heads", None)
         n_kv = getattr(self, "_n_kv_heads", None) or n_heads
         kv_lora_rank = getattr(self, "_kv_lora_rank", None)
@@ -1147,15 +979,8 @@ class _KvCacheEstimateMixin:
         flash_attn: bool = True,
         n_parallel: int = 1,
     ) -> int:
-        """Per-device context-dependent scratch, added to the flat compute buffer.
-
-        Includes the KQ mask and quantized-cache dequantization. Without flash
-        attention, also charge float32 scores and a float32 mask. Layer splits add
-        scheduler copies, with sliding-window masks sized by n_parallel; tensor
-        splits pass layer_split=False. DeepSeek and Inkling use separate rates.
-
-        None cache type means f16; callers resolve environment overrides.
-        Return 0 without n_embd or a positive context."""
+        """Per-device context scratch: KQ mask and dequant; without flash attention, float32 scores
+        and mask."""
         n_embd = self._embedding_length or 0
         if n_embd <= 0 or n_ctx <= 0:
             return 0
@@ -1163,35 +988,44 @@ class _KvCacheEstimateMixin:
             1,
             int(self._DEFAULT_N_UBATCH if n_ubatch is None else n_ubatch),
         )
-        # One KQ mask copy ([n_kv, n_ubatch]), n_embd-independent: f16 under flash
-        # attention, f32 without it (build_attn_inp_kq_mask). Every rate below is a
-        # single-GPU total containing exactly one, so a split adds the extra copies.
+        # One KQ mask copy, f16 with FA, f32 without. Rates below include one; a split adds copies.
         mask_rate = ub * (2 if flash_attn else 4)
         split_extra = (self._CTX_COMPUTE_SPLIT_MULT - 1) * mask_rate if layer_split else 0
         if getattr(self, "_architecture", None) == "deepseek4":
-            # DSV4 indexer/CSA buffer (see constants): flat + linear, ub-scaled. Fires
-            # for any KV type -- the indexer scratch is present even with an f16 cache.
-            # No split_extra, unlike every other arch: 72000 already clears the measured
-            # 65.5 KiB/tok by 4928 B/tok, more than the 4608 the mask copies cost.
+            # DSV4: flat + linear, ub-scaled, any KV type. No split_extra: 72000 already covers the mask copies.
             ub_scale = ub / self._DEFAULT_N_UBATCH
             return int(
                 self._DSV4_CTX_COMPUTE_FLAT_BYTES
                 + self._DSV4_CTX_COMPUTE_BYTES_PER_TOK * n_ctx * ub_scale
             )
+        if getattr(self, "_architecture", None) == "deepseek41":
+            # DSV4.1 sparse-attention buffer (see constants): flat + linear, ub-scaled. Unlike
+            # deepseek4 the rate has little headroom at 1M (~4%), so a layer split adds the
+            # extra mask copies like every other arch.
+            ub_scale = ub / self._DEFAULT_N_UBATCH
+            per_tok = self._DSV41_CTX_COMPUTE_BYTES_PER_TOK * ub_scale + split_extra
+            flat = self._DSV41_CTX_COMPUTE_FLAT_BYTES
+            if not flash_attn:
+                # Dense branch: f32 KQ scores [window + n_comp, ub, n_head]. Layer score sizes
+                # differ, so the allocator fragments and keeps two copies live (one undercounts).
+                n_head = getattr(self, "_n_heads", None) or max(1, n_embd // 64)
+                score_rate = 2 * ub * n_head * 4
+                window_cells = _pad_kv_cells(
+                    self._effective_sliding_window() * max(1, int(n_parallel)) + ub
+                )
+                # The measured rate holds one f16 KQ mask; here it is f32.
+                per_tok += score_rate + ub * 2
+                flat += score_rate * window_cells
+            return int(flat + per_tok * n_ctx)
         if getattr(self, "_architecture", None) == "inkling":
             ub_scale = ub / self._DEFAULT_N_UBATCH
-            # The fused banded path requires an f32/f16/bf16 KV cache. A quantized
-            # cache forces the dense relative-bias fallback, whose compute buffer is
-            # [n_kv, ub, n_head] f32 (~402 KiB per context token at ub=512); size the
-            # fit for that so a q8_0 cache gets a small honest context instead of an
-            # unloadable one that crash-loops the server.
+            # A quantized KV forces the dense fallback (~402 KiB/tok); size for it so the server loads.
             if cache_type_kv and _kv_bytes_per_elem(cache_type_kv) < 2.0:
                 rate = self._INKLING_CTX_COMPUTE_DENSE_BYTES_PER_TOK
             else:
                 # Banded flash path (see constants): linear, ub-scaled.
                 rate = self._INKLING_CTX_COMPUTE_BYTES_PER_TOK
-            # Both paths allocate the mask, and 8192 has only ~1.5x headroom over the
-            # 5.6 KiB/tok banded measurement -- a split alone would overrun it.
+            # Both paths allocate the mask, and 8192 has too little headroom to absorb a split.
             return int(rate * n_ctx * ub_scale + split_extra * n_ctx)
         per_tok = mask_rate
         if _kv_bytes_per_elem(cache_type_kv) < 2.0:
@@ -1201,11 +1035,9 @@ class _KvCacheEstimateMixin:
             n_head = getattr(self, "_n_heads", None) or max(1, n_embd // 64)
             per_tok += ub * n_head * 4
             if getattr(self, "_kv_lora_rank", None) is not None:
-                # MLA decompresses a float32 copy of the latent cache to attend over it:
-                # GLM-4.7-Flash grows 44 KiB per cell at ubatch 512, 2 KiB past the scores.
+                # MLA decompresses an f32 copy of the latent cache to attend over it.
                 per_tok += self._attention_dequant_width() * 4
-        # Scheduler copies replicate masks and hidden states, but not dequant scratch.
-        # Sliding-window copies use the same per-slot cell count as the flat buffer.
+        # Scheduler copies replicate masks and hidden states, not dequant scratch.
         split_fixed = 0
         if layer_split:
             split_fixed = self._CTX_COMPUTE_SPLIT_MULT * n_embd * ub * 4
@@ -1237,6 +1069,11 @@ class _KvCacheEstimateMixin:
         ctx_checkpoints: int = 0,
         include_requested: bool = False,
         exact: bool = False,
+        integrated: frozenset = frozenset(),
+        discrete_host_only_bytes: int = 0,
+        prefer_discrete: bool = True,
+        discount_prefixes: frozenset = frozenset(),
+        shared_gpu_ids: Optional[Iterable[int]] = None,
     ) -> tuple[Optional[list[int]], bool, int]:
         """Largest serving-slot count that fits fully on GPU, so Unsloth keeps the model on
         GPU (-ngl -1) instead of --fit on, which offloads layers to host and collapses decode
@@ -1252,6 +1089,10 @@ class _KvCacheEstimateMixin:
         ``n_parallel`` itself and would re-price every lower count just to discard it.
         ``ctx_checkpoints`` mirrors --ctx-checkpoints: N host-RAM snapshots per slot,
         passed only when the GPUs share that pool (unified memory), else 0.
+        ``integrated``: the discrete-tier attempt is priced without the checkpoints and
+        without ``discrete_host_only_bytes`` (e.g. a CPU-pinned projector on a shared pool);
+        ``gpus`` already narrowed to discrete cards of a mixed pool are priced that way outright.
+        ``prefer_discrete`` False (explicit device pick) skips the tier, keeping that pricing.
         ``ubatch_for_slots`` re-derives the micro-batch per candidate: the emitted
         --batch-size is raised to max(slots, 2), and llama.cpp caps the micro-batch
         against it, so a batch below the requested slot count shrinks as the candidates
@@ -1272,21 +1113,35 @@ class _KvCacheEstimateMixin:
             )
             if cb <= 0:
                 cb = self._TENSOR_PARALLEL_BUFFER_RESERVE_MIB * 1024 * 1024
-            total = (
-                base_footprint_bytes
-                + cb
-                + (mtp_bytes_for_slots(slots, _ub) if mtp_bytes_for_slots else 0)
-                + self._estimate_kv_cache_bytes(
+
+            def _kv(ckpts: int) -> int:
+                return self._estimate_kv_cache_bytes(
                     effective_ctx,
                     cache_type_kv,
                     n_parallel = slots,
                     swa_full = swa_full,
                     kv_unified = kv_unified,
                     n_ubatch = _ub,
-                    ctx_checkpoints = ctx_checkpoints,
+                    ctx_checkpoints = ckpts,
                     flash_attn = flash_attn,
                 )
+
+            kv = _kv(ctx_checkpoints)
+            total = (
+                base_footprint_bytes
+                + cb
+                + (mtp_bytes_for_slots(slots, _ub) if mtp_bytes_for_slots else 0)
+                + kv
             )
+            # Checkpoints and host-only bytes sit in host RAM, which a dGPU does not draw on.
+            discrete_total = None
+            if integrated and (ctx_checkpoints or discrete_host_only_bytes):
+                discrete_total = (
+                    total - discrete_host_only_bytes - (kv - _kv(0) if ctx_checkpoints else 0)
+                )
+                # Devices already narrowed to dGPUs of a mixed pool (the slot re-fit).
+                if all(g[0] not in integrated for g in gpus):
+                    total = discrete_total
             gpu_indices, use_fit = self._select_gpus_split_aware(
                 total,
                 gpus,
@@ -1297,6 +1152,11 @@ class _KvCacheEstimateMixin:
                 split_extra_bytes = (
                     split_extra_for_slots(slots) if split_extra_for_slots else split_extra_bytes
                 ),
+                integrated = integrated,
+                discrete_size_bytes = discrete_total,
+                prefer_discrete = prefer_discrete,
+                discount_prefixes = discount_prefixes,
+                shared_gpu_ids = shared_gpu_ids,
             )
             if not use_fit:
                 return gpu_indices, False, slots
@@ -1362,8 +1222,7 @@ class _KvCacheEstimateMixin:
             flash_attn = flash_attn,
         )
 
-        # byte-accurate mtp_overhead_fn supersedes the flat fraction (the fallback
-        # when dims can't size the draft KV); callers may override budget_frac.
+        # A byte-accurate mtp_overhead_fn supersedes the flat fraction.
         if budget_frac is None:
             flat_mtp = mtp_engaged and mtp_overhead_fn is None
             budget_frac = _active_vram_fraction() - (_MTP_VRAM_RESERVE_FRAC if flat_mtp else 0.0)
@@ -1384,8 +1243,7 @@ class _KvCacheEstimateMixin:
             return mtp_overhead_fn(ctx) if mtp_overhead_fn is not None else 0
 
         def _cc_at(ctx: int) -> int:
-            # Context-linear compute-buffer growth (flash-attn KQ mask + scratch);
-            # the flat term in model_footprint only covers ctx -> 0.
+            # Context-linear compute growth; model_footprint's flat term covers only ctx -> 0.
             return compute_ctx_bytes_fn(ctx) if compute_ctx_bytes_fn is not None else 0
 
         # Already fits?

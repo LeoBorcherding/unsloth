@@ -68,6 +68,33 @@ from .tool_loop_text import (
     _finalize_reasoning_only_cumulative,
     _quote_cut_event,
 )
+from core.inference.llama_server_args import _flag_name
+from core.inference.stream_errors import is_tool_parse_rejection
+from dataclasses import replace
+from .compaction import (
+    _compaction_reporter,
+)
+from .core_types import (
+    _TERMINAL_RETIREMENT_HOOKS,
+    _automatic_recovery_load,
+)
+from .draft_args import (
+    _extra_args_mtp_draft_path,
+)
+from .launch_flags import (
+    _child_spec_env,
+)
+from .memory_policy import (
+    _extra_args_set_spec_type,
+)
+from .spec_args import (
+    _canonicalize_spec_mode,
+)
+from .tool_loop_text import (
+    _GPU_OOM_HEADROOM_MAX_STRIKES,
+    _GPU_OOM_HEADROOM_STEP_MIB,
+    _with_template_extras,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -122,11 +149,7 @@ class _GenerationMixin:
 
     @contextlib.contextmanager
     def _open_stream(self, url: str, payload: dict, cancel_event):
-        """Open a streaming POST to llama-server, retrying through prefill, and
-        yield ``(response, first_token_deadline)`` once a 200 lands. Owns the
-        httpx.Client + auth headers for the stream's lifetime; raises
-        RuntimeError on a non-200. Shared scaffold for the streaming consumers,
-        which differ only in how they parse the SSE body."""
+        """Polls cancel_event between short reads (Windows will not wake a blocked recv); re-reads the live read timeout per call; httpcore snapshots it at body start"""
         from core.inference.mcp_images import prepare_image_turn_boundaries
 
         if "messages" in payload:
@@ -138,13 +161,18 @@ class _GenerationMixin:
                     or getattr(self, "_chat_template", None),
                 ),
             }
+        from core.rag.conversation_archive import inference_running
+
         stream_timeout = httpx.Timeout(connect = 10, read = 0.5, write = 10, pool = 10)
-        with httpx.Client(
-            timeout = stream_timeout,
-            limits = httpx.Limits(max_keepalive_connections = 0),
-            trust_env = False,
-            verify = _local_ssl_context(),
-        ) as client:
+        with (
+            inference_running(),
+            httpx.Client(
+                timeout = stream_timeout,
+                limits = httpx.Limits(max_keepalive_connections = 0),
+                trust_env = False,
+                verify = _local_ssl_context(),
+            ) as client,
+        ):
             first_token_deadline = start_first_token_wait()
             with self._stream_with_retry(
                 client,
@@ -196,6 +224,57 @@ class _GenerationMixin:
         if data is None:
             return False
         return _llama_chunk_has_generated_output(data)
+
+    def _iter_tool_round_text(
+        self,
+        response: "httpx.Response",
+        payload: dict,
+        cancel_event: Optional[threading.Event],
+        first_token_deadline: Optional[float],
+        on_respawn: Optional[Callable[[], None]] = None,
+    ) -> Generator[str, None, None]:
+        """Raw SSE text of one tool round. A tool-call parse rejection before any output (Llama 3.x
+        ``{"type": "function", ...}``, ``;``-joined calls) is retried once with tool_choice "none",
+        which turns llama-server's parser off so Studio's parser reads the raw reply."""
+        stream = self._iter_text_cancellable(
+            response, cancel_event, first_token_deadline = first_token_deadline
+        )
+        if not payload.get("tools") or payload.get("tool_choice") == "none":
+            yield from stream
+            return
+        pending = ""
+        for chunk in stream:
+            pending += chunk
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                data = None
+                stripped = line.strip()
+                if stripped.startswith("data: ") and stripped != "data: [DONE]":
+                    try:
+                        data = json.loads(stripped[6:])
+                    except json.JSONDecodeError:
+                        pass
+                if is_tool_parse_rejection(data):
+                    logger.info(
+                        "llama-server could not parse the reply as tool calls; "
+                        "asking again with its tool-call parser off"
+                    )
+                    response.close()
+                    payload["tool_choice"] = "none"
+                    with self._open_chat_stream_with_respawn_retry(
+                        payload, cancel_event, on_respawn = on_respawn
+                    ) as (retry_response, retry_deadline):
+                        yield from self._iter_text_cancellable(
+                            retry_response, cancel_event, first_token_deadline = retry_deadline
+                        )
+                    return
+                yield line + "\n"
+                # Output already reached the caller: a second request could not be joined to it.
+                if isinstance(data, dict) and _llama_chunk_has_generated_output(data):
+                    yield pending
+                    yield from stream
+                    return
+        yield pending
 
     @staticmethod
     def _iter_text_cancellable(
@@ -307,14 +386,8 @@ class _GenerationMixin:
         response: Optional["httpx.Response"] = None,
         poll_s: float = 0.2,
     ) -> None:
-        """Wrap the httpcore stream so the reader interrupts its own blocked recv() on cancel.
-
-        A cross-thread socket shutdown wakes a parked recv() on POSIX but not on
-        Windows (Winsock), so read in short slices and poll cancel_event between them
-        (plain or TLS); slice timeouts are swallowed so a slow-but-alive stream survives.
-        httpcore snapshots request.extensions["timeout"]["read"] once at body start, so
-        given ``response`` we re-read the live value per call to honor the post-first-token
-        stall timeout instead of the long prefill timeout."""
+        """Polls cancel_event between short reads, since Windows does not wake a blocked recv() on
+        shutdown."""
         import httpcore
 
         def _live_read_timeout(snapshot: Optional[float]) -> Optional[float]:
@@ -392,8 +465,7 @@ class _GenerationMixin:
                     while not _cancel_closed.is_set():
                         r = _response_ref[0]
                         try:
-                            # response.close() can't wake a read already blocked in
-                            # recv(); only a socket shutdown does, so shut down first.
+                            # close() can't wake a blocked recv(); shut the socket down first.
                             LlamaCppBackend._shutdown_active_httpx_sockets(client)
                             if r is not None:
                                 r.close()
@@ -449,11 +521,7 @@ class _GenerationMixin:
             _cancel_closed.set()
 
     def _server_socket_is_open(self, timeout_s: float = 0.15) -> bool:
-        """True if anything still accepts on the server port.
-
-        The listening socket dies with the process, so this tells a live server
-        from a dead one without waiting for the child to become reapable.
-        """
+        """True while the port still accepts; the socket dies with the process, so no wait for reaping."""
         port = self._port
         if not port:
             return False
@@ -464,37 +532,25 @@ class _GenerationMixin:
             return False
 
     def _respawn_if_dead(self) -> bool:
-        """Relaunch the llama-server if its process has exited.
-
-        A loaded chat model can be SIGKILL'd mid-session (usually GPU/RAM pressure
-        from a training run on the same box), leaving a defunct process while
-        ``is_loaded`` still reads True. Replay the last ``load_model`` call to
-        recover, returning True once healthy. Serialised on ``_respawn_lock`` so
-        many generations hitting the dead server trigger at most one reload.
-        """
-        # Read outside the lock so a queued caller can tell the replacement from the child
-        # its own error came from; otherwise each burns the grace wait below, and that
-        # sleep is held under the lock, so the waits serialise.
+        """Replays load_model when the process died, since is_loaded still reads True; one reload at
+        a time."""
+        # Read outside the lock so queued callers skip the grace wait for a replaced child.
         served_by = self._process
         with self._respawn_lock:
             proc = self._process
             if proc is None:
                 return False
             if self._cancel_event.is_set():
-                # unload_model sets this before it kills, so the child can still be
-                # accepting. Reporting it healthy would aim the retry at a server
-                # that is deliberately going away.
+                # unload_model sets this before it kills; don't aim the retry at it.
                 return False
             if proc is not served_by:
                 # Replaced while we queued: this child never served our request.
                 return self._healthy
             if proc.poll() is None:
-                # Still serving, so the error was transient. Charging it the grace below
-                # would cost a second per caller, serialised under this lock.
+                # Still serving: transient error, skip the grace wait.
                 if self._server_socket_is_open():
                     return self._healthy
-                # A closing server can beat its own exit status: calling it alive returns
-                # the stale _healthy and spends the retry on the corpse.
+                # A closing server can beat its own exit status; wait briefly for it.
                 deadline = time.monotonic() + _RESPAWN_REAP_GRACE_S
                 while proc.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.05)
@@ -504,8 +560,7 @@ class _GenerationMixin:
                 return self._healthy
             with self._mtp_runtime_fallback_lock:
                 if self._mtp_runtime_fallback_in_progress:
-                    # An MTP-free reload owns this corpse; replaying the old kwargs
-                    # restarts the crashing config and aborts that reload.
+                    # An MTP-free reload owns this; replaying old kwargs would abort it.
                     logger.info("Respawn skipped: an MTP-free reload is already recovering.")
                     return False
             # The RLock lets the load_model below re-enter it.
@@ -513,9 +568,7 @@ class _GenerationMixin:
                 if self._process is not proc:
                     logger.info("Respawn skipped: a newer load is already active.")
                     return self._healthy
-                # Snapshot under _lock, the one unload_model holds, so a teardown is
-                # either wholly before us (flag set) or wholly after (epoch bumped).
-                # _serial_load_lock alone would not exclude it: unload never takes it.
+                # Snapshot under _lock: unload holds it, never _serial_load_lock.
                 with self._lock:
                     if self._cancel_event.is_set():
                         logger.info("Respawn skipped: the model was unloaded.")
@@ -523,33 +576,64 @@ class _GenerationMixin:
                     intent = self._last_load_intent
                     if intent is None:
                         return False
+                    if self._metal_oom_is_terminal(intent):
+                        logger.error(
+                            f"Not restarting llama-server for '{self._model_identifier}': "
+                            "it ran out of Metal memory twice with these settings."
+                        )
+                        return False
                     epoch = self._unload_epoch
                     self._healthy = False
                 logger.warning(
                     f"llama-server for '{self._model_identifier}' exited "
                     f"(code {proc.returncode}); respawning to recover the session"
                 )
+                if self._died_of_gpu_oom(proc):
+                    self._note_gpu_oom_strike(intent)
                 try:
-                    started = bool(self.load_model(intent))
+                    with _automatic_recovery_load():
+                        started = bool(self.load_model(intent))
                 except Exception as exc:
                     logger.error(f"Failed to respawn llama-server: {exc}")
                     return False
                 if started and self._unload_epoch != epoch:
-                    # An unload landed mid-reload. load_model cleared _cancel_event on
-                    # the way in, so the epoch is the only surviving evidence; undo the
-                    # replacement rather than leave a model the user stopped running.
+                    # load_model cleared _cancel_event, so the epoch is the only unload evidence.
                     logger.info("Respawn undone: the model was unloaded during the reload.")
                     self.unload_model()
                     return False
                 return started
 
-    def _retire_device_lost_server(self, served_by) -> None:
+    def _stop_stats_logger(self) -> None:
+        """Stop the engine-stats poller of the child going away. getattr: teardown must
+        tolerate a partially-built backend (failed __init__ or a __new__-built instance)."""
+        if getattr(self, "_stats_logger", None) is not None:
+            self._stats_logger.stop()
+            self._stats_logger = None
+
+    def _retire_device_lost_server(
+        self,
+        served_by,
+        metal_poison: Optional[dict] = None,
+    ) -> None:
         """Kill the llama-server that hit a lost GPU device, if it is still current (#11453).
 
         It survives VK_ERROR_DEVICE_LOST but fails every later request; a dead child is
-        what _respawn_if_dead already recovers.
+        what _respawn_if_dead already recovers. ``metal_poison`` marks the Metal variant:
+        a failed command buffer (usually out of memory) latches the backend the same way.
         """
-        with self._respawn_lock:
+        if metal_poison is not None:
+            # Outside the locks: the probe waits on the child up to its timeout.
+            if (
+                served_by is None
+                or served_by is not self._process
+                or served_by.poll() is not None
+                or self._cancel_event.is_set()
+                or not self._metal_compute_failure_confirmed()
+            ):
+                metal_poison["pending"] = False
+                return
+        # _serial_load_lock too: no load may publish another model between the kill and the strike.
+        with self._respawn_lock, self._serial_load_lock:
             if (
                 served_by is None
                 or served_by is not self._process
@@ -557,24 +641,217 @@ class _GenerationMixin:
                 or self._cancel_event.is_set()
             ):
                 return
-            # Else the MTP watchdog reads this kill as an MTP crash.
+            # First, or the MTP watchdog reads this kill as an MTP crash.
             self._stop_mtp_crash_watchdog()
+            self._retired_process = served_by
             try:
                 served_by.kill()
                 served_by.wait(timeout = 10)
             except (OSError, subprocess.TimeoutExpired):
                 pass
+            # Else it polls the dead child's port, which another server may reuse.
+            self._stop_stats_logger()
+            if metal_poison is not None:
+                # Under _respawn_lock, or a request could respawn the speculative config.
+                terminal = False
+                with self._lock:
+                    if self._process is served_by and not self._cancel_event.is_set():
+                        terminal = self._after_metal_poisoned_server(
+                            bool(metal_poison.get("draft"))
+                        )
+                if not terminal:
+                    return
+                # Nothing will respawn it: unload it like any other model, still under
+                # _serial_load_lock.
+                self.unload_model()
+                # A reload queued on _serial_load_lock may land before the hooks run.
+                retired_epoch = self._unload_epoch
+        if metal_poison is not None:
+            # Outside every backend lock (gpu_arbiter._lock comes first).
+            for hook in list(_TERMINAL_RETIREMENT_HOOKS):
+                try:
+                    hook(self, retired_epoch)
+                except Exception as exc:  # noqa: BLE001 -- best effort, as a reap
+                    logger.debug("Terminal retirement cleanup failed: %s", exc)
+            return
         try:
             logger.warning(
                 f"llama-server for '{self._model_identifier}' lost its GPU device "
-                "(the graphics driver reset it); restarted it. On Intel Arc with "
-                "Vulkan, GGML_VK_DISABLE_COOPMAT=1 may avoid the reset."
+                "(the graphics driver reset it); stopped it so the next request starts "
+                "a fresh one. On Intel Arc with Vulkan, GGML_VK_DISABLE_COOPMAT=1 may "
+                "avoid the reset."
             )
         except Exception:
             # The logger raises once stdout is closed; recovery must not.
             pass
 
-    def _retire_device_lost_server_soon(self, served_by) -> None:
+    def _after_metal_poisoned_server(self, draft_failed: bool) -> bool:
+        """Choose the recovery after a Metal-poisoned server was retired; True on the terminal
+        second strike."""
+        intent = self._last_load_intent
+        key = self._metal_oom_key(intent) if intent is not None else None
+        prior = getattr(self, "_metal_oom_strikes", None)
+        strikes = prior[1] + 1 if prior is not None and key is not None and prior[0] == key else 1
+        self._metal_oom_strikes = (key, strikes)
+        where = "the speculative draft context" if draft_failed else "a decode"
+        try:
+            name = self._model_identifier
+            if strikes >= 2:
+                # Not replaced: an identical explicit load must spawn a new child.
+                self._healthy = False
+                self._metal_oom_terminal_key = key
+                logger.error(
+                    f"llama-server for '{name}' ran out of Metal memory again in {where} "
+                    "after a restart; not restarting it. Lower the context length or the "
+                    "GPU layers, turn off speculative decoding, or choose a smaller quant, "
+                    "then load the model again."
+                )
+                return True
+            requested_mode = getattr(intent, "speculative_type", None)
+            recovery_extras = list(getattr(intent, "extra_args", None) or ())
+            # A bare --model-draft in the extras survives an Off reload (has_dft()).
+            auto_sidecar = (
+                self._speculative_type in ("draft-dspark", "draft-dflash")
+                and _canonicalize_spec_mode(requested_mode) in (None, "auto")
+                and not _extra_args_set_spec_type(recovery_extras)
+                and not _extra_args_mtp_draft_path(
+                    recovery_extras, env = _child_spec_env(recovery_extras)
+                )
+            )
+            if auto_sidecar and self._maybe_recover_from_mtp_crash(sidecar_oom = True):
+                logger.warning(
+                    f"llama-server for '{name}' ran out of Metal memory in {where} with the "
+                    f"{self._speculative_type.split('-', 1)[1]} drafter and its Metal backend "
+                    "cannot recover; reloading once without speculative decoding."
+                )
+                return False
+            logger.warning(
+                f"llama-server for '{name}' ran out of Metal memory in {where} and its Metal "
+                "backend cannot recover; stopped it so the next request starts a fresh one."
+            )
+        except Exception:
+            pass
+        return strikes >= 2
+
+    @contextlib.contextmanager
+    def _while_still_retired(self, epoch):
+        """Hold _serial_load_lock, which every load takes, and yield whether this backend is
+        still the one a terminal Metal strike unloaded at ``epoch``: nothing spawned since and
+        no other unload. A cleanup acting on a replacement would kill it."""
+        with self._serial_load_lock:
+            yield self._process is None and getattr(self, "_unload_epoch", None) == epoch
+
+    def _metal_oom_is_terminal(self, intent) -> bool:
+        """Whether ``intent`` already ran out of Metal memory twice (no more replays)."""
+        terminal = getattr(self, "_metal_oom_terminal_key", None)
+        return (
+            terminal is not None and intent is not None and self._metal_oom_key(intent) == terminal
+        )
+
+    def _gpu_oom_headroom_mib(self, intent) -> float:
+        """Extra --fit-target for a reload of the load that ran out of GPU memory; 0 otherwise."""
+        prior = getattr(self, "_gpu_oom_strikes", None)
+        if prior is None or intent is None or prior[0] != self._metal_oom_key(intent):
+            return 0.0
+        return prior[1] * _GPU_OOM_HEADROOM_STEP_MIB
+
+    def _note_gpu_oom_strike(self, intent) -> None:
+        key = self._metal_oom_key(intent)
+        prior = getattr(self, "_gpu_oom_strikes", None)
+        strikes = prior[1] + 1 if prior is not None and prior[0] == key else 1
+        strikes = min(strikes, _GPU_OOM_HEADROOM_MAX_STRIKES)
+        self._gpu_oom_strikes = (key, strikes)
+        try:
+            logger.warning(
+                f"llama-server for '{self._model_identifier}' ran out of GPU memory; "
+                f"respawning it with {int(strikes * _GPU_OOM_HEADROOM_STEP_MIB)} MiB more "
+                "free VRAM kept (--fit-target)."
+            )
+        except Exception:
+            pass
+
+    def _died_of_gpu_oom(self, proc) -> bool:
+        """Whether the dead served child logged a GPU out-of-memory error before exiting."""
+        drain = getattr(self, "_stdout_thread", None)
+        if drain is not None and drain is not threading.current_thread():
+            # Its last lines can still be in the pipe when the exit status lands.
+            drain.join(timeout = 2)
+        return proc is not None and getattr(self, "_gpu_oom_process", None) is proc
+
+    @staticmethod
+    def _metal_oom_key(intent):
+        """The load an OOM strike is charged to: the speculative mode is what the fallback
+        changes, so it is left out and the no-drafter reload keeps the strike count. The
+        verified-cache hint is per request (the committed snapshot drops it), so it is left
+        out too, or a hinted explicit reload and the snapshot it commits disagree."""
+        try:
+            return replace(intent, speculative_type = None, verified_gguf = None)
+        except TypeError:
+            return intent
+
+    def _metal_compute_failure_confirmed(self) -> bool:
+        """Whether the child really fails compute: a poisoned Metal backend rejects every
+        graph, so a one-token request comes back 500 "Compute error.". The log marker
+        alone is not proof, since request text can reach the server's error output. An
+        --embedding server is restricted to embeddings, so it is probed on the native
+        /embedding route, which computes under every pooling type but RANK (/v1/embeddings
+        400s on NONE pooling before compute). RANK pools n_cls_out floats while
+        send_embedding reads n_embd_out of them, so a reranker (--rerank or --pooling rank)
+        is probed on /rerank, and one ranking only by the GGUF's default (/rerank refuses
+        it) is not probed at all."""
+        try:
+            embedding = bool(self.is_embedding_gguf)
+        except Exception:
+            embedding = False
+        args = [str(a) for a in (self._extra_args or ())]
+        # Argv only (load_model strips inherited LLAMA_ARG_POOLING); last-wins, as common/arg.cpp
+        # applies them.
+        pooling = None
+        for i, raw in enumerate(args):
+            flag = _flag_name(raw)
+            if flag in ("--embedding", "--embeddings"):
+                embedding = True
+            elif flag in ("--rerank", "--reranking"):
+                embedding = True
+                pooling = "rank"
+            elif flag == "--pooling":
+                _, eq, inline = raw.partition("=")
+                value = inline if eq else (args[i + 1] if i + 1 < len(args) else "")
+                pooling = value.strip().lower() or pooling
+        if embedding and pooling == "rank":
+            route, body = "/rerank", {"query": " ", "documents": [" "]}
+        elif embedding and pooling is None and getattr(self, "_pooling_type", None) == 4:
+            return False
+        elif embedding:
+            route, body = "/embedding", {"content": " "}
+        else:
+            route, body = "/completion", {"prompt": " ", "n_predict": 1, "stream": False}
+        try:
+            resp = httpx.post(
+                f"{self.base_url}{route}",
+                json = body,
+                headers = self._auth_headers,
+                timeout = 10.0,
+                trust_env = False,
+                verify = _local_ssl_context(),
+            )
+            if resp.status_code < 500:
+                return False
+            error = resp.json().get("error", {})
+            message = error.get("message", "") if isinstance(error, dict) else error
+            return (
+                str(message)
+                .rstrip()
+                .endswith(("Compute error.", "failed to process speculative batch"))
+            )
+        except Exception:
+            return False
+
+    def _retire_device_lost_server_soon(
+        self,
+        served_by,
+        metal_poison: Optional[dict] = None,
+    ) -> None:
         """Retire after a device loss in the server log, for the passthrough routes.
 
         The grace lets a chat request that hit the same error retire and retry first.
@@ -582,12 +859,14 @@ class _GenerationMixin:
 
         def _retire():
             time.sleep(_DEVICE_LOST_LOG_GRACE_S)
-            self._retire_device_lost_server(served_by)
+            self._retire_device_lost_server(served_by, metal_poison = metal_poison)
 
         try:
             threading.Thread(target = _retire, daemon = True, name = "llama-device-lost").start()
         except RuntimeError:
-            pass
+            if metal_poison is not None:
+                # No retirement will run: let a later poison line try again.
+                metal_poison["pending"] = False
 
     @contextlib.contextmanager
     def _open_chat_stream_with_respawn_retry(
@@ -596,22 +875,7 @@ class _GenerationMixin:
         cancel_event,
         on_respawn: Optional[Callable[[], None]] = None,
     ):
-        """Open a chat stream, respawning a dead llama-server once before streaming.
-
-        Retry only when opening the response fails: once it is open a consumer may
-        already have emitted content or tool events, so a replay could duplicate
-        output and side effects. ``base_url`` is resolved per attempt because a
-        respawn may pick a new port. The budget is one retry per model request, not
-        per chat turn, so a long tool loop never discards a completed tool.
-
-        A child dying after the accept but before the headers surfaces as
-        ReadError/WriteError/RemoteProtocolError rather than ConnectError, and which
-        one differs per OS. llama-server flushes its 200 at slot start, so that window
-        is an upload still in flight or a request behind busy slots; a death during
-        decode arrives with the response open and is not replayed. Timeouts are
-        excluded: the server is slow, not dead, and a replay would spend the
-        first-token budget twice.
-        """
+        """Respawns once; retries only before the response opens (replay could duplicate output); timeouts never retried; base_url resolved per attempt."""
         for attempt in range(2):
             response_opened = False
             served_by = getattr(self, "_process", None)
@@ -650,10 +914,7 @@ class _GenerationMixin:
 
     @staticmethod
     def decode_slot_from_chunk(chunk) -> Optional[int]:
-        """The llama-server slot a stream chunk was decoded on, None if it does not say.
-
-        Only the final result carries ``__verbose``, and only when asked for.
-        """
+        """Slot a stream chunk was decoded on, from __verbose on the final result; None if absent."""
         if not isinstance(chunk, dict):
             return None
         verbose = chunk.get("__verbose")
@@ -665,13 +926,7 @@ class _GenerationMixin:
         return slot
 
     def release_idle_chat_slot(self, base_url: str, slot: int) -> bool:
-        """Erase one completed round's cached context, True once the engine says so.
-
-        Declines unless the round decoded on this server, which a reload renumbers, and
-        unless --slot-save-path is in play, which the endpoint requires. An erase aimed at
-        a slot since handed to another request is deferred rather than dropped, so even a
-        timeout can cost that chat its prefix.
-        """
+        """Erases the cached slot of a round only on the decoding server (a reload renumbers slots) and needs --slot-save-path; a timeout can cost the chat its prefix."""
         if (
             not self._slot_save_dir
             or base_url != self.base_url
@@ -686,6 +941,7 @@ class _GenerationMixin:
                 headers = self._auth_headers,
                 timeout = 2.0,
                 trust_env = False,
+                verify = _local_ssl_context(),
             )
             response.raise_for_status()
             result = response.json()
@@ -730,15 +986,9 @@ class _GenerationMixin:
         thinking_budget_tokens: Optional[int] = None,
         _allow_respawn_retry: bool = True,
         compact_context: bool = False,
+        chat_template_kwargs: Optional[dict] = None,
     ) -> Generator[Union[str, dict], None, None]:
-        """
-        Send a chat completion to llama-server and stream tokens back.
-
-        Uses /v1/chat/completions -- llama-server applies the chat template
-        and handles vision (multimodal image_url parts) natively.
-
-        Yields cumulative text (matching InferenceBackend's convention).
-        """
+        """Streams a chat completion via /v1/chat/completions (llama-server applies template and vision); yields cumulative text like InferenceBackend."""
         if not self.is_loaded:
             raise RuntimeError("llama-server is not loaded")
         if replay_preserve_thinking:
@@ -785,9 +1035,10 @@ class _GenerationMixin:
             payload["timings_per_token"] = True
         if logit_bias:
             payload["logit_bias"] = logit_bias
-        # Per-request enable_thinking / reasoning_effort / preserve_thinking
-        _reasoning_kw = self._request_reasoning_kwargs(
-            enable_thinking, reasoning_effort, preserve_thinking
+        # Per-request enable_thinking / reasoning_effort / preserve_thinking, plus the caller's other tags
+        _reasoning_kw = _with_template_extras(
+            self._request_reasoning_kwargs(enable_thinking, reasoning_effort, preserve_thinking),
+            chat_template_kwargs,
         )
         if _reasoning_kw is not None:
             payload["chat_template_kwargs"] = _reasoning_kw
@@ -806,8 +1057,7 @@ class _GenerationMixin:
         if context_overflow == "truncate_oldest" and self._effective_context_length:
             try:
                 _before_fit = openai_messages
-                # One value for both the boundary read and the fit: a boundary the fit
-                # would not consume as an epoch must not be discarded as if it would.
+                # Same value for boundary read and fit, so they agree on epochs.
                 _can_reset = _can_reset_epoch(
                     thread_id,
                     _backend_supports_tools(self),
@@ -822,11 +1072,12 @@ class _GenerationMixin:
                 )
                 openai_messages, truncation = _fit_with_instruction_pins(
                     openai_messages,
+                    on_compacting = _compaction_reporter(perf_callback),
                     context_length = self._effective_context_length,
                     max_tokens = payload["max_tokens"],
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
-                            messages_without_unpriced_media(fitted), None, self.markup_profile
+                            self._countable_messages(fitted), None, self.markup_profile
                         ),
                         None,
                         None,
@@ -835,7 +1086,7 @@ class _GenerationMixin:
                         continue_final_message = continue_final_message,
                         should_abort = lambda: bool(cancel_event and cancel_event.is_set()),
                     ),
-                    estimate_message = estimate_message_tokens_without_unpriced_media,
+                    estimate_message = self._estimate_countable_message,
                     reserve_tokens = _conversation_recall_reserve(thread_id),
                     sticky_dropped = _sticky,
                     sticky_is_checkpoint = _sticky_is_checkpoint,
@@ -847,16 +1098,14 @@ class _GenerationMixin:
                     **_compaction_fit_kwargs(context_policy, compaction_headroom_ratio),
                 )
                 if truncation:
-                    # Inline, not a forged tool exchange: this path sends no tools array,
-                    # and strict templates reject a tool role with no catalogue.
+                    # Inline: no tools array here, and strict templates reject a lone tool role.
                     _recalled = _archive_and_recall(
                         openai_messages,
                         _before_fit,
                         branch_messages = _before_fit,
                         thread_id = thread_id,
                         style = "inline",
-                        # Checkpoint mode recalls once, on the turn that reset; rolling has no
-                        # such key and keeps recalling on every turn that evicted anything.
+                        # Checkpoint mode recalls once; rolling recalls every turn that evicted.
                         force_recall = bool(truncation.get("checkpoint_started", True)),
                         # A rescued refusal may evict messages; archive them without recall.
                         recall_done = not truncation["fits"],
@@ -868,7 +1117,7 @@ class _GenerationMixin:
                         ),
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
-                                messages_without_unpriced_media(fitted),
+                                self._countable_messages(fitted),
                                 None,
                                 self.markup_profile,
                             ),
@@ -878,6 +1127,8 @@ class _GenerationMixin:
                             chat_template_kwargs = _reasoning_kw,
                             continue_final_message = continue_final_message,
                         ),
+                        cancel_check = lambda: bool(cancel_event and cancel_event.is_set()),
+                        background = True,
                     )
                     openai_messages = _recalled["conversation"]
                     truncation = {**truncation, **_recalled["counts"]}
@@ -891,17 +1142,13 @@ class _GenerationMixin:
                 payload["messages"] = neutralize_control_markup_in_messages(
                     openai_messages, None, self.markup_profile
                 )
-                # Reuse the fitted request on respawn; re-running the preflight would
-                # emit the same truncation event twice.
+                # Reuse the fitted request; re-running preflight would duplicate the event.
                 retry_messages = openai_messages
                 retry_image_b64 = None
                 retry_max_tokens = payload["max_tokens"]
                 retry_context_overflow = None
                 retry_preflight_context_length = self._effective_context_length
-                # `fits` False too: it carries the diagnosis the client needs to explain
-                # WHY. Otherwise the user only sees llama-server's error, which reports
-                # the whole conversation's size and advises shortening it even when the
-                # single message just sent is the part that does not fit.
+                # Re-cost here, not at the breaks: results and nudges appended after the last re-cost left the pool unaware of this final pass, the largest request.
                 if truncation:
                     yield {"type": "context_truncated", **truncation}
             except Exception as exc:
@@ -957,16 +1204,15 @@ class _GenerationMixin:
                 context_overflow = context_overflow_,
                 context_policy = context_policy,
                 compaction_headroom_ratio = compaction_headroom_ratio,
-                # The retry refits for the replacement window and can evict more than
-                # the first attempt did. Without the thread those extra turns are
-                # archived nowhere and no reserve or boundary applies, on the one path
-                # that deliberately compacts again.
+                # The retry refits and can evict more turns, so it must get the same thread_id to
+                # archive them.
                 thread_id = thread_id,
                 # The retry refits, so it must be told the same about this request's
                 # tools as the first attempt was.
                 tools_withheld = tools_withheld,
                 thinking_budget_tokens = thinking_budget_tokens,
                 compact_context = compact_context,
+                chat_template_kwargs = chat_template_kwargs,
                 _allow_respawn_retry = False,
             )
 
@@ -1001,10 +1247,8 @@ class _GenerationMixin:
                                     _prov_entry = None
                                     yield cumulative
                                 else:
-                                    # Only reasoning_content, no content:
-                                    # model put its whole reply in reasoning
-                                    # (e.g. Qwen3 always-think). Show it as
-                                    # the main response, not a thinking block.
+                                    # Reasoning-only reply (e.g. Qwen3 always-think): show it as the
+                                    # main response.
                                     cumulative = _finalize_reasoning_only_cumulative(
                                         cumulative,
                                         reasoning_text,
@@ -1022,9 +1266,7 @@ class _GenerationMixin:
                         try:
                             data = json.loads(line[6:])
                             _report_live_llama_timings(perf_callback, data)
-                            # Diffusion frame (per-step canvas) from the shim: forward untouched so
-                            # the frontend renders it in place. No assistant text, so it never enters
-                            # the cumulative content.
+                            # Diffusion frame from the shim: forward untouched, never into content.
                             if data.get("type") == "diffusion_frame":
                                 yield data
                                 continue
@@ -1035,10 +1277,7 @@ class _GenerationMixin:
                             _chunk_usage = data.get("usage")
                             if _chunk_usage:
                                 _metadata_usage = _chunk_usage
-                            # An error chunk carries no choices, so without this the loop
-                            # ignored it and the reply ended with no finish_reason and no
-                            # incomplete stamp: to the user, a mid-sentence stop for no
-                            # stated reason. Raise so the failure is surfaced.
+                            # Error chunks have no choices; raise so the failure is surfaced.
                             _stream_error = stream_error_from_chunk(data)
                             if _stream_error is not None:
                                 raise _stream_error
@@ -1056,9 +1295,8 @@ class _GenerationMixin:
                                 if reasoning:
                                     reasoning_text += reasoning
                                     if not in_thinking:
-                                        # Provenance for think-aware consumers: a
-                                        # leading <think> we open here is genuine
-                                        # reasoning, unlike literal tags in content.
+                                        # A leading <think> opened here is genuine reasoning, unlike
+                                        # literal tags.
                                         if reasoning_provenance is not None and not cumulative:
                                             reasoning_provenance["wrapped"] = (
                                                 reasoning_provenance.get("wrapped", 0) + 1
@@ -1102,9 +1340,7 @@ class _GenerationMixin:
                     )
                     yield {
                         "type": "metadata",
-                        # Never None: a finish-only metadata event (no usage,
-                        # no timings) would otherwise crash consumers that do
-                        # usage.get(...) on the non-streaming paths.
+                        # Never None: consumers call usage.get(...).
                         "usage": _metadata_usage or {},
                         "timings": _metadata_timings,
                         "finish_reason": _metadata_finish_reason,

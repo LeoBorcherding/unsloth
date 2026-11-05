@@ -20,65 +20,38 @@ from core.inference.llama_server_args import (
     _TENSOR_SPLIT_FLAGS,
     parse_cache_override_per_axis,
 )
+from core.inference.llama_server_args import _last_flag_value
+import ctypes
+import re
 
-# Below this many B params, draft-mtp regresses vs spec-off (bench in
-# _build_speculative_flags); auto mode drops MTP under it.
+# Below this, draft-mtp regresses vs spec-off; auto mode drops MTP under it.
 _MTP_MIN_SIZE_B = 3.0
 
-# Cap total GPU occupancy at this fraction of the card. The fit reserves an
-# absolute (1 - frac) * total per GPU when total VRAM is known, else a fraction
-# of free (see _fit_context_to_vram), plus a byte-accurate MTP draft reserve.
-# 3%: the context-linear compute buffer is now modelled (_compute_buffer_ctx_bytes),
-# so this cushion no longer covers it - only fragmentation, the per-device CUDA
-# context on a multi-GPU split, and MoE routing, which measure ~2-3% (Qwen3.5-397B on
-# 3 GPUs under-predicts by 2.7%). Below 3% one fragmentation spike overflows to CPU.
+# Cap GPU occupancy at 97%; the 3% covers fragmentation, per-device CUDA context and MoE routing, not the modelled compute buffer.
 _CTX_FIT_VRAM_FRACTION = 0.97
 
-# Apple unified memory is shared with the OS, so tighter than VRAM. Matches the
-# 0.85 MLX uses in mlx_inference.py (_configure_memory_limits); not kept in sync.
+# Apple unified memory is shared with the OS, so tighter than VRAM; matches the 0.85 in mlx_inference.py but is not kept in sync.
 _APPLE_UNIFIED_MEMORY_FRACTION = 0.85
 
 # The 5% of wired headroom held back absorbs error in the footprint estimate.
 _APPLE_WIRED_CEILING_FRACTION = 0.95
 
-# _fit_context_to_vram's floor: the shortest context the search will settle for, so a
-# value equal to it is that floor rather than a measurement. The Metal branch re-prices
-# from _FIT_FLOOR_MIN_CTX (the search's 256 alignment step) before trusting it.
-#
-# 8192, not llama.cpp's own 4096 (common_params.fit_params_min_ctx). 4096 is too short
-# to be useful for chat once tools and a system prompt are in the window, and the fit
-# search would settle there rather than spilling weights it could spill instead. The two
-# floors are now deliberately different numbers: llama.cpp's still governs ITS fitter,
-# and Unsloth does not pass -fitc, so a launch that hands llama.cpp an explicit -c can
-# still be reduced below this by the child's own fit step.
-#
-# Every arm now floors here, Metal included. The Apple arm used to hold a separate
-# hardcoded 4096, which made a Mac publish half the context a discrete GPU published
-# for the same model. Being BELOW llama.cpp's own floor is what made that safe to
-# raise: -c 8192 is a request the child's --fit can still reduce, down to its 4096,
-# so the arm hands over a ceiling rather than a commitment. The one arm still on a
-# bare 4096 is _plan_tensor_parallel's no-KV fallback, which cannot prove a safe cap
-# at all and is a different question from this floor.
+# 8192 floor (llama.cpp 4096 is too short for chat); a result at the search floor is that floor, not a measurement; Metal re-prices from _FIT_FLOOR_MIN_CTX.
 _FIT_MIN_CTX = 8192
 _FIT_FLOOR_MIN_CTX = 256
 
-# llama.cpp's OWN reduction floor: common_params.fit_params_min_ctx, 4096
-# (common/common.h), the smallest context its --fit step will shrink a request to.
-# Named because the paragraph above spends the whole justification for _FIT_MIN_CTX on
-# it: -c 8192 is safe to hand a Mac only as a ceiling the child's fitter can still come
-# down from, and this is how far down. A launch that hands over 8192 with the fitter
-# NOT running has no such backstop, so it must hand over this number itself rather than
-# the ceiling that assumed one.
+# llama.cpp's own --fit floor; without the fitter running, hand over this, not 8192.
 _LLAMA_FIT_MIN_CTX = 4096
 
 # _plan_tensor_parallel's no-KV fallback. A GUESS: may shrink Auto, never a request (#9653).
 _TP_UNMEASURED_CTX = 4096
 
-# Auto only reaches this path when no discrete-GPU subset can hold the model.
-# llama.cpp must offload layers to host RAM either way, so prefer a context that
-# remains useful for chat. Separate from _FIT_MIN_CTX: that value is also a search
-# and Apple unified-memory safety floor.
+# Auto offload context when no GPU subset holds the model; prefers a chat-useful size, kept separate from _FIT_MIN_CTX (search and Apple floor).
 _AUTO_OFFLOAD_CTX = 8192
+
+
+# Auto context on unified memory; 65536 is the floor unsloth start agents need.
+_APPLE_AUTO_CTX = 65536
 
 # Keep this at or above the fit search floor. Not a style rule, a correctness one:
 # the Auto offload branch re-checks whether a subset holds the model at the reduced
@@ -95,14 +68,10 @@ _AUTO_OFFLOAD_CTX = 8192
 # pins both defaults to _FIT_MIN_CTX and this constant above it, so the agreement
 # cannot lapse silently.
 
-# How far amd-smi's total VRAM may sit from HIP's before the two are reporting
-# different memory scopes rather than one pool (an APU carve-out against the GTT
-# pool, a partition against the whole card). Same 10% margin
-# utils/hardware/hardware.py::_rocm_system_wide_vram_by_index gates its overlay on.
+# Must stay >= fit search floor or the Auto re-check flips --fit off (test pins it). amd-smi vs HIP VRAM totals differing over 10% are different scopes.
 _AMD_SMI_TOTAL_TOLERANCE = 0.10
 
-# Flat MTP reserve, used only when GGUF dims are too sparse for the byte-accurate
-# reserve (_estimate_mtp_overhead_bytes). Applied to both the fit budget and pin.
+# Flat MTP reserve, used only when GGUF dims are too sparse for _estimate_mtp_overhead_bytes; applied to both the fit budget and the pin.
 _MTP_VRAM_RESERVE_FRAC = 0.05
 
 
@@ -114,26 +83,64 @@ _VRAM_FLOOR_RESERVE_MIB = 512.0
 # ... default: 1024"): what the fallback fitter leaves when we pass nothing.
 _LLAMA_FIT_TARGET_DEFAULT_MIB = 1024.0
 
-# Windows + discrete NVIDIA: since driver 536.40 WDDM serves VRAM overflow from host RAM
-# instead of failing (unslothai/unsloth#11349), so match llama.cpp's own fit margin.
+# Windows + NVIDIA since driver 536.40: WDDM spills VRAM overflow to host RAM instead of failing, so the reserve matches llama.cpp fit margin.
 _WINDOWS_SYSMEM_FALLBACK_RESERVE_MIB = _LLAMA_FIT_TARGET_DEFAULT_MIB
 _WINDOWS_SYSMEM_FALLBACK_MAX_FRACTION = 0.125
 
 
+def _windows_private_memory(pid: int) -> Optional[tuple[int, int]]:
+    """(PrivateUsage, PrivateWorkingSetSize) in bytes; None when unreadable (needs Windows 10 1809+).
+    psutil's uss and wset both count mmap'd GGUF pages, which would hide untouched commit."""
+    from ctypes import wintypes
+
+    class _COUNTERS_EX2(ctypes.Structure):
+        _fields_ = (
+            [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)]
+            + [
+                (name, ctypes.c_size_t)
+                for name in (
+                    "PeakWorkingSetSize",
+                    "WorkingSetSize",
+                    "QuotaPeakPagedPoolUsage",
+                    "QuotaPagedPoolUsage",
+                    "QuotaPeakNonPagedPoolUsage",
+                    "QuotaNonPagedPoolUsage",
+                    "PagefileUsage",
+                    "PeakPagefileUsage",
+                    "PrivateUsage",
+                    "PrivateWorkingSetSize",
+                )
+            ]
+            + [("SharedCommitUsage", ctypes.c_ulonglong)]
+        )
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error = True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        counters = _COUNTERS_EX2()
+        counters.cb = ctypes.sizeof(counters)
+        if not kernel32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return None
+        return int(counters.PrivateUsage), int(counters.PrivateWorkingSetSize)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+_WINDOWS_GPU_COMMIT_HEADROOM_WARN_MIB = 4096
+
+
+# WDDM backs GPU allocations with system commit the process never touches (#16015).
+_WINDOWS_GPU_UNTOUCHED_COMMIT_MIN_MIB = 2048
+
+
 def _vram_reserve_floor_mib(total_mib: float, *, sysmem_fallback: bool = False) -> float:
-    """Smallest margin a card keeps: 512 MiB, or the default's own reserve if smaller.
-
-    Capping it at the default keeps the budget monotonic. A flat 512 MiB would
-    RAISE the reserve the moment the slider passed the default on any card under
-    about 17 GiB, where 3% is already less than that: an 8 GiB card offers 7946 MiB
-    at 0.97 but only 7680 at 0.971, so nudging the slider up would hand back less
-    context, the opposite of what the control promises. Capped, the reserve never
-    rises with the fraction, and at or below the default the percentage term always
-    wins, so an unset budget is untouched on every card size.
-
-    ``sysmem_fallback`` raises the floor (flat in ``frac``, so still monotonic) on hosts
-    whose driver spills an overshoot into system RAM; it overrides a 100% budget on purpose.
-    """
+    """Floor 512 MiB, capped at the default reserve to keep the budget monotonic; sysmem_fallback raises it and deliberately overrides a 100% budget."""
     floor = min(_VRAM_FLOOR_RESERVE_MIB, (1.0 - _CTX_FIT_VRAM_FRACTION) * total_mib)
     if not sysmem_fallback:
         return floor
@@ -154,16 +161,7 @@ def _vram_usable_mib(
     pooled: bool = False,
     sysmem_fallback: bool = False,
 ) -> float:
-    """Free MiB one card offers a load at ``frac``, unclamped.
-
-    ``pooled`` marks an already absolute budget summed over cards that have each
-    paid their own reserve; charging it again would double count. Everything else
-    is one device, including a probe reporting free memory with no total, which
-    still has to keep a margin: there the free reading is the only scale available,
-    and it agrees with the known-total form at the default.
-
-    ``sysmem_fallback``: see ``LlamaCppBackend._sysmem_fallback_risk()``; ``pooled`` ignores it.
-    """
+    """Pooled budgets already paid every card reserve, so do not charge it again; a probe with no total still keeps a margin."""
     if total_mib and total_mib > 0:
         reserve = max(
             (1.0 - frac) * total_mib,
@@ -187,13 +185,7 @@ def _model_memory_settings_or_none() -> Optional[tuple[bool, bool]]:
 
 
 def _active_vram_fraction() -> float:
-    """The user's VRAM budget, or ``_CTX_FIT_VRAM_FRACTION`` when they set none.
-
-    The settings module clamps to a supported range and swallows a corrupt stored
-    value, so this cannot widen the budget past 1.0 or hand back a NaN. Imported
-    lazily to keep the settings/storage layer off this module's import path, and
-    read per call so a change applies to the next load without a restart.
-    """
+    """User VRAM budget, or _CTX_FIT_VRAM_FRACTION if unset; settings clamp it so no NaN or past 1.0. Read per call, so no restart is needed."""
     try:
         from utils.vram_budget_settings import get_vram_budget_fraction
         return get_vram_budget_fraction()
@@ -243,11 +235,9 @@ def _kv_cache_gpu_fallback_warning(
     )
 
 
-# Upper bound on any current tokenizer, for output rows when a truncated header drops
-# the token array. Above Llama 4 / Gemma 3 (256k), the widest shipping.
+# Upper bound on any current tokenizer vocab (output rows) when a truncated header drops the token array; above the 256k of Llama 4 and Gemma 3.
 _ASSUMED_MAX_VOCAB = 262144
-# Ceiling on the float32 activations a compute graph keeps per micro-batch token, for a
-# header that cannot be read: 4 * n_ff at n_ff = 65536, above Llama 3.1 405B's 53056.
+# Ceiling on float32 activations per micro-batch token for an unreadable header: 4 * n_ff at n_ff = 65536, above the Llama 3.1 405B figure of 53056.
 _ASSUMED_MAX_ACTIVATION_WIDTH = 262144
 
 
@@ -267,18 +257,9 @@ def _kv_cache_cell_layout(n_ctx: int, n_parallel: int, kv_unified: bool) -> tupl
 
 
 def _env_main_cache_type_for_budget(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """Heavier (max bytes/elem) of the set LLAMA_ARG_CACHE_TYPE_K/_V env types
-    when it budgets differently from the f16 default, else None. Unsloth emits
-    --cache-type only for the param/extras path, so an env type would otherwise
-    reach the child unbudgeted: f32 under-reserves the KV, and a quantized type
-    skips the dequant compute scratch (on Inkling the dense fallback it forces
-    dwarfs the banded rate). The caller adopts the type for the reserve only;
-    _cache_type_from_env keeps it out of the emitted flags."""
+    """Heavier of LLAMA_ARG_CACHE_TYPE_K/_V when not f16, budgeted because the child gets it unbudgeted (f32 under-reserves, quantized skips scratch)."""
     e = os.environ if env is None else env
-    # An UNSET axis is not absent, it is llama.cpp's f16 default, so it joins the max.
-    # Dropping it let a lone CACHE_TYPE_V=q4_0 return q4_0 and price K as q4 while the
-    # child ran it at f16, under-reserving the larger tensor when key_length >
-    # value_length -- and tensor mode has no --fit valve to absorb that.
+    # An unset axis is llama.cpp f16 and joins the max; dropping it lets a lone q4_0 V price K as q4 while the child runs f16, under-reserving.
     axis_types = [
         (e.get(var) or "").strip().lower() or "f16"
         for var in ("LLAMA_ARG_CACHE_TYPE_K", "LLAMA_ARG_CACHE_TYPE_V")
@@ -292,11 +273,7 @@ def _env_main_cache_type_for_budget(env: Optional[Mapping[str, str]] = None) -> 
 
 
 def _extra_args_main_cache_type_for_budget(extra_args: Optional[Iterable[str]]) -> Optional[str]:
-    """Heavier (max bytes/elem) of the explicit --cache-type-k/-v extras, or None.
-
-    Extras are appended last and win per axis, so an asymmetric K=f32,V=f16 must be
-    budgeted by its heavier axis. resolve_cache_type_kv returns only the last-wins
-    single type, which under-reserves the heavier axis when the lighter one is last."""
+    """Budget by the heavier axis: resolve_cache_type_kv keeps the last-wins type and under-reserves."""
     k, v = parse_cache_override_per_axis(extra_args)
     candidates = [c for c in (k, v) if c]
     if not candidates:
@@ -337,9 +314,7 @@ def _planned_main_cache_types(
     return _effective_main_cache_types(args, env)
 
 
-# What kv_cache_type_from_str accepts, so the only types Unsloth emits. Module scope
-# because the budget must know whether a type will reach the child before the command
-# is assembled.
+# What kv_cache_type_from_str accepts; module scope so the budget can check it early.
 _VALID_CACHE_TYPES = frozenset(
     {"f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "iq4_nl", "f32"}
 )
@@ -350,15 +325,7 @@ def _planned_scratch_cache_type(
     extra_args: Optional[Iterable[str]] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> str:
-    """LIGHTEST planned axis: the type that decides the compute-buffer scratch rate.
-
-    The KV-byte reserve takes the HEAVIER axis (max over _planned_main_cache_types),
-    which is conservative for storage but hides a paired quantized axis -- an f16
-    budget hides a q4_0 K. _compute_buffer_ctx_bytes charges the per-device dequant
-    scratch only when its cache type is under f16, so handing it the heavier axis
-    silently drops that scratch for an asymmetric pair. Taking the lighter axis here
-    makes any quantized axis select the quantized rate, leaving the two terms
-    independently conservative (heavier for bytes, lighter for scratch)."""
+    """Scratch is charged only under f16, so take the LIGHTER axis: the heavier one hides a quantized K behind f16 and silently drops the scratch."""
     return min(_planned_main_cache_types(cache_type_kv, extra_args, env), key = _kv_bytes_per_elem)
 
 
@@ -368,20 +335,13 @@ def _auto_mode_drops_mtp(
     *,
     has_separate_drafter: bool = False,
 ) -> bool:
-    """Auto mode drops MTP below _MTP_MIN_SIZE_B for an embedded draft head
-    (its per-token cost regresses there); a separate drafter (Gemma) is a tiny
-    standalone model that still speeds up below 3B, so it never drops. Forced
-    mtp / mtp+ngram engage regardless of size."""
+    """Embedded MTP regresses below _MTP_MIN_SIZE_B, so Auto drops it; a separate drafter is kept."""
     if has_separate_drafter:
         return False
     return req_mode == "auto" and size_b is not None and size_b < _MTP_MIN_SIZE_B
 
 
-# MLA archs whose MTP context covers only the NextN block instead of duplicating the
-# trunk KV: glm5next holds 4+3 MiB over one layer where its trunk holds 48+36 over
-# twelve. That one fact is why Auto keeps MTP (gate below) and why the fit must not
-# reserve the copy (_estimate_mtp_overhead_bytes). "glm5-next" = upstream name
-# (ggml-org/llama.cpp#27773); builds lacking its NextN graph retry without speculation.
+# glm5next (upstream glm5-next): MTP covers only the NextN block, so Auto keeps MTP and the fit reserves no copy; old builds retry without speculation.
 _MLA_MTP_FAST_ARCHS = frozenset({"glm5next", "glm5-next"})
 # Smallest context Auto shrinks to so a fast MLA head still launches.
 _FAST_MTP_MIN_CTX = 65536
@@ -400,14 +360,7 @@ def _arch_mtp_skips_target_kv_copy(architecture: Optional[str]) -> bool:
 
 
 def _mla_mtp_auto_enabled() -> bool:
-    """Whether Auto may pick embedded MTP for an MLA model (GLM-5.2/DeepSeek/Kimi).
-
-    Off by default: llama.cpp's MLA/DSA MTP path keeps a duplicated full target-KV
-    context and recomputes the sparse-attention indexer every draft step, so it runs
-    ~2x slower than no speculation (GLM-5.2 bench: 27 vs 45 tok/s, flat across draft
-    depth and 96-100% acceptance) -- the opposite of the vLLM/SGLang speedup on the
-    same model. Set UNSLOTH_MLA_MTP_ENABLED=1 to let Auto promote MLA MTP again once
-    that path is optimized upstream. Forced mtp / mtp+ngram ignore this gate."""
+    """Off by default: MLA MTP runs ~2x slower than no speculation (duplicated KV, indexer recomputed); UNSLOTH_MLA_MTP_ENABLED=1 enables; forced modes ignore it."""
     return os.environ.get("UNSLOTH_MLA_MTP_ENABLED", "0").strip().lower() in (
         "1",
         "true",
@@ -422,18 +375,11 @@ def _extra_args_set_spec_type(extra_args: Optional[Iterable[str]]) -> bool:
     return _extra_args_set_any_flag(extra_args, {"--spec-type", "--spec-default"})
 
 
-# Layer-offload override detection. Single-sourced from llama_server_args, which
-# also strips these (plus the MoE flags) from inherited extras; sharing the layer
-# set keeps detection and stripping from drifting.
+# Shared with llama_server_args so detection and stripping cannot drift.
 _GPU_OFFLOAD_OVERRIDE_FLAGS = _LAYER_OFFLOAD_FLAGS
-# Extras that keep weights on the CPU regardless of the layer count, so a
-# full offload cannot be inferred from -ngl alone. -ncmoe carries a COUNT, and
-# zero places nothing, so it is parsed rather than merely spotted; the rest are
-# presence-only (-cmoe takes no value, and an -ot pattern is not worth guessing
-# at, which matches how the env side reads LLAMA_ARG_OVERRIDE_TENSOR).
+# Extras keeping weights on CPU regardless of -ngl; -ncmoe 0 places nothing, so it is parsed.
 _CPU_MOE_COUNT_FLAGS = frozenset({"-ncmoe", "--n-cpu-moe"})
-# The dense-model twin: common/arg.cpp turns a positive -ncffn into CPU overrides for the
-# first N layers' ffn_up/down/gate, exactly as -ncmoe does for expert weights.
+# Dense twin of -ncmoe: a positive -ncffn moves the first N layers' FFN to CPU.
 _CPU_FFN_COUNT_FLAGS = frozenset({"-ncffn", "--n-cpu-ffn"})
 # User controls over llama.cpp's own fitter. Studio emits neither on Metal, so a launch carrying
 # one is placed by a fitter the Metal memory probe did not run.
@@ -483,3 +429,38 @@ def _extra_args_set_any_flag(extra_args: Optional[Iterable[str]], flags: Collect
         if flag in flags:
             return True
     return False
+
+
+def _explicit_device_ordinals_needed(extra_args: Optional[Iterable[str]]) -> Optional[int]:
+    """Leading child ordinals the user's device flags name (highest ordinal + 1, tensor-split
+    length), 0 when no flag names one; None when a value cannot be read or the pick is CPU only.
+    argv wins over LLAMA_ARG_*."""
+    try:
+        device = _last_flag_value(extra_args, frozenset({"--device", "-dev"}))
+        main_gpu = _last_flag_value(extra_args, frozenset({"--main-gpu", "-mg"}))
+        split = _last_flag_value(extra_args, _TENSOR_SPLIT_FLAGS)
+    except ValueError:
+        return None
+    device = device or str(os.environ.get("LLAMA_ARG_DEVICE", "")).strip() or None
+    main_gpu = main_gpu or str(os.environ.get("LLAMA_ARG_MAIN_GPU", "")).strip() or None
+    split = split or str(os.environ.get("LLAMA_ARG_TENSOR_SPLIT", "")).strip() or None
+    need = 0
+    for token in (device or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        # CPU only ("none", like "cpu"): the child uses no GPU, so no GPU subset may be priced lighter.
+        if token.lower() == "none":
+            return None
+        match = re.fullmatch(r"[A-Za-z]+(\d+)", token)
+        if match is None:
+            return None
+        need = max(need, int(match.group(1)) + 1)
+    if main_gpu is not None:
+        try:
+            need = max(need, int(main_gpu) + 1)
+        except ValueError:
+            return None
+    if split is not None:
+        need = max(need, len([part for part in re.split(r"[,/]", split) if part.strip()]))
+    return need

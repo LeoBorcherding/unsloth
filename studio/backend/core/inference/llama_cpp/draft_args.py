@@ -27,16 +27,26 @@ from .launch_flags import (
     _env_places_tensors_on_cpu,
 )
 from .memory_policy import _extra_args_set_any_flag
+from core.inference.llama_server_args import _last_flag_value
+from core.inference.llama_server_args import fit_is_effectively_on
+from core.inference.llama_server_args import parse_ctx_override
+from typing import Union
+import math
+from .launch_flags import (
+    _CUDA_LIKE_DEVICE_RE,
+    _LLAMA_ARG_TRUE_VALUES,
+    _distinct_device_count,
+    _is_positive_int,
+)
+from .memory_policy import (
+    _LLAMA_FIT_MIN_CTX,
+)
 
 
 def _extra_args_requests_separate_draft(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """True if a non-MTP model draft mode (draft-simple/draft-eagle3) is selected, which
-    loads a separate draft model the budget must reserve (draft-mtp ->
-    _extra_args_requests_mtp; ngram-* load no model). Accumulating for the same reason as
-    _extra_args_requests_mtp: a later --spec-default or --spec-type cannot clear an
-    inherited draft-simple, so reading only the last under-reserves the model it loads."""
+    """Non-MTP draft modes load a separate model; accumulated, as an inherited one cannot be cleared."""
     return bool(
         _accumulated_spec_types(extra_args, env)
         & {"draft-simple", "draft-eagle3", "draft-dspark", "draft-dflash"}
@@ -65,28 +75,191 @@ def _extra_args_spec_draft_n_max(extra_args: Optional[Iterable[str]]) -> Optiona
 def _extra_args_mtp_draft_path(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[str]:
-    """Separate drafter path from extras (local --model-draft/-md or HF
-    --spec-draft-hf/-hfd/...), else the LLAMA_ARG_SPEC_DRAFT_MODEL/_HF_REPO env,
-    else None. An HF repo isn't a local file, so the budget can't size it (falls
-    back to the flat reserve), but recognizing it avoids sizing the wrong one."""
+    """An HF repo draft is not a local file, so it cannot be sized and falls back to the flat reserve."""
     return _extra_args_mtp_draft_source(extra_args, env)[0]
+
+
+def _drop_sidecar_margins(
+    cmd: List[str],
+    integrity_flags: List[str],
+    rebuilt_integrity: List[str],
+    override_pairs: Iterable[List[str]],
+    *,
+    user_args: Iterable[str] = (),
+) -> List[str]:
+    """``cmd`` without Studio's sidecar margins; a user's own pairs survive, so it is idempotent."""
+    out = list(cmd)
+    user = [str(a) for a in user_args]
+
+    def _count(tokens: List[str], pair: List[str]) -> int:
+        return sum(tokens[i : i + len(pair)] == pair for i in range(len(tokens) - len(pair) + 1))
+
+    def _studio_owns(pair: List[str]) -> bool:
+        return bool(pair) and _count(out, pair) > _count(user, pair)
+
+    if "--fit-target" in integrity_flags:
+        old_at = integrity_flags.index("--fit-target")
+        old_margin = integrity_flags[old_at : old_at + 2]
+        new_margin: List[str] = []
+        if "--fit-target" in rebuilt_integrity:
+            new_at = rebuilt_integrity.index("--fit-target")
+            new_margin = rebuilt_integrity[new_at : new_at + 2]
+        at = _subsequence_index(out, old_margin, 0)
+        if out[at : at + 2] == old_margin and _studio_owns(old_margin):
+            out[at : at + 2] = new_margin
+    for pair in reversed(list(override_pairs)):
+        if not _studio_owns(pair):
+            continue
+        for i in range(len(out) - len(pair), -1, -1):
+            if out[i : i + len(pair)] == pair:
+                del out[i : i + len(pair)]
+                break
+    return out
+
+
+def _sidecar_reserve_margin_flags(
+    child_args: Iterable[str],
+    user_args: Optional[Iterable[str]],
+    env: Optional[Mapping[str, str]],
+    base_margin_mib: float,
+    reserve_mib: int,
+    *,
+    per_device: Optional[list[int]] = None,
+    base_by_device: Optional[list[float]] = None,
+) -> list[str]:
+    """``--fit-target`` keeping an unsized sidecar's reserve free on top of the user's margin, read
+    off the child's argv + env."""
+    args = [str(a) for a in child_args]
+    if not reserve_mib or not _extra_args_mtp_draft_path(args, env = env):
+        return []
+    if not fit_is_effectively_on(args, env):
+        return []
+    # A scalar --fit-target is broadcast to every device, so a multi-device launch needs a
+    # per-device list.
+    devices = _extra_args_main_device(args) or (os.environ if env is None else env).get(
+        "LLAMA_ARG_DEVICE"
+    )
+    if (
+        not per_device
+        and devices
+        and _distinct_device_count(devices) > 1
+        and not _split_mode_confines_to_one_device(args, env)
+    ):
+        return []
+    if per_device:
+        bases = (
+            base_by_device
+            if base_by_device and len(base_by_device) == len(per_device)
+            else [base_margin_mib] * len(per_device)
+        )
+        margins = _fit_margins_by_device(user_args, env, 0.0, len(per_device))
+        want_list = ",".join(
+            str(math.ceil(max(b, m) + r)) for b, m, r in zip(bases, margins, per_device)
+        )
+        if _last_flag_value(args, {"-fitt", "--fit-target"}) == want_list:
+            return []
+        return ["--fit-target", want_list]
+    # Studio's per-card margin, not the host-wide scalar a lowered budget sizes by the largest card.
+    if base_by_device and len(set(base_by_device)) == 1:
+        base_margin_mib = base_by_device[0]
+    want = math.ceil(
+        max(base_margin_mib, _single_device_fit_margin(user_args or (), env) or 0.0) + reserve_mib
+    )
+    have = _single_device_fit_margin(args, None)
+    if have is not None and have >= want:
+        return []
+    return ["--fit-target", str(want)]
+
+
+def _fit_margins_by_device(
+    user_args: Optional[Iterable[str]],
+    env: Optional[Mapping[str, str]],
+    base_margin_mib: float,
+    count: int,
+) -> list[float]:
+    """Each card's user --fit-target margin as common/arg.cpp applies it; unset cards keep
+    ``base_margin_mib``."""
+    margins = [float(base_margin_mib)] * count
+    for raw in _fit_target_values(user_args or (), env):
+        entries = [e.strip() for e in str(raw).replace("/", ",").split(",") if e.strip()]
+        try:
+            values = [float(e) for e in entries]
+        except ValueError:
+            continue
+        if len(values) == 1:
+            margins = values * count
+        else:
+            margins[: len(values)] = values[:count]
+    return margins
+
+
+def _fit_target_values(user_args: Iterable[str], env: Optional[Mapping[str, str]]) -> list[str]:
+    """Every --fit-target value llama.cpp applies, env first then argv order."""
+    found = []
+    if env and env.get("LLAMA_ARG_FIT_TARGET"):
+        found.append(str(env["LLAMA_ARG_FIT_TARGET"]))
+    tokens = [str(a) for a in user_args]
+    for i, raw in enumerate(tokens):
+        _, eq, inline = raw.partition("=")
+        if _flag_name(raw) in ("-fitt", "--fit-target"):
+            value = inline if eq else (tokens[i + 1] if i + 1 < len(tokens) else None)
+            if value is not None:
+                found.append(value)
+    return found
+
+
+def _single_device_fit_margin(
+    args: Iterable[str], env: Optional[Mapping[str, str]]
+) -> Optional[float]:
+    """The margin the one launched device keeps: the FIRST entry of a ``--fit-target`` list.
+
+    ``fit_target_margin_in`` takes the largest entry because it prices every device it
+    credits; a single-device launch only ever uses device 0's entry (common/arg.cpp), so a
+    larger later entry must not be added under the sidecar reserve."""
+    raw = _last_flag_value(args, {"-fitt", "--fit-target"})
+    if raw is None and env:
+        raw = env.get("LLAMA_ARG_FIT_TARGET")
+    if raw is None:
+        return None
+    first = str(raw).replace("/", ",").split(",")[0].strip()
+    try:
+        return float(first)
+    except ValueError:
+        return None
 
 
 _HF_DRAFT_FLAGS = frozenset({"--spec-draft-hf", "-hfd", "-hfrd", "--hf-repo-draft"})
 _LOCAL_DRAFT_FLAGS = frozenset({"--model-draft", "--spec-draft-model", "-md"})
 
 
+def _draft_backend_sampling_off(
+    spec_flags: list[str], caps: Mapping[str, object], vocab_size: Optional[int], vulkan: bool
+) -> list[str]:
+    if not vulkan or "--spec-type" not in spec_flags:
+        return []
+    i = spec_flags.index("--spec-type")
+    spec_types = str(spec_flags[i + 1]).split(",") if i + 1 < len(spec_flags) else []
+    if all(t == "none" or t.startswith("ngram") for t in spec_types):
+        return []
+    if vocab_size and vocab_size % _VULKAN_ALIGNED_VOCAB_MULTIPLE == 0:
+        return []
+    if _NO_DRAFT_BACKEND_SAMPLING_FLAG not in (caps.get("flags") or {}):
+        return []
+    return [_NO_DRAFT_BACKEND_SAMPLING_FLAG]
+
+
+_NO_DRAFT_BACKEND_SAMPLING_FLAG = "--no-spec-draft-backend-sampling"
+
+
+# Vulkan TOP_K cannot bind a misaligned view, and backend draft sampling reads logits row r at
+# r * n_vocab * 4 bytes (#14987). n_vocab % 64 == 0 keeps rows 256-byte aligned, the spec maximum.
+_VULKAN_ALIGNED_VOCAB_MULTIPLE = 64
+
+
 def _extra_args_mtp_draft_source(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> tuple[Optional[str], bool]:
-    """The drafter the launch resolves to, and whether it is a repo id.
-
-    The two travel together on purpose. Draft flags are last-wins, so a remote flag
-    followed by a local one leaves a local path as the winner; a caller that asks
-    only "does any remote flag appear" would then price a filesystem path as a
-    Hugging Face repository and charge a reserve for something llama-server will
-    not load. Only the winning flag decides which of the two the value is.
-    """
+    """Last-wins across remote and local flags, so only the winning flag says whether it is a repo id."""
     args = [str(a) for a in extra_args] if extra_args else []
     found: Optional[str] = None
     found_remote = False
@@ -102,8 +275,7 @@ def _extra_args_mtp_draft_source(
     if found is not None:
         return found, found_remote
     e = os.environ if env is None else env
-    # The value lookup's own precedence; with no flag to read, the env spelling says
-    # local or remote. The last two are pre-b8955 (2025-08-30 to 2026-04-28).
+    # The last two are pre-b8955 spellings.
     for var, remote in (
         ("LLAMA_ARG_SPEC_DRAFT_MODEL", False),
         ("LLAMA_ARG_SPEC_DRAFT_HF_REPO", True),
@@ -117,12 +289,7 @@ def _extra_args_mtp_draft_source(
 
 
 def _normalized_load_mode(value: Optional[str]) -> Optional[str]:
-    """Canonical --load-mode, with llama.cpp's own default reading as unset.
-
-    "auto" IS the default, so a load asking for it and a load asking for nothing
-    launch the same command; the dedupe has to see them as equal or picking Auto
-    would reload a server already running it.
-    """
+    """auto is the default, so it maps to None; else the dedupe reloads a server already running it."""
     if value is None:
         return None
     mode = str(value).strip().lower()
@@ -137,11 +304,11 @@ _BREAKDOWN_HOST_ROW_RE = re.compile(
 )
 
 
-def _parse_metal_memory_breakdown(output: str) -> Optional[tuple[int, int, int]]:
-    """Parse the first llama.cpp table as ``(metal_model_mib, host_model_mib, rows)``.
+_METAL_FIT_PROBE_TIMEOUT_S = 120
 
-    Require one Metal device row and sum the model column from every host row.
-    """
+
+def _parse_metal_memory_breakdown(output: str) -> Optional[tuple[int, int, int]]:
+    """Requires one Metal device row; host model MiB sums the model column of every host row."""
     rows: list[str] = []
     for line in output.splitlines():
         if "common_memory_breakdown_print" not in line:
@@ -174,9 +341,7 @@ def _parse_metal_memory_breakdown(output: str) -> Optional[tuple[int, int, int]]
     return metal[0], host, len(rows)
 
 
-# The KV cache dtypes llama.cpp can map, shared by the emission guard and the
-# budget. Module level because both the draft-cache block and the MTP reserve
-# need it, and the main cache path's copy is a local inside load_model.
+# KV cache types llama.cpp can map, module level so the draft-cache block and MTP reserve share it.
 _VALID_KV_CACHE_TYPES: frozenset[str] = frozenset(
     {"f16", "bf16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1", "iq4_nl", "f32"}
 )
@@ -221,10 +386,7 @@ _DRAFT_GPU_LAYER_FLAGS = frozenset(
 def _extra_args_draft_gpu_layers(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[str]:
-    """The effective draft layer count for the SEPARATE drafter, as written.
-
-    Last-wins over argv, falling back to the ``LLAMA_ARG_N_GPU_LAYERS_DRAFT`` twin
-    the child reads before argv. None when neither is set."""
+    """Last-wins over argv, falling back to LLAMA_ARG_N_GPU_LAYERS_DRAFT; None when neither is set."""
     args = [str(a) for a in extra_args] if extra_args else []
     last_ngl: Optional[str] = None
     for i, raw in enumerate(args):
@@ -244,25 +406,7 @@ def _draft_is_split_across_host(
     *,
     n_draft_layers: Optional[int] = None,
 ) -> bool:
-    """True when a fixed POSITIVE draft layer count splits the drafter between the
-    GPU and host RAM.
-
-    ``_extra_args_draft_offloaded_to_cpu`` is the whole-drafter question and only
-    answers ``-ngld 0``. Anything between that and the drafter's own block count
-    leaves the layers past the count on the host -- llama.cpp derives
-    ``i_gpu_start`` from the count and hands every layer below it the CPU buffer
-    list (llama-model.cpp), and each layer's KV follows its device
-    (llama-kv-cache.cpp). llama.cpp's default is -1, "all", so only a non-negative
-    count is a placement at all, and only a count ABOVE ``n_draft_layers`` places
-    the drafter whole: ``i_gpu_start = max(n_layer_all + 1 - n_gpu_layers, 0)``
-    (llama-model.cpp), so the count has to clear the block count by one to reach
-    zero, and ``-ngld`` equal to the block count still leaves one block -- and its
-    KV -- on the host. That is the same threshold the main model already uses
-    (``requested <= n_layers`` in ``_partially_offloads_layers``, and
-    ``0 <= gpu_layers <= n_layers`` in the pipelining check). An unreadable block
-    count (None) says nothing either way, so a positive count stands as a split
-    rather than being waved through.
-    """
+    """A positive -ngld splits the drafter unless above its block count; equal leaves a block on host."""
     raw = _extra_args_draft_gpu_layers(extra_args, env)
     if raw is None:
         return False
@@ -276,6 +420,108 @@ def _draft_is_split_across_host(
     return not (n_draft_layers and count > n_draft_layers)
 
 
+def _draft_n_ubatch(
+    args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
+) -> Optional[int]:
+    """A positive --spec-draft-n-ubatch (env twin overridden by argv), else None."""
+    found = (os.environ if env is None else env).get("LLAMA_ARG_SPEC_DRAFT_N_UBATCH")
+    tokens = [str(a) for a in args] if args else []
+    for i, raw in enumerate(tokens):
+        _, eq, inline = raw.partition("=")
+        if _flag_name(raw) == "--spec-draft-n-ubatch":
+            found = inline if eq else (tokens[i + 1] if i + 1 < len(tokens) else None)
+    return int(str(found).strip()) if _is_positive_int(found) else None
+
+
+def _sidecar_child_ctx(
+    args: Optional[Iterable[str]],
+    env: Optional[Mapping[str, str]],
+    native_ctx: Optional[int],
+    n_parallel: Optional[int],
+    kv_unified: bool,
+) -> int:
+    """The context the child allocates: last positive -c, else LLAMA_ARG_CTX_SIZE, else the native
+    length."""
+    ctx = parse_ctx_override(args)
+    if ctx is None:
+        try:
+            ctx = int(
+                str((os.environ if env is None else env).get("LLAMA_ARG_CTX_SIZE", "")).strip()
+            )
+        except (TypeError, ValueError):
+            ctx = None
+    if ctx and ctx > 0:
+        return ctx
+    # Without -c, --kv-unified-per-slot N sizes the pool to n_parallel * N
+    # (tools/server/server.cpp).
+    source_env = os.environ if env is None else env
+    tokens = [str(a) for a in args] if args else []
+    full_window = str(source_env.get("LLAMA_ARG_CTX_SIZE", "")).strip() == "0"
+    if str(source_env.get("LLAMA_ARG_FIT_CTX", "")).strip():
+        full_window = False
+    per_slot = source_env.get("LLAMA_ARG_KV_UNIFIED_PER_SLOT")
+    for i, raw in enumerate(tokens):
+        flag = _flag_name(raw)
+        if flag not in ("-c", "--ctx-size", "-fitc", "--fit-ctx", "--kv-unified-per-slot"):
+            continue
+        _, eq, inline = raw.partition("=")
+        value = inline if eq else (tokens[i + 1] if i + 1 < len(tokens) else "")
+        if flag == "--kv-unified-per-slot":
+            per_slot = value
+        elif flag in ("-fitc", "--fit-ctx"):
+            full_window = False
+        elif str(value).strip() == "0":
+            full_window = True
+    if _is_positive_int(per_slot) and not full_window:
+        return int(str(per_slot).strip()) * max(1, int(n_parallel or 1))
+    bound = int(native_ctx or 0) or _LLAMA_FIT_MIN_CTX
+    if not kv_unified:
+        bound *= max(1, int(n_parallel or 1))
+    return bound
+
+
+def _draft_card_share_unknown(
+    extra_args: Optional[Iterable[str]],
+    env: Optional[Mapping[str, str]] = None,
+    *,
+    n_draft_layers: Optional[int] = None,
+) -> bool:
+    """True when the drafter is not wholly on the target's card, so its whole file is not
+    the share to reserve there: a positive -ngld below its depth (split with the host), or
+    a draft tensor override, which llama.cpp applies per weight while picking buffers (the
+    same flags the fit-voiding list treats as placement changes), or the draft CPU-MoE
+    switches, which llama.cpp turns into draft tensor overrides."""
+    if _extra_args_set_any_flag(extra_args, _DRAFT_OVERRIDE_TENSOR_FLAGS | _DRAFT_CPU_MOE_FLAGS):
+        return True
+    source_env = os.environ if env is None else env
+    if source_env.get("LLAMA_ARG_SPEC_DRAFT_CPU_MOE") in _LLAMA_ARG_TRUE_VALUES:
+        return True
+    # Each positive count appends draft CPU overrides, so any positive one is a placement.
+    if _is_positive_int(source_env.get("LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE")):
+        return True
+    args = [str(a) for a in extra_args] if extra_args else []
+    for i, raw in enumerate(args):
+        _, eq, inline = raw.partition("=")
+        if _flag_name(raw) in _DRAFT_N_CPU_MOE_FLAGS and _is_positive_int(
+            inline if eq else (args[i + 1] if i + 1 < len(args) else None)
+        ):
+            return True
+    return _draft_is_split_across_host(extra_args, env, n_draft_layers = n_draft_layers)
+
+
+_DRAFT_N_CPU_MOE_FLAGS = frozenset(
+    {"--spec-draft-n-cpu-moe", "--spec-draft-ncmoe", "-ncmoed", "--n-cpu-moe-draft"}
+)
+
+
+_DRAFT_CPU_MOE_FLAGS = frozenset({"--spec-draft-cpu-moe", "-cmoed", "--cpu-moe-draft"})
+
+
+_DRAFT_OVERRIDE_TENSOR_FLAGS = frozenset(
+    {"-otd", "--override-tensor-draft", "--spec-draft-override-tensor"}
+)
+
+
 _SIDECAR_ADAPTER_FLAGS = (
     "--lora",
     "--lora-scaled",
@@ -285,29 +531,7 @@ _SIDECAR_ADAPTER_FLAGS = (
 
 
 def _sidecar_adapter_paths(extra_args: Optional[Iterable[str]]) -> list[str]:
-    """Every adapter file the child loads and holds RESIDENT, in argv order.
-
-    None of these have an env twin -- common/arg.cpp declares all four without
-    ``set_env`` -- so the tokens are the whole surface. Each operand is a
-    comma-separated row (``parse_csv_row``), and the ``-scaled`` spellings split
-    every entry on ':' into exactly FNAME and SCALE and throw otherwise, so a
-    malformed entry is a child that never starts and has no placement to misprice;
-    it is skipped rather than priced. ACCUMULATED, not last-wins: every handler
-    ``push_back``s onto ``lora_adapters`` / ``control_vectors``, so a second
-    ``--lora`` adds to the first rather than replacing it.
-
-    The ``-scaled`` pair also has a LEGACY spelling: builds up to the turn of the
-    year declared it ``{"--lora-scaled"}, "FNAME", "SCALE"`` and took the scale as a
-    SECOND token, and Unsloth runs whatever llama-server it is pointed at
-    (``LLAMA_SERVER_PATH``, or one found on PATH), which is why the pass-through
-    validator still admits that shape (``_OPTIONAL_SECOND_VALUE_FLAGS``). Read
-    colon-first, since that is today's syntax; only when the colon parse priced
-    NOTHING and the token after the operand is a bare number is this the two-token
-    form, and then the operand is the whole filename -- which is also the one
-    reading that survives a Windows drive letter. On a build that wants the colon
-    the same tokens are upstream's own throw, so pricing the file there costs at
-    most a fit that never launched.
-    """
+    """Resident LoRA and control-vector files; legacy two-token -scaled read, malformed entries skipped."""
     args = [str(a) for a in extra_args] if extra_args else []
     paths: list[str] = []
     for i, raw in enumerate(args):
@@ -345,22 +569,7 @@ def _sidecar_adapter_paths(extra_args: Optional[Iterable[str]]) -> list[str]:
 
 
 def _sidecar_adapter_bytes(extra_args: Optional[Iterable[str]]) -> Optional[int]:
-    """Resident bytes the pass-through adapters add, or None when one cannot be sized.
-
-    LoRA tensors are allocated on the BASE tensor's buffer type
-    (``ggml_backend_buffer_get_type(model_tensor->buffer)``, llama-adapter.cpp) and
-    a control vector on ``model.select_buft(il)``, so they follow the layer
-    placement this fit just priced rather than living anywhere it can ignore.
-    Neither path mmaps -- the file is read into a staging buffer and pushed with
-    ``ggml_backend_tensor_set`` -- so these bytes are resident whatever
-    ``--load-mode`` says, and they sit ON TOP of a placement llama.cpp's own fitter
-    never accounted for (common/fit.cpp knows nothing about adapters).
-
-    File size is the ceiling on the allocation (the loader skips ``_norm.weight``
-    pairs and keeps every other tensor at its stored type), and overstating a term
-    only ever costs a fit, so the stat is charged whole. An unreadable file is the
-    "engaged but unsized" case the fit abstains on.
-    """
+    """Adapters are resident whatever --load-mode says, so file size is charged whole as a ceiling."""
     total = 0
     for path in _sidecar_adapter_paths(extra_args):
         try:
@@ -373,14 +582,7 @@ def _sidecar_adapter_bytes(extra_args: Optional[Iterable[str]]) -> Optional[int]
 def _extra_args_draft_offloaded_to_cpu(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """True if the SEPARATE draft model is on CPU (so the budget must not charge
-    its weights+KV): --spec-draft-ngl 0, or --spec-draft-device naming only
-    cpu/none, else the LLAMA_ARG_N_GPU_LAYERS_DRAFT env the child honors (the
-    device flag has no env). An embedded MTP head follows the main -ngl, so these
-    draft-only flags don't move it. Last-wins, so only each flag's final value counts.
-
-    A count BETWEEN 0 and the drafter's block count is a split, not an offload; see
-    ``_draft_is_split_across_host``."""
+    """Embedded MTP heads follow the main -ngl; only a zero count or cpu/none device moves the drafter."""
     last_ngl = _extra_args_draft_gpu_layers(extra_args, env)
     if last_ngl is not None:
         try:
@@ -394,6 +596,16 @@ def _extra_args_draft_offloaded_to_cpu(
         if devs and all(d in ("cpu", "none") for d in devs):
             return True
     return False
+
+
+def _margin_mib_for(margin: Union[float, Mapping[int, float], None], idx: int) -> float:
+    """The ``--fit-target`` margin one card keeps: a single broadcast value, or that
+    card's entry in a per-device mapping (the largest entry for a card it omits)."""
+    if isinstance(margin, Mapping):
+        if not margin:
+            return 0.0
+        return max(0.0, float(margin.get(int(idx), max(margin.values()))))
+    return max(0.0, float(margin or 0.0))
 
 
 def _extra_args_device(
@@ -416,11 +628,7 @@ def _extra_args_main_device(extra_args: Optional[Iterable[str]]) -> Optional[str
 
 
 def _without_subsequence(tokens: List[str], run: List[str]) -> List[str]:
-    """``tokens`` with the first contiguous occurrence of ``run`` removed.
-
-    Only the exact flags Unsloth appended go, so a user's own identical flag
-    elsewhere in the command survives. Unchanged when ``run`` is not present.
-    """
+    """Removes only the first occurrence, so an identical user flag elsewhere in the command survives."""
     if not run:
         return list(tokens)
     for i in range(len(tokens) - len(run) + 1):
@@ -445,14 +653,7 @@ def _count_subsequence(tokens: List[str], run: List[str]) -> int:
 
 
 def _subsequence_index(tokens: List[str], run: List[str], hint: int) -> int:
-    """Where ``run`` sits in ``tokens``, given it was appended at ``hint``.
-
-    A stored index goes stale the moment anything narrows the argv ahead of it,
-    and the arch gate does exactly that (dropping ``--split-mode`` /
-    ``--tensor-split``), so the block can only ever move LEFT. Search back from
-    the hint, then forward, so a future narrowing site cannot silently shift the
-    slice and take neighbouring tokens with it.
-    """
+    """Searches back from the hint first: narrowing argv earlier can only shift the block left."""
     span = len(tokens) - len(run)
     if not run or span < 0:
         return max(0, min(hint, len(tokens)))
@@ -476,17 +677,8 @@ def _pass_through_overrides_placement(
     is_vulkan_backend: bool = False,
     gpu_indices: Optional[Iterable[int]] = None,
 ) -> bool:
-    """Whether pass-through args or env run a placement other than the one a fit priced.
-
-    ``extra_args`` / ``source_env`` are what the child really gets (a ``gpu_ids`` pin
-    strips its device flags and env twins first); ``credited`` is how many devices the
-    fit charged. See ``LlamaCppBackend._fit_derived_load_mode`` for each term.
-    """
-    # A --device naming FEWER devices than this fit charges leaves the credit
-    # paying for cards the child never opens. llama.cpp REPLACES the list on every
-    # occurrence (parse_device_list) and reads LLAMA_ARG_DEVICE before argv, so the
-    # last of the two wins. Counted, not name-matched: CUDA/ROCm ordinals are
-    # assigned after a visibility mask this launch has not written yet.
+    """Checks the child's real extras and env against what the fit priced; see _fit_derived_load_mode."""
+    # A --device naming fewer cards than the fit charged leaves credit for cards never opened.
     _dev_value = _extra_args_main_device(extra_args)
     if _dev_value is None:
         _dev_value = source_env.get("LLAMA_ARG_DEVICE")
@@ -497,10 +689,7 @@ def _pass_through_overrides_placement(
     # keeps the list verbatim, so "CUDA0,CUDA0" is ONE physical pool listed twice,
     # and counting it as two leaves the credit paying for a card that is not there.
     _device_narrows = bool(_dev_names) and len(set(_dev_names)) < _credited
-    # Vulkan is the one backend where names ARE comparable (_vulkan_device_pin ->
-    # "Vulkan<i>"), so hold a surviving --device to an exact match. That catches
-    # what a count cannot: a same-sized list naming DIFFERENT cards, and a longer
-    # one adding devices this footprint never charged for.
+    # Vulkan names are comparable, so a surviving --device must match exactly, not just by count.
     _vulkan_pin_replaced = bool(
         is_vulkan_backend
         and gpu_indices is not None
@@ -509,10 +698,7 @@ def _pass_through_overrides_placement(
     )
     return bool(
         _extra_args_set_any_flag(extra_args, _GPU_LAYER_FLAGS)
-        # And its env twin, the ONLY layer count the fitting path leaves: it
-        # emits no -ngl, only Manual mode clears LLAMA_ARG_N_GPU_LAYERS, and the
-        # fitter will not lower a count it did not set, so an inherited one stands
-        # and loads a prefix out of host RAM.
+        # Env twin: the fitter never lowers an inherited LLAMA_ARG_N_GPU_LAYERS, so a prefix loads from RAM.
         or _env_fixes_gpu_layers(source_env)
         # With the env twin: only an explicit gpu_ids pin clears LLAMA_ARG_DEVICE,
         # so an inherited "none" puts the whole load in host RAM.
@@ -530,12 +716,7 @@ def _pass_through_overrides_placement(
 def _device_selection_is_cpu(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """True when the effective ``--device`` selection names no GPU.
-
-    llama.cpp then runs the model on the CPU whatever the layer count says, so
-    the weights are in pageable host RAM. argv wins over the env twin, and an
-    unreadable value answers True like every other unknown in the gate.
-    """
+    """argv beats the env twin; an unreadable value answers True, like every other unknown in the gate."""
     value = _extra_args_main_device(extra_args)
     if value is None and env:
         value = env.get("LLAMA_ARG_DEVICE")
@@ -578,15 +759,7 @@ def _widen_pin_ids_for_companion_devices(
     *,
     allowed_ids: Optional[Iterable[int]] = None,
 ) -> tuple[list[int], str]:
-    """Fit a pinned GPU mask to the companion devices the argv names (#11810).
-
-    Companion ``CUDA<n>`` / ``ROCm<n>`` tokens use the unpinned numbering (position in
-    ``inherited_ids``, else the physical index). Cards they name are appended after the
-    pinned ones, the winning flag is renumbered to the child's mask, and a main
-    ``--device`` is added so ``-ngl -1`` does not spread over the extra cards. Tokens
-    the parent cannot see are left alone. ``allowed_ids`` (explicit gpu_ids) limits
-    widening to those cards. Returns the mask and a log note, empty when unchanged.
-    """
+    """Companion CUDA<n>/ROCm<n> tokens use unpinned numbering; a main --device keeps -ngl -1 local."""
     if not pin_ids:
         return list(pin_ids), ""
     main_ids = [int(i) for i in pin_ids]
@@ -668,3 +841,26 @@ def _extra_args_draft_device_pin(extra_args: Optional[Iterable[str]]) -> Optiona
     if not devs or all(d.lower() in ("cpu", "none") for d in devs):
         return None
     return last_dev
+
+
+def _spawn_draft_on_target(
+    run_cmd: List[str],
+    spawn_devices: Optional[str],
+    env: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Whether the spawned argv's CUDA / ROCm draft pin names the target's device."""
+    pin = _extra_args_draft_device_pin(run_cmd)
+    if pin is not None:
+        distinct = {d.strip() for d in pin.split(",") if d.strip()}
+        pin = distinct.pop() if len(distinct) == 1 else pin
+    if pin is None or not _CUDA_LIKE_DEVICE_RE.match(pin.strip()):
+        return True
+    if spawn_devices:
+        named = [d.strip().lower() for d in spawn_devices.split(",") if d.strip()]
+        if _split_mode_confines_to_one_device(run_cmd, env):
+            # Only devices[main_gpu] is kept (main_gpu 0 by default).
+            main = LlamaCppBackend._effective_main_gpu(run_cmd, env)
+            main = 0 if main is None else main
+            return 0 <= main < len(named) and pin.strip().lower() == named[main]
+        return set(named) == {d.strip().lower() for d in pin.split(",") if d.strip()}
+    return int(re.sub(r"\D", "", pin)) == (LlamaCppBackend._effective_main_gpu(run_cmd, env) or 0)

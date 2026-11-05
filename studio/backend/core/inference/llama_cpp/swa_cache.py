@@ -14,14 +14,7 @@ from typing import Optional
 from hub.utils.hf_tokens import call_hub_with_anonymous_retry
 
 # ── Sliding-window-pattern resolver ───────────────────────────
-# Resolves the per-layer SWA mask when a GGUF reports a sliding window but
-# no `sliding_window_pattern` field. Tier order in `_resolve_swa_pattern`:
-# GGUF metadata, on-disk cache, bootstrap dict below, transformers
-# introspection, HF Hub config.json, legacy 1/4 fallback. Period N means
-# layer i is SWA iff `(i + 1) % N != 0`, matching transformers. Skipped on
-# purpose: phi3 (no key/val length in GGUF, window >= ctx anyway), qwen2
-# family (converter strips sliding_window when use_sliding_window=False),
-# mistral v0.1/v0.2 (all-SWA can't be a period).
+# Period N: layer i is SWA iff (i+1) % N != 0. Absent: phi3 (no key/val length), qwen2 (converter strips the window), mistral v0.1/v0.2 (all-SWA is no period).
 _BOOTSTRAP_SWA_DEFAULTS: dict[str, int] = {
     "gemma2": 2,  # Gemma2Config.sliding_window_pattern
     "gemma3": 6,  # Gemma3TextConfig.sliding_window_pattern
@@ -30,8 +23,7 @@ _BOOTSTRAP_SWA_DEFAULTS: dict[str, int] = {
     "cohere2": 4,  # Cohere2Config.sliding_window_pattern
 }
 
-# Process-wide cache backed by JSON on disk. Values are int period or
-# list[bool] mask; `__missed_repos__` lists casefolded repos with no SWA field. Lazy-loaded.
+# Values are int period or list[bool] mask; __missed_repos__ lists casefolded repos with no SWA field. JSON on disk, lazy-loaded.
 _SWA_CACHE: Optional[dict] = None
 _SWA_CACHE_LOCK = threading.Lock()
 

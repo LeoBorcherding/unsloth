@@ -15,10 +15,21 @@ from core.inference.tool_call_parser import (
     REPROMPT_MAX_CHARS as _REPROMPT_MAX_CHARS,
 )
 from core.tool_healing import _markerless_promotable
+from core.inference.context_window import image_dimensions
+from core.inference.llama_server_args import extra_args_image_max_tokens
+from core.inference.llama_server_args import extra_args_image_min_tokens
+import math
 
-# A transport error can arrive before the child is reapable; a request path cannot
-# afford the 5s the background MTP reload spends on the same race.
+# Transport errors can beat the child to reapable; a request cannot wait the 5s MTP reload spends.
 _RESPAWN_REAP_GRACE_S = 1.0
+
+
+_GPU_OOM_HEADROOM_MAX_STRIKES = 3
+
+
+# Extra --fit-target per mid-session GPU OOM of one load: an identical respawn hits the same
+# allocation once the conversation is replayed (#16177).
+_GPU_OOM_HEADROOM_STEP_MIB = 1024.0
 
 
 def _finalize_reasoning_only_cumulative(
@@ -28,18 +39,7 @@ def _finalize_reasoning_only_cumulative(
     promote_reasoning_only: bool,
     resumed_reasoning: str = "",
 ) -> str:
-    """Close a live thinking block and promote it only after a clean stop.
-
-    Local inference streams cumulative snapshots. Replacing ``<think>...`` with
-    bare reasoning at EOF makes the final snapshot shorter, so suffix-based
-    route consumers drop the intended fallback. Keep the snapshot append-only.
-    A length-truncated thought is not a final answer, so close it without
-    promotion and let the client surface the ``length`` terminal state. Raw
-    consumers that do not split reasoning from visible content can disable the
-    fallback to avoid returning the same reasoning twice.
-
-    Include ``resumed_reasoning`` in the promoted reply; the stream contains only the new tail.
-    """
+    """Snapshot must stay append-only or suffix consumers drop the fallback. Promote only on clean stop, never on length; include resumed_reasoning."""
     visible_fallback = (
         resumed_reasoning + reasoning_text
         if promote_reasoning_only and finish_reason != "length"
@@ -82,24 +82,16 @@ def _quote_cut_event(
     return {"type": "quote_cut"} if _ends_inside_quote(shown) else None
 
 
-# Only large streamed tool payloads get an early provisional card; render_html
-# is exempt because it needs immediate artifact feedback.
+# Only large streamed tool args get an early provisional card; render_html is exempt.
 _PROVISIONAL_ARGS_MIN_CHARS = 256
 _DEFAULT_STREAM_STALL_TIMEOUT_S = 120.0  # 2 min
-# Cap tool calls from a single TEXTUAL-fallback turn (mirrors the safetensors
-# loop). Structured delta.tool_calls are grammar-bounded by llama-server; text
-# parsed from content is not, so one runaway turn could fan out unbounded.
+# Textual-fallback tool calls are not grammar-bounded, so cap them per turn.
 _MAX_TOOL_CALLS_PER_TURN = 8
-# How many times a turn may be resumed after ending inside its own reasoning. Two, because
-# the first retry already runs with thinking off: if that still produces nothing visible,
-# the window is too small for this model and another attempt only spends more of the user's
-# time reaching the same place.
+# The first retry already runs with thinking off; more attempts rarely help.
 _MAX_LENGTH_CONTINUATIONS = 2
 _CONTINUE_AFTER_LENGTH_STATUS = "Continuing after a long thought..."
 _CONTINUE_TRUNCATED_ANSWER_STATUS = "Continuing the answer..."
-# Below this, a tool result carries no content: what comes back is the notice saying it was
-# cut, which costs a call and teaches the model nothing. Sized to leave a short line of real
-# output rather than to guarantee a useful one; the point is to catch the collapse to zero.
+# Below this a tool result carries only the cut notice; the floor catches a collapse to zero.
 _MIN_USEFUL_RESULT_TOKENS = 64
 # llama.cpp's default per-image embedding cap plus mtmd's delimiters, when the admission figure is out of reach.
 _FALLBACK_IMAGE_TOKENS = 4096 + 128
@@ -114,6 +106,47 @@ def _mcp_image_tokens(backend) -> int:
         return _FALLBACK_IMAGE_TOKENS
 
 
+def _image_token_price(backend, part: dict) -> int:
+    """One image's prompt cost for the fit and tool-result sizing (#14968): the admission ceiling,
+    unless a known projector gives a closer upper bound (the ceiling evicts history that fits)."""
+    ceiling = _mcp_image_tokens(backend)
+    if ceiling <= 0:
+        return 0
+    projector = str(getattr(backend, "_mmproj_projector_type", None) or "").strip().lower()
+    fixed = _FIXED_IMAGE_TOKENS.get(projector)
+    if fixed:
+        return min(ceiling, fixed + _IMAGE_WRAPPER_TOKENS)
+    merged = _MERGED_PATCH_PX.get(projector)
+    dims = image_dimensions(part) if merged else None
+    if dims is None:
+        return ceiling
+    width, height = dims
+    # Ceil, not round: mtmd may round either side up, and this must stay an upper bound.
+    tokens = math.ceil(width / merged) * math.ceil(height / merged)
+    extra_args = getattr(backend, "_extra_args", None)
+    try:
+        cap = extra_args_image_max_tokens(extra_args) or 0
+        # mtmd resizes against --image-min-tokens on its own rounded grid, which this does not model.
+        if extra_args_image_min_tokens(extra_args):
+            return ceiling
+    except Exception:  # noqa: BLE001 -- pricing must never break a count
+        cap = 0
+    cap = cap or ceiling - _IMAGE_WRAPPER_TOKENS
+    return min(ceiling, min(tokens, cap) + _IMAGE_WRAPPER_TOKENS)
+
+
+# Fixed per image: Gemma 3 pools 896 px to 16 x 16 (258 measured on Gemma 3 4B, ceiling 4224).
+_FIXED_IMAGE_TOKENS = {"gemma3": 256}
+
+
+# Qwen-VL merges a 2x2 patch square per embedding: 14 px patches on Qwen2/2.5-VL, 16 on Qwen3-VL.
+_MERGED_PATCH_PX = {"qwen2vl_merger": 28, "qwen2.5vl_merger": 28, "qwen3vl_merger": 32}
+
+
+# mtmd's delimiters around an image's embeddings, as admission allows for them.
+_IMAGE_WRAPPER_TOKENS = 128
+
+
 # How many times one tool may return a byte-identical result before the model is told the
 # call is not going to change. Follows OpenClaw's tool-loop detection, which keys on the
 # RESULT rather than the arguments and never intervenes while results are still changing:
@@ -121,21 +154,20 @@ def _mcp_image_tokens(backend) -> int:
 # guard would have watched the whole thing happen.
 _MAX_IDENTICAL_TOOL_RESULTS = 3
 
-# Separates "no kwargs were passed" from "None was passed", which is itself a real
-# reasoning-kwargs value meaning send no chat_template_kwargs at all.
+# Unset (no kwargs passed) differs from None, a real value meaning send no chat_template_kwargs.
 _UNSET = object()
 
 
-# The tail `_fit_result_to_room` appends when a result did not fit. A result carrying it
-# is the WINDOW's answer, not the tool's, so two calls with different arguments that both
-# end here are not two different answers -- they are the same dead end reached twice.
+def _with_template_extras(reasoning_kw: Optional[dict], extras: Optional[dict]) -> Optional[dict]:
+    """The caller's other template tags (e.g. verification) under Studio's resolved reasoning keys."""
+    if not extras:
+        return reasoning_kw
+    return {**extras, **(reasoning_kw or {})}
+
+
+# A result with this tail is the window's answer, not the tool's.
 _WINDOW_NOTICE_MARKER = "chars for the model;"
-# The OTHER shape the same cause produces. At a budget of zero there is no room for a
-# body at all, so `_truncate` returns `_zero_room_stub` instead of a truncated result
-# with a notice appended, and that text carries neither the marker above nor any of the
-# result. Missing it is the case this classification exists for: the nudge is skipped and
-# the no-progress key falls back to including the arguments, so a model reading a file in
-# different slices repeats forever, which is the loop the guard was written to stop.
+# Zero-budget results use _zero_room_stub, which lacks the marker above; missing it lets a model re-read slices forever, so catch it too.
 _ZERO_ROOM_MARKER = "no context room left"
 
 
@@ -158,33 +190,22 @@ def _note_before_envelopes(result: str, tool_name: str, add_note) -> str:
 # usage hint printed after it, small enough that a 10 MB unterminated line (which
 # _drain_stdout keeps whole) stays cheap to scan.
 _FAILURE_SCAN_TAIL_CHARS = 64 * 1024
-# How much of a quoted fragment from the child's own output an error message carries.
-# Long enough for any real flag or reason, short enough that a wrapper printing
-# megabytes cannot make the API error unreadable.
+# Caps the child output quoted in errors: enough for a real flag or reason, not megabytes of noise.
 _FAILURE_QUOTE_CHARS = 200
-# Obligation phrasing INTENT_SIGNAL leaves alone ("I need to call ..."), paired with
-# an action verb. Sentence-anchored: mid-sentence the same words are prose that names
-# a tool ("The API I should invoke is foo() because ..."), and suppressing that loses
-# a real answer. "should"/"must" sit outside the need|have|ought group because they
-# take a bare infinitive. "invoke"/"query" stay out of the verb list: they read as
-# technical prose far more often than as a stall.
+# Sentence-anchored: mid-sentence the same words are prose naming a tool and suppressing them loses answers. Keep invoke and query out of the verb list.
 _FORCED_PLAN_INTENT = re.compile(
     r"(?:^|[.!?]\s+)\s*"
     r"(?:i\s+(?:(?:need|have|ought)\s+to|should|must)|need\s+to|going\s+to|must|should)"
     r"\s+(?:\w+\s+){0,2}?(?:call|use|run|search|fetch|render)\b",
     re.I | re.M,
 )
-# "the answer is not in the context" announces a *missing* answer, so the negated
-# forms are excluded or the plan behind them would ship as the final response.
+# Negated forms announce a missing answer, so they are excluded.
 _FINAL_ANSWER_SIGNAL = re.compile(
     r"\b(?:final\s+answer|answer\s*:|here\s+is|here's|in\s+summary|result\s*:"
     r"|(?:the\s+)?answer\s+is(?!\s+(?:not|unavailable|unknown|unclear|missing)\b))\b",
     re.I,
 )
-# A plan that pivots ("I should call web_search, but Tokyo is the capital") has an
-# answer attached, so the turn must survive. Leaking a plan sentence is cosmetic;
-# dropping an answer is not, so the doubtful case keeps the output. The pivot has to
-# carry text of its own: "I should call web_search, though." answers nothing.
+# A plan that pivots to an answer must survive; the pivot needs its own text. When in doubt keep output: a leaked plan is cosmetic, a dropped answer is not.
 _ANSWER_PIVOT = re.compile(
     r"\b(?:but|however|although|though|that\s+said|in\s+the\s+meantime|meanwhile)\b"
     r"[\W_]*(?:\w+[\W_]+){1,}\w",
@@ -201,8 +222,7 @@ def _gguf_active_tool_names(active_tools: list[dict]) -> list[str]:
     return [name for name in names if name]
 
 
-# Rehearsal NAME chars (word + hyphen, matching the parser); the lookbehind excludes the
-# Mistral [CALL_ID]...[ARGS] shape.
+# Lookbehind excludes the Mistral [CALL_ID]...[ARGS] shape.
 _GGUF_REHEARSAL_ARGS_RE = re.compile(r"(?<!\[CALL_ID\])\b([\w-]+)\[ARGS\]")
 
 
@@ -220,11 +240,7 @@ def _gguf_rehearsal_signal_pos(text: str, active_tools: list[dict]) -> int:
 
 
 def _gguf_has_genuine_tool_signal(text: str, signals, active_tools: list[dict]) -> bool:
-    """True when ``text`` holds a genuine tool-call boundary for one of ``signals``.
-
-    Unambiguous markers (``<tool_call>``, ``[TOOL_CALLS]``, ``<function=``) count on a
-    plain substring hit; an ``[ARGS]`` hit is genuine only when an active tool name
-    precedes it, so inactive-name prose is neither drained nor parsed."""
+    """Unambiguous markers count on a plain substring hit; an [ARGS] hit is genuine only with an active tool name before it, so inactive-name prose is not parsed."""
     for sig in signals:
         if sig == "[ARGS]":
             if _gguf_rehearsal_signal_pos(text, active_tools) >= 0:
@@ -232,8 +248,7 @@ def _gguf_has_genuine_tool_signal(text: str, signals, active_tools: list[dict]) 
             continue
         if sig in text:
             return True
-    # Bare Gemma is not in ``signals``, but the parser promotes it wherever it sits, so a
-    # mid-prose one is a boundary too.
+    # The parser promotes bare Gemma anywhere, so a mid-prose one is a boundary too.
     return promotable_gemma_call_pos(text, lambda: set(_gguf_active_tool_names(active_tools))) >= 0
 
 
@@ -243,17 +258,8 @@ _TEXT_TOOL_REHEARSAL_RE = re.compile(r"\s*([\w.\-]+)\s*\[ARGS\]")
 
 
 def _sniff_text_tool_name(text: str, enabled_names: set) -> str:
-    """Best-effort tool name from a partially drained TEXT tool call, gated on
-    enabled names so prose can never spawn a card. Used only to open the live
-    argument pane early; the authoritative parse still happens at stream end.
-
-    The two anchored arms only match a MARKERLESS leading call (a wrapper pushes the shape
-    off position 0), so they take the parser's gate: a card for a bare ``call:terminal{``
-    would show a call that never runs. The ``"name":`` arm searches the whole prefix and so
-    also sees a trusted ``[TOOL_CALLS][{"name":"terminal",..}]``; the markerless bare-JSON
-    form cannot reach it, since ``strip_leading_bare_json_call`` refuses to drain it."""
-    # A blocked leading call will NOT run, so naming the card after it hands the client a card
-    # the real call then reuses by id. Every markerless format is skipped, not just bare JSON.
+    """Only enabled names are returned, so prose cannot open a tool card; the final parse still decides."""
+    # A blocked leading call will not run, so skip every markerless format before naming.
     text = text[blocked_markerless_prefix_end(text, 0, enabled_names) :]
     m = _TEXT_TOOL_NAME_RE.search(text[:4096])
     if m and m.group(1) in enabled_names:
@@ -267,44 +273,47 @@ def _sniff_text_tool_name(text: str, enabled_names: set) -> str:
     return ""
 
 
-def _is_rehearsal_prefix(stripped: str, active_tools: list[dict]) -> bool:
-    """True if ``stripped`` is a (possibly partial) prefix of ``NAME[ARGS]`` for a
-    markerless-promotable tool: the bare name arriving in its own chunk before
-    ``[ARGS]{...}``. An execution-class name is prose here, so it streams rather than being
-    held. Mirrors the safetensors loop so the split rehearsal is not leaked."""
+def _is_rehearsal_prefix(
+    stripped: str,
+    active_tools: list[dict],
+    *,
+    _names: Optional[list] = None,
+) -> bool:
+    """Execution-class names stream rather than being held; otherwise it mirrors the safetensors loop."""
     if not stripped or any(ch.isspace() for ch in stripped):
         return False
-    for name in _gguf_active_tool_names(active_tools):
-        # Active by construction, so only the class is left. The shared gate, not the built-in
-        # three: an mcp__* name is refused too, and holding its suffix withholds visible text.
-        if not _markerless_promotable(name, None):
-            continue
-        if stripped == name or f"{name}[ARGS]".startswith(stripped):
+    for name in _gguf_active_tool_names(active_tools) if _names is None else _names:
+        # Use the shared gate, which also refuses mcp__* names.
+        if (stripped == name or f"{name}[ARGS]".startswith(stripped)) and _markerless_promotable(
+            name, None
+        ):
             return True
     return False
 
 
 def _held_rehearsal_tail_len(text: str, active_tools: list[dict]) -> int:
-    """Length of a trailing bare tool-name token that may be a split rehearsal call
-    (``...web_search`` with ``[ARGS]{...}`` still to arrive), so STREAMING can hold it
-    instead of leaking the name. Returns 0 for ordinary prose. Mirrors safetensors, including
-    the trailing bare-Gemma ``call:NAME{..`` the signal scan misses until its ``{``."""
+    """Holds a trailing bare tool name back while its [ARGS] may still arrive, including a bare-Gemma call:NAME{ prefix that the signal scan misses until its brace."""
+    names = _gguf_active_tool_names(active_tools)
+    # A tail longer than every NAME[ARGS] cannot be a prefix, so the scan stops there (CJK has no spaces).
+    limit = max(
+        (len(name) for name in names if isinstance(name, str)),
+        default = 0,
+    ) + len("[ARGS]")
     i = len(text)
-    while i > 0 and not text[i - 1].isspace():
+    stop = max(0, i - limit - 1)
+    while i > stop and not text[i - 1].isspace():
         i -= 1
     tail = text[i:]
-    held = len(tail) if tail and _is_rehearsal_prefix(tail, active_tools) else 0
-    return max(
-        held, held_bare_gemma_tail_len(text, lambda: set(_gguf_active_tool_names(active_tools)))
+    held = (
+        len(tail)
+        if tail and len(tail) <= limit and _is_rehearsal_prefix(tail, active_tools, _names = names)
+        else 0
     )
+    return max(held, held_bare_gemma_tail_len(text, lambda: set(names)))
 
 
 def _should_suppress_forced_no_tool_output(text: str, previous: str = "") -> bool:
-    """Suppress only repeated forced-turn planning text, not final answers.
-
-    ``previous`` is the stall text that triggered the nudge, so a retry that
-    moved on can be told from one that just said the same thing again.
-    """
+    """Suppresses only a repeat of the stall text that triggered the nudge, never a final answer."""
     stripped = text.strip()
     if not stripped or len(stripped) >= _REPROMPT_MAX_CHARS:
         return False
@@ -312,12 +321,9 @@ def _should_suppress_forced_no_tool_output(text: str, previous: str = "") -> boo
         return False
     plan = _FORCED_PLAN_INTENT.search(stripped)
     if plan is not None:
-        # Only the plan itself is safe to drop; anything the turn pivots to after it
-        # is the answer the user is waiting for.
+        # Only the plan itself is safe to drop; anything the turn pivots to after it is the answer.
         return _ANSWER_PIVOT.search(stripped[plan.end() :]) is None
     if not _is_short_intent_without_action(stripped):
         return False
-    # INTENT_SIGNAL also fires on lead-ins to a real answer ("Now I have the results.
-    # The capital is Tokyo."), so a bare intent match is a stall only when the retry
-    # adds nothing. No ``previous`` keeps the standalone "is this a stall?" contract.
+    # INTENT_SIGNAL also fires on answer lead-ins; a stall only if the retry adds nothing.
     return not previous or _is_reprompt_restatement(stripped, previous)

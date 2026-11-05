@@ -59,6 +59,13 @@ from .gguf_cache import (
 from .hf_offline import _hf_env_offline
 from .log import logger
 from .memory_policy import _extra_args_set_spec_type
+from typing import Mapping
+import contextlib
+import functools
+from .gguf_cache import (
+    _mmproj_picker,
+    _snapshot_dir_of,
+)
 
 
 class _DownloadMixin:
@@ -72,12 +79,7 @@ class _DownloadMixin:
         hf_token: Optional[str] = None,
         requested_file: Optional[str] = None,
     ) -> Optional[tuple[str, int, list[str]]]:
-        """Find a GGUF variant (including all shards) smaller than the requested one.
-
-        The largest that leaves ``_DISK_RESERVE_BYTES`` free, else the fewest new bytes.
-
-        Returns (first_shard_filename, total_size_bytes, extra_shards) or None.
-        """
+        """Smaller-than-requested GGUF variant incl all shards: largest leaving _DISK_RESERVE_BYTES free, else fewest new bytes; (first shard, total, extras) or None."""
         try:
             from huggingface_hub import get_paths_info, list_repo_files
             from core.inference.openai_auto_download import _DISK_RESERVE_BYTES
@@ -152,17 +154,7 @@ class _DownloadMixin:
         allow_smaller_fallback: bool = True,
         cancel_event: Optional[threading.Event] = None,
     ) -> str:
-        """Download GGUF file(s) from HuggingFace. Returns local path.
-
-        Runs WITHOUT self._lock so unload_model() can set _cancel_event at
-        any time; checks it between each shard download.
-
-        ``force`` re-fetches even when a (possibly stale) blob is cached.
-        ``allow_smaller_fallback=False`` raises on low disk instead of silently
-        switching to a smaller quant. ``cancel_event`` overrides
-        ``self._cancel_event`` so an update can use a private event without
-        touching the shared one; defaults to the shared event.
-        """
+        """Runs without self._lock so unload_model can cancel between shards; force re-fetches a cached blob; allow_smaller_fallback=False raises on low disk."""
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
             raise GgufDownloadCancelled("Cancelled")
@@ -194,9 +186,7 @@ class _DownloadMixin:
         # Prefer the existing model. Updates use force=True to fetch a new revision.
         if not force:
             if hf_variant:
-                # Resolve by variant so a newer revision's filename does not hide
-                # the complete older copy. Size-check against that older snapshot's
-                # own revision when its metadata remains available.
+                # By variant, so a newer revision's filename does not hide a complete older copy; size-check against that older snapshot's own revision if its metadata remains.
                 cached_main = cached_gguf_for_load(
                     hf_repo,
                     hf_variant,
@@ -225,11 +215,7 @@ class _DownloadMixin:
             )
             total_bytes = sum((p.size or 0) for p in path_infos)
 
-            # Subtract bytes already in the HF cache so we only preflight
-            # against what we must download. Without this, re-loading a
-            # cached large model (e.g. MiniMax-M2.7-GGUF at 131 GB) fails
-            # cold whenever free disk is below the full weight footprint,
-            # even though nothing needs downloading.
+            # Preflight only against bytes still to download, or cached large models fail on low disk.
             already_cached_bytes = 0
             # Count only files that can resume this download.
             offline = _hf_env_offline()
@@ -284,8 +270,7 @@ class _DownloadMixin:
 
                 if total_download_bytes > free_bytes:
                     if not allow_smaller_fallback:
-                        # Update path: never silently switch to a smaller quant;
-                        # surface the disk shortfall for the requested variant.
+                        # Update path: never silently switch to a smaller quant.
                         raise RuntimeError(
                             f"Not enough disk space to download {gguf_filename}. "
                             f"Only {free_gb:.1f} GB free in {download_cache_dir}"
@@ -313,8 +298,7 @@ class _DownloadMixin:
                         gguf_filename = fallback_file
                         gguf_extra_shards = fallback_shards
 
-                        # The selected fallback is a new load target. Apply the
-                        # same any-revision reuse policy before starting a fetch.
+                        # The fallback is a new load target: apply the same any-revision cache reuse before fetching.
                         fallback_candidate = _cached_complete_candidate(
                             hf_repo, gguf_filename, gguf_extra_shards
                         )
@@ -396,39 +380,12 @@ class _DownloadMixin:
         outcome: Optional[dict] = None,
         on_transient_failure: Optional[Callable[[], None]] = None,
     ) -> Optional[str]:
-        """Resolve and fetch a companion GGUF (mmproj / MTP drafter) by name.
-
-        Prefers a companion co-located with ``near_path``'s cache snapshot,
-        then tries the live repo file list, then the local HF cache snapshots
-        (offline, same fallback as _download_gguf), then hf_hub_download.
-        Runs WITHOUT self._lock (like _download_gguf); honors _cancel_event so
-        an /unload between the main download and here skips the fetch.
-        ``cancel_event`` overrides ``self._cancel_event`` (defaults to it).
-
-        Split-aware, like the main-model download: a companion published as a
-        split GGUF is only usable as a complete set, since llama-server resolves
-        the sibling shards from the first one's directory. Fetching just the
-        picked shard left a drafter whose header reads fine and which the server
-        then cannot open, so the load fell back to no speculation with nothing to
-        show for the download -- and it disagreed with the local scan, which
-        accepts a split drafter only when every shard is present.
-
-        ``reuse_snapshot_sibling=False`` is for a caller that already rejected the
-        snapshot copy; without it this repeats the lookup and hands it back. ``near_path``
-        is still passed: it also selects the cache directory the fetch writes into.
-
-        ``on_transient_failure`` fires when the companion was lost to a listing that
-        never completed or a download that dropped, the one None worth another attempt.
-        A callback rather than an ``outcome`` key because the DFlash caller loops and
-        needs the answer per attempt. Permanent errors, offline and cancellation do not
-        fire it.
-        """
+        """Split companion fetched whole (llama-server needs siblings); on_transient_failure only on retryable drops; reuse_snapshot_sibling=False skips snapshot reuse."""
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
             return None
 
-        # The listing that produced the pick, kept so the shard siblings can be
-        # resolved from the same names the pick chose among.
+        # Kept so shard siblings resolve from the same names the pick chose among.
         available: list[str] = []
 
         def _pick_from(names: list[str]) -> Optional[str]:
@@ -454,17 +411,13 @@ class _DownloadMixin:
             return None
 
         target: Optional[str] = None
-        # Whether the question was actually answered. A listing that never
-        # completed (offline, transient Hub failure) leaves target None for a
-        # reason that says nothing about the repo's contents.
+        # A listing that never completed says nothing about the repo's contents.
         listing_answered = False
-        # Whether the listing died of something retryable. Distinct from
-        # listing_answered: a permanent error also leaves the listing unanswered.
+        # Retryable failure; a permanent error also leaves the listing unanswered.
         listing_failed = False
         from huggingface_hub import list_repo_files
 
-        # Retry a transient listing blip; permanent repo/auth errors and offline
-        # mode are not retried (offline raises at once -> fall through to cache).
+        # Retry transient listing errors only; offline raises at once and falls through to cache.
         for attempt in range(3):
             if cancel_event.is_set():
                 return None
@@ -501,11 +454,7 @@ class _DownloadMixin:
             except Exception as e:
                 logger.debug(f"Offline cache lookup for {label} failed: {e}")
 
-        # "The repo publishes none" and "the fetch failed" both return None, but
-        # only the second is worth retrying on the next Apply. Left unset unless
-        # the question was really answered -- by a listing that completed, or by
-        # a cache hit that produced a target regardless -- so an unreachable Hub
-        # is not recorded as a permanent absence.
+        # Record absence only when really answered, so an unreachable Hub is retried on next Apply.
         if (
             outcome is not None
             and not cancel_event.is_set()
@@ -520,11 +469,7 @@ class _DownloadMixin:
                 self._report_transient_companion_failure(on_transient_failure, label)
             return None
 
-        # Offline, resolve the companion straight from the cache snapshot that
-        # holds it. resolve_cached_repo_id_case can return a partial lower-case
-        # spelling when any dir exists under the requested casing, so calling
-        # hf_hub_download with hf_repo would miss the canonical file and silently
-        # drop the companion. _cached_hf_snapshot_file scans every case variant.
+        # Offline: resolve_cached_repo_id_case can return a partial casing, so hf_hub_download would silently drop the companion; scan every case variant.
         if _hf_env_offline():
             cached = _cached_hf_snapshot_file(
                 hf_repo,
@@ -534,21 +479,14 @@ class _DownloadMixin:
             if cached:
                 from utils.models.model_config import _drafter_split_is_complete
 
-                # Same whole-set rule as the snapshot reuse above: half a split
-                # companion is not a companion, and offline there is no fetch to
-                # complete it, so answering None leaves the load without a
-                # drafter instead of with one llama-server cannot open.
+                # Half a split companion is no companion, and offline nothing completes it: answer None rather than a drafter llama-server cannot open.
                 if _drafter_split_is_complete(Path(cached)):
                     logger.info("Resolved %s from local HF cache: %s", label, cached)
                     return cached
 
-        # A split companion is one file to pick and N files to fetch. Same helper
-        # the main-model download resolves its shards with, so the two cannot
-        # disagree about what belongs to a set; empty for the single-file case,
-        # which is every mmproj and every published sidecar so far.
+        # Same shard helper as the main download, so the two agree on set membership.
         extra_shards = _gguf_extra_shards(available, target)
-        # The filename carries the set size, so a short listing is answerable before
-        # the download: half a split companion is not one, as the reuse paths above say.
+        # The filename carries the set size, so a short listing is answerable before download.
         _shard_total = _SHARD_FULL_RE.match(target)
         if _shard_total and len(extra_shards) + 1 != int(_shard_total.group(3)):
             logger.info(
@@ -558,8 +496,7 @@ class _DownloadMixin:
                 len(extra_shards) + 1,
                 _shard_total.group(3),
             )
-            # Settled, not retryable: the listing answered, so the caller records
-            # absence rather than reloading on every Apply.
+            # Settled: the listing answered, so record absence rather than reloading every Apply.
             if outcome is not None:
                 outcome["listed"] = False
                 outcome["listed_live"] = False
@@ -588,8 +525,7 @@ class _DownloadMixin:
             return local_path
         except Exception as e:
             logger.warning(f"Could not download {label}: {e}")
-            # The listing named the file, so this is the fetch dropping: retryable
-            # unless the Hub or this machine answered for good, or we were cancelled.
+            # Listed but the fetch dropped: retryable unless permanent or cancelled.
             if (
                 not cancel_event.is_set()
                 and type(e).__name__ not in _PERMANENT_HUB_ERRORS
@@ -603,11 +539,7 @@ class _DownloadMixin:
     def _report_transient_companion_failure(
         on_transient_failure: Optional[Callable[[], None]], label: str
     ) -> None:
-        """Tell the caller its companion was lost to something retryable.
-
-        Best-effort both ways: the callback is optional, and one that raises must not
-        lose the load over bookkeeping for an already best-effort companion.
-        """
+        """Tells the caller a companion was lost to a retryable failure; best-effort, so a callback that raises must not fail the load."""
         if on_transient_failure is None:
             return
         try:
@@ -623,29 +555,33 @@ class _DownloadMixin:
         cancel_event: Optional[threading.Event] = None,
         near_path: Optional[str] = None,
     ) -> Optional[str]:
-        """Download the mmproj (vision projection) file from a GGUF repo.
-
-        Prefers mmproj-F16.gguf, else any mmproj*.gguf. Returns the local
-        path, or None if none exists. ``cancel_event`` overrides
-        ``self._cancel_event`` (defaults to it). ``near_path`` prefers a
-        copy co-located with the main GGUF's cache snapshot.
-
-        Falls back to a projector hand-added beside the cached weight, only
-        when the live listing says the repo publishes none (#9286).
-        """
+        """Downloads the mmproj, preferring mmproj-F16.gguf; falls back to a hand-added projector beside the cached weight only if the repo publishes none; else None."""
 
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
             return None
 
+        from utils.models.model_config import mmproj_f16_unsafe, mmproj_precision
+
+        names = (hf_repo, near_path)
+        pick = _mmproj_picker(hf_repo, near_path)
+        f16_unsafe = any(mmproj_f16_unsafe(n) for n in names)
+        if f16_unsafe and near_path:
+            # Only a cached MiMo-VL F16 projector is broken; a cached BF16 / F32 one is reused as usual.
+            cached = _companion_snapshot_sibling(near_path, pick)
+            with contextlib.suppress(OSError):
+                if cached and mmproj_precision(cached) != "f16" and Path(cached).stat().st_size > 0:
+                    logger.info("Reusing cached mmproj: %s", cached)
+                    return cached
         outcome: dict = {}
         resolved = self._download_companion_gguf(
             hf_repo = hf_repo,
             hf_token = hf_token,
-            pick = _pick_mmproj,
+            pick = pick,
             label = "mmproj",
             cancel_event = cancel_event,
             near_path = near_path,
+            reuse_snapshot_sibling = not f16_unsafe,
             outcome = outcome,
         )
         if resolved is not None:
@@ -657,8 +593,7 @@ class _DownloadMixin:
                 return resolved
             logger.info("Ignoring an empty mmproj resolved for %s: %s", hf_repo, resolved)
         elif outcome.get("listed_live") is True:
-            # The repo publishes one and the fetch dropped: retry next Apply rather
-            # than launch a hand-added file in its place. Offline still falls back.
+            # The fetch dropped: retry next Apply rather than launch a hand-added file. Offline falls back.
             return None
         if not near_path or cancel_event.is_set():
             return None
@@ -676,17 +611,7 @@ class _DownloadMixin:
         cache_dir: Optional[str] = None,
         allow_nested: bool = True,
     ) -> Optional[str]:
-        """A drafter already in this repo's local HF cache, reused offline when a
-        fresh copy can't be fetched. Prefers a repo-root ``mtp-*.gguf`` across all
-        cached snapshots; else an existing ``MTP/`` copy. None if none is cached.
-
-        Ranked with ``_pick_mtp``'s keys, or offline and online disagree about one
-        cache: lexical order put ``mtp-Qwen3.8-Flash-Next-BF16.gguf`` first, so a
-        cached user got the 7.77 GB slowest head while a fresh install downloaded
-        the 2.79 GB shared Q8_0 one.
-
-        ``allow_nested=False`` drops the ``MTP/`` half, so a non-qwen4exp target
-        resolves the same way offline as online (``_pick_mtp_root_only``)."""
+        """Cached drafter for offline reuse, ranked with _pick_mtp keys so offline and online pick one file; allow_nested=False drops the MTP/ half."""
         try:
             from utils.models.drafters.preference import mtp_preference_key
             from utils.models.model_config import (
@@ -705,10 +630,7 @@ class _DownloadMixin:
                 snap_roots: list[str] = []
                 snap_subdirs: list[str] = []
                 for f in _gguf_snapshot_files(snap):
-                    # MTP only: a DSpark drafter needs --spec-type draft-dspark.
-                    # The nested tier needs a published drafter NAME too, since
-                    # everything under MTP/ classifies as one and an mmproj or
-                    # imatrix there would otherwise go to --model-draft.
+                    # MTP only: a DSpark drafter needs --spec-type draft-dspark. Nested files need a drafter name, or an mmproj under MTP/ would go to --model-draft.
                     if "/" not in f:
                         if _is_mtp_only_drafter_path(f):
                             snap_roots.append(f)
@@ -717,11 +639,9 @@ class _DownloadMixin:
                 # Root lexical, nested by preference: the tiers as _pick_mtp orders them.
                 roots.extend(snap / f for f in sorted(snap_roots))
                 subdirs.extend(snap / f for f in sorted(snap_subdirs, key = mtp_preference_key))
-            # Keep snapshot order (newest first), root before any MTP/ copy, so a
-            # newer main GGUF pairs with the newest cached drafter, not a stale one.
+            # Newest snapshot first, root before MTP/, so a newer GGUF pairs with the newest drafter.
             for cand in roots + subdirs if allow_nested else roots:
-                # Half a split set is not a drafter, and offline there is no fetch
-                # to complete it: the rule _download_companion_gguf applies too.
+                # Half a split set is not a drafter; offline there is no fetch to complete it.
                 if cand.is_file() and _drafter_split_is_complete(cand):
                     return str(cand)
         except Exception as e:
@@ -737,19 +657,7 @@ class _DownloadMixin:
         near_path: Optional[str] = None,
         allow_nested: bool = True,
     ) -> Optional[str]:
-        """Download the separate MTP drafter (speculative head) from a GGUF repo.
-
-        Prefers the repo-root ``mtp-*.gguf`` companion -- the Q8_0 drafter
-        unsloth mirrors there for llama.cpp ``-hf`` auto-discovery (smallest,
-        recommended for speculation) -- and falls back to the ``MTP/`` folder for
-        a repo that publishes no root mirror, as Qwen3.8-Flash-Next and
-        Qwen3.8-27B do. Repos that bake the MTP head into the main GGUF ship
-        neither and this returns None. Returns the local path, or None.
-
-        ``allow_nested=False`` skips the ``MTP/`` fallback, which is what every
-        architecture but qwen4exp gets: elsewhere the sidecar would only displace a
-        head the file already carries.
-        """
+        """Download MTP drafter: root mtp-*.gguf mirror first, MTP/ fallback only if allow_nested (qwen4exp only); None when the repo bakes the head into the main GGUF."""
 
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
@@ -767,8 +675,7 @@ class _DownloadMixin:
         if near_path:
             cached = _companion_snapshot_sibling(near_path, pick)
             if cached and _mtp_head_borrows(cached) and not _hf_env_offline():
-                # --fit cannot measure a borrowing head, so the MTP context OOMs
-                # (unsloth#10322). hf_hub_download reuses this file if nothing is better.
+                # --fit cannot measure a borrowing head, so the MTP context would OOM; hf_hub_download reuses this file if nothing better is found.
                 logger.info(
                     "Cached MTP drafter borrows the target's embeddings; checking the "
                     "repo for a self-contained head: %s",
@@ -779,10 +686,8 @@ class _DownloadMixin:
                 logger.info("Reusing cached MTP drafter: %s", cached)
                 return cached
 
-        # Offline, reuse any drafter already on disk (a fresh copy can't be
-        # fetched). Online, _download_companion_gguf/hf_hub_download reuse the
-        # current cached file and refetch a changed one, so skip the probe here
-        # rather than pair new weights with a stale draft.
+        # Offline, reuse any cached drafter. Online, the download refetches a changed file, so skip
+        # the probe rather than pair new weights with a stale draft.
         if _hf_env_offline():
             cached = self._cached_repo_mtp_drafter(
                 hf_repo,
@@ -852,17 +757,7 @@ class _DownloadMixin:
         binary: Optional[str] = None,
         caps_probe: Optional[Callable[[Optional[str]], dict]] = None,
     ) -> Optional[str]:
-        """Download the published DSpark sidecar, preferring its Q8_0 copy.
-
-        The ~11 GB fetch is gated on ``supports_dspark``: a binary that cannot run
-        ``draft-dspark`` (every prebuilt in the known-broken window included) falls
-        back, so the download would never be opened. A raised probe still fetches,
-        since launch re-probes and may yet engage.
-
-        ``caps_probe`` is the caller's accumulator: this gate shapes the launch, and a
-        guess here has to latch like any other, or a load that skipped the sidecar on an
-        inconclusive probe looks conclusive once the retry window lapses mid-download.
-        """
+        """Fetches the DSpark sidecar, skipped unless supports_dspark; a raised probe still fetches, caps_probe latches the guess, else a lapsed retry looks conclusive."""
         cancel_event = (
             cancel_event
             if cancel_event is not None
@@ -886,10 +781,7 @@ class _DownloadMixin:
                     "--spec-type draft-dspark, so this load falls back to no speculative "
                     "decoding. Run `unsloth studio update`, then reload."
                 )
-                # A sidecar already on disk is still reported: the route rediscovers it
-                # on every Apply, so answering None would make the reuse check compare
-                # it against a launched None and reload the same server each time.
-                # _build_speculative_flags re-checks the capability and still falls back.
+                # Still report a sidecar on disk, else the reuse check reloads each Apply; _build_speculative_flags re-checks support and still falls back.
                 return cached
         except Exception as exc:
             logger.debug("DSpark capability probe failed before the sidecar fetch: %s", exc)
@@ -907,8 +799,7 @@ class _DownloadMixin:
             near_path = near_path,
             outcome = outcome,
         )
-        # Distinguishes a repo that ships no sidecar (the permanent state for
-        # every repo but one) from a fetch that failed and could yet succeed.
+        # Tells a repo with no sidecar apart from a fetch that may yet succeed.
         self._dspark_sidecar_absent = outcome.get("listed") is False
         return found
 
@@ -919,17 +810,7 @@ class _DownloadMixin:
         cache_dir: Optional[str] = None,
         near_path: Optional[str] = None,
     ) -> Optional[str]:
-        """The preferred already-cached DFlash sidecar for a repo, Q8_0 first
-        (dflash_repo_preference_key), so an offline reuse picks the same file
-        the online download would have fetched.
-
-        ``near_path`` is the weight this sidecar would draft for. A repo hosting
-        more than one family ships more than one sidecar, and precision alone
-        would hand model B the sidecar named after model A, so the candidates
-        are ranked against the weight actually being loaded (same rule as
-        detect_dflash_file). Without it the ordering is precision only, as
-        before.
-        """
+        """Preferred cached DFlash sidecar, Q8_0 first, ranked against near_path's weight so a multi-family repo does not hand model B model A's sidecar."""
         try:
             from utils.models.drafters import (
                 _drafter_split_is_complete,
@@ -947,11 +828,7 @@ class _DownloadMixin:
             ranked: list[tuple[tuple[int, int, int, str], Path]] = []
             for snap in snapshots:
                 names = _gguf_snapshot_files(snap)
-                # Every non-sidecar GGUF in the snapshot is a weight some sidecar
-                # could be naming; that is what tells a neighbour's sidecar apart
-                # from one naming no family at all. A nested dflash-*.gguf counts
-                # as one of those weights, since only a root-level file is a
-                # sidecar here.
+                # Every non-sidecar GGUF here, nested dflash-*.gguf included, is a weight a sidecar could name.
                 others = [
                     Path(name).name for name in names if not _is_root_dflash_drafter_path(name)
                 ]
@@ -963,25 +840,14 @@ class _DownloadMixin:
             for _, candidate in sorted(ranked, key = lambda entry: entry[0]):
                 if not candidate.is_file():
                     continue
-                # The ranking above works off names, and dflash- is only a naming
-                # convention: a cached weight whose basename happens to start with
-                # it would be launched as --model-draft and refused at startup.
-                # Same header rule, same helper, as the local scan, so an offline
-                # reuse and a local scan cannot disagree about what a sidecar is.
-                # Skipped rather than fatal, since the snapshot may hold a real one.
+                # dflash- is only a naming convention: verify the header as the local scan does, and skip a mismatch rather than fail, or it is refused at startup.
                 if not is_dflash_architecture(str(candidate)):
                     logger.info(
                         "Ignoring cached DFlash candidate %s: general.architecture is not dflash",
                         candidate,
                     )
                     continue
-                # Same whole-set rule _companion_snapshot_sibling applies, for the
-                # same reason: llama-server resolves the sibling shards from this
-                # one's directory, and what this lookup returns is handed straight
-                # back as the drafter with no fetch left to complete it. Half a
-                # set reads as a valid header and then cannot be opened, so the
-                # load quietly drops speculation. Skipped rather than fatal, since
-                # another snapshot may hold the complete copy.
+                # Half a split set reads as a valid header but cannot be opened, so the load quietly drops speculation; skip it, another snapshot may hold the full set.
                 if not _drafter_split_is_complete(candidate):
                     logger.info(
                         "Ignoring cached DFlash candidate %s: split shard set is incomplete",
@@ -1002,16 +868,7 @@ class _DownloadMixin:
         near_path: Optional[str] = None,
         binary: Optional[str] = None,
     ) -> Optional[str]:
-        """Download the published DFlash sidecar, preferring its Q8_0 copy.
-
-        Unlike the ~11 GB DSpark sidecar, which is why that one is opt-in, the
-        published DFlash sidecar is ~1.5 GiB and already ships in the model's own
-        GGUF repo, so Auto fetches it the same way it fetches the MTP drafter.
-        Still gated on ``supports_dflash``: a binary with no usable
-        ``--spec-type draft-dflash`` falls back, so the download would never be
-        opened. A raised probe still fetches, since launch re-probes and may yet
-        engage.
-        """
+        """Auto fetches this ~1.5 GiB sidecar, gated on supports_dflash (--spec-type draft-dflash); a raised probe still fetches."""
 
         cancel_event = cancel_event if cancel_event is not None else self._cancel_event
         if cancel_event.is_set():
@@ -1023,72 +880,82 @@ class _DownloadMixin:
         def _mark_retry_needed() -> None:
             self._dflash_retry_needed = True
 
-        # Basenames whose header turned out not to say dflash. A name lands here
-        # only once the file is readable on disk, and _pick_dflash then skips it,
-        # so a repo whose best-ranked candidate is an impostor still reaches the
-        # real sidecar behind it instead of the search giving up on the repo.
+        # Header-rejected basenames, so the search moves past an impostor to the real sidecar.
         rejected: set[str] = set()
+        # Once per call; an empty answer (also a failed model_info) is asked again, as before.
+        remote_sizes: dict[str, int] = {}
 
-        def _pick_dflash(candidates: list[str]) -> Optional[str]:
-            # Ranked against the weight being loaded, not by precision alone: a
-            # repo hosting two families ships a sidecar per family, and
-            # dflash-model-A-Q8_0.gguf beats the generic dflash-kquant.gguf on
-            # precision, so model B would download and launch model A's drafter.
-            # The rest of the listing supplies the neighbouring weights that make
-            # a foreign sidecar recognisable (a sidecar naming no family at all
-            # stays eligible, which is what the published one does).
+        def _remote_sizes() -> dict[str, int]:
+            nonlocal remote_sizes
+            if not remote_sizes:
+                remote_sizes = self._remote_root_gguf_sizes(hf_repo, hf_token)
+            return remote_sizes
+
+        snap = _snapshot_dir_of(near_path) if near_path else None
+
+        def _local_sizes(candidates: list[str]) -> dict[str, int]:
+            sizes: dict[str, int] = {}
+            if snap is None:
+                return sizes
+            for name in candidates:
+                if "/" in name:
+                    continue
+                try:
+                    sizes[name] = (snap / name).stat().st_size
+                except OSError:
+                    continue
+            return sizes
+
+        def _pick_dflash(candidates: list[str], *, local: bool = False) -> Optional[str]:
+            # Ranked against the weight loaded, not precision alone, so model B does not get model A's drafter; a sidecar naming no family stays eligible.
             from utils.models.drafters import (
                 dflash_repo_preference_key,
                 split_listing_is_complete,
             )
 
-            # Root level only, as the local scan is: a nested dflash-*.gguf is an
-            # ordinary weight, and offering it here spends its entire download
-            # before the header check can turn it away.
+            # Root level only, as the local scan: a nested dflash-*.gguf is an ordinary weight, and offering it spends a whole download before the header check.
             others = [
                 Path(name).name
                 for name in candidates
                 if name.lower().endswith(".gguf") and not _is_root_dflash_drafter_path(name)
             ]
-            # Same bound as dflash_plan_files: dflash- is a prefix real weights carry,
-            # the header only reads once the bytes are here, and a drafter is a few
-            # layers of its target. An unlisted size leaves the candidate in, as before.
-            sizes = self._remote_root_gguf_sizes(hf_repo, hf_token)
+            eligible = [
+                name
+                for name in candidates
+                if _is_root_dflash_drafter_path(name)
+                and Path(name).name not in rejected
+                # Before ranking, as dflash_plan_files: the fetch refuses a half-listed set, and returning one would end the loop.
+                and split_listing_is_complete(candidates, name)
+            ]
+            if not eligible:
+                return None
             try:
                 target_bytes = (self._get_gguf_size_bytes(near_path) or 0) if near_path else 0
             except OSError:
                 target_bytes = 0
-            files = sorted(
-                (
+
+            def _under_bound(sizes: Mapping[str, int]) -> list[str]:
+                # Same size bound as dflash_plan_files: header reads only after download, a drafter is a few layers of its target, and an unlisted size keeps the candidate.
+                return [
                     name
-                    for name in candidates
-                    if _is_root_dflash_drafter_path(name)
-                    and Path(name).name not in rejected
-                    # Before the ranking, as dflash_plan_files is: the fetch refuses a
-                    # half-listed set, and returning it ends the loop.
-                    and split_listing_is_complete(candidates, name)
-                    # Whole set, not the picked shard: each half of a split weight can
-                    # sit under the target while the set does not.
-                    and not (
+                    for name in eligible
+                    # Whole set, not the picked shard: each half of a split weight can sit under the target while the set does not.
+                    if not (
                         target_bytes and _drafter_set_bytes(sizes, Path(name).name) >= target_bytes
                     )
-                ),
-                key = lambda name: dflash_repo_preference_key(name, weight_name, others),
+                ]
+
+            # On-disk sizes settle it only when they keep every candidate, as an unanswered model_info does; else ask the Hub.
+            kept = _under_bound(_local_sizes(candidates)) if local else None
+            if kept is None or len(kept) != len(eligible):
+                kept = _under_bound(_remote_sizes())
+            files = sorted(
+                kept, key = lambda name: dflash_repo_preference_key(name, weight_name, others)
             )
             return files[0] if files else None
 
         def _validated(path: Optional[str]) -> Optional[str]:
-            """``path`` back iff its header really says ``dflash``.
-
-            _is_dflash_drafter_path is a FILENAME test, deliberately (the prefix
-            form is the only one accepted, so a sidecar cannot double as a
-            selectable main model in the quant picker), which means a remote repo
-            holding an ordinary weight called dflash-*.gguf passes it. The local
-            scan settles that with the architecture in the header; the remote
-            paths have to as well, or the load spends gigabytes of download on a
-            file llama-server then refuses as --model-draft. Same helper as
-            detect_dflash_file so the two rules cannot drift.
-            """
+            """Returns path only if header says dflash, since a filename test accepts any dflash-*.gguf; else the download spends gigabytes on a file llama-server refuses."""
             from utils.models.drafters import is_dflash_architecture
 
             if not path:
@@ -1099,22 +966,20 @@ class _DownloadMixin:
             logger.warning("Ignoring DFlash candidate %s: general.architecture is not dflash", path)
             return None
 
-        # Retried rather than abandoned: every rejection removes one name from the
-        # pool, so the next pick returns a different file and the scan ends at the
-        # last candidate (or at the first real sidecar). Answers already seen end
-        # it too, so a scan that ignores the pool cannot spin here.
+        # Each rejection shrinks the pool, and answers already seen end the loop, so a scan that ignores the pool cannot spin.
         cached: Optional[str] = None
         seen_siblings: set[str] = set()
         while near_path and not cancel_event.is_set():
-            sibling = _companion_snapshot_sibling(near_path, _pick_dflash)
+            sibling = _companion_snapshot_sibling(
+                near_path, functools.partial(_pick_dflash, local = True)
+            )
             if sibling is None or sibling in seen_siblings:
                 break
             seen_siblings.add(sibling)
             cached = _validated(sibling)
             if cached:
                 break
-        # _cached_repo_dflash_drafter applies the same header check to its own
-        # candidates, so anything it hands back is already validated.
+        # _cached_repo_dflash_drafter already header-checks its candidates.
         if not cached and _hf_env_offline():
             cached = self._cached_repo_dflash_drafter(
                 hf_repo,
@@ -1128,11 +993,7 @@ class _DownloadMixin:
                     "--spec-type draft-dflash, so this load falls back to no speculative "
                     "decoding. Run `unsloth studio update`, then reload."
                 )
-                # A sidecar already on disk is still reported, for the same reason as
-                # the DSpark path: the route rediscovers it on every Apply, so
-                # answering None would make the reuse check compare it against a
-                # launched None and reload the same server each time.
-                # _build_speculative_flags re-checks the capability and still falls back.
+                # Still report a sidecar on disk, else the reuse check reloads each Apply; _build_speculative_flags re-checks support and still falls back.
                 return cached
         except Exception as exc:
             logger.debug("DFlash capability probe failed before the sidecar fetch: %s", exc)
@@ -1142,11 +1003,7 @@ class _DownloadMixin:
             return cached
         outcome: dict = {}
         found: Optional[str] = None
-        # The header can only be read once the bytes are here, so validation is a
-        # post-fetch step and a rejection has to be able to fall through to the
-        # next candidate rather than end the search. Bounded the same way as the
-        # reuse scan above: a fetch that answers with a file already rejected has
-        # nothing further to offer.
+        # The header is checkable only after fetch, so a rejection falls through to the next candidate; a fetch returning an already rejected file ends the search.
         fetched: set[str] = set()
         while True:
             candidate = self._download_companion_gguf(
@@ -1157,8 +1014,7 @@ class _DownloadMixin:
                 cancel_event = cancel_event,
                 near_path = near_path,
                 outcome = outcome,
-                # Not a header rejection: that candidate is settled and the loop moves
-                # on. Only the Hub dropping out leaves a real sidecar unfetched.
+                # Only a Hub failure, not a header rejection, leaves a real sidecar unfetched.
                 on_transient_failure = _mark_retry_needed,
             )
             if candidate is None or candidate in fetched:
@@ -1167,21 +1023,13 @@ class _DownloadMixin:
             found = _validated(candidate)
             if found:
                 break
-        # Distinguishes a repo that ships no sidecar from a fetch that failed and
-        # could yet succeed. A repo whose only dflash-*.gguf is an ordinary weight
-        # exits the loop through a listing that picked nothing, which records the
-        # same permanent absence: there is nothing usable here to fetch next time.
+        # Tells a repo with no usable sidecar apart from a fetch that may yet succeed; an ordinary dflash- weight counts as no usable sidecar.
         self._dflash_sidecar_absent = outcome.get("listed") is False
         return found
 
     @staticmethod
     def _remote_root_gguf_sizes(hf_repo: str, hf_token: Optional[str] = None) -> dict[str, int]:
-        """Root-level GGUF basenames to their listed byte size, {} when unavailable.
-
-        list_repo_files answers names only, so the size bound needs the metadata
-        listing. Best effort: an empty map leaves every candidate eligible, which is
-        the behaviour before the bound existed.
-        """
+        """Sizes come from model_info (list_repo_files has names only); empty means no size bound."""
         try:
             from huggingface_hub import model_info
             info = call_hub_with_anonymous_retry(model_info, hf_token, hf_repo, files_metadata = True)
@@ -1203,29 +1051,13 @@ class _DownloadMixin:
         extra_args: Optional[list[str]],
         caps: Optional[Callable[[Optional[str]], dict]] = None,
     ) -> bool:
-        """Whether Auto will actually resolve this load to DSpark.
-
-        A DSpark path on its own does not answer that. _download_dspark reports
-        an already-cached sidecar even when the binary has no usable
-        ``--spec-type draft-dspark`` (deliberately: the route rediscovers it on
-        every Apply, and answering None there would reload the same server each
-        time), so the capability has to be applied by everything that reads the
-        path as "DSpark is what Auto picks". Without it a binary that supports
-        DFlash but not DSpark stands down on the DFlash fetch for a sidecar it
-        can never launch and the load ends up with no drafter at all.
-
-        A raised probe answers False, which keeps Auto on its other options
-        exactly as the promotion does. probe_server_capabilities caches on the
-        binary's revision, so asking here and at the promotion is one probe.
-        """
+        """A DSpark path alone is not enough: Auto picks DSpark only if the binary supports draft-dspark, else it stands down on DFlash and loads no drafter."""
         if spec_canon != "auto" or not dspark_draft_path:
             return False
         if _extra_args_set_spec_type(extra_args):
             return False
         try:
-            # Through the caller's getter when it has one, so an inconclusive probe
-            # still latches for this launch (#8317) even though the promotion moved
-            # in here.
+            # Through the caller's getter so an inconclusive probe still latches for this launch.
             probe = caps or self.probe_server_capabilities
             return bool(probe(binary).get("supports_dspark"))
         except Exception as exc:
@@ -1275,16 +1107,7 @@ class _DownloadMixin:
             return 0
 
     def _inherited_mmproj_soft_overhead(self, mmproj_bytes: int, *, on_host: bool) -> int:
-        """Runtime buffer allowance for a projector that arrived only through the env.
-
-        The resolved projector gets this term in the fit's ``soft_overhead``, but that
-        one is gated on ``effective_is_vision``, itself gated on ``launch_mmproj_path``,
-        so a ``LLAMA_ARG_MMPROJ`` projector is charged its file size and nothing for the
-        ~1.3x the encoder really allocates. Understating the footprint is the direction
-        that claims a fit which is not there.
-
-        VRAM arm only: on the host arm the resolved projector is priced raw too.
-        """
+        """Projector arriving only via LLAMA_ARG_MMPROJ gets an encoder allowance, since its file size alone understates VRAM; VRAM arm only."""
         if mmproj_bytes <= 0 or on_host:
             return 0
         return int(mmproj_bytes * (self._MMPROJ_VRAM_SAFETY - 1.0))
@@ -1295,11 +1118,7 @@ class _DownloadMixin:
         mtp_draft_path: Optional[str],
         drafter_label: str = "MTP",
     ) -> Optional[str]:
-        """Return mtp_draft_path iff it exists on disk, else None.
-
-        No family check needed: the drafter is only ever auto-resolved from
-        the same repo as the main GGUF (see _download_mtp).
-        """
+        """Returns mtp_draft_path only if it exists on disk, else None; no family check, since the drafter comes only from the main GGUF's repo."""
         if not mtp_draft_path:
             return None
         if not Path(mtp_draft_path).is_file():

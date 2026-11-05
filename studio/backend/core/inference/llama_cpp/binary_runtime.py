@@ -12,18 +12,13 @@ import threading
 
 from pathlib import Path
 from typing import Optional
+from .log import (
+    logger,
+)
 
 
 def _wsl_system_rocm_lib_dirs() -> "list[str]":
-    """System ROCm lib dir(s) to load before a prebuilt's bundled HIP, on WSL.
-
-    The bundled bare-metal HIP can't drive WSL's /dev/dxg and segfaults on the
-    first GPU call; the system ROCm libs (libamdhip64 + librocdxg) can, while
-    the bundle still supplies libggml-hip / librocblas (gfx1151 kernels).
-    Mirrors install_llama_prebuilt._wsl_system_rocm_lib_dirs so a prebuilt that
-    passed install validation runs the same at serve time. No-op off a ROCDXG
-    WSL host (needs /dev/dxg, "microsoft" /proc/version, librocdxg in /opt/rocm).
-    """
+    """Bundled HIP segfaults on WSL /dev/dxg, so system ROCm libs load first. Mirrors install_llama_prebuilt; no-op off a ROCDXG WSL host."""
     try:
         if not os.path.exists("/dev/dxg"):
             return []
@@ -46,24 +41,14 @@ def _bundled_hip_present(binary_dir: str) -> bool:
     if not binary_dir:
         return False
     try:
-        # Glob the version suffix (libggml-hip.so, .so.0, .so.0.11.1) the same
-        # way the installer's runtime health check matches libggml-hip.so*.
+        # Glob libggml-hip.so* to match versioned suffixes, the same way the installer's health check does.
         return any(Path(str(binary_dir)).glob("libggml-hip.so*"))
     except OSError:
         return False
 
 
 def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
-    """System ROCm lib dir(s) to prepend before a prebuilt's bundled HIP, on native Linux.
-
-    The bundled bare-metal HIP runtime can mismatch the host amdkfd driver and crash
-    in hsa_init(); prepending the whole system ROCm lib dir loads a driver-matched,
-    version-consistent stack (libhsa-runtime64 / libamdhip64 / librocblas) ahead of it.
-    The whole dir is deliberate: mixing the bundle's rocBLAS with a different-version
-    system HIP/ROCR risks missing symbols, and when it does load_model retries once
-    with the bundle only. UNSLOTH_LLAMA_NO_SYSTEM_ROCM=1 skips the prepend up front,
-    for a host whose system ROCm lacks this arch. No-op on WSL / non-Linux.
-    """
+    """Prepend whole system ROCm dir: bundled HIP can crash in hsa_init and mixing risks missing symbols. UNSLOTH_LLAMA_NO_SYSTEM_ROCM=1 skips it."""
     if os.environ.get("UNSLOTH_LLAMA_NO_SYSTEM_ROCM") == "1":
         return []
     if sys.platform != "linux" or os.path.exists("/dev/dxg"):
@@ -72,8 +57,7 @@ def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
         return []
     if not _bundled_hip_present(binary_dir):
         return []
-    # Env-configured ROCm root first; /opt/rocm only as a fallback so a stale
-    # /opt/rocm doesn't shadow the driver-matching install these vars point at.
+    # Env ROCm roots first so a stale /opt/rocm does not shadow them.
     candidates = []
     for var in ("HIP_PATH", "HIP_PATH_57", "ROCM_PATH"):
         val = os.environ.get(var)
@@ -92,10 +76,7 @@ def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
                 os.path.join(d, "libhsa-runtime64.so.1")
             ):
                 out.append(d)
-                # ROCm keeps LLVM's versioned runtime under <root>/lib/llvm, so a
-                # lib64 host still finds it under lib. Probe both and keep them
-                # ahead of the bundle, else system libamd_comgr binds to the
-                # bundle's incompatible libLLVM.so.*.
+                # ROCm keeps LLVM under root/lib/llvm even on lib64 hosts, so probe lib too, ahead of the bundle, else libamd_comgr binds the bundle libLLVM.
                 for _sub in (lib_sub, "lib"):
                     llvm_lib = os.path.join(base, _sub, "llvm", "lib")
                     if llvm_lib not in seen and os.path.isdir(llvm_lib):
@@ -104,36 +85,22 @@ def _native_linux_system_rocm_lib_dirs(binary_dir: str = "") -> "list[str]":
     return out
 
 
-# Host RAM to leave free on an integrated GPU, matching llama.cpp's own --fit
-# margin (default 1024 MiB per device). ggml reports an iGPU's "VRAM" as shared
-# system RAM, so hold back the same margin rather than inventing a larger one.
+# Matches llama.cpp's --fit margin; an iGPU's VRAM is shared system RAM.
 _IGPU_HOST_RESERVE_MIB = 1024
 _HOST_RAM_HEADROOM_MIB = 2048
-# What the advice refuses to take from the host: this many GB or this share of the
-# machine, whichever is larger. The carve-out comes out of the RAM the OS sees, so
-# ignoring the host turns a slow load into an unusable desktop.
+# The host keeps the larger of a GB floor or a RAM share, else the desktop becomes unusable.
 _CARVEOUT_ADVICE_MIN_HOST_GB = 8
-# A fifth, not a quarter: the 128 GB Strix Halo firmware offers 96 GB and runs it. A
-# quarter would cap at 95.83 GB and rule out a setting we measured.
+# A fifth, not a quarter: 128 GB Strix Halo firmware offers and runs 96 GB.
 _CARVEOUT_ADVICE_HOST_FRACTION = 0.20
-# A driver reports the pool it kept, not the firmware menu number (95.83 against a
-# 96.00 GB setting here). Without slack a model between the two earns the rung the
-# user is ALREADY on, so the advice reads "allocate 96 GB" to someone running 96 GB.
-# Half a GB is well under the gap between rungs.
+# Drivers report the kept pool (95.83 for a 96 GB setting); slack avoids advising the current rung.
 _CARVEOUT_NOMINAL_SLACK_GB = 0.5
-# Appended to whichever shortfall warning an oversized non-pageable launch produced,
-# after _page_an_oversized_unmapped_load rewrote the mode. One string, so the three
-# call sites cannot describe the same override differently.
+# One string so the three call sites describe the override the same way.
 _PAGEABLE_OVERRIDE_NOTE = (
     " This model was set to load without memory mapping, which reads every byte into "
     "RAM up front and cannot complete at this size, so Unsloth loaded it with memory "
     "mapping instead."
 )
-# What memory_warning says when the text-only fallback removed the CPU-pinned projector
-# whose bytes were what made the load oversized, on a launch that had already had its
-# unmapped load mode overridden for that shortfall. The override is REPORTED and not
-# taken back: the argv was rewritten and spawned, and force_pageable_load rewrote the
-# shared child env in place, so the running server is memory-mapped whatever this says.
+# The override is reported, not undone: the running server is already memory-mapped.
 _PAGEABLE_OVERRIDE_TEXT_ONLY_NOTICE = (
     "This model was set to load without memory mapping, and with its vision projector "
     "in system RAM it was too large to load that way, so Unsloth loaded it with memory "
@@ -146,37 +113,14 @@ _PROC_SELF_CGROUP = "/proc/self/cgroup"
 
 
 def _apply_igpu_host_reserve_mib(free_mib: int, is_igpu: bool) -> int:
-    """Reserve host headroom on an integrated (shared-memory) Vulkan GPU.
-
-    An iGPU's reported free "VRAM" is really free system RAM, so sizing
-    context/offload against all of it would push the host into swap or the OOM
-    killer. Leave the same margin llama.cpp's --fit uses. ``is_igpu`` comes from
-    ggml's device type, so a discrete card is never touched; only ever reduces.
-    """
+    """An iGPU's free VRAM is system RAM, so reserve the --fit margin; discrete cards are never touched."""
     if not is_igpu:
         return free_mib
     return max(0, free_mib - _IGPU_HOST_RESERVE_MIB)
 
 
 def _resolve_llama_binary(binary: str, *, template_only: bool = False) -> Path:
-    """Resolve a managed symlink or shell entrypoint to the real server.
-
-    Follows a chain rather than one hop. A wrapper whose target is another
-    wrapper used to resolve to the intermediate script, which on macOS is the
-    same defect this is here to avoid (SIP drops DYLD_* through the shell) and
-    also gives _llama_lib_dir the wrong directory, so the loader path would
-    point at the wrapper's folder instead of the one holding the dylibs.
-    Bounded, and stops on a repeat, so a wrapper pair pointing at each other
-    cannot spin.
-
-    ``template_only`` stops at the first link that is not the installer's own
-    template. Two callers, two different questions. Finding the dylibs wants
-    the end of the chain whatever it is made of, because that is where they
-    sit. Choosing what to LAUNCH must not step over somebody's own script:
-    checking only the outer entrypoint meant an installer-shaped symlink whose
-    target was a hand-written wrapper had that wrapper's exports skipped, even
-    though running the symlink directly would have executed them.
-    """
+    """Follows the link chain, bounded; template_only stops at the first link not from the installer."""
     resolved = Path(binary).resolve()
     seen = {resolved}
     for _ in range(8):
@@ -204,26 +148,14 @@ def _llama_lib_dir(binary: str) -> Path:
     return _resolve_llama_binary(binary).parent
 
 
-# install_llama_prebuilt.write_exec_wrapper emits exactly this and nothing else:
-# a shebang, one exec line, a trailing newline. Anything more is somebody's own
-# script, whose extra lines are the whole reason not to skip past it.
+# write_exec_wrapper emits exactly this; anything more is a user script.
 _INSTALLER_WRAPPER_RE = re.compile(
     r"\A#!/bin/sh\n" r'exec "\$\(dirname "\$0"\)/[^"\n]+" "\$@"\n?\Z'
 )
 
 
 def _is_installer_entrypoint(binary: str) -> bool:
-    """Is ``binary`` an entrypoint the installer itself wrote?
-
-    Symlinks and real executables qualify: neither carries setup that could be
-    lost by launching the target instead. A shell script only qualifies when it
-    matches the installer's template exactly, so a user's wrapper that exports
-    variables before its exec line is launched as written.
-
-    Kept separate from _resolve_llama_binary, which must keep resolving ANY
-    wrapper: _llama_lib_dir needs the directory holding the dylibs, and that is
-    the target's directory whoever wrote the wrapper.
-    """
+    """Only an exact installer template counts among scripts; the resolver must still follow ANY wrapper."""
     try:
         path = Path(binary)
         if path.is_symlink():
@@ -238,13 +170,7 @@ def _is_installer_entrypoint(binary: str) -> bool:
 
 
 def _loader_path_var() -> str:
-    """The platform's shared-library search env var.
-
-    dyld ignores LD_LIBRARY_PATH entirely, so a macOS child launched with only
-    that variable set has no search path at all. Same mapping as the sibling
-    engines (sd_cpp_engine._lib_path_var, stt_ggml_sidecar) and as the
-    installer's own staged-binary validation.
-    """
+    """dyld ignores LD_LIBRARY_PATH, so macOS needs DYLD_LIBRARY_PATH; Windows uses PATH."""
     if sys.platform == "darwin":
         return "DYLD_LIBRARY_PATH"
     if sys.platform == "win32":
@@ -253,15 +179,8 @@ def _loader_path_var() -> str:
 
 
 def _prepend_loader_dir(existing: str, lib_dir: str) -> str:
-    """``lib_dir`` first in a loader search path, with no repeats.
-
-    Deduplicates on the normalised spelling, so an inherited "/x/bin/" or
-    "/x/./bin" does not survive alongside the "/x/bin" being prepended and the
-    result is stable however many times it is fed back in. Purely textual:
-    realpath would touch the filesystem, and a dead network mount on an
-    inherited entry must not stall a model load. Entries keep the spelling they
-    arrived with, since that is what the loader is given.
-    """
+    """Dedupes textually, not via realpath, so a dead network mount in the path cannot stall a model
+    load."""
     out: list[str] = []
     seen: set[str] = set()
     for entry in (lib_dir, *existing.split(os.pathsep)):
@@ -277,10 +196,7 @@ def _prepend_loader_dir(existing: str, lib_dir: str) -> str:
 
 _CPU_RUNTIME_OWNER_FILE = "UNSLOTH_OWNER_PID"
 
-# GPU backends the staged CPU-only runtime must not carry over. Module level: compiled once.
-# Vulkan rows for the placement decision in progress. THREAD-LOCAL: system-info polling
-# reaches the same probe from other threads and wants live VRAM, and a shared dict let
-# such a poll seed the load's memo with minutes-old rows.
+# Thread-local: polling wants live VRAM, not this load's memo; GPU backends must not carry over.
 _LOAD_PROBE_STATE = threading.local()
 
 
@@ -312,6 +228,9 @@ def _arm_load_probe_memo() -> None:
     against VRAM that has since been allocated. `_load_probe_memo_scope` on the load
     call owns the lifetime, so this never has to be unwound by hand.
     """
+    # Already armed this load: keep the rows the launch reuses.
+    if _load_probe_memo_armed():
+        return
     _LOAD_PROBE_STATE.armed = True
     _LOAD_PROBE_STATE.rows = {}
 
@@ -319,27 +238,55 @@ def _arm_load_probe_memo() -> None:
 @contextlib.contextmanager
 def _load_probe_memo_scope():
     """Guarantee the memo cannot outlive a load however it exits. Arming is the
-    narrower `_arm_load_probe_memo`, taken around the placement decision."""
+    narrower `_arm_load_probe_memo`, taken around the placement decision. The whole
+    load also keeps a llama-fit-params failure that is not cached across loads (a
+    timeout, a crash) and the Metal fit lines already logged, so a second budget pass
+    neither waits on the probe again nor repeats its message."""
+    prev = (
+        getattr(_LOAD_PROBE_STATE, "metal_transient", None),
+        getattr(_LOAD_PROBE_STATE, "logged", None),
+    )
+    _LOAD_PROBE_STATE.metal_transient = {}
+    _LOAD_PROBE_STATE.logged = set()
     try:
         yield
     finally:
         _LOAD_PROBE_STATE.armed = False
         _LOAD_PROBE_STATE.rows = None
+        _LOAD_PROBE_STATE.metal_transient, _LOAD_PROBE_STATE.logged = prev
+
+
+def _info_once_per_load(msg: str, *args) -> None:
+    """``logger.info`` that a load says once (_load_probe_memo_scope); always outside one."""
+    seen = getattr(_LOAD_PROBE_STATE, "logged", None)
+    if seen is not None:
+        if (msg, args) in seen:
+            return
+        seen.add((msg, args))
+    logger.info(msg, *args)
 
 
 # "Probed, no usable answer", kept apart from None = "not probed yet".
 _MISSING = object()
 
+
+_vulkan_inventory_cache: dict = {}
+
+
+_vulkan_inventory_lock = threading.Lock()
+
+
+# Display reads only (/api/system would spawn the probe per poll); a GPU memory event or fresh_reads() skips it.
+_VULKAN_INVENTORY_TTL_S = 30.0
+
 # Discrete by construction: `_weights_in_host_memory` classifies them upstream. Vulkan
 # gets the shared-memory probe; SYCL/OpenCL/MUSA/CANN may be integrated, so they decline.
 _SELF_EVIDENTLY_DISCRETE = frozenset({"cuda"})
 
-# AMD needs its classifier to have RUN: the empty set means "no APU" or "no ROCm torch to
-# ask", and there is no Windows ROCm wheel, so reading it as discrete gave a Strix Halo dio.
+# Empty set may mean no ROCm torch (e.g. Windows), so AMD needs the classifier to have run.
 _NEEDS_ROCM_CLASSIFICATION = frozenset({"rocm", "hip"})
 
-# The rungs narrow exactly these, so a memo keyed on the binary alone answered a narrowed
-# set with the original set's verdict.
+# The rungs narrow these, so the memo must key on them too.
 _DEVICE_VISIBILITY_ENV = (
     "CUDA_VISIBLE_DEVICES",
     "HIP_VISIBLE_DEVICES",
@@ -350,19 +297,13 @@ _DEVICE_VISIBILITY_ENV = (
     "LLAMA_ARG_MAIN_GPU",
 )
 
-# A header, then one indented `<id>: <desc> (<total> MiB, <free> MiB free)` per device;
-# `  (none)` or nothing on a CPU-only build. The id has no internal spaces, which excludes
-# the `  Device 0: ...` lines ggml_cuda_init writes ABOVE the header.
+# No internal spaces in the id excludes ggml_cuda_init's '  Device 0:' lines.
 _LISTED_DEVICE_RE = re.compile(r"^\s+(\S+):\s")
 _LIST_DEVICES_HEADER = "Available devices:"
 
 
 def _parse_listed_devices(text: Optional[str]) -> Optional[list[str]]:
-    """Device ids from ``--list-devices`` output, or None when it had no answer.
-
-    Only lines BELOW the header count: backends log their own initialisation above it,
-    which is noise that happens to contain colons.
-    """
+    """Only lines below the header count: backend init logging above it also has colons."""
     if not text:
         return None
     lines = text.splitlines()
@@ -384,11 +325,16 @@ def _parse_listed_devices(text: Optional[str]) -> Optional[list[str]]:
     return devices
 
 
-# Exact soname or a real versioned form (`libggml-cuda.so.1`), not a stem prefix: that also
-# matched `ggml-cuda.dll.disabled`, the name left behind by DISABLING the backend.
+# Exact or versioned soname: a prefix match also hit 'ggml-cuda.dll.disabled'.
 _GGML_GPU_BACKEND_RE = re.compile(
     r"^(?:lib)?ggml-(?:cann|cuda|hip|metal|musa|opencl|sycl|virtgpu|vulkan)"
     r"(?:\.dll|\.so(?:\.\d+)*|(?:\.\d+)*\.dylib)$"
+)
+
+
+# libllama the same way: a `.bak` / `.disabled` copy is not the library the child loads.
+_LLAMA_SHARED_LIB_RE = re.compile(
+    r"^(?:lib)?llama(?:\.dll|\.so(?:\.\d+)*|(?:\.\d+)*\.dylib)$", re.IGNORECASE
 )
 
 

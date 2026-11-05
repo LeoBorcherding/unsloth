@@ -23,10 +23,44 @@ from .drafters import (
     _is_dspark_drafter_path,
 )
 from .log import logger
+import functools
 
 # ── Pre-compiled patterns for GGUF shard detection ───────────
 _SHARD_FULL_RE = re.compile(r"^(.*)-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
 _SHARD_RE = re.compile(r"^(.*)-\d{5}-of-\d{5}\.gguf$", re.IGNORECASE)
+
+
+def _gguf_set_bytes(path: Path) -> int:
+    """Size of a GGUF plus, when it is a split one, its sibling shards: llama-server opens the whole set."""
+    total = 0
+    try:
+        if path.is_file():
+            total += path.stat().st_size
+        m = _SHARD_FULL_RE.match(path.name)
+        if m is None or not path.parent.is_dir():
+            return total
+        # llama.cpp names a shard "<prefix>-<i>-of-<count>.gguf" from the first one's, so both must match: a
+        # drafter split as "<main prefix>-MTP-..." or a stale set with another count is not this set.
+        prefix, count = m.group(1).lower(), int(m.group(3))
+        for sibling in path.parent.iterdir():
+            if sibling.name == path.name:
+                continue
+            sibling_match = _SHARD_FULL_RE.match(sibling.name)
+            if (
+                sibling_match is None
+                or sibling_match.group(1).lower() != prefix
+                or int(sibling_match.group(3)) != count
+                or not 1 <= int(sibling_match.group(2)) <= count
+            ):
+                continue
+            try:
+                if sibling.is_file():
+                    total += sibling.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
 
 
 def _gguf_snapshot_files(snapshot: Path) -> list[str]:
@@ -85,12 +119,7 @@ def _cached_hf_snapshot_file(
 def _snapshot_has_all_shards(
     main_path: str, main_filename: str, shards: Iterable[str], expected_sizes: dict[str, int]
 ) -> bool:
-    """True when every shard sits beside ``main_path`` in the same cache snapshot.
-
-    llama.cpp loads a split GGUF by resolving its siblings from the main shard's
-    directory, so a cached main shard is only safe to reuse when the rest of the
-    set is co-located; otherwise the caller must fetch the whole set together.
-    """
+    """llama.cpp finds split shards beside the main file, so the whole set must share a snapshot."""
     root = Path(main_path)
     for _ in [part for part in main_filename.replace("\\", "/").split("/") if part]:
         root = root.parent
@@ -111,13 +140,7 @@ def _snapshot_has_all_shards(
 
 
 def _resolve_repo_id_casing(hf_repo: str) -> str:
-    """Map a requested repo id to its cached canonical casing, or return it unchanged.
-
-    A case-variant request (for example a lowercased id) resolves to the
-    canonical-cased cache directory so the main GGUF and its companions
-    (mmproj / MTP drafter) all read the same cache entry. Returns ``hf_repo``
-    unchanged when resolution is unavailable or errors.
-    """
+    """Maps a case-variant id to the cached casing so main and companion GGUFs share one cache entry; returns hf_repo unchanged on failure."""
     try:
         from utils.paths import resolve_cached_repo_id_case
         return resolve_cached_repo_id_case(hf_repo)
@@ -142,14 +165,7 @@ def _cached_gguf_snapshots(repo_id: str):
 def _cached_colocated_split_main(
     repo_id: str, main_filename: str, shards: Iterable[str], expected_sizes: dict[str, int]
 ) -> Optional[str]:
-    """Main-shard path from a cache snapshot that also holds every sibling shard.
-
-    A newer snapshot may hold only the first shard while an older snapshot has the
-    complete split set. ``_cached_hf_snapshot_file`` would return that newer partial
-    main and the co-location check would then force a refetch, so scan snapshots for
-    one where the whole set is present and return that main path instead. None when
-    no snapshot holds the full set.
-    """
+    """Prefers a snapshot with the full split set; a newer partial main would force a refetch."""
     main_parts = [part for part in main_filename.replace("\\", "/").split("/") if part]
     if not main_parts or any(part in (".", "..") for part in main_parts):
         return None
@@ -187,10 +203,7 @@ def _cached_variant_candidates(
     require_mmproj: bool = False,
     strict: bool = False,
 ) -> Generator[tuple[str, str, list[str], Path], None, None]:
-    """Yield complete cached variant copies in snapshot preference order.
-
-    A copy whose recorded download is unfinished or cancelled comes last, and ``strict``
-    drops it: only a copy that can run without the Hub qualifies then."""
+    """Incomplete or cancelled copies come last, and strict drops them so only a Hub-free copy qualifies."""
     try:
         from hub.utils.gguf_sources import (
             cached_gguf_manifest_complete,
@@ -238,12 +251,7 @@ def _cached_variant_candidates(
 def _cached_variant_sizes(
     repo_id: str, hf_variant: str, main_path: str
 ) -> Optional[tuple[tuple[str, int], ...]]:
-    """Sorted ``(filename, size)`` pairs for the cached variant copy at ``main_path``.
-
-    None when no complete cached copy resolves to that path. ``_cached_variant_candidates``
-    owns the shard set and every read is local, so recording this and comparing it later
-    catches a truncated, resized or dropped file without a Hub lookup.
-    """
+    """Sorted (filename, size) pairs of the complete cached copy at main_path, or None; compared later to catch truncated or dropped shards offline."""
     target = os.path.abspath(main_path)
     for cached_main, main, shards, snap in _cached_variant_candidates(repo_id, hf_variant):
         if os.path.abspath(cached_main) != target:
@@ -263,13 +271,7 @@ def _cached_variant_sizes(
 def _cached_candidate_matches_revision_size(
     repo_id: str, candidate: tuple[str, str, list[str], Path], hf_token: Optional[str]
 ) -> bool:
-    """Check cached byte sizes against the snapshot's own Hub revision.
-
-    A snapshot pointer is normally published only after its blob is complete.
-    When the old revision is still queryable, also compare every weight file's
-    size so a manually truncated cache entry is not treated as reusable. If
-    metadata cannot be reached, retain the cache's normal offline semantics.
-    """
+    """Compares sizes with the Hub revision when reachable, so a manually truncated cache is not reused."""
     main_path, main, shards, snap = candidate
     paths = [main, *shards]
     try:
@@ -293,8 +295,7 @@ def _cached_candidate_matches_revision_size(
         return True
 
     if not infos:
-        # The Hub answers an unknown (e.g. force-pushed away) revision with an
-        # empty result, not an error; treat it like unreachable metadata.
+        # The Hub answers an unknown revision with an empty result, not an error; treat it like unreachable metadata.
         return True
     expected_sizes = {info.path: info.size for info in infos if info.size is not None}
     if any(path not in expected_sizes for path in paths):
@@ -394,12 +395,7 @@ def _companion_snapshot_sibling(
     candidate = snap / sibling
     if not candidate.is_file():
         return None
-    # A split companion is usable only as a whole set (llama-server resolves the
-    # siblings from this path's directory), so a snapshot holding shard 1 alone
-    # is not a reuse -- reporting it would skip the download that completes it and
-    # leave the load with a drafter the server cannot open. Same rule the local
-    # scan applies. Non-split names are a complete one-file set, so this is a
-    # no-op for every companion published today.
+    # Split companion is usable only as a whole set: llama-server resolves siblings from its directory, so shard 1 alone is not a reuse.
     from utils.models.model_config import _drafter_split_is_complete
 
     return str(candidate) if _drafter_split_is_complete(candidate) else None
@@ -427,14 +423,7 @@ _MTP_SHARD_SUFFIX_RE = re.compile(r"-[0-9]{5}-of-[0-9]{5}$")
 
 
 def _is_published_mtp_drafter_name(path: str) -> bool:
-    """Does *path*'s BASENAME name a published MTP head?
-
-    ``_is_mtp_only_drafter_path`` accepts anything under ``MTP/``, which is right
-    for excluding companions from menus and too broad for choosing what to launch:
-    an mmproj, an imatrix or a stray weight copy would go to ``--model-draft``.
-    Same rule as ``detect_mtp_file`` -- ``mtp-<model>`` or the older
-    ``<model>-MTP`` -- shard suffix stripped first, since an old-scheme split copy
-    is ``<model>-Q8_0-MTP-00001-of-00002.gguf``, whose stem lacks ``-mtp``."""
+    """Basename only, since any MTP/ file is too broad to launch. Names mtp-<model> or <model>-MTP, with any shard suffix stripped first."""
     lower = Path(path).name.lower()
     if not lower.endswith(".gguf"):
         return False
@@ -448,12 +437,7 @@ def _mtp_head_borrows(path: str) -> bool:
 
 
 def _pick_mtp(candidates: list[str], *, allow_nested: bool = True) -> Optional[str]:
-    """The MTP drafter a listing offers, or None. Module level for the same reason
-    ``_pick_dspark`` is: both are handed a live repo listing as well as a snapshot,
-    and ``/kv-cache-estimate`` has to price the drafter the launch will open.
-
-    ``allow_nested=False`` restricts the answer to a root mirror, which is what
-    every architecture but qwen4exp gets -- see ``_pick_mtp_root_only``."""
+    """The MTP drafter a listing offers, or None; module level so /kv-cache-estimate prices the drafter the launch opens. allow_nested=False: root only."""
     from hub.utils.gguf import drop_shadowed_appledouble_names
     from utils.models.drafters import split_listing_is_complete
     from utils.models.drafters.preference import mtp_preference_key
@@ -461,15 +445,10 @@ def _pick_mtp(candidates: list[str], *, allow_nested: bool = True) -> Optional[s
     names = drop_shadowed_appledouble_names(list(candidates))
 
     def _launchable(name: str) -> bool:
-        # Settled before ranking, as detect_mtp_file settles it at collection:
-        # llama.cpp resolves sibling shards from the first one's directory, so half
-        # a set is unusable and _download_companion_gguf answers None to it. Ranked
-        # first and rejected after, it would shadow a complete lower-ranked head.
+        # Half a split set is unusable, so settle completeness before ranking, or an incomplete head shadows a complete lower-ranked one.
         return split_listing_is_complete(names, name)
 
-    # Root first, so a repo mirroring one head at the root (Gemma 4) still resolves to it
-    # rather than to a subdir copy, which would sort ahead. The mtp- prefix also excludes
-    # AppleDouble shadows ("._mtp-x.gguf"), so this bucket needs no filtering of its own.
+    # Root first, so a root mirror (Gemma 4) beats a subdir copy; the mtp- prefix already excludes AppleDouble ._mtp shadows, so no filter is needed.
     mtp_files = sorted(
         f
         for f in names
@@ -481,10 +460,7 @@ def _pick_mtp(candidates: list[str], *, allow_nested: bool = True) -> Optional[s
     if mtp_files:
         return mtp_files[0]
 
-    # No root mirror, or none of them complete: fall back to the MTP/ folder, which
-    # is the only place Qwen3.8-Flash-Next publishes its heads. This is the policy
-    # _cached_repo_mtp_drafter already applies to the offline cache, so without it a
-    # user holding a cached copy gets speculation and a fresh install does not.
+    # Fall back to MTP/, where Qwen3.8-Flash-Next publishes heads (matches the offline cache).
     if not allow_nested:
         return None
     nested = sorted(
@@ -499,28 +475,22 @@ def _pick_mtp(candidates: list[str], *, allow_nested: bool = True) -> Optional[s
 
 
 def _pick_mtp_root_only(candidates: list[str]) -> Optional[str]:
-    """``_pick_mtp`` for everything but qwen4exp: the behaviour every model had
-    before the ``MTP/`` fallback existed.
-
-    llama.cpp loads the draft model whenever one is passed, so a sidecar displaces
-    an embedded head rather than adding to it. On Qwen3.8-27B UD-Q4_K_XL the two
-    draft identically (143 of 223, byte-identical output), so the 1.37 GB copy buys
-    nothing. A root mirror is still taken: publishing one beside the weights says
-    it is the one to use."""
+    """Root mirror only: a passed sidecar displaces the embedded head, so a nested copy buys nothing."""
     return _pick_mtp(candidates, allow_nested = False)
 
 
 def _mtp_drafter_loads_standalone(path: str) -> bool:
-    """Does *path* have the embeddings a ``--model-draft`` file needs?
-
-    The rule lives in ``gguf_metadata`` so the memory-estimate route, which asks on
-    every settings change, shares its ``(path, mtime, size)`` cache.
-    """
+    """A --model-draft file must have the embeddings it needs to load; the rule lives in gguf_metadata so the memory estimate shares its cache."""
     from utils.models.gguf_metadata import mtp_drafter_loads_standalone
     return mtp_drafter_loads_standalone(path)
 
 
-def _pick_mmproj(candidates: list[str]) -> Optional[str]:
+def _pick_mmproj(
+    candidates: list[str],
+    *,
+    order: Optional[tuple] = None,
+    weight: Optional[str] = None,
+) -> Optional[str]:
     from hub.utils.gguf import drop_shadowed_appledouble_names
 
     # "._mmproj-F16.gguf" satisfies the F16 preference and sorts ahead of the real adapter.
@@ -530,7 +500,27 @@ def _pick_mmproj(candidates: list[str]) -> Optional[str]:
     )
     if not mmproj_files:
         return None
+    if order:
+        from utils.models.model_config import mmproj_order_rank, mmproj_weight_match
+
+        # Pair with the weight first, so a repo of several checkpoints never hands over another one's projector.
+        return max(
+            mmproj_files,
+            key = lambda f: (mmproj_weight_match(weight, f), mmproj_order_rank(f, order)),
+        )
     return next((f for f in mmproj_files if f.lower().endswith("-f16.gguf")), mmproj_files[0])
+
+
+def _mmproj_picker(
+    model: Optional[str], weight_path: Optional[str] = None
+) -> Callable[[list[str]], Optional[str]]:
+    from utils.models.model_config import mmproj_order
+
+    order = mmproj_order(model, weight_path)
+    if not order:
+        return _pick_mmproj
+    weight = Path(weight_path).name if weight_path else None
+    return functools.partial(_pick_mmproj, order = order, weight = weight)
 
 
 def _hub_download_in_flight(hf_repo: str) -> bool:
@@ -548,12 +538,7 @@ def _hub_download_blocks_gguf_load(
     require_mmproj: bool = False,
     hf_token: Optional[str] = None,
 ) -> bool:
-    """Whether an active Hub job makes this GGUF load unsafe.
-
-    Same-variant jobs can reclaim the stale snapshot a load would reuse, so
-    they always block. Other jobs block only when this load lacks a complete
-    cached copy and would write to the shared cache itself.
-    """
+    """A same-variant Hub job always blocks (it can reclaim the snapshot this load reuses); other jobs block only with no complete cached copy."""
     try:
         from hub.utils.download_registry import get_models_registry
 
@@ -597,10 +582,7 @@ def _gguf_extra_shards(files: Iterable[str], first_shard: str) -> list[str]:
 
 
 def _quant_label_for_endian(path: str) -> Optional[str]:
-    """The file's own quant label, for ``_is_big_endian_gguf_path``, or None when unreadable.
-
-    Best-effort: with no label the caller keeps its previous argument rather than dropping the
-    endian test, which would admit a genuinely big-endian build."""
+    """With no label the caller keeps its previous argument, so the endian test is never dropped."""
     try:
         from hub.utils.gguf import extract_quant_token
         return extract_quant_token(path)
@@ -609,11 +591,7 @@ def _quant_label_for_endian(path: str) -> Optional[str]:
 
 
 def _gguf_files_for_variant(files: Iterable[str], variant: str) -> list[str]:
-    """Return main GGUF files matching a requested variant.
-
-    Prefer exact quant-label matches over loose substring matches so a request
-    for ``stories260K`` does not resolve to ``stories260K-be.gguf``.
-    """
+    """Exact quant-label matches win over substrings, so stories260K does not match stories260K-be.gguf."""
     from hub.utils.gguf import drop_shadowed_appledouble_names
 
     variant_key = variant.strip().lower()
@@ -623,12 +601,7 @@ def _gguf_files_for_variant(files: Iterable[str], variant: str) -> list[str]:
         for f in drop_shadowed_appledouble_names(list(files))
         if f.lower().endswith(".gguf")
         and not _is_companion_gguf_path(f)
-        # The endian predicate reads a quant TOKEN -- it decides whether the quant came from the
-        # parent directory only -- so it gets the file's own label, never the requested key. Handed
-        # a path-qualified key it cannot find that string in either the basename or the parent and
-        # reads distilled/Q4_K_M/foo-be.gguf as big-endian, dropping the one file the key owns:
-        # the row is advertised and downloadable but never resolves for loading. Same reason
-        # gguf_plan and the auto-download map pass the label here.
+        # Pass the file's own quant label: a path-qualified key misreads -be.gguf as big-endian.
         and not _is_big_endian_gguf_path(f, _quant_label_for_endian(f) or variant_key)
     ]
     if not variant_key:
@@ -642,9 +615,7 @@ def _gguf_files_for_variant(files: Iterable[str], variant: str) -> list[str]:
 
     if _gguf_variant_key is not None:
         try:
-            # The variant's own files first. In a repo holding several checkpoints at
-            # one quant the label alone names all of them, and handing llama-server a
-            # mixed set makes it read another checkpoint's weights as a shard.
+            # Variant's own files first: mixing checkpoints makes llama-server read the wrong shards.
             owned = sorted(f for f in main_files if _gguf_variant_key(f).lower() == variant_key)
             if owned:
                 return owned
@@ -668,13 +639,7 @@ def _resolve_variant_gguf_files(
     hf_variant: Optional[str],
     hf_token: Optional[str] = None,
 ) -> tuple[Optional[str], list[str]]:
-    """Which file in ``hf_repo`` this variant means, plus its extra shards.
-
-    Repo listing, then the local HF cache, then a name synthesised from the repo id; every
-    tier fails soft (``(None, [])`` means "no opinion"). Module level, not inside
-    ``_download_gguf``, so the pre-teardown header probe resolves exactly the file the
-    download will open -- two copies of this cascade would let the two drift.
-    """
+    """Module level so the header probe and the download resolve the same file; two copies would drift."""
     gguf_filename: Optional[str] = None
     gguf_extra_shards: list[str] = []
     if not hf_variant:

@@ -6,19 +6,11 @@
 import math
 
 from .log import logger
+import json
 
 
 def _backfill_usage_from_timings(usage, timings):
-    """Synthesize ``usage`` from llama-server's ``timings`` when the
-    OpenAI-style usage block is missing or reports zero tokens.
-
-    The Unsloth chat UI computes generation t/s from
-    ``meta.usage.completion_tokens / totalStreamTime``. llama-server always
-    populates ``timings.predicted_n`` (true decoded count) and
-    ``timings.prompt_n``, but the final SSE chunk's ``usage`` can be absent
-    or zero on some server builds / streaming configs, making the UI fall
-    back to wall-clock t/s and dilute speculative-decoding speedups.
-    """
+    """Fills usage from timings when absent or zero, so the UI's t/s is not diluted by wall-clock time."""
     if not timings:
         return usage
     if usage and usage.get("completion_tokens"):
@@ -82,6 +74,19 @@ def _llama_chunk_has_generated_output(data: dict) -> bool:
         if choice.get("text") not in (None, ""):
             return True
     return False
+
+
+def _structured_calls_complete(calls: dict) -> bool:
+    for call in calls.values():
+        function = call.get("function") or {}
+        if not function.get("name", "").strip():
+            return False
+        try:
+            if not isinstance(json.loads(function.get("arguments") or ""), dict):
+                return False
+        except ValueError:
+            return False
+    return bool(calls)
 
 
 def _perf_callback_wants_timings(callback) -> bool:

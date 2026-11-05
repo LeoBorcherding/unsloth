@@ -29,6 +29,10 @@ from .tool_loop_text import (
     _FAILURE_QUOTE_CHARS,
     _FAILURE_SCAN_TAIL_CHARS,
 )
+from utils.gguf_archs import is_foreign_asr_gguf_architecture
+from .server_log import (
+    _PORT_OWNER_REFUSED_MARKER,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -37,21 +41,14 @@ from .tool_loop_text import (
 class _StartFailureMixin:
     @staticmethod
     def _is_bundled_llama_library(lib: str) -> bool:
-        # The loader prints a bare soname when the file is absent but a full
-        # path when it found and rejected it, so compare on the basename.
+        # The loader prints a soname when absent, a full path when rejected; compare basenames.
         return os.path.basename((lib or "").strip()).startswith(
             LlamaCppBackend._BUNDLED_LIB_PREFIXES
         )
 
     @staticmethod
     def _is_unsloth_managed_binary(binary: Optional[str]) -> bool:
-        """Would `unsloth studio update` actually replace ``binary``?
-
-        A pinned LLAMA_SERVER_PATH, or a llama-server found on PATH, is
-        explicitly unmanaged (update_flow.managed_install_root returns None),
-        so telling the user to update Unsloth's runtime cannot repair it.
-        Unknown binary (callers that pass nothing) keeps the managed default.
-        """
+        """A pinned LLAMA_SERVER_PATH or PATH llama-server is unmanaged, so update cannot repair it; an unknown binary (none passed) keeps the managed default."""
         if not binary:
             return True
         try:
@@ -61,14 +58,10 @@ class _StartFailureMixin:
                 _llama_install_root,
             )
 
-            # A Settings-selected checkout is user-owned even when its ordinary
-            # `llama.cpp` directory name or prebuilt marker resembles our tree.
+            # A Settings-selected checkout is user-owned even if it looks like our tree.
             if custom_llama_cpp_path_source() == "studio":
                 return False
-            # A --with-llama-cpp-dir tree is the user's own checkout reached
-            # through a symlinked llama.cpp dir. The updater refuses to write
-            # through that link, so it cannot repair the binary either, and its
-            # entrypoint is theirs to keep.
+            # A --with-llama-cpp-dir symlinked tree is the user's; the updater refuses to write through it.
             if _active_install_is_local_link(binary):
                 return False
             return _llama_install_root(binary) is not None
@@ -77,13 +70,7 @@ class _StartFailureMixin:
 
     @staticmethod
     def _is_llama_install_tree(binary: Optional[str]) -> bool:
-        """Does ``binary`` sit in a llama.cpp tree Unsloth resolved for itself?
-
-        The pre-existing half of the question above, kept separate because the
-        two are not the same: a --with-llama-cpp-dir checkout IS the active
-        install (so anything that only needs to read or copy from it still
-        applies) while not being something the updater can replace.
-        """
+        """A --with-llama-cpp-dir checkout is the active install but not updater-replaceable."""
         if not binary:
             return True
         try:
@@ -94,11 +81,8 @@ class _StartFailureMixin:
 
     @staticmethod
     def _is_library_path(lib: str) -> bool:
-        # glibc's own discriminator is `strchr (name, '/') == NULL`
-        # (elf/dl-load.c): a slash anywhere means the name is a pathname and no
-        # search happens, so a relative DT_NEEDED is as exact as an absolute
-        # one. os.sep would be platform-bound and this string comes from
-        # whatever host ran llama-server, so match both separators.
+        # glibc treats any slash as a pathname (no search); match both separators since the text
+        # comes from another host.
         lib = (lib or "").strip()
         return "/" in lib or "\\" in lib
 
@@ -119,10 +103,7 @@ class _StartFailureMixin:
                 "binary is a custom install Unsloth does not manage, so reinstall "
                 "or rebuild that llama.cpp, then load the model again."
             )
-        # A bare soname means the loader searched the standard directories,
-        # which is what a package populates. Any name carrying a separator is a
-        # pathname the loader opened directly (e.g. a vendor .so under /opt), so
-        # one exact file is absent and no package will put it there.
+        # A pathname was opened directly, so no package will put that exact file there.
         if LlamaCppBackend._is_library_path(lib):
             _remedy = (
                 "run `unsloth studio update`"
@@ -146,11 +127,7 @@ class _StartFailureMixin:
         reason: str,
         binary: Optional[str] = None,
     ) -> str:
-        """The loader FOUND ``lib`` and refused it: the same "error while
-        loading shared libraries" line also carries "file too short", "invalid
-        ELF header", "wrong ELF class", "cannot open shared object file:
-        Permission denied", ... Installing a package is the wrong advice there
-        -- the file is already present."""
+        """The file exists but the loader refused it, so installing a package is the wrong advice."""
         detail = f" ({reason})" if reason else ""
         if LlamaCppBackend._is_bundled_llama_library(lib):
             if LlamaCppBackend._is_unsloth_managed_binary(binary):
@@ -175,26 +152,7 @@ class _StartFailureMixin:
 
     @staticmethod
     def _exec_path_for_launch(binary: Optional[str]) -> Optional[str]:
-        """The path to actually execute, resolving a managed macOS entrypoint.
-
-        SIP purges DYLD_* while starting the protected /bin/sh a shell
-        entrypoint runs under, so the loader path we build for the child would
-        not survive the wrapper's own exec (#8566). Only OUR entrypoint is
-        resolved: someone's own wrapper may export backend variables or do
-        other setup before its exec line, and skipping past it would silently
-        drop that.
-
-        The test is the wrapper's shape, not where it came from. Provenance is
-        not enough (_llama_install_root treats the directory named by
-        UNSLOTH_LLAMA_CPP_PATH as the active install with no marker file
-        needed, so somebody's own checkout reads as managed), and neither is an
-        explicit LLAMA_SERVER_PATH pin: pointing that at the installer's own
-        entrypoint is a supported configuration, and refusing to resolve it
-        just because it was named put the launch back through /bin/sh and
-        reproduced the very bug this fixes. An installer-template wrapper does
-        nothing but exec its target, so resolving past one is never a loss,
-        however it was reached.
-        """
+        """Resolves only an installer-template macOS wrapper past /bin/sh (SIP strips DYLD_*), by shape not provenance; any other wrapper is left alone."""
         if not binary or sys.platform != "darwin":
             return binary
         if not LlamaCppBackend._is_unsloth_managed_binary(binary):
@@ -206,92 +164,51 @@ class _StartFailureMixin:
                 return binary
         if not _is_installer_entrypoint(binary):
             return binary
-        # template_only: the outer entrypoint being ours says nothing about
-        # what it points at. Resolve only through links that are also ours.
+        # template_only: resolve only through links that are also ours.
         return str(_resolve_llama_binary(binary, template_only = True))
 
     @staticmethod
     def _runtime_remedy(binary: Optional[str]) -> str:
-        """The repair advice for ``binary``, by provenance.
-
-        `unsloth studio update` cannot touch a pinned LLAMA_SERVER_PATH or a
-        llama-server found on PATH, so those owners get told to rebuild theirs.
-        """
+        """Pinned or PATH llama-server binaries get a rebuild instruction, since update cannot touch
+        them."""
         return (
             "run `unsloth studio update` to reinstall the llama.cpp runtime"
             if LlamaCppBackend._is_unsloth_managed_binary(binary)
             else "reinstall or rebuild that custom llama.cpp"
         )
 
-    # A "tried:" list names every searched path, so the reason can run to
-    # kilobytes. The glibc branch is capped to one line; cap this one too.
+    # A tried: list can run to kilobytes; cap like the glibc branch.
     _MACOS_REASON_CHARS = 300
 
-    # A dyld install name is a path, and macOS PATH_MAX is 1024. Double it and
-    # anything longer is not something the loader produced.
+    # macOS PATH_MAX is 1024; anything past double is not from the loader.
     _DYLD_LIB_NAME_MAX_CHARS = 2048
 
     @staticmethod
     def _plain_dyld_lib_name(lib: str) -> str:
-        """Drop dyld's search directives from an install name.
-
-        ``@rpath/libllama.dylib`` is a lookup token, not a location, so passing
-        it through as a path makes _missing_library_message tell the user to
-        restore a file at a directory that does not exist. The soname is what
-        they can act on, and _is_bundled_llama_library already matches on it.
-        """
-        # Basename, not just the directive: "@loader_path/../Frameworks/x.dylib"
-        # still reads as an exact location to _is_library_path.
+        """Reduces dyld @rpath, @loader_path or @executable_path names to basename: they are lookup tokens, so as paths they would name a missing directory."""
         if lib.startswith(("@rpath/", "@loader_path/", "@executable_path/")):
             lib = os.path.basename(lib)
-        # The name is quoted from untrusted output and lands in an HTTP error.
-        # A real install name is well under this; without the cap, a wrapper
-        # printing a 100000-character one turned a 200-character diagnosis into
-        # a 100000-character API response. PATH_MAX on macOS is 1024, so this
-        # only ever truncates something dyld could not have produced.
+        # Quoted from untrusted output into an HTTP error, so cap it.
         if len(lib) > LlamaCppBackend._DYLD_LIB_NAME_MAX_CHARS:
             lib = lib[: LlamaCppBackend._DYLD_LIB_NAME_MAX_CHARS] + "..."
         return lib
 
-    # Ten search paths at a long path each, with room to spare. Only ever cuts
-    # text a real dyld reason does not produce.
+    # Ten paths of a long length each is generous; it only cuts text no real dyld reason produces.
     _DYLD_REASON_MAX_CHARS = 4000
-    # How far past "Library not loaded:" to look for its Reason at all. Four
-    # times the cap above, so a real reason preceded by a little noise is still
-    # found whole.
+    # How far past Library not loaded to scan for its Reason: four times the cap, so noise before a real reason is still found whole.
     _DYLD_REASON_SCAN_CHARS = 16000
-    # Candidates read out of one "tried:" list. dyld searches a bounded set of
-    # paths; a list longer than this is not one it produced.
+    # Candidates come from one tried: list; dyld searches a bounded set, so a longer list is not dyld's.
     _DYLD_MAX_CANDIDATES = 128
 
-    # dyld announces itself at the start of a line: "dyld[1234]: ", the older
-    # "dyld: ", or a crash report's "Termination Reason: ... DYLD". Structural
-    # on purpose: "Referenced from:" and friends are words a wrapper or a GGUF
-    # metadata string can carry, and were accepted as framing before.
+    # dyld framing must start a line; phrases like 'Referenced from:' can come from wrappers or GGUF metadata.
     _DYLD_FRAMING_RE = re.compile(
         r"(?im)^[ \t]*(?:dyld(?:\[\d+\])?:|termination reason:.*\bdyld\b)"
     )
 
     @staticmethod
     def _dyld_reason_after(output: str, start: int) -> str:
-        """The ``Reason:`` belonging to a dyld error, flattened to one line.
-
-        Bounded to that line plus its indented continuations, and searched only
-        after the "Library not loaded:" it explains: an unrelated earlier
-        "Reason:" in llama.cpp's own output would otherwise be read as dyld's,
-        and an unbounded read would swallow everything printed afterwards.
-
-        Length-capped as well. dyld lists one candidate per search path, so a
-        real reason is a couple of KB at most, but the text is whatever the
-        child printed: a pathological one drives the candidate scan below into
-        quadratic backtracking (100KB of "'a' (" measured at 6.3s, against
-        0.0s before this change), and that scan runs on the event loop.
-        """
-        # Windowed, not just capped afterwards: dyld prints the reason directly
-        # under the "Library not loaded:" line, so nothing useful lives further
-        # out, and matching against the whole remaining output would materialise
-        # a group as large as whatever the child printed (a 25MB reason was
-        # measured at ~366MB peak RSS through the flatten below).
+        """Searched only after the dyld message, in a capped window, since the match can backtrack badly."""
+        # Windowed: the reason sits right under the line, and matching all output could use huge memory.
         window = output[start : start + LlamaCppBackend._DYLD_REASON_SCAN_CHARS]
         match = re.compile(
             r"reason:[ \t]*([^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*)",
@@ -303,22 +220,14 @@ class _StartFailureMixin:
 
     @staticmethod
     def _dyld_tried_verdict(reason: str, binary: Optional[str]) -> str:
-        """The verdict for the candidate that is ours, out of a "tried:" list.
-
-        dyld reports ``tried: '<path>' (<verdict>), '<path>' (<verdict>), ...``
-        over every search path, so the list routinely mixes "no such file" for
-        our own bundle with "incompatible architecture" for a leftover Intel
-        Homebrew copy. Prefer the candidate in the runtime's own lib dir, else
-        the first one; with no list at all the reason stands as its own verdict.
-        """
+        """Prefers the dyld candidate in our own lib dir, else the first; the bare reason if no list."""
         lib_dir = ""
         if binary:
             try:
                 lib_dir = str(_llama_lib_dir(binary))
             except (OSError, ValueError):
                 lib_dir = ""
-        # finditer with a count, not findall: the reason is already capped, but
-        # a list built before the first useful match is work done for nothing.
+        # Use finditer with a cap, not findall: a list built before the first useful match is wasted work.
         first: Optional[str] = None
         for index, match in enumerate(re.finditer(r"'([^']+)'\s*\(([^)]*)\)", reason)):
             if index >= LlamaCppBackend._DYLD_MAX_CANDIDATES:
@@ -332,29 +241,14 @@ class _StartFailureMixin:
 
     @staticmethod
     def _classify_macos_loader_failure(output: str, binary: Optional[str]) -> Optional[str]:
-        """dyld / Mach-O startup failures, or None when the output has none.
-
-        Pure text matching on captured llama-server output, so this runs (and
-        is tested) on any host, not only Darwin. Kept ahead of the returncode
-        heuristics in the caller: a dyld diagnostic is a fact, while signal 9
-        is a guess that would otherwise blame memory (#8566).
-
-        Nothing here fires without dyld's own framing. llama.cpp echoes GGUF
-        metadata to stderr while loading, so "Library not loaded:" or "Symbol
-        not found" can be a model's own general.name; a bare match outranked
-        the status-127 and signal-15 branches and answered a diffusion-GGUF
-        load with library advice. Every branch is now gated on the same guard
-        rather than each carrying its own.
-        """
+        """Only dyld-framed output counts: GGUF metadata can echo 'Library not loaded' text."""
         if not output:
             return None
         if not LlamaCppBackend._DYLD_FRAMING_RE.search(output):
             return None
         lowered = output.lower()
 
-        # Built for a newer macOS than the host. Same two markers as
-        # install_llama_prebuilt.looks_like_macos_incompatibility, so the
-        # installer and the runtime agree on the wording.
+        # Same markers as install_llama_prebuilt.looks_like_macos_incompatibility.
         if ("built for macos" in lowered and "newer than running os" in lowered) or (
             "symbol not found" in lowered and "mtlresidency" in lowered
         ):
@@ -374,51 +268,37 @@ class _StartFailureMixin:
         if not_loaded:
             lib = LlamaCppBackend._plain_dyld_lib_name(not_loaded.group(1).strip())
             reason = LlamaCppBackend._dyld_reason_after(output, not_loaded.end())
-            # dyld4 gives a per-path verdict for every path it searched, so
-            # judge ours. Scanning the flattened list would let a stale Intel
-            # /usr/local copy decide the diagnosis for a dylib simply absent.
+            # dyld4 gives a per-path verdict; judge our path, not a stale copy elsewhere.
             verdict = LlamaCppBackend._dyld_tried_verdict(reason, binary)
             verdict_l = verdict.lower()
-            # macOS refused the Mach-O itself. Unsigned or altered code is a
-            # hard SIGKILL on Apple Silicon, so never send the user hunting for
-            # a corrupt GGUF or for free memory.
+            # Code-signature refusal: a hard SIGKILL on Apple Silicon, not a GGUF or memory problem.
             if "code signature" in verdict_l or "not valid for use in process" in verdict_l:
                 return (
                     f"llama-server could not start: macOS rejected the code "
                     f"signature of {lib}. The file was modified or is "
                     f"incompletely signed, so {LlamaCppBackend._runtime_remedy(binary)}."
                 )
-            # dyld4 says "mach-o file, but is an incompatible architecture";
-            # the older wording is "mach-o, but wrong architecture".
+            # dyld4 reports incompatible architecture; older dyld reported wrong architecture.
             if "incompatible architecture" in verdict_l or "wrong architecture" in verdict_l:
                 return (
                     f"llama-server could not start: {lib} was built for a "
                     "different CPU architecture than this Mac. Its install is "
                     f"for the wrong platform, so {LlamaCppBackend._runtime_remedy(binary)}."
                 )
-            # "no such file" (the modern per-path "tried:" list) and the older
-            # bare "image not found" both mean absent; anything else means dyld
-            # found it and refused it, where reinstalling a package is wrong.
+            # Only 'no such file' / 'image not found' mean absent; otherwise dyld found and refused it.
             if not verdict_l or "no such file" in verdict_l or "image not found" in verdict_l:
                 return LlamaCppBackend._missing_library_message(lib, binary)
             return LlamaCppBackend._unloadable_library_message(
                 lib, verdict[: LlamaCppBackend._MACOS_REASON_CHARS], binary
             )
 
-        # A symbol mismatch with no missing file. Where it was expected decides
-        # the remedy: a system framework means the build wants a newer macOS
-        # (reinstalling cannot make the OS export it); one of ours means our
-        # own files are from different builds.
-        # Only with dyld's own framing: "Symbol not found" is ordinary English
-        # any wrapper on any platform can print, and claiming it would also
-        # suppress the output tail the fallback carries.
+        # Symbol mismatch: a system framework means the build needs a newer macOS, ours means mixed
+        # builds. Only with dyld framing, since 'Symbol not found' is ordinary English.
         if "symbol not found" in lowered and any(
             marker in lowered for marker in ("dyld[", "dyld:", "referenced from:", "expected in:")
         ):
             expected = re.search(r"expected in:\s*(?:<[^>]*>\s*)?([^\r\n]+)", output, re.IGNORECASE)
-            # Newer dyld quotes the path. Unstripped, "'/System/..." fails the
-            # prefix test below and a too-new build is blamed on a mismatched
-            # install instead of on the OS.
+            # Newer dyld quotes the path; strip quotes or the /System prefix test fails.
             expected_path = expected.group(1).strip().strip("'\"") if expected else ""
             if expected_path.startswith(("/System/", "/usr/lib/")):
                 return (
@@ -436,10 +316,7 @@ class _StartFailureMixin:
             )
         return None
 
-    # The macOS shell's message for EBADARCH, printed with the offending path
-    # and typically exit 126. Never reaches dyld, so it carries no dyld framing
-    # and has to be matched on its own; the wording is macOS-specific enough
-    # (Linux says "cannot execute binary file") to be safe anywhere.
+    # The shell's EBADARCH message; never reaches dyld, so matched on its own.
     _BAD_CPU_TYPE_RE = re.compile(r"(?im)^.*:[ \t]*bad cpu type in executable[ \t]*$")
 
     @staticmethod
@@ -453,19 +330,7 @@ class _StartFailureMixin:
         secrets: Sequence[Optional[str]] = (),
         extra_args: Optional[Sequence[str]] = None,
     ) -> str:
-        """Classify, then redact, whatever the classification quoted.
-
-        Redaction used to live only in the startup-diagnostics tail, so it
-        covered the fallback and nothing else. Every other branch also quotes
-        untrusted text -- a dyld message names the library it could not load,
-        and that name comes from the child -- so a credential appearing there
-        went out in the API error while the same credential in the tail was
-        starred out. One boundary for every branch, rather than one per
-        interpolation, which is the arrangement that let this through.
-
-        Scrubbing twice is harmless: a redacted value no longer matches, so
-        running the pass over an already-decorated message is a no-op.
-        """
+        """Redacts every classified message, since each branch quotes untrusted child output."""
         return LlamaCppBackend._scrub_secret_values(
             LlamaCppBackend._classify_start_failure_text(
                 output,
@@ -491,27 +356,20 @@ class _StartFailureMixin:
         secrets: Sequence[Optional[str]] = (),
         extra_args: Optional[Sequence[str]] = None,
     ) -> str:
-        """Explain *why* llama-server failed to start, from its output.
-
-        Several distinct failures otherwise collapse into the same opaque
-        "invalid GGUF or out of memory" message. Worst case: a diffusion GGUF
-        loaded as a chat model -- valid file, plenty of memory, but llama.cpp
-        has no such architecture, so the user is told to free memory that was
-        never the problem (#5842). Pick the most specific message we can.
-
-        ``output`` is the child's stdout and is never trusted, not even when it
-        looks like something this module wrote: the only guard on our own
-        framing is the one in _with_startup_diagnostics, which reads the
-        ``message`` we built ourselves. An earlier revision short-circuited here
-        when the *output* carried that framing, so a wrapper printing
-        "llama-server output:" as its first line had its stdout returned
-        verbatim: no redaction, no 2000-character cap, no log path (50067
-        characters with an environment dump's credentials intact, against 2136
-        scrubbed for the same bytes without the heading).
-        """
+        """Classifies the child's output, which is never trusted, even when it mimics Unsloth's own
+        framing."""
         lowered = (output or "").lower()
 
-        # First: every branch below advises reinstall, memory or administrator,
+        # A healthy server we stopped ourselves: its output holds no failure to classify.
+        if _PORT_OWNER_REFUSED_MARKER.lower() in lowered:
+            return (
+                "llama-server started and answered on its local port, but Studio could not "
+                "confirm that the listener on that port belongs to the server it launched, so it "
+                "stopped the server. The model file and memory are not the problem; the backend "
+                "log names the port and the process that held it."
+            )
+
+        # Then: every branch below advises reinstall, memory or administrator,
         # none of which lift a refusal to load a file that is present.
         blocked = code_integrity_block_reason(returncode) or code_integrity_block_reason(output)
         if blocked is not None:
@@ -521,14 +379,8 @@ class _StartFailureMixin:
         if cuda_image_error is not None:
             return LlamaCppBackend._cuda_kernel_image_message(cuda_image_error, binary, log_path)
 
-        # The dynamic loader kills llama-server before main(), so nothing below
-        # matches and the fallback blames the file or memory instead. The Linux
-        # prebuilt links libgomp.so.1, which a stock container does not ship.
-        # glibc prints "<prog>: error while loading shared libraries: <object>:
-        # <diagnostic>[: <strerror>]" (elf/dl-catch.c fatal_error). <object> is
-        # echoed verbatim, so an absolute dependency under a directory with
-        # spaces keeps them ("/opt/My Runtime/libfoo.so: file too short"):
-        # split on the ": " that introduces the diagnostic, not on whitespace.
+        # Split the glibc loader message on ': ', not whitespace, since library paths may contain
+        # spaces.
         missing_lib = re.search(
             r"error while loading shared libraries:[ \t]*([^\r\n]+?)"
             r"(?::[ \t]+([^\r\n]*))?[ \t]*\r?$",
@@ -538,24 +390,14 @@ class _StartFailureMixin:
         if missing_lib:
             _lib = missing_lib.group(1).strip()
             _reason = (missing_lib.group(2) or "").strip()
-            # glibc omits the object name entirely on its own allocation
-            # failures ("...shared libraries: cannot create search path array"),
-            # so the first word is prose, not a library. Report it unnamed.
+            # glibc omits the object name on its own allocation failures.
             if not (
                 "/" in _lib or "\\" in _lib or any(_e in _lib for _e in (".so", ".dylib", ".dll"))
             ):
                 return LlamaCppBackend._unloadable_library_message(
                     "", f"{_lib} {_reason}".strip(), binary
                 )
-            # Only "cannot open shared object file" means absent; the same line
-            # reports corrupt/incompatible libraries too, which are present.
-            # glibc appends strerror(errno) to that diagnostic, and only ENOENT
-            # ("No such file or directory") means the file is not there: EACCES
-            # ("Permission denied", seen with an absolute DT_NEEDED path, an
-            # unreadable parent directory, SELinux mislabels or container
-            # sandboxing) means it exists and cannot be opened, where installing
-            # a package is the wrong advice. A truncated tail keeps the
-            # missing-library reading.
+            # Only ENOENT means absent; EACCES etc. mean it exists but cannot be opened, so no package fix; a truncated tail keeps the missing-library reading.
             _reason_l = _reason.lower()
             _errno_text = ""
             if "cannot open shared object file:" in _reason_l:
@@ -566,15 +408,12 @@ class _StartFailureMixin:
                 return LlamaCppBackend._missing_library_message(_lib, binary)
             return LlamaCppBackend._unloadable_library_message(_lib, _reason, binary)
 
-        # macOS. dyld shares no wording with glibc, so every loader failure on
-        # Apple Silicon fell past the branch above into the generic GGUF/memory
-        # message, and none of them is about either (#8566).
+        # macOS: dyld shares no wording with glibc.
         macos_detail = LlamaCppBackend._classify_macos_loader_failure(output or "", binary)
         if macos_detail:
             return macos_detail
 
-        # The executable itself is for the wrong architecture, so the shell
-        # rejects it before dyld runs and there is no loader diagnostic at all.
+        # Wrong-arch executable: the shell rejects it before dyld runs.
         if LlamaCppBackend._BAD_CPU_TYPE_RE.search(output or ""):
             return (
                 "llama-server could not start: the executable was built for a "
@@ -582,25 +421,12 @@ class _StartFailureMixin:
                 f"{LlamaCppBackend._runtime_remedy(binary)}."
             )
 
-        # Argument parsing runs before the model is touched, so a rejected flag is
-        # never about the GGUF or memory. llama.cpp prints two shapes, and the
-        # difference matters to the reader: an unknown flag is a typo or a flag
-        # this build does not have, while a rejected VALUE is the right flag used
-        # wrongly. Both are otherwise diagnosed as an invalid GGUF or an OOM.
-        # Bounded, unlike the branches above, which have to see a dyld line whose
-        # library name can itself be the pathological part. llama.cpp prints an
-        # argument error and exits, so it is always at the end of the capture.
+        # Argument parsing runs before the model loads: an unknown flag vs a rejected value. Bounded
+        # to the tail, where llama.cpp prints argument errors.
         scan_tail = (output or "")[-_FAILURE_SCAN_TAIL_CHARS:]
 
         def _short(value: str) -> str:
-            """A quoted fragment of the child's output, kept to a readable length.
-
-            The capture is a run of non-whitespace, and nothing stops a wrapper on
-            LLAMA_SERVER_PATH from printing 64 KiB of it, so this is the bound that
-            keeps an API error the size of an error rather than the size of the
-            capture. _STARTUP_TAIL_CHARS bounds the surrounding diagnostics; this
-            bounds the one piece interpolated straight from the child.
-            """
+            """Bounds the child-output fragment quoted into an error, since a wrapper could print 64 KiB."""
             value = value.strip()
             return (
                 value
@@ -610,12 +436,7 @@ class _StartFailureMixin:
 
         unknown_arg = re.search(r"error:\s*invalid argument:\s*(\S+)", scan_tail, re.IGNORECASE)
         if unknown_arg:
-            # Both owners in one sentence, because nothing reaching here says which
-            # one it was: Unsloth emits its own flags conditionally on the capability
-            # probe, and a binary swapped underneath a cached probe rejects one of
-            # those just as readily as it rejects a typo from the box. Sending every
-            # reader to the extra arguments would point most of them at a box they
-            # never opened.
+            # Name both owners: Unsloth's own conditional flags can be rejected too.
             return (
                 f"llama-server does not recognise the argument "
                 f"'{_short(unknown_arg.group(1))}'. Check it in this model's extra "
@@ -630,19 +451,11 @@ class _StartFailureMixin:
         if bad_arg_value:
             _arg = _short(bad_arg_value.group(1))
             _why = _short(bad_arg_value.group(2) or "")
-            # "stoi" is what llama.cpp surfaces when std::stoi throws on a value
-            # that is not a number; nobody outside the C++ standard library reads
-            # that as an error message.
+            # llama.cpp surfaces a failed std::stoi as just 'stoi'.
             if _why.lower() in {"stoi", "stof", "stod", "stoul", "stoll"}:
                 _why = "the value is not a number"
             _tail = f": {_why}" if _why else ""
-            # Whose flag it is decides the advice. Unsloth emits its own options
-            # conditionally on the capability probe, so a build that reads
-            # "--flash-attn on" differently rejects a value the box never held, and
-            # sending that reader to edit their extra arguments points them at a
-            # setting they cannot use to fix it. Named here only when the extras
-            # really do carry the flag; an alias spelling falls back to the neutral
-            # wording rather than guessing.
+            # Blame the extra arguments only when they really carry the flag; an alias spelling gets neutral wording rather than a guess.
             _owned_by_user = False
             if extra_args:
                 from core.inference.llama_server_args import _flag_name
@@ -661,9 +474,7 @@ class _StartFailureMixin:
                 f"not set it."
             )
 
-        # Tensor parallelism (--split-mode tensor) is arch-gated in llama.cpp;
-        # unsupported architectures abort the load with this marker. Point the
-        # user at the toggle instead of a generic invalid-GGUF/OOM message.
+        # --split-mode tensor is arch-gated in llama.cpp; point at the toggle.
         if "split_mode_tensor not implemented" in lowered:
             return (
                 "Tensor parallelism is not supported for this model's "
@@ -674,10 +485,7 @@ class _StartFailureMixin:
         if LlamaCppBackend._is_sched_reserve_abort(output or ""):
             return LlamaCppBackend._sched_reserve_abort_message()
 
-        # An older llama.cpp refusing a quantized KV cache under --split-mode tensor.
-        # Naming the build is the point: the remedy is an update, where the generic
-        # invalid-GGUF/OOM fallback sends the user to check their file or buy VRAM.
-        # After the arch gate above, a different marker for a permanent per-model limit.
+        # An older build refusing quantized KV under tensor split: the remedy is an update.
         if LlamaCppBackend._is_tensor_quant_kv_unsupported(lowered):
             return (
                 "This llama.cpp build cannot use a quantized KV cache together "
@@ -686,14 +494,12 @@ class _StartFailureMixin:
                 "Parallelism in the model settings."
             )
 
-        # llama.cpp prints the four bytes it found with %c, so a binary header arrives as
-        # unprintable characters; the generic fallback then blamed the user's memory (#8566).
+        # llama.cpp prints the bad magic with %c, so a binary header shows as garbage.
         if "invalid magic characters" in lowered:
             # Not necessarily the main model: the projector and drafter report this too.
             base = os.path.basename(gguf_path) if gguf_path else ""
             named = f", loading {base}" if base else ""
-            # A "._" model path proves the volume keeps xattrs in companions, whichever file
-            # llama-server actually opened, and dot_clean is the remedy for the volume.
+            # A ._ path proves the volume keeps xattrs in AppleDouble companions; dot_clean fixes it.
             remedy = (
                 'This volume has no native extended attributes, so macOS keeps them in "._" '
                 'companions: run "dot_clean -m" on the folder to remove them, or keep models '
@@ -710,8 +516,33 @@ class _StartFailureMixin:
                 secrets,
             )
 
-        # Detect Ollama source up front so the arch branch can keep the
-        # Ollama hint instead of the generic "unsupported arch" message.
+        # Projectors, drafters and shards fail this way too: never name the main GGUF.
+        if "data is not within the file bounds" in lowered:
+            return LlamaCppBackend._with_startup_diagnostics(
+                "A model file appears incomplete or damaged. Check that the download finished.",
+                output,
+                log_path,
+                secrets,
+            )
+
+        if "failed to open gguf file" in lowered:
+            return LlamaCppBackend._with_startup_diagnostics(
+                "Couldn't open a model file. Check it exists and Unsloth has permission to read it.",
+                output,
+                log_path,
+                secrets,
+            )
+
+        # GPU evidence on the allocation line itself: a host allocation failure keeps the fallback.
+        if LlamaCppBackend._is_gpu_memory_start_failure(scan_tail):
+            return LlamaCppBackend._with_startup_diagnostics(
+                "Couldn't allocate memory. Try lowering the context length or choosing a smaller model.",
+                output,
+                log_path,
+                secrets,
+            )
+
+        # Detect Ollama first so the arch branch keeps the Ollama hint.
         gguf = gguf_path or ""
         is_ollama = (
             ".studio_links" in gguf
@@ -720,9 +551,7 @@ class _StartFailureMixin:
             or (model_identifier or "").startswith("ollama/")
         )
 
-        # "unknown model architecture: '<arch>'": diffusion -> Images page,
-        # Ollama -> Ollama hint, else a precise "unsupported" message. Exact
-        # match so chat archs aren't misrouted.
+        # Unknown-arch: diffusion to Images page, Ollama to Ollama hint, else unsupported; exact match only.
         arch_match = re.search(r"unknown model architecture:\s*'([^']+)'", lowered)
         if arch_match:
             arch = arch_match.group(1)
@@ -731,9 +560,15 @@ class _StartFailureMixin:
                     "This is an audio GGUF (speech, music or transcription), which llama-server "
                     "cannot run as a chat/completion model. Open it from Unsloth's Audio page instead."
                 )
+            if is_foreign_asr_gguf_architecture(arch):
+                return (
+                    f"'{arch}' is a speech-recognition GGUF for parakeet.cpp / LocalAI, which "
+                    "llama-server cannot run as a chat/completion model. Updating llama.cpp will "
+                    "not add support for it. For Parakeet in Unsloth, open the Audio page and use "
+                    "the curated audio.cpp model (Parakeet-TDT-0.6B-v3-GGUF)."
+                )
             if is_speech_gguf_architecture(arch):
-                # Same wording rule as the pre-launch refusal above: name the build that runs,
-                # not a page this file will not appear on.
+                # Name the build that runs it, not a page this file will not appear on.
                 return (
                     f"'{arch}' is a text-to-speech GGUF, which llama-server cannot run as a "
                     "chat/completion model. Run the model's Transformers build (for example "
@@ -760,7 +595,7 @@ class _StartFailureMixin:
                 )
             if (
                 arch in LlamaCppBackend._IMAGE_ARCHES
-                and LlamaCppBackend._image_arch_is_pickable(gguf_path, model_identifier)
+                and LlamaCppBackend._image_arch_is_pickable(gguf_path, model_identifier, arch)
             ) or (
                 arch in LlamaCppBackend._AMBIGUOUS_IMAGE_ARCHES
                 and LlamaCppBackend._ambiguous_image_arch_is_pickable(gguf_path, model_identifier)
@@ -779,8 +614,7 @@ class _StartFailureMixin:
                     "does not list it either. Updating Unsloth may add support for it."
                 )
             if arch in LlamaCppBackend._AMBIGUOUS_IMAGE_ARCHES:
-                # Same shared-arch resolution as the pre-launch refusal: unresolved means
-                # the Images picker tags it image-diffusion-unsupported and hides the row.
+                # Unresolved shared archs are hidden from the Images picker.
                 return (
                     f"'{arch}' is a diffusion (image-generation) GGUF, which "
                     "llama-server cannot run as a chat/completion model. Unsloth Studio "
@@ -793,16 +627,15 @@ class _StartFailureMixin:
                     "different model, or use this model directly through "
                     "Ollama instead."
                 )
-            # Not "cannot be run": unlike the branches above, this includes an arch the
-            # INSTALLED build predates (qwen4exp ran after a llama.cpp update).
+            # Includes an arch the installed build predates.
             return (
                 f"The installed llama.cpp does not recognise this GGUF's model "
-                f"architecture ('{arch}'). The file is valid. If the model is newer "
-                "than this llama.cpp build, updating llama.cpp may add support for it."
+                f"architecture ('{arch}'). Check the model card for its required runtime. "
+                "If the model is newer than this llama.cpp build, updating llama.cpp may "
+                "add support; a model requiring a custom runtime may still be incompatible."
             )
 
-        # Other Ollama compat failures that don't name an arch. Only when
-        # the output shows a GGUF compat issue, not OOM / missing binaries.
+        # Other Ollama compat failures, only when the output shows a GGUF compat issue.
         if is_ollama:
             gguf_compat_hints = (
                 "key not found",
@@ -821,11 +654,11 @@ class _StartFailureMixin:
         if missing_key:
             return LlamaCppBackend._with_startup_diagnostics(
                 f"This GGUF is missing the metadata key '{_short(missing_key.group(1))}', "
-                "which the installed llama.cpp requires to load it. The file was made "
-                "for a different llama.cpp version of this model's format, usually an "
-                "older or pre-release one; this is not a memory problem. Download an "
-                "updated GGUF of this model, or update llama.cpp if the file is newer "
-                "than this build.",
+                "which the installed llama.cpp requires to load it; this is not a memory problem. "
+                "This can happen with an incompatible conversion, incomplete metadata, or "
+                "an adapter selected as a full model. Check the model card for its required "
+                "runtime and whether it needs a base model. Use a compatible full or updated "
+                "GGUF, or update llama.cpp if the model requires a newer build.",
                 output,
                 log_path,
                 secrets,
@@ -833,12 +666,16 @@ class _StartFailureMixin:
 
         # A type this build lacks (prism-ml PQ2_0 / PTQ1_0 = 142 / 143) or packs differently (group-128 Q2_0, #11259).
         # A truncated download fails later instead, as "data is not within the file bounds".
-        bad_type = re.search(r"tensor '([^']*)' has invalid ggml type (\d+)", scan_tail)
+        # Bundled IQ1_XS..IQ1_XXXS = 64-66, so ids 43-63 fail later as an empty block-size-0 slot (#13908).
+        bad_type = re.search(
+            r"tensor '([^']*)' (?:has invalid ggml type (\d+)|of type (\d+) .*?not a multiple of block size \(0\))",
+            scan_tail,
+        )
         bad_layout = re.search(r"tensor '[^']*' has offset \d+, expected \d+", scan_tail)
         if bad_type or bad_layout:
             detail = (
                 f"tensor '{_short(bad_type.group(1))}' uses quantization type "
-                f"{bad_type.group(2)}, which this build does not have"
+                f"{bad_type.group(2) or bad_type.group(3)}, which this build does not have"
                 if bad_type
                 else "its tensor layout does not match this build's quantization types"
             )
@@ -873,8 +710,7 @@ class _StartFailureMixin:
                 f"{LlamaCppBackend._runtime_remedy(binary)}."
             )
         if returncode == 127:
-            # Same provenance split as the library branches: the updater cannot
-            # touch a pinned binary, so do not send its owner there.
+            # The updater cannot touch a pinned binary.
             _remedy = (
                 "run `unsloth studio update` to reinstall the llama.cpp runtime"
                 if LlamaCppBackend._is_unsloth_managed_binary(binary)
@@ -887,15 +723,11 @@ class _StartFailureMixin:
                 f"llama-server log, and {_remedy}."
             )
 
-        # SIGKILL with no diagnostic output is the OOM killer (e.g. a model too
-        # large for the WSL VM's RAM cap); name it actionably.
+        # SIGKILL with no output is usually the OOM killer.
         if returncode == -9:
-            # macOS also SIGKILLs an invalid code signature before the process
-            # can print, so memory is not the only reading there (#8566).
+            # macOS also SIGKILLs an invalid code signature before any output.
             if sys.platform == "darwin":
-                # The log is often empty here, so name the likeliest cause and
-                # the macOS-specific one without claiming the two are the only
-                # ones: signal 9 is also a supervisor, or a plain `kill -9`.
+                # Log is often empty: name likely causes (incl. macOS SIGKILL); signal 9 may also be a supervisor.
                 return LlamaCppBackend._with_startup_diagnostics(
                     "llama-server was stopped by macOS (signal 9) before it "
                     "started. This is most often out of memory, so try a "
@@ -913,8 +745,7 @@ class _StartFailureMixin:
                 "GGUF, lower the context length, or free memory (on WSL, raise "
                 "the memory limit in .wslconfig)."
             )
-        # SIGTERM is also how an unload/cancel or a supervisor stops the server,
-        # so report it neutrally rather than blaming memory.
+        # SIGTERM is also how unload/cancel stops the server; report neutrally.
         if returncode == -15:
             return (
                 "llama-server was terminated (signal 15) before it became "
@@ -922,8 +753,7 @@ class _StartFailureMixin:
                 "expected; otherwise check the llama-server log for the cause."
             )
 
-        # A startup stall is not a bad GGUF; memory pressure or a proxy intercepting
-        # the loopback probe can also keep /health from succeeding (#5740).
+        # A startup stall is not a bad GGUF; memory pressure or a proxy intercepting the loopback probe can also cause it.
         if "health check timed out" in lowered:
             return (
                 "llama-server started but stopped making progress before it became "
@@ -932,10 +762,7 @@ class _StartFailureMixin:
                 "localhost bypasses it (NO_PROXY=127.0.0.1,localhost)."
             )
 
-        # Fallback: genuinely unknown failure (OOM, missing binary ...).
-        # Nothing above recognised the output, so carry the evidence rather
-        # than drop it; without the tail and the log path a report of this
-        # message is unactionable and costs a round trip (#8566).
+        # Fallback: carry the output tail and log path so the report is actionable.
         return LlamaCppBackend._with_startup_diagnostics(
             "llama-server failed to start. "
             "Check that the GGUF file is valid and you have enough memory.",
@@ -944,59 +771,28 @@ class _StartFailureMixin:
             secrets,
         )
 
-    # Enough of the tail to carry a stack trace or a ggml assert, bounded so a
-    # chatty server cannot push an unreadable wall of text into an API error.
+    # Bounded so a chatty server cannot flood an API error.
     _STARTUP_TAIL_CHARS = 2000
 
-    # The labels _with_startup_diagnostics writes, so it can recognise its own
-    # output and stay idempotent. Kept next to the writer: a label edited on one
-    # side only would silently re-enable double appending.
+    # Labels _with_startup_diagnostics writes, used to stay idempotent. Keep in sync with the writer.
     _DIAGNOSTICS_MARKERS = ("llama-server output:", "Full log: ")
 
-    # Token shapes worth redacting on sight: a name-based list cannot cover a
-    # credential the child obtained elsewhere, or one held in a variable whose
-    # name says nothing (GITHUB_PAT, MY_THING).
+    # Token shapes redacted on sight, whatever the variable name.
     _SECRET_VALUE_RES = (
         re.compile(r"hf_(?:oauth_[A-Za-z0-9._~+/=-]{20,}|[A-Za-z0-9]{20,})"),
         re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
         re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
         re.compile(r"sk-[A-Za-z0-9_\-]{20,}"),
-        # HTTP credentials, if a wrapper or a proxy echoes a request header.
-        # token68 is [A-Za-z0-9._~+/-]* with optional "=" padding (RFC 9110
-        # 11.2), so a narrower class leaves the tail of a base64 credential
-        # readable; Basic (RFC 7617) is a base64 user:password pair and belongs
-        # here for the same reason.
+        # HTTP credentials. Full RFC 9110 token68 class so no base64 tail survives.
         re.compile(r"(?i)(?:bearer|basic)\s+[A-Za-z0-9._~+/\-]+=*"),
-        # Our own --api-key, if a wrapper dumps its argv. token_urlsafe(32)
-        # matches no shape and is in no env var, so catch it by its flag, as
-        # _redacted_cmd_for_log already does for the log.
+        # Our own --api-key matches no shape and is in no env var.
         re.compile(r"(?<=--api-key )\S+"),
         re.compile(r"(?<=--api-key=)\S+"),
-        # scheme://user:secret@host, which is what DATABASE_URL / REDIS_URL and
-        # a proxy variable carry. Keep the scheme, drop the userinfo.
+        # URL userinfo: keep the scheme, drop the credential.
         re.compile(r"(?<=://)[^/@\s]+(?=@)"),
     )
 
-    # NAME = value / "NAME": "value", in the three shapes an environment dump
-    # takes: shell-ish, JSON, and bare. The quoted arm ends on the delimiter it
-    # opened with, not on either quote character: a JSON value may legitimately
-    # contain an apostrophe, and rejecting both meant "DB_PASSWORD": "a' b"
-    # fell through to the bare arm, which stops at whitespace and left " b"
-    # standing in the API error. Escapes are consumed so a backslash-escaped
-    # delimiter does not end the value early. Both arms are unambiguous
-    # alternations of single characters, so matching stays linear; there is no
-    # nested quantifier for a crafted line to exploit.
-    # The name accepts the separators a config key uses, not only the ones a
-    # shell variable may: a child dumping its own configuration writes
-    # "db-password" or client.secret, and an identifier-only pattern never
-    # reached is_secret_env_name for either. The predicate still decides.
-    #
-    # Third value arm: a truncated line ends the output mid-value, so
-    # DB_PASSWORD="prefix supersecret has no closing delimiter. It cannot match
-    # the terminated arm, and the bare arm stops at whitespace, which left the
-    # rest of the credential in the API error. An opened-but-unclosed quote
-    # runs to the end of the line. Ordered after the terminated arm so a
-    # properly closed value still matches that one.
+    # NAME = value in shell, JSON or bare form; the unterminated-quote arm must come after the quoted one; names may contain hyphen and dot.
     _SECRET_ASSIGNMENT_RE = re.compile(
         r"""(?P<q>["']?)(?P<name>[A-Za-z_][A-Za-z0-9_.\-]{0,63})(?P=q)
             (?P<sep>[ \t]*[=:][ \t]*)
@@ -1008,23 +804,14 @@ class _StartFailureMixin:
 
     @staticmethod
     def _redact_secret_assignments(text: str) -> str:
-        """Redact the value beside any secret-looking NAME, however encoded.
-
-        Positional, not literal: whatever follows the name is replaced, so
-        JSON escaping, shell quoting or URL encoding cannot smuggle a value
-        past the check the way a value-literal comparison allows.
-        """
+        """Replaces whatever follows a secret-looking name, so escaping or quoting cannot hide the value."""
         try:
             from utils.prebuilt.child_env import is_secret_env_name
         except Exception:  # noqa: BLE001 - redaction must never break a load error
             return text
 
         def sub(m: "re.Match[str]") -> str:
-            # A config key spells the same thing with a hyphen or a dot, and
-            # the predicate's markers are underscored (API_KEY, PRIVATE_KEY),
-            # so "api-key" missed while "api_key" matched. Normalise the
-            # separator before asking; the predicate stays the one place that
-            # decides what counts as a secret.
+            # Normalise hyphen and dot to underscore before asking the predicate: its markers are underscored, so api-key missed while api_key matched.
             name = m.group("name")
             if not is_secret_env_name(name.replace("-", "_").replace(".", "_")):
                 return m.group(0)
@@ -1032,9 +819,7 @@ class _StartFailureMixin:
             if vq:
                 body = f"{vq}***{vq}"
             elif uq:
-                # Unterminated: keep the opening delimiter, drop the rest of
-                # the line. Inventing a closing quote would misreport what the
-                # child printed.
+                # Unterminated: keep the opening delimiter, drop the rest; do not invent a closing quote.
                 body = f"{uq}***"
             else:
                 body = "***"
@@ -1047,35 +832,13 @@ class _StartFailureMixin:
 
     @staticmethod
     def _scrub_secret_values(text: str, extra: Sequence[Optional[str]] = ()) -> str:
-        """Redact credential-looking environment values out of ``text``.
-
-        llama-server inherits nearly all of Unsloth's environment, so a wrapper
-        script, a diagnostic build or a crash handler that echoes its env would
-        otherwise put an API key straight into the load error.
-
-        Two passes, because either alone has a hole. Matching the VALUE catches
-        a credential under a name we never heard of, but only if the child
-        printed it verbatim: a wrapper dumping its environment as JSON prints
-        pa"ss\\word as pa\\"ss\\\\word, which is a different string and was
-        reaching the API error fully reconstructible. Matching the NAME and
-        redacting whatever follows it is immune to how the value was encoded,
-        but only works for names that look like secrets. Doing both leaves a
-        gap only for an unrecognised name AND an escaped value.
-        """
+        """Redacts env values by value and by secret-looking name, since each alone misses something."""
         if not text:
             return text
         cleaned = LlamaCppBackend._redact_secret_assignments(text)
-        # Secrets we minted and therefore know exactly: no pattern recognises
-        # a token_urlsafe blob. Gathered together with the environment's own
-        # values and replaced LONGEST FIRST, because two credentials can
-        # overlap: with TOKEN_A=abcdefgh and TOKEN_B="abcdefgh VERYSECRET",
-        # replacing the short one first rewrote the long one's only occurrence
-        # to "*** VERYSECRET", after which the long one no longer matched
-        # itself and its tail went out in the API error.
+        # Minted secrets plus env values, replaced longest first since credentials can overlap.
         literals = {literal for literal in extra if literal and len(literal) >= 8}
-        # By name, reusing what decides which vars a managed server is denied,
-        # so the two cannot drift: what we withhold must not come back out of
-        # the child either. URL userinfo counts whatever it is named.
+        # Reuse the managed-server denylist by name so the two cannot drift; URL userinfo is withheld whatever its name.
         try:
             from utils.prebuilt.child_env import URL_USERINFO_RE, is_secret_env_name
             for name, value in os.environ.items():
@@ -1083,13 +846,7 @@ class _StartFailureMixin:
                     continue
                 secret_name = is_secret_env_name(name)
                 if len(value) < 8:
-                    # Too short to replace globally ("1", "true", a port number
-                    # would match everywhere), but a short password is still a
-                    # password: redact it where it appears next to its name.
-                    # The name and the value may each be quoted, because an env
-                    # dump can be shell-ish (DB_PASSWORD='x'), JSON
-                    # ({"DB_PASSWORD": "x"}), or bare, and only the bare form
-                    # matched before.
+                    # Too short to replace globally, so redact only next to its (optionally quoted) name.
                     if secret_name:
                         cleaned = re.sub(
                             rf"([\"']?{re.escape(name)}[\"']?\s*[=:]\s*)"
@@ -1104,27 +861,19 @@ class _StartFailureMixin:
             pass
         for literal in sorted(literals, key = len, reverse = True):
             cleaned = cleaned.replace(literal, "***")
-        # By shape, for credentials that are not in our environment to match on
-        # (a token the child read from its own config, a proxy's header echo).
+        # By shape, for credentials not present in our environment to match on.
         for pattern in LlamaCppBackend._SECRET_VALUE_RES:
             cleaned = pattern.sub("***", cleaned)
         return cleaned
 
     @staticmethod
     def _has_startup_diagnostics(text: str) -> bool:
-        """Is ``text`` something _with_startup_diagnostics already produced?
-
-        Matches our own framing, not the bare words: a server that printed
-        "llama-server output:" itself must still get its tail attached.
-        """
+        """Matches our framing, not bare marker words, so a server echoing them still gets its tail."""
         return text.startswith(LlamaCppBackend._DIAGNOSTICS_MARKERS) or any(
             f"\n\n{marker}" in text for marker in LlamaCppBackend._DIAGNOSTICS_MARKERS
         )
 
-    # Ceiling on how far the tail window is widened for redaction. A real
-    # credential is far below this; the cap stops a pathological environment
-    # value from turning a bounded slice into a scan of everything the child
-    # ever printed.
+    # Caps window widening so a pathological env value cannot force a full-output scan.
     _MAX_SECRET_SCAN_CHARS = 262144
 
     @staticmethod
@@ -1152,36 +901,17 @@ class _StartFailureMixin:
         log_path: "Optional[Path | str]",
         extra_secrets: Sequence[Optional[str]] = (),
     ) -> str:
-        """Append llama-server's output tail and log path to ``message``.
-
-        Returns ``message`` unchanged when there is neither, so the classified
-        messages and the no-output case keep their exact existing text.
-
-        Idempotent: a message that already carries a diagnostics block is
-        returned as is. Only one call site exists today, so this cannot fire
-        yet; it is here so a second caller (a retry that re-classifies an
-        already-decorated message, say) cannot silently double the tail.
-        """
+        """Appends the output tail and log path to message, returning it unchanged when neither exists; a message already carrying the block is returned as is."""
         if LlamaCppBackend._has_startup_diagnostics(message):
             return message
         parts = [message]
-        # Slice before filtering: _drain_stdout keeps an unterminated line
-        # whole, so a runaway progress line would otherwise be walked
-        # character by character just to throw all but the last 2000 away.
-        #
-        # Widened by the longest secret we could be asked to redact. The
-        # scrubber matches a whole value, so a credential longer than this
-        # window (a PEM key or a service-account blob dumped by a wrapper) was
-        # cut by the slice, and the surviving suffix matched neither the
-        # literal nor any token shape -- so it reached the API error. A shorter
-        # secret cannot straddle the boundary: if its end is inside a window
-        # wider than the secret, so is its start.
+        # Slice before filtering (runaway lines), widened by the longest secret so a long
+        # credential cannot straddle the cut and escape redaction.
         _window = LlamaCppBackend._STARTUP_TAIL_CHARS * 4 + LlamaCppBackend._max_secret_len(
             extra_secrets
         )
         raw = (output or "")[-_window:]
-        # Control characters (progress bars, colour codes) would corrupt the
-        # API error; keep newlines and tabs, which carry the structure.
+        # Strip control characters (progress bars, colour codes) from API error tails; keep newlines and tabs.
         tail = "".join(ch for ch in raw if ch in "\n\t" or ch.isprintable()).strip()
         if tail:
             tail = LlamaCppBackend._scrub_secret_values(tail, extra_secrets)

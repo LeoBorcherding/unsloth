@@ -148,6 +148,19 @@ from .tool_loop_text import (
     _should_suppress_forced_no_tool_output,
     _sniff_text_tool_name,
 )
+from core.inference.stream_errors import is_tool_parse_rejection
+from core.inference.tool_loop_controller import REPEATABLE_TOOL_NAMES
+from core.inference.tool_loop_controller import TRUNCATED_TOOL_TURN_MESSAGE
+from state.tool_approvals import note_host_access
+from .compaction import (
+    _compaction_reporter,
+)
+from .timings import (
+    _structured_calls_complete,
+)
+from .tool_loop_text import (
+    _with_template_extras,
+)
 
 
 class _ToolLoopMixin:
@@ -194,13 +207,7 @@ class _ToolLoopMixin:
         context_policy: Optional[str] = None,
         compaction_headroom_ratio: Optional[float] = None,
         tool_choice: Any = None,
-        # Appended, never inserted: no bare `*` here, so every parameter is
-        # positional-or-keyword and inserting one rebinds later positional arguments.
-        #
-        # Called at the top of every round with the conversation as it now stands, so KV
-        # admission can charge what this run occupies rather than its opening estimate.
-        # MAY BLOCK: recost_waiting waits for cache room. Safe at the top of a round,
-        # where the previous round's request has completed.
+        # Append new params only: no bare *, so inserting rebinds positional args. MAY BLOCK for KV room; called at each round top so admission sees actual occupancy.
         on_conversation_grew: Optional[Callable[[list], None]] = None,
         on_decode_slot: Optional[Callable[[str, int], None]] = None,
         thinking_budget_tokens: Optional[int] = None,
@@ -209,6 +216,9 @@ class _ToolLoopMixin:
         instruction_anchor_ids = None,
         sandbox_level: Optional[str] = None,
         compact_context: bool = False,
+        website_policy: Optional[dict] = None,
+        live_permissions = None,
+        chat_template_kwargs: Optional[dict] = None,
     ) -> Generator[dict, None, None]:
         """
         Agentic loop: let the model call tools, execute them, and continue.
@@ -233,8 +243,11 @@ class _ToolLoopMixin:
             search_images_kwargs,
             stream_tool_execution,
         )
+        from core.inference.studio_tool_loop import _WEB_FETCH_CONCURRENCY, _web_fetch_host
         from core.inference.tools import (
+            StartedUrlRead,
             build_rag_autoinject,
+            compaction_receipt_field,
             execute_tool,
             has_text_only_provisional_card,
             is_high_risk_tool_call,
@@ -244,16 +257,13 @@ class _ToolLoopMixin:
         )
         from core.inference.mcp_image import note_attached_image
 
-        # "full" and bypass_permissions are the same switch, whichever arrives
-        # first wins. "off" keeps the sandbox but never prompts. Unset defaults to
-        # "auto"; unknown falls back to the stricter "ask". An explicit
-        # confirm_tool_calls=True with no mode is already resolved to "ask" at the
-        # request layer, so it never arrives here as an ambiguous unset.
+        # full and bypass_permissions are one switch, first wins; off keeps the sandbox but never prompts; unset defaults to auto; unknown falls back to ask.
         from state.tool_policy import (
             account_tool_stream,
             needs_tool_confirmation,
             normalize_sandbox_level,
             normalize_tool_permissions,
+            require_tool_access,
             requires_os_isolation,
             runs_without_os_sandbox,
             tool_call_may_prompt,
@@ -262,6 +272,10 @@ class _ToolLoopMixin:
         permission_mode, bypass_permissions = normalize_tool_permissions(
             permission_mode, bypass_permissions
         )
+        from state.tool_approvals import LiveToolPermissions, bind_permission_upgrade
+
+        if live_permissions is None:
+            live_permissions = LiveToolPermissions(session_id, cancel_event)
         sandbox_level = normalize_sandbox_level(sandbox_level)
         stream_tool_execution = account_tool_stream(stream_tool_execution)
 
@@ -275,19 +289,11 @@ class _ToolLoopMixin:
         conversation = restore_replayed_tool_results(messages)
         # Seeded with tool results an explicit skill load relies on, so fitting keeps them.
         _rolling_anchor_ids: set[int] = set(instruction_anchor_ids or ())
-        # The loop refits on every iteration; recall must fire once per request, or each
-        # pass stacks another block of recalled turns onto the prompt.
+        # Recall once per request, or each refit stacks more recalled turns.
         _conversation_recall_done = False
-        # The sticky boundary describes the ORIGINAL transcript, so apply it at most once
-        # per request. Each later refit runs on what the previous fit returned, so
-        # re-applying the count evicts another boundary-sized block of live history, and
-        # the summed events persist the inflated total into the next request.
+        # Apply the sticky boundary once; refits run on already-fitted history.
         _sticky_boundary_applied = False
-        # Exact templated prompt tokens minus the estimator's view of the same messages,
-        # measured once by the preflight. The estimator cannot see the tool catalogue or
-        # the template framing, thousands of tokens with a large (MCP) catalogue: enough
-        # for a conversation search to be told there is room it does not have. Carrying
-        # the difference makes the estimate exact where it was measured.
+        # Estimator misses the tool catalogue and template framing; the offset corrects it.
         _prompt_token_offset: Optional[int] = None
         # The branch this request is on, kept aside before anything is evicted from or
         # injected into `conversation`. The archive is keyed by thread and the stored rows
@@ -343,11 +349,7 @@ class _ToolLoopMixin:
                 )
             return True
 
-        # Forced first-pass RAG so a doc question doesn't lose to web_search. Emits
-        # the same tool card + citations a real call would. Skip it only when a
-        # retrieval call would actually prompt (ask mode); auto never gates the
-        # safe search_knowledge_base tool, so retrieval must still run there.
-        # off never prompts either, so it also keeps first-pass retrieval.
+        # Forced first-pass RAG so doc questions do not lose to web_search; skipped only in ask mode, where retrieval would prompt.
         from core.inference.chat_template_helpers import (
             forced_tool_name,
             trailing_assistant_resume_kind,
@@ -360,8 +362,7 @@ class _ToolLoopMixin:
                 f"Forced tool '{initial_forced_name}' is not enabled for this request."
             )
 
-        # A resumed turn must keep the partial trailing: autoinject appends a tool call
-        # plus its result, moving the boundary so the model opens a fresh answer.
+        # A resumed turn must keep the partial trailing; autoinject would move the boundary.
         _skip_autoinject = (
             tool_choice == "none"
             or (
@@ -422,22 +423,44 @@ class _ToolLoopMixin:
         ) -> str:
             if not (auto_heal_tool_calls or force):
                 return text
-            # Delegate to the shared parser-side strip so the GGUF cleanup covers every family the
-            # parser promotes (Llama <|python_tag|>, Mistral [TOOL_CALLS], bare rehearsal, function
-            # XML, Gemma) and stays aligned with detection; tool_healing's strip omits the loop-only
-            # forms (python_tag / Mistral name) and would leak them into display.
+            # Shared parser-side strip covers every family; tool_healing strip omits loop-only forms (python_tag, Mistral name) and would leak them into display.
             return _shared_strip_tool_markup(
                 text, final = final, enabled_tool_names = _enabled_names_gate
             )
 
-        # Wraps the parser's ``strip_segment`` so the accumulated response is not rescanned
-        # end to end on every content token (that was quadratic in the response length).
-        # Think blocks stay verbatim inside it: a rehearsed call in one must not be deleted.
+        # Avoids quadratic rescans. Think blocks stay verbatim: a rehearsed call inside one must not be deleted.
         _streaming_stripper = _StreamingMarkupStripper(_enabled_names_gate)
 
-        # The final-answer loop has its own buffer and strips with ``final = False``, so it
-        # needs its own instance rather than sharing the one above.
+        # Caller's continue_final_message is restored once a turn progresses; forced only to join one answer.
         _final_answer_stripper = _StreamingMarkupStripper(_enabled_names_gate, seg_final = False)
+
+        def _final_answer_visible(
+            cleaned: str,
+            answer: str,
+            *,
+            at_end: bool = False,
+        ):
+            """tool_choice "none" leaves a Llama 3.x bare-JSON call in the answer text: hold while a leading
+            ;-chain of objects has an open peer (its name may not have arrived), then drop the enabled calls
+            as the tool rounds do. None means hold."""
+            if not _enabled_names_gate or not cleaned.endswith(answer):
+                return cleaned
+            probe = strip_llama3_leading_sentinels(answer.lstrip())
+            if not probe.startswith("{"):
+                return cleaned
+            if not at_end and len(probe) < _MAX_BARE_JSON_BUFFER:
+                chain = probe
+                while chain.startswith("{"):
+                    end = _balanced_brace_end(chain, 0)
+                    if end is None:
+                        return None
+                    chain = strip_llama3_leading_sentinels(chain[end + 1 :].lstrip()).lstrip(
+                        " \t\n\r;"
+                    )
+            kept = strip_leading_bare_json_call(answer, _enabled_names_gate)
+            if kept == answer:
+                return cleaned
+            return cleaned[: len(cleaned) - len(answer)] + kept
 
         def _strip_tool_markup_streaming(text: str, *, force: bool = False) -> str:
             if not (auto_heal_tool_calls or force):
@@ -501,18 +524,11 @@ class _ToolLoopMixin:
                     )
                 cumulative_display += "<think>" + reasoning_accum + "</think>"
             cumulative_display += content_buffer
-            # Not cleared: the callers measure len(content_buffer) right after to place the
-            # live-args window. Recorded instead, so the cancel flush does not re-add it.
+            # Not cleared: callers measure len(content_buffer) right after; recorded in _buffer_in_display so the cancel flush does not re-add it.
             _buffer_in_display = True
 
         def _cancelled_hold_text() -> str:
-            """Display text the guards are still holding, which a cancel would drop.
-
-            Mirrors the safetensors loop: a completed blocked markerless object keeps the
-            chain guard true while its suffix is empty, so the whole object sits in
-            ``content_buffer`` as ordinary display text the parser will never promote, and
-            returning on cancellation lost the reply outright. The final strip removes
-            genuinely promotable markup, so an aborted real call contributes only prose."""
+            """Keeps display text the guards still hold, so a cancel does not drop a completed reply."""
             if _suppress_visible_output:
                 return ""
             held = cumulative_display + ("" if _buffer_in_display else content_buffer)
@@ -543,10 +559,7 @@ class _ToolLoopMixin:
                 return False
             return strip_leading_bare_json_call(probe, enabled_tool_names) != probe
 
-        # Sanitized at construction, not at each gate: the controller authorizes execution,
-        # and llama-server's structured delta.tool_calls path reaches prepare_call without
-        # _enabled_tool_names at all. A tool dropped for unsafe markup is absent from the
-        # prompt, so it must leave the controller too or it stays executable by name (#7066).
+        # Sanitize at construction: structured tool_calls bypass the name gate; a tool dropped for unsafe markup must leave the controller or stay executable by name.
         from core.inference.chat_template_helpers import (
             neutralize_tool_descriptions as _neutralize_tool_descriptions,
         )
@@ -580,9 +593,7 @@ class _ToolLoopMixin:
         _kb_search_count = 0
 
         # ── Re-prompt on plan-without-action ─────────────────
-        # Model describes intent without calling a tool: re-prompt once. A
-        # direct answer ("4", "Hello!") won't match. Pattern shared with the
-        # safetensors loop (tool_call_parser.INTENT_SIGNAL).
+        # Re-prompt once when the model states intent without a tool call; direct answers will not match. Pattern shared with tool_call_parser.INTENT_SIGNAL.
         _reprompt_count = 0
         # Budgeted apart from _reprompt_count so a pre-tool nudge can't spend it.
         _post_tool_reprompts = 0
@@ -594,28 +605,13 @@ class _ToolLoopMixin:
         )
         # Text that triggered the last nudge; if the retry restates it, stop.
         _last_reprompt_text = ""
-        # Gates ``max_tool_iterations`` on real tool turns (not the enlarged range) so reserved
-        # re-prompt slots don't extend the budget. Mirrors the safetensors guard.
+        # Counts real tool turns so re-prompt slots don't extend the budget.
         _tool_iters_done = 0
         _forced_tool_call_pending = False
-        # Turns that ended INSIDE their own thought, having produced nothing to show.
-        # `_finalize_reasoning_only_cumulative` deliberately refuses to promote a truncated
-        # thought as the answer -- correctly, it is not one -- which left the client with an
-        # empty message and the user with no reply at all. Observed on a 4096 window: the
-        # model spent 2301 tokens reasoning, exactly the room the prompt left, and stopped.
-        # Compaction cannot help, because there is no tool result to compact; the whole
-        # window went on thinking. So carry a short note of where the thought reached into a
-        # fresh turn with thinking OFF, which is the one thing that guarantees the next turn
-        # produces something visible.
+        # Turns cut off mid-thought: continue in a fresh turn with thinking off, the one setting that guarantees visible output; compaction cannot help.
         _length_continuations = 0
         _effective_enable_thinking = enable_thinking
-        # Dropped alongside it, because for the `reasoning_effort` style an explicit
-        # effort WINS over enable_thinking: `_request_reasoning_kwargs` returns the
-        # caller's "high" and never reaches the enable_thinking branch, so turning
-        # thinking off would re-run the turn that just spent the window thinking.
-        # Cleared rather than pinned to a level, so the existing thinking-off
-        # convention for this style applies -- "low" for the models that cannot
-        # actually disable reasoning.
+        # An explicit effort wins over enable_thinking, so clear it too.
         _effective_reasoning_effort = reasoning_effort
         # Restored once a turn gets somewhere: it is turned on to stitch ONE answer
         # back together, not for the rest of the request.
@@ -641,37 +637,20 @@ class _ToolLoopMixin:
             continue_flag = False,
             protect = None,
         ):
-            """Drop older turns from a continuation candidate that is one eviction short.
-
-            Only reached once the candidate has already been priced and found too large.
-            The single-turn case the callers were written for genuinely has nothing to
-            evict, but a multi-turn chat under `truncate_oldest` usually does, and
-            refusing there ended the turn before the NEXT iteration's ordinary preflight
-            could ever run -- so a recoverable continuation was abandoned.
-
-            Deliberately the plain rolling fit with instruction pins, not the loop's full
-            preflight: that one archives, recalls and moves this thread's sticky boundary,
-            and none of that should happen a second time in the middle of one turn.
-            Returns the evicted candidate, or None when there was nothing to evict.
-
-            ``protect`` keeps the current turn intact while older history is evicted.
-            """
+            """Evicts older turns from a continuation one eviction short, using the plain fit only, not the full preflight (which would archive and recall again)."""
             if context_overflow != "truncate_oldest" or not self._effective_context_length:
                 return None
             try:
                 _fitted, _truncation = _fit_with_instruction_pins(
                     list(candidate),
                     context_length = self._effective_context_length,
-                    # The room the CONTINUATION needs, which is not the room the caller's
-                    # cap asks for: a small `max_tokens` makes `prompt_budget` larger than
-                    # the window minus the reply floor, so fitting to the caller's figure
-                    # would evict and still leave the candidate unservable.
+                    # Room the continuation needs, not the caller's cap (a small cap overstates room).
                     max_tokens = max(
                         int(max_tokens or 0), _reply_floor(self._effective_context_length)
                     ),
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
-                            messages_without_unpriced_media(fitted),
+                            self._countable_messages(fitted),
                             _markup_cache,
                             self.markup_profile,
                         ),
@@ -681,7 +660,7 @@ class _ToolLoopMixin:
                         chat_template_kwargs = reasoning_kw,
                         continue_final_message = continue_flag,
                     ),
-                    estimate_message = estimate_message_tokens_without_unpriced_media,
+                    estimate_message = self._estimate_countable_message,
                     anchor_ids = (_rolling_anchor_ids | protect) if protect else _rolling_anchor_ids,
                 )
             except Exception:
@@ -693,8 +672,7 @@ class _ToolLoopMixin:
                 "Continuation did not fit; evicted %s older message(s) to try to keep it",
                 _truncation.get("dropped_messages"),
             )
-            # Whether that was ENOUGH is the caller's own fit check, re-run on this: the
-            # rule for what counts as servable stays in one place.
+            # Reset each iteration: set when a reasoning retry was refused for the caller's allowance.
             return _fitted
 
         def _loop_continuation_fits(
@@ -703,20 +681,13 @@ class _ToolLoopMixin:
             reasoning_kw,
             continue_flag = False,
         ) -> bool:
-            """Whether the retry's own prompt still fits once the partial is in it.
-
-            The final pass has the same guard. This path did not, and it is the one a
-            request with tools enabled actually takes: a `length` stop that came from
-            exhausting the window makes the retry prompt window-sized, and with a single
-            user turn there is no older history to evict, so llama-server rejects it or
-            leaves room for a stub. A count that cannot be taken is not a refusal.
-            """
+            """Whether the retry's prompt still fits with the partial; an uncountable prompt fails open."""
             if not self._effective_context_length:
                 return True
             try:
                 _tokens = self.count_chat_tokens(
                     neutralize_control_markup_in_messages(
-                        messages_without_unpriced_media(candidate),
+                        self._countable_messages(candidate),
                         _markup_cache,
                         self.markup_profile,
                     ),
@@ -724,10 +695,7 @@ class _ToolLoopMixin:
                     tools,
                     strict = True,
                     chat_template_kwargs = reasoning_kw,
-                    # An answer continuation goes out with `continue_final_message`, which
-                    # renders WITHOUT a generation prompt and with the partial as the turn
-                    # being extended. Counting it as an ordinary prompt prices a different
-                    # request from the one about to be sent.
+                    # continue_final_message renders differently; price the request actually sent.
                     continue_final_message = continue_flag,
                 )
             except Exception:
@@ -738,12 +706,7 @@ class _ToolLoopMixin:
             )
 
         def _loop_budget_left(spent_this_attempt: int) -> "Optional[int]":
-            """What remains of a cap the CALLER set, or None when they set none.
-
-            The in-loop payload rebuilds `max_tokens` from the caller's value on every
-            iteration, so without this a request capped at 100 tokens ran two more
-            100-token generations after its own cap stopped the first.
-            """
+            """What is left of the caller's own max_tokens, since the loop rebuilds it; None when unset."""
             if max_tokens is None:
                 return None
             window = self._effective_context_length or 0
@@ -753,15 +716,8 @@ class _ToolLoopMixin:
 
         # A forced function applies until the model produces it; execution or denial resolves it.
         _forced_choice_resolved = _auto_satisfies_forced_choice
-        # A continuation re-enters this loop, so without a credit it is charged to the
-        # caller's TOOL budget. At max_tool_iterations=1, three plan-without-action
-        # re-prompts and two truncated reasoning turns exhaust the loop before the model
-        # ever issues its call, and the tool-free final pass then cannot perform the
-        # action that was asked for -- the turn fails having spent no tool iteration at
-        # all. Granted as they happen rather than reserved up front, so a request that
-        # never stalls keeps exactly the bound it has always had.
-        # Set by a continuation to hand the NEXT iteration what is left of the caller's
-        # output cap, then cleared as it is spent.
+        # Continuations get a credit so they don't consume the caller's tool budget.
+        # Holds the remaining output cap for the next iteration.
         _continuation_max_tokens: Optional[int] = None
         _continuation_credits = 0
         _MAX_CONTINUATION_CREDITS = _MAX_LENGTH_CONTINUATIONS * max(1, max_tool_iterations)
@@ -770,12 +726,7 @@ class _ToolLoopMixin:
         # Resent on the final pass with tool_choice "none": tools head the system prompt.
         _last_sent_tools = None
         iteration = -1
-        # Outside the loop: the cap is across the whole run, and a per-iteration list
-        # would only ever see the current batch, leaving every earlier iteration's
-        # images in the conversation untrimmed.
-        # Seeded with what promotion already put in the conversation, not empty. The cap
-        # is across the CONVERSATION, so a resumed chat whose history already carries the
-        # allowance would otherwise get a second one for this run and send both.
+        # Cap is across the whole conversation, seeded with already promoted images.
         loop_mcp_image_parts: list = list(replayed_image_parts)
         while True:
             iteration += 1
@@ -807,10 +758,7 @@ class _ToolLoopMixin:
                 reconciled_tool_choice,
             )
 
-            # An MCP server's description and inputSchema are remote text the template renders
-            # into the system turn (#7066). Computed above the gate: a tool dropped for unsafe
-            # markup is absent from the prompt and must be absent from what we EXECUTE too,
-            # else the model names it and the raw gate lets the call through.
+            # Drop unsafe-markup tools from execution too, not just from the prompt.
             safe_tools = neutralize_tool_descriptions(
                 active_tools, _markup_cache, self.markup_profile
             )
@@ -845,15 +793,13 @@ class _ToolLoopMixin:
                 neutralize_control_markup_in_messages,
             )
 
-            _reasoning_kw = self._request_reasoning_kwargs(
-                _effective_enable_thinking, _effective_reasoning_effort, preserve_thinking
+            _reasoning_kw = _with_template_extras(
+                self._request_reasoning_kwargs(
+                    _effective_enable_thinking, _effective_reasoning_effort, preserve_thinking
+                ),
+                chat_template_kwargs,
             )
-            # What THIS request may generate, which on a continuation is the remainder of
-            # the caller's cap rather than the whole of it. Read before the payload
-            # consumes it below, because every sizing decision this iteration makes runs
-            # first: `prompt_budget` shrinks as `max_tokens` grows, so pricing a
-            # 600-token continuation as if it could still emit 1000 evicts history the
-            # request never needed to lose.
+            # On a continuation only the remainder of the caller's cap; read before the payload.
             _iteration_max_tokens = (
                 _continuation_max_tokens if _continuation_max_tokens is not None else max_tokens
             )
@@ -883,11 +829,12 @@ class _ToolLoopMixin:
                     )
                     conversation, truncation = _fit_with_instruction_pins(
                         conversation,
+                        on_compacting = _compaction_reporter(perf_callback),
                         context_length = self._effective_context_length,
                         max_tokens = _iteration_max_tokens,
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
-                                messages_without_unpriced_media(fitted),
+                                self._countable_messages(fitted),
                                 _markup_cache,
                                 self.markup_profile,
                             ),
@@ -901,7 +848,7 @@ class _ToolLoopMixin:
                             ),
                             should_abort = lambda: bool(cancel_event and cancel_event.is_set()),
                         ),
-                        estimate_message = estimate_message_tokens_without_unpriced_media,
+                        estimate_message = self._estimate_countable_message,
                         anchor_ids = _rolling_anchor_ids,
                         keeps_boundary = _keeps_compaction_boundary(thread_id),
                         can_reset = _iteration_can_reset,
@@ -920,18 +867,15 @@ class _ToolLoopMixin:
                         # messages, priced by the fit with the catalogue and template.
                         _prompt_token_offset = int(
                             truncation.get("prompt_tokens_after") or 0
-                        ) - estimate_messages_tokens_without_unpriced_media(conversation)
+                        ) - sum(self._estimate_countable_message(m) for m in conversation)
                     if truncation:
                         _recalled = _archive_and_recall(
                             conversation,
                             _before_fit,
                             branch_messages = _extend_live_branch(_before_fit),
+                            query_messages = _request_branch,
                             thread_id = thread_id,
-                            # Tool style forges an assistant tool_call plus a tool result
-                            # for search_conversation, safe only when the request
-                            # advertises it. On the FIRST compaction the archive did not
-                            # exist at tool-selection time, so it is absent, and a tool
-                            # role with no catalogue entry breaks strict templates.
+                            # Forge a tool exchange only when search_conversation is advertised.
                             style = (
                                 "tool" if "search_conversation" in _enabled_tool_names else "inline"
                             ),
@@ -950,7 +894,7 @@ class _ToolLoopMixin:
                             ),
                             count_tokens = lambda fitted: self.count_chat_tokens(
                                 neutralize_control_markup_in_messages(
-                                    messages_without_unpriced_media(fitted),
+                                    self._countable_messages(fitted),
                                     _markup_cache,
                                     self.markup_profile,
                                 ),
@@ -959,16 +903,14 @@ class _ToolLoopMixin:
                                 strict = True,
                                 chat_template_kwargs = _reasoning_kw,
                             ),
+                            cancel_check = lambda: bool(cancel_event and cancel_event.is_set()),
+                            background = True,
                         )
                         conversation = _recalled["conversation"]
                         truncation = {**truncation, **_recalled["counts"]}
                         if _recalled["recalled"]:
                             _conversation_recall_done = True
-                            # Anchor exactly what the injection added, so a later refit
-                            # cannot evict what we just paid to bring back. NOT the last
-                            # two messages: inline recall appends nothing and rewrites the
-                            # latest user turn in place, so that slice also pinned a whole
-                            # eviction unit the fit was entitled to drop.
+                            # Anchor exactly what the injection added, not the last two messages.
                             for _message in _recalled["anchored"]:
                                 _rolling_anchor_ids.add(id(_message))
                             for _ev in _recalled["events"]:
@@ -988,8 +930,7 @@ class _ToolLoopMixin:
                     logger.warning("Could not preflight the rolling context window: %s", exc)
 
             payload = {
-                # Re-run every iteration: tool results land in ``conversation`` as the
-                # loop goes, and a forged turn in one would render for real (#7066).
+                # Re-run each iteration: tool results may contain forged turns.
                 "messages": neutralize_control_markup_in_messages(
                     conversation, _markup_cache, self.markup_profile
                 ),
@@ -1013,14 +954,26 @@ class _ToolLoopMixin:
                 payload["timings_per_token"] = True
             if logit_bias:
                 payload["logit_bias"] = logit_bias
-            # As in the passthrough builder: if every name carried markup the catalog is
-            # now empty, and "tools": [] would still advertise tool use.
-            if safe_tools:
-                payload["tools"] = llama_grammar_tools(safe_tools)
-                payload["tool_choice"] = requested_choice
-                _last_sent_tools = safe_tools
+            # An empty list would still advertise tool use.
             if _reasoning_kw is not None:
                 payload["chat_template_kwargs"] = _reasoning_kw
+            if safe_tools:
+                grammar_tools = safe_tools
+                if not forced_name and requested_choice != "none":
+                    grammar_tools = neutralize_tool_descriptions(
+                        tool_controller.active_tools(include_deferred = True),
+                        _markup_cache,
+                        self.markup_profile,
+                    )
+                payload["tools"] = llama_grammar_tools(grammar_tools)
+                payload["tool_choice"] = requested_choice
+                if grammar_tools != safe_tools:
+                    # The parser needs discovered names; the template keeps its cached declaration.
+                    payload["chat_template_kwargs"] = {
+                        **(_reasoning_kw or {}),
+                        "tools": llama_grammar_tools(safe_tools),
+                    }
+                _last_sent_tools = safe_tools
             if thinking_budget_tokens is not None:
                 payload["thinking_budget_tokens"] = thinking_budget_tokens
             # Re-checked per iteration: once a tool result is appended the partial is
@@ -1039,10 +992,7 @@ class _ToolLoopMixin:
                 if max_tokens is not None
                 else (self._effective_context_length or _DEFAULT_MAX_TOKENS_FLOOR)
             )
-            # A continuation is the SAME reply carried across two requests, so it spends
-            # the caller's output budget once, not once per attempt. Rebuilt from the
-            # caller's value above, this payload would hand a 100-token request another
-            # full 100 tokens on every retry.
+            # A continuation spends the caller's output budget once, not per attempt.
             if _continuation_max_tokens is not None:
                 payload["max_tokens"] = _continuation_max_tokens
                 _continuation_max_tokens = None
@@ -1070,11 +1020,12 @@ class _ToolLoopMixin:
                 try:
                     conversation, truncation = _fit_with_instruction_pins(
                         conversation,
+                        on_compacting = _compaction_reporter(perf_callback),
                         context_length = self._effective_context_length,
                         max_tokens = _iteration_max_tokens,
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
-                                messages_without_unpriced_media(fitted),
+                                self._countable_messages(fitted),
                                 _markup_cache,
                                 self.markup_profile,
                             ),
@@ -1088,7 +1039,7 @@ class _ToolLoopMixin:
                             ),
                             should_abort = lambda: bool(cancel_event and cancel_event.is_set()),
                         ),
-                        estimate_message = estimate_message_tokens_without_unpriced_media,
+                        estimate_message = self._estimate_countable_message,
                         anchor_ids = _rolling_anchor_ids,
                         keeps_boundary = _keeps_compaction_boundary(thread_id),
                         can_reset = _can_reset_epoch(
@@ -1099,19 +1050,12 @@ class _ToolLoopMixin:
                         recall_offered = "search_conversation" in (_enabled_tool_names or ()),
                         **_compaction_fit_kwargs(context_policy, compaction_headroom_ratio),
                     )
-                    # Recorded here, not left to the forwarding below. That list is
-                    # drained from INSIDE the reopened stream, so a replacement server
-                    # that came back with a smaller window and then refused this prompt
-                    # raises at the door and the refusal reaches `_friendly_error` as
-                    # nothing at all -- which then advises shortening a conversation
-                    # eviction has already emptied. Idempotent, and safe on a fit:
-                    # `record_fit` clears whatever the last one left.
+                    # Record here: the reopened stream raises before forwarding sees the refusal.
                     from core.inference import context_refusal  # noqa: PLC0415
 
                     context_refusal.record_fit(truncation)
                     if truncation:
-                        # Archive only. The replacement fit reserves no recall room, and a
-                        # rescued refusal may still have evicted messages.
+                        # Cards with a first tool_args event; later fragments stream so big payloads don't look frozen.
                         truncation.update(
                             _archive_and_recall(
                                 conversation,
@@ -1120,6 +1064,8 @@ class _ToolLoopMixin:
                                 style = "inline",
                                 recall_done = True,
                                 branch_messages = _extend_live_branch(conversation),
+                                cancel_check = lambda: bool(cancel_event and cancel_event.is_set()),
+                                background = True,
                             )["counts"]
                         )
                     payload["messages"] = neutralize_control_markup_in_messages(
@@ -1140,9 +1086,8 @@ class _ToolLoopMixin:
 
             try:
                 # ── Speculative buffer state machine ──────────────────
-                # BUFFERING: accumulate content, check for tool signals
-                # STREAMING: no tool detected, yield tokens to caller
-                # DRAINING:  tool signal found, silently consume rest
+                # BUFFERING: hold content, check for tool signals
+                # STREAMING: no tool, yield tokens; DRAINING: tool found, consume silently
                 _S_BUFFERING = 0
                 _S_STREAMING = 1
                 _S_DRAINING = 2
@@ -1177,31 +1122,16 @@ class _ToolLoopMixin:
                 provisional_started_tool_calls: dict[str, str] = {}
                 resolved_provisional_tool_call_ids: set[str] = set()
                 _suppress_visible_output = _forced_tool_call_pending
-                # Cards that already got their first tool_args event; later
-                # fragments stream individually so a big payload isn't a dead spinner.
+                # Same reply-room remainder as the preflight; whole-cap pricing would compact turns with room.
                 arg_streamed_tool_call_ids: set[str] = set()
-                # TEXT tool-call path: a committed call's raw text streams to a
-                # provisional card under the parser's first-call id ("call_0"), so
-                # the final tool_start reconciles in place.
+                # Provisional card uses the parser's first-call id ('call_0') so tool_start reconciles.
                 _text_args_call_start = -1
                 _text_args_streamed_upto = -1
                 _text_args_id = ""
                 _text_args_name = ""
                 _confirm_gated_iteration = bool(confirm_tool_calls) and not bypass_permissions
 
-                # Reclaim reply room before generating, not only before running a tool.
-                #
-                # The pre-execution gate compacts only when the next prompt would not FIT.
-                # A prompt can fit and still leave nothing to answer in, and that is the
-                # more common ending: observed on a 4096 window where every tool call was
-                # servable, none was refused, the file was written -- and the turn died on
-                # `finish_reason: length` with the model still thinking, because the prompt
-                # had eaten the room its answer needed. Compaction is exactly the lever for
-                # that and nothing was asking it to run.
-                #
-                # `prompt_budget` is the line here, not the window: it already encodes how
-                # much of the window a reply is owed. Over it means tight, not fatal, so
-                # this compacts and never refuses -- a turn that fits is always sent.
+                # Compact when the prompt eats the reply room, not only when it doesn't fit. Never refuses.
                 if self._effective_context_length and conversation:
                     # Same remainder the preflight used: this check decides whether to
                     # compact, and pricing a continuation as if it had the whole cap
@@ -1210,15 +1140,13 @@ class _ToolLoopMixin:
                         self._effective_context_length, _iteration_max_tokens
                     )
                     if (
-                        estimate_messages_tokens_dense(
-                            messages_without_unpriced_media(conversation)
-                        )
+                        estimate_messages_tokens_dense(self._countable_messages(conversation))
                         > 0.7 * _reply_target
                     ):
                         try:
                             _prompt_now = self.count_chat_tokens(
                                 neutralize_control_markup_in_messages(
-                                    messages_without_unpriced_media(conversation),
+                                    self._countable_messages(conversation),
                                     _markup_cache,
                                     self.markup_profile,
                                 ),
@@ -1258,10 +1186,12 @@ class _ToolLoopMixin:
                     for truncation in _respawn_truncations:
                         yield {"type": "context_truncated", **truncation}
                     raw_buf = ""
-                    for raw_chunk in self._iter_text_cancellable(
+                    for raw_chunk in self._iter_tool_round_text(
                         response,
+                        payload,
                         cancel_event,
-                        first_token_deadline = first_token_deadline,
+                        first_token_deadline,
+                        on_respawn = _refit_iteration_after_respawn,
                     ):
                         raw_buf += raw_chunk
                         while "\n" in raw_buf:
@@ -1318,10 +1248,22 @@ class _ToolLoopMixin:
                                 if _cu:
                                     _iter_usage = _cu
 
-                                # See the note on the first stream loop: an error chunk has
-                                # no choices, so `continue` below would drop it silently.
+                                # Error chunks have no choices; don't drop them.
                                 _stream_error = stream_error_from_chunk(chunk_data)
                                 if _stream_error is not None:
+                                    # A rejected later call (`;`-joined) must not lose the complete ones before it.
+                                    if (
+                                        has_structured_tc
+                                        and is_tool_parse_rejection(chunk_data)
+                                        and _structured_calls_complete(tool_calls_acc)
+                                    ):
+                                        logger.info(
+                                            "llama-server rejected a later tool call; "
+                                            "running the %d complete one(s) before it",
+                                            len(tool_calls_acc),
+                                        )
+                                        _stream_done = True
+                                        break
                                     raise _stream_error
                                 choices = chunk_data.get("choices", [])
                                 if not choices:
@@ -1371,8 +1313,7 @@ class _ToolLoopMixin:
                                             if not tc_id:
                                                 tool_calls_synthetic_ids.add(acc_key)
                                         elif tc_id:
-                                            # Update ID if a real one
-                                            # arrives on a later delta.
+                                            # Display only, accumulator untouched: first tool_args event sends the backlog, later ones fragments.
                                             tool_calls_acc[acc_key]["id"] = tc_id
                                             tool_calls_synthetic_ids.discard(acc_key)
                                         func = tc_d.get("function", {})
@@ -1408,10 +1349,7 @@ class _ToolLoopMixin:
                                             and "render_html"
                                             in provisional_started_tool_calls.values()
                                         )
-                                        # Later parallel cards only reconcile when parallel use is enabled.
-                                        # In auto mode an always-safe tool (render_html) never
-                                        # prompts, so it must stream its early card too; mirror
-                                        # that here instead of gating on the raw confirm flag.
+                                        # Later parallel cards reconcile only when parallel use is on; early cards follow the prompt rule, not the raw confirm flag, so always-safe tools stream.
                                         _confirm_gated = (
                                             tool_call_may_prompt(
                                                 confirm_tool_calls = bool(confirm_tool_calls),
@@ -1419,6 +1357,7 @@ class _ToolLoopMixin:
                                                 permission_mode = permission_mode,
                                                 name = current_name,
                                                 sandbox_level = sandbox_level,
+                                                session_id = session_id,
                                             )
                                             # A text-preview card still streams while gated;
                                             # hiding it blanks the chat.
@@ -1488,11 +1427,7 @@ class _ToolLoopMixin:
                                     continue
 
                                 # ── Reasoning tokens ──
-                                # Stream live except while DRAINING: reasoning is
-                                # orthogonal to tool detection (content_buffer
-                                # only), and the route resets prev_text on
-                                # tool_start, so the <think> block stays a
-                                # monotonic prefix like the no-tool path.
+                                # Reasoning streams live except while DRAINING: it is orthogonal to tool detection, and the route resets prev_text on tool_start so think stays a monotonic prefix.
                                 reasoning = delta.get("reasoning_content", "")
                                 if reasoning:
                                     if _reasoning_started_at is None:
@@ -1500,10 +1435,8 @@ class _ToolLoopMixin:
                                     reasoning_accum += reasoning
                                     if detect_state != _S_DRAINING:
                                         if not in_thinking:
-                                            # Suppressed (forced-retry) iterations
-                                            # yield no content events, so recording
-                                            # their wraps would desync the ledger
-                                            # from the emitted stream.
+                                            # Suppressed iterations emit no content, so don't record
+                                            # their wraps.
                                             if (
                                                 reasoning_provenance is not None
                                                 and not cumulative_display
@@ -1545,10 +1478,8 @@ class _ToolLoopMixin:
                                     content_accum += token
 
                                     if detect_state == _S_DRAINING:
-                                        # Accumulate silently for parsing, but stream the drained
-                                        # TEXT call to a provisional card. Gated on an enabled-name
-                                        # sniff + size floor so prose/small calls spawn no pane; id
-                                        # matches the first call so the final tool_start reconciles.
+                                        # Stream the drained TEXT call to a provisional card, gated
+                                        # on name sniff and size.
                                         if not has_structured_tc and _text_args_call_start >= 0:
                                             if not _text_args_id:
                                                 _call_text = content_accum[_text_args_call_start:]
@@ -1569,6 +1500,7 @@ class _ToolLoopMixin:
                                                                 permission_mode = "off",
                                                                 name = _sniffed,
                                                                 sandbox_level = sandbox_level,
+                                                                session_id = session_id,
                                                             )
                                                         )
                                                         and not has_text_only_provisional_card(
@@ -1624,8 +1556,7 @@ class _ToolLoopMixin:
                                             _prov_entry = None
                                         cumulative_display += token
                                         cleaned = _strip_tool_markup_streaming(cumulative_display)
-                                        # Hold a trailing bare active-tool-name (split rehearsal)
-                                        # until [ARGS] arrives; released by later prose or stream end.
+                                        # Hold a trailing bare tool name (split rehearsal) until [ARGS] arrives; later prose or stream end releases it.
                                         _hold = _held_rehearsal_tail_len(cleaned, _detect_tools)
                                         _emit = (
                                             cleaned[: len(cleaned) - _hold] if _hold else cleaned
@@ -1656,8 +1587,7 @@ class _ToolLoopMixin:
                                                 is_prefix = True
                                                 break
                                             if sig == "[ARGS]":
-                                                # Active NAME[ARGS] only; inactive-name prose
-                                                # is gated out, not drained/parsed.
+                                                # Only active NAME[ARGS] counts; inactive-name prose is gated out, not drained/parsed
                                                 if (
                                                     _gguf_rehearsal_signal_pos(
                                                         stripped_buf, _detect_tools
@@ -1670,8 +1600,7 @@ class _ToolLoopMixin:
                                                 is_match = True
                                                 break
 
-                                        # Split rehearsal: hold the bare name until
-                                        # its [ARGS] arrives and matches above.
+                                        # Split rehearsal: hold the bare name until its [ARGS] arrives and matches above.
                                         is_rehearsal_prefix = False
                                         if (
                                             not is_match
@@ -1681,9 +1610,7 @@ class _ToolLoopMixin:
                                             is_prefix = True
                                             is_rehearsal_prefix = True
 
-                                        # Signal-less call shapes (mirror the safetensors
-                                        # loop): Llama-3.2 bare {"name":..} and Gemma
-                                        # call:NAME{...} would otherwise stream raw.
+                                        # Signal-less call shapes: Llama-3.2 bare JSON and Gemma call:NAME{...}.
                                         _hold_buffer = False
                                         # Whole buffer is the call (no visible prefix) -- drain silently.
                                         _drain_silently = False
@@ -1696,9 +1623,7 @@ class _ToolLoopMixin:
                                                     elif _looks_like_enabled_bare_json(
                                                         _bare, _enabled_tool_names
                                                     ):
-                                                        # Oversized still-open enabled call: drain
-                                                        # rather than leak; a giant ordinary JSON
-                                                        # answer still streams.
+                                                        # Oversized, still-open enabled call: drain, don't leak; a giant ordinary JSON answer still streams.
                                                         _drain_silently = True
                                                 elif self._parse_tool_calls_from_text(
                                                     content_buffer,
@@ -1712,8 +1637,7 @@ class _ToolLoopMixin:
                                                     if len(stripped_buf) < _MAX_BARE_JSON_BUFFER:
                                                         _hold_buffer = True
                                                     else:
-                                                        # Bounded buffer: fail closed rather
-                                                        # than expose text a later peer
+                                                        # Fail closed rather than expose text a later peer
                                                         # could make executable.
                                                         _drain_silently = True
                                             elif (
@@ -1725,15 +1649,14 @@ class _ToolLoopMixin:
                                                     stripped_buf, _enabled_tool_names
                                                 )
                                             ):
-                                                # Whitespace-tolerant like the parser, and on
-                                                # its gate: a rejected name streams as prose.
+                                                # Whitespace-tolerant like the parser; a name this gate rejects streams as prose.
                                                 if _gemma_lead_promotable(stripped_buf):
                                                     _drain_silently = True
                                                 elif blocked_gemma_chain_may_continue(
                                                     stripped_buf, _enabled_tool_names
                                                 ):
-                                                    # A promotable peer behind a blocked
-                                                    # call must not stream first.
+                                                    # A promotable peer behind a blocked call must not
+                                                    # stream first.
                                                     if self._parse_tool_calls_from_text(
                                                         content_buffer,
                                                         allow_incomplete = auto_heal_tool_calls,
@@ -1748,12 +1671,9 @@ class _ToolLoopMixin:
                                                     _hold_buffer = True
 
                                         if _drain_silently:
-                                            # The buffered content IS the call; drain it
-                                            # without yielding. A live <think> prefix is
-                                            # separate from it -- close that.
+                                            # The buffered content IS the call, drained unyielded; a live <think> prefix is separate: close it.
                                             detect_state = _S_DRAINING
-                                            # Call text begins at the held buffer
-                                            # (live arg display only; UI extracts the code).
+                                            # Call text begins at the held buffer (live arg display only; UI extracts the code).
                                             _text_args_call_start = len(content_accum) - len(
                                                 content_buffer
                                             )
@@ -1763,13 +1683,7 @@ class _ToolLoopMixin:
                                                     "text": cumulative_display,
                                                 }
                                         elif is_match:
-                                            # Tool signal -- flush any visible
-                                            # prefix before DRAINING so the
-                                            # route sends it before tool_start.
-                                            # Use the final strip (all families incl. Llama
-                                            # <|python_tag|> / Mistral name): the buffer holds
-                                            # the whole call, so a streaming closed-only strip
-                                            # would leak its open-ended markup as display text.
+                                            # Flush visible prefix before DRAINING so the route sends it before tool_start; use the final strip, a streaming one would leak markup.
                                             _flush_reasoning_and_buffer()
                                             cleaned = _strip_tool_markup(
                                                 cumulative_display,
@@ -1784,8 +1698,7 @@ class _ToolLoopMixin:
                                                         "text": cleaned,
                                                     }
                                             detect_state = _S_DRAINING
-                                            # Live-arg display starts at the held buffer
-                                            # (visible prefix flushed above; UI extracts the code).
+                                            # Live-arg display starts at the held buffer (visible prefix flushed above; UI extracts the code).
                                             _text_args_call_start = len(content_accum) - len(
                                                 content_buffer
                                             )
@@ -1796,20 +1709,18 @@ class _ToolLoopMixin:
                                                 or len(stripped_buf) < _MAX_BUFFER_CHARS
                                             )
                                         ):
-                                            # A rehearsal prefix is self-bounded; the buffer
-                                            # cap must not cut long MCP names short.
+                                            # Rehearsal prefix is self-bounded; the cap must not cut
+                                            # long MCP names.
                                             pass  # keep buffering
                                         else:
                                             # Not a tool -- flush buffer
                                             detect_state = _S_STREAMING
-                                            # Flush reasoning accumulated
-                                            # during BUFFERING.
+                                            # Flush reasoning accumulated during BUFFERING.
                                             _flush_reasoning_and_buffer()
                                             cleaned = _strip_tool_markup(
                                                 cumulative_display,
                                             )
-                                            # Same trailing-name hold as STREAMING for this
-                                            # first flush out of BUFFERING.
+                                            # Same trailing-name hold as STREAMING, for this first flush out of BUFFERING.
                                             _hold = _held_rehearsal_tail_len(cleaned, _detect_tools)
                                             _emit = (
                                                 cleaned[: len(cleaned) - _hold]
@@ -1832,8 +1743,7 @@ class _ToolLoopMixin:
                 # ── Resolve BUFFERING at stream end ──
                 if detect_state == _S_BUFFERING:
                     stripped_buf = content_buffer.lstrip()
-                    # A held bare-JSON fragment has no XML signal; route it to DRAINING (the signal-only
-                    # gate below would flush the raw JSON to the user).
+                    # Bare JSON has no XML signal; route to DRAINING or it is flushed raw.
                     _bare_eos = strip_llama3_leading_sentinels(stripped_buf)
                     # Gate on enabled names so an ordinary JSON answer isn't routed to DRAINING and dropped.
                     _is_bare_tc = bool(active_tools) and _looks_like_enabled_bare_json(
@@ -1859,9 +1769,7 @@ class _ToolLoopMixin:
                                     ),
                                 }
                         elif reasoning_accum and not has_content_tokens:
-                            # Reasoning-only reply: show it as the main response,
-                            # not a thinking block (mirrors the no-tool path; the
-                            # route's extractor closes the streamed <think>).
+                            # Reasoning-only reply: show as main response, like the no-tool path.
                             if _reasoning_started_at is not None and not _reasoning_summary_emitted:
                                 _reasoning_summary_emitted = True
                                 _summary = _reasoning_summary_event(_reasoning_started_at)
@@ -1883,8 +1791,7 @@ class _ToolLoopMixin:
                                     "text": cumulative_display,
                                 }
                     else:
-                        # Held buffer was no tool signal and no enabled bare-JSON call: a leading ``{`` is an
-                        # ordinary JSON answer and must be shown; any other partial-markup prefix is dropped.
+                        # A leading `{` is an ordinary JSON answer; other partial markup is dropped.
                         _held = strip_llama3_leading_sentinels(content_buffer.lstrip())
                         if _held.startswith("{") and not _suppress_visible_output:
                             yield {"type": "content", "text": _held}
@@ -1892,12 +1799,7 @@ class _ToolLoopMixin:
 
                 # ── STREAMING path: no tool call ──
                 if detect_state == _S_STREAMING:
-                    # Safety net: re-parse the full content for tool calls. The
-                    # route layer resets prev_text on tool_start, so post-tool
-                    # synthesis streams correctly even if content was emitted
-                    # before the tool XML.
-                    # Unconditional (not gated on _tool_xml_signals): bare-JSON and Gemma wrapper-less
-                    # calls carry no XML signal, so a signal gate would let them slip past.
+                    # Safety net: re-parse unconditionally; bare-JSON and Gemma calls have no XML signal.
                     _safety_tc = self._parse_tool_calls_from_text(
                         content_accum,
                         allow_incomplete = auto_heal_tool_calls,
@@ -1905,12 +1807,7 @@ class _ToolLoopMixin:
                     )
                     if not _safety_tc:
                         # ── Re-prompt on plan-without-action ──
-                        # Intent described without a tool call: nudge it to act. Up
-                        # to _MAX_REPROMPTS times, only on short responses with intent
-                        # signals -- "4" or "Hello!" won't trigger it. Uses content,
-                        # else reasoning text (reasoning-only stalls).
-                        # Classify only what the user sees: tool-call markup is
-                        # scrubbed, and reasoning shows only with no content tokens.
+                        # Classify only what the user sees.
                         _visible_raw = content_accum.strip()
                         _visible = (
                             _strip_tool_markup(content_accum, final = True).strip()
@@ -1918,15 +1815,11 @@ class _ToolLoopMixin:
                             else ""
                         )
                         _reasoning = reasoning_accum.strip()
-                        # Bracketed reasoning IS the turn for a Magistral-style model
-                        # and the strip takes it whole, so fall back to the raw text.
+                        # Magistral-style bracketed reasoning is stripped whole; fall back to raw.
                         _stripped = _visible or _reasoning or _visible_raw
-                        # Thinking rendered as <think> in the CONTENT channel stays
-                        # in _visible, and a fence inside one was never shown.
+                        # Thinking rendered as <think> in CONTENT stays in _visible; a fence inside one was never shown.
                         _visible_answer = _text_outside_think(_visible).strip()
-                        # Reasoning stands in for the answer only when the loop
-                        # promotes it to visible content; on the Anthropic path it
-                        # stays a thinking block and the user saw nothing.
+                        # On the Anthropic path reasoning stays a thinking block, unseen.
                         _reasoning_shown = (
                             not has_content_tokens
                             and promote_reasoning_only
@@ -1937,23 +1830,12 @@ class _ToolLoopMixin:
                             if _visible_answer
                             else (_reasoning if _reasoning_shown else "")
                         )
-                        # Same for intent: a plan only thought is not one announced.
-                        # With nothing outside the block the turn showed nothing, which
-                        # IS the stall. _stripped stays whole; it is what gets replayed
-                        # as the assistant turn and compared for a repeat.
+                        # A plan only thought is not announced; _stripped stays whole, replayed and compared for repeats.
                         _intent_text = _visible_answer if _visible_answer else _stripped
 
                         # ── Continue an answer the window cut in half ──
-                        # The sibling case below is a turn that showed NOTHING. This one
-                        # showed real work and stopped mid-sentence: observed streaming a
-                        # 2401-byte file inline at a 4096 window, cut at `ctx.arc(6, -5, 5,`
-                        # with no closing tag. Compaction cannot help, because the room that
-                        # ran out is the reply's, not the prompt's; the answer has to be
-                        # finished across two turns instead.
-                        #
-                        # `continue_final_message` is what makes that seamless: the partial
-                        # goes back as the assistant turn to be EXTENDED, so the model picks
-                        # up mid-token rather than restarting and apologising.
+                        # Answer cut by the window: continue it via continue_final_message so it
+                        # resumes mid-token.
                         _partial_answer = content_accum.strip()
                         if (
                             _iter_finish_reason == "length"
@@ -1961,9 +1843,7 @@ class _ToolLoopMixin:
                             and not tool_calls_acc
                             and _length_continuations < _MAX_LENGTH_CONTINUATIONS
                         ):
-                            # Withheld BEFORE the nudge is sent, not regretted after. A model
-                            # echoing one fragment would otherwise have the echo stitched into
-                            # the answer, which is how hermes-agent got a 60,698-char reply.
+                            # Refuse to continue repetitive output, or the echo is stitched into the answer.
                             if is_repetition_dominated(_partial_answer):
                                 logger.info(
                                     "Truncated answer is repetition-dominated (%d chars); "
@@ -1978,26 +1858,18 @@ class _ToolLoopMixin:
                                     _length_continuations,
                                     _MAX_LENGTH_CONTINUATIONS,
                                 )
-                                # Candidate first, as the final pass does: a retry that
-                                # cannot be served, or one the caller's own cap leaves no
-                                # room for, must not spend the conversation or the usage.
+                                # Candidate first: an unservable retry must not spend conversation or usage.
                                 _cand_c = list(conversation)
                                 append_assistant_turn(
                                     _cand_c,
-                                    # Unstripped: `strip()` would make the replayed prefix
-                                    # differ from the text already streamed, and the next
-                                    # delta is concatenated onto the STREAMED one. Inside a
-                                    # code block that eats the newline and indentation the
-                                    # continuation is about to build on.
+                                    # Unstripped, so the replayed prefix matches the streamed text exactly.
                                     {"role": "assistant", "content": content_accum},
                                     continue_final_message = True,
                                 )
                                 _fu_c = (
                                     _backfill_usage_from_timings(_iter_usage, _iter_timings) or {}
                                 )
-                                # A `length` stop means the attempt produced its whole
-                                # allowance, which is what to charge when the server
-                                # reported no usage.
+                                # A `length` stop spent the whole allowance; charge that when usage is missing.
                                 _spent_c = _fu_c.get("completion_tokens", 0) or int(
                                     payload.get("max_tokens") or 0
                                 )
@@ -2006,9 +1878,7 @@ class _ToolLoopMixin:
                                     _cand_c, safe_tools, _reasoning_kw, True
                                 )
                                 if _cap_left_c != 0 and not _fits_c:
-                                    # Same as the thought continuation below: abandoning
-                                    # here ends the turn, so the next iteration's ordinary
-                                    # preflight never gets to drop an older exchange.
+                                    # Like the thought continuation: abandoning ends the turn, so preflight never drops older exchanges.
                                     _evicted_c = _evict_until_it_fits(
                                         _cand_c, safe_tools, _reasoning_kw, True
                                     )
@@ -2046,9 +1916,7 @@ class _ToolLoopMixin:
                                     continue
 
                         # ── Continue a turn that ended inside its own thought ──
-                        # Ahead of the re-prompt below because that one is gated on a SHORT
-                        # response, and a thought that filled the window is the opposite of
-                        # short -- the case fell through the gap and returned an empty turn.
+                        # Ahead of the re-prompt, which only handles SHORT responses.
                         if (
                             _iter_finish_reason == "length"
                             and not content_accum.strip()
@@ -2056,8 +1924,7 @@ class _ToolLoopMixin:
                             and _length_continuations < _MAX_LENGTH_CONTINUATIONS
                         ):
                             _length_continuations += 1
-                            # Thinking off for the retry. Leaving it on re-runs the turn that
-                            # just failed, and the second failure looks identical to the first.
+                            # Thinking off, or the retry fails the same way.
                             _effective_enable_thinking = False
                             _effective_reasoning_effort = None
                             logger.info(
@@ -2067,12 +1934,7 @@ class _ToolLoopMixin:
                                 _length_continuations,
                                 _MAX_LENGTH_CONTINUATIONS,
                             )
-                            # Candidate first, exactly as the partial-answer branch above
-                            # does. This one mutated `conversation` directly and checked
-                            # neither the fit nor the caller's cap: a thought that reached
-                            # the context wall makes the retry prompt window-sized, and
-                            # with no evictable history the recovery request is the one
-                            # thing that must not be rejected.
+                            # Check fit and cap: the recovery request must not be rejected.
                             _cand_l = list(conversation)
                             append_assistant_turn(
                                 _cand_l,
@@ -2098,23 +1960,17 @@ class _ToolLoopMixin:
                                 payload.get("max_tokens") or 0
                             )
                             _cap_left_l = _loop_budget_left(_spent_l)
-                            # `_reasoning_kw` was computed at the top of this iteration,
-                            # with thinking ON. The retry goes out with it off, which is a
-                            # different rendered prompt on any template that reads
-                            # `enable_thinking`, so admitting under the old kwargs prices
-                            # a request nobody sends. Same fix the final pass already has.
-                            _off_kw_l = self._request_reasoning_kwargs(
-                                False, None, preserve_thinking
+                            # Recompute kwargs with thinking off so admission prices the real request.
+                            _off_kw_l = _with_template_extras(
+                                self._request_reasoning_kwargs(False, None, preserve_thinking),
+                                chat_template_kwargs,
                             )
-                            # Counted ONCE in the ordinary case: the eviction attempt
-                            # below only runs on a candidate already found too large.
+                            # Counted ONCE normally: eviction below runs only on a candidate already found too large.
                             _fits_l = _cap_left_l != 0 and _loop_continuation_fits(
                                 _cand_l, safe_tools, _off_kw_l
                             )
                             if _cap_left_l != 0 and not _fits_l:
-                                # Possibly one eviction short. Refusing here ends the
-                                # turn, so the next iteration's ordinary preflight never
-                                # gets its chance to drop an older exchange.
+                                # Try eviction: refusing here ends the turn.
                                 _evicted_l = _evict_until_it_fits(_cand_l, safe_tools, _off_kw_l)
                                 if _evicted_l is not None and _loop_continuation_fits(
                                     _evicted_l, safe_tools, _off_kw_l
@@ -2128,11 +1984,8 @@ class _ToolLoopMixin:
                                     if _cap_left_l == 0
                                     else "the retry prompt would not be served",
                                 )
-                                # Which wall it was, so the give-up below names the lever
-                                # the user actually has. Blaming the context window for a
-                                # spent Max Tokens sends them to the one setting that was
-                                # never the constraint, and this reaches the client as
-                                # ordinary content, so nothing downstream can correct it.
+                                # Record whether Max Tokens or the window ran out, so the message
+                                # names the right lever.
                                 _reasoning_cap_spent = _cap_left_l == 0
                                 _length_continuations -= 1
                                 _effective_enable_thinking = enable_thinking
@@ -2145,8 +1998,7 @@ class _ToolLoopMixin:
                                 _it_l = _iter_timings or {}
                                 _accumulated_predicted_ms += _it_l.get("predicted_ms", 0)
                                 _accumulated_predicted_n += _it_l.get("predicted_n", 0)
-                                # Blank first so the route resets its text cursor, as the
-                                # re-prompt below does; else the retry reads as a hang.
+                                # Blank status first so the route resets its text cursor.
                                 if _continuation_credits < _MAX_CONTINUATION_CREDITS:
                                     _continuation_credits += 1
                                 yield {"type": "status", "text": ""}
@@ -2158,19 +2010,13 @@ class _ToolLoopMixin:
                             and not content_accum.strip()
                             and reasoning_accum.strip()
                         ):
-                            # Allowance spent and still nothing to show. Saying so is the
-                            # whole point: returning here silently is the original defect,
-                            # a turn that renders as an empty message with no indication
-                            # that anything went wrong or what the user might change.
+                            # Allowance spent: say so rather than return an empty message.
                             logger.info(
                                 "Reasoning exhausted the window %d times; giving up with "
                                 "an explanation",
                                 _length_continuations,
                             )
-                            # `_reasoning_cap_spent` is only set when a continuation was
-                            # REFUSED. Arriving here by exhausting the retry limit leaves
-                            # it at its default, so the cap is re-read: the last permitted
-                            # attempt may be the one that finished off Max Tokens.
+                            # Re-read the cap: the last attempt may have exhausted Max Tokens.
                             _fu_g = _backfill_usage_from_timings(_iter_usage, _iter_timings) or {}
                             _spent_g = _fu_g.get("completion_tokens", 0) or int(
                                 payload.get("max_tokens") or 0
@@ -2197,10 +2043,7 @@ class _ToolLoopMixin:
                             r"(?i)\brender[_\s-]?html\b",
                             _stripped,
                         )
-                        # A post-tool stall still deserves a nudge, but each retry
-                        # re-runs tools, so allow only one. RAG autoinject never lands
-                        # in history, so _auto keeps a doc-grounded turn from reading
-                        # as pre-tool (mirrors safetensors rag_autoinjected).
+                        # Post-tool stall gets one nudge (retries re-run tools). _auto counts RAG autoinject.
                         _already_acted = bool(_auto) or any(
                             record.executed for record in tool_controller.history
                         )
@@ -2216,8 +2059,7 @@ class _ToolLoopMixin:
                             and not _render_html_already_done_intent
                             and _reprompt_used < _reprompt_cap
                             and not _is_reprompt_repeat(_stripped, _last_reprompt_text)
-                            # On _stripped as well: it is what gets replayed, and the
-                            # intent text can be a short tail of a very long turn.
+                            # _stripped is what gets replayed; intent text may be a short tail.
                             and len(_stripped) < _REPROMPT_MAX_CHARS
                             and _is_short_intent_without_action(_intent_text)
                             and not (_artifact_text and _has_answer_artifact(_artifact_text))
@@ -2231,8 +2073,7 @@ class _ToolLoopMixin:
                                 f"model responded without calling tools "
                                 f"({len(_stripped)} chars)"
                             )
-                            # Merges into a resumed partial: the nudge that follows is a
-                            # user turn, so a second assistant turn breaks alternation.
+                            # Merge into a resumed partial to keep role alternation.
                             append_assistant_turn(
                                 conversation,
                                 {"role": "assistant", "content": _stripped},
@@ -2258,8 +2099,7 @@ class _ToolLoopMixin:
                             _it_r = _iter_timings or {}
                             _accumulated_predicted_ms += _it_r.get("predicted_ms", 0)
                             _accumulated_predicted_n += _it_r.get("predicted_n", 0)
-                            # Blank first (the route resets its text cursor only on an
-                            # empty status), then the badge so the retry is not a hang.
+                            # Blank first (the route resets its cursor only on empty status).
                             yield {"type": "status", "text": ""}
                             yield {"type": "status", "text": _NUDGE_TOOL_CALLS_STATUS}
                             continue
@@ -2290,8 +2130,7 @@ class _ToolLoopMixin:
                                     if _deferred_reasoning_summary is not None:
                                         yield _deferred_reasoning_summary
                         elif not _suppress_visible_output:
-                            # Turn ended as a plain answer (no [ARGS] followed): the held
-                            # rehearsal tail is real prose, release it.
+                            # Plain answer with no [ARGS] following: the held rehearsal tail is real prose, so release it.
                             _final_clean = _strip_tool_markup_streaming(cumulative_display)
                             if len(_final_clean) > len(_last_emitted):
                                 yield {"type": "content", "text": _final_clean}
@@ -2328,17 +2167,14 @@ class _ToolLoopMixin:
                     tool_calls = None
                     content_text = content_accum
                     if has_structured_tc:
-                        # Drop incomplete fragments (e.g. from max_tokens
-                        # truncation or disconnect).
-                        # first-seen order: a call forked onto a reused index arrived after every call already open, so it must execute and replay last
+                        # Drop incomplete fragments. First-seen order so forked calls run last.
                         tool_calls = [
                             call
                             for call in tool_calls_acc.values()
                             if (call.get("function", {}).get("name", "").strip())
                         ] or None
                     if not tool_calls:
-                        # Unconditional re-parse: we only reach DRAINING when the buffer looked like a
-                        # call, and bare-JSON / Gemma wrapper-less calls carry no XML signal to gate on.
+                        # Unconditional: bare-JSON / Gemma calls carry no XML signal.
                         tool_calls = self._parse_tool_calls_from_text(
                             content_accum,
                             allow_incomplete = auto_heal_tool_calls,
@@ -2350,8 +2186,7 @@ class _ToolLoopMixin:
                             final = True,
                             force = True,
                         )
-                        # ``_strip_tool_markup`` only knows XML; also drop a leading bare-JSON call so the
-                        # executed call isn't replayed as text or next-turn history.
+                        # Also drop a leading bare-JSON call so it isn't replayed as text.
                         content_text = strip_leading_bare_json_call(
                             content_text, _enabled_tool_names
                         )
@@ -2361,9 +2196,7 @@ class _ToolLoopMixin:
                             f"{'structured delta' if has_structured_tc else 'content text'}"
                         )
                     if not tool_calls:
-                        # DRAINING but no tool calls (false positive): close any
-                        # provisional cards (a sniff can open one whose call never
-                        # parses); without a tool_end the card spins forever.
+                        # False positive: close provisional cards or they spin forever.
                         for _pid, _pname in provisional_started_tool_calls.items():
                             if _pid not in resolved_provisional_tool_call_ids:
                                 resolved_provisional_tool_call_ids.add(_pid)
@@ -2379,9 +2212,7 @@ class _ToolLoopMixin:
                         if content_accum:
                             # Strip leaked tool-call XML before yielding.
                             content_accum = _strip_tool_markup(content_accum, final = True)
-                        # A truncated bare-JSON call has no XML markup to strip and didn't parse. With
-                        # Auto-Heal on, drop a leading ENABLED-tool fragment (ordinary JSON answers untouched);
-                        # off keeps it visible per the strict contract.
+                        # With Auto-Heal on, drop a truncated ENABLED-tool JSON fragment; off keeps it.
                         if content_accum and active_tools and auto_heal_tool_calls:
                             content_accum = strip_leading_bare_json_call(
                                 content_accum, _enabled_tool_names
@@ -2395,22 +2226,35 @@ class _ToolLoopMixin:
                             yield _meta
                         return
 
+                # A cut turn runs no call, siblings included: a healed tail may be half a rewrite.
+                if _iter_finish_reason in ("length", "content_filter"):
+                    for _pid, _pname in provisional_started_tool_calls.items():
+                        if _pid not in resolved_provisional_tool_call_ids:
+                            resolved_provisional_tool_call_ids.add(_pid)
+                            yield {
+                                "type": "tool_end",
+                                "tool_name": _pname,
+                                "tool_call_id": _pid,
+                                "result": TRUNCATED_TOOL_TURN_MESSAGE,
+                                "provenance": provisional_tool_provenance(_pname),
+                            }
+                    # Empty status resets the route cursor; send only text not already streamed.
+                    display = _strip_tool_markup(cumulative_display, final = True, force = True)
+                    notice = display[len(_last_emitted) :] + ("\n\n" if display else "")
+                    yield {"type": "status", "text": ""}
+                    yield {
+                        "type": "content",
+                        "text": notice + TRUNCATED_TOOL_TURN_MESSAGE,
+                    }
+                    yield _build_metadata_event(_iter_usage, _iter_timings, _iter_finish_reason)
+                    return
+
                 # ── Execute tool calls ──
-                # The turn got somewhere, so the earlier stall is spent history. Without
-                # this reset the allowance is consumed for the whole request and a later,
-                # unrelated stall gets fewer attempts than it should -- the shape of
-                # NousResearch/hermes-agent#79100, where the counter survived a good
-                # tool round and the give-up fired early. Thinking comes back on for the
-                # same reason: it was turned off to break one stall, not for the request.
+                # Progress made: reset stall counters and restore thinking.
                 _length_continuations = 0
                 _effective_enable_thinking = enable_thinking
                 _effective_reasoning_effort = reasoning_effort
-                # Captured BEFORE the reset below. This turn may have been resumed with
-                # `continue_final_message`, leaving the partial as the trailing assistant
-                # message, and anything recorded further down has to merge into it.
-                # Restoring the caller's value first made `append_assistant_turn` add a
-                # SECOND consecutive assistant message, which is the role alternation that
-                # helper exists to preserve and which strict templates reject.
+                # Captured before the reset: later records must merge into a resumed partial.
                 _merge_into_partial = continue_final_message
                 continue_final_message = _caller_continue_final_message
                 _accumulated_completion_tokens += (
@@ -2423,8 +2267,7 @@ class _ToolLoopMixin:
                 # recount). Sent once the first tool is running, so it never delays a tool.
                 _pending_context_usage = _context_usage_event(_iter_usage, _iter_timings)
 
-                # Collapse exact-duplicate calls and cap the count for the TEXTUAL
-                # fallback (mirrors the safetensors loop; see _MAX_TOOL_CALLS_PER_TURN).
+                # Dedupe and cap TEXTUAL fallback calls (see _MAX_TOOL_CALLS_PER_TURN).
                 _over_cap: list = []
                 if tool_calls and not has_structured_tc and len(tool_calls) > 1:
                     _seen_keys: set = set()
@@ -2452,7 +2295,8 @@ class _ToolLoopMixin:
                             _novel_at_last_keep[_key] = _novel_kept
                             _last_workspace_key = _key
                         # A browser call acts on the page as it is then: two scrolls are two scrolls.
-                        elif _key in _seen_keys and _fn.get("name") not in BROWSER_TOOL_NAMES:
+                        # Two identical generate_image calls are two images.
+                        elif _key in _seen_keys and _fn.get("name") not in REPEATABLE_TOOL_NAMES:
                             continue
                         _seen_keys.add(_key)
                         if len(_deduped) < _MAX_TOOL_CALLS_PER_TURN:
@@ -2475,9 +2319,7 @@ class _ToolLoopMixin:
                         )
                     tool_calls = _deduped
 
-                # disable_parallel_tool_use: execute only the first tool call
-                # this turn. Truncate before building assistant_msg so the
-                # conversation stays consistent and extra calls are never executed.
+                # Truncate before building assistant_msg so extra calls never execute.
                 if disable_parallel_tool_use and tool_calls and len(tool_calls) > 1:
                     tool_calls = tool_calls[:1]
                     _over_cap = []
@@ -2489,11 +2331,9 @@ class _ToolLoopMixin:
                 # Collect no-op feedback and flush it after the batch, so a
                 # suppressed call never drops a later parallel call.
                 deferred_noop_msgs: list = []
-                # Which tools those no-ops were about, so the flush below can tell
-                # whether the trailing result belongs to the same tool.
+                # Which tools the no-ops concerned, so the flush below can tell a same-tool trailing result.
                 deferred_noop_tools: set = set()
-                # Per result, so a parallel batch is not squeezed into one
-                # result's worth of images.
+                # Per result, so a parallel batch is not squeezed into one result's worth of images.
                 batch_mcp_images: list = []
                 # Where this batch's results start, for the image turn\'s wording.
                 batch_conversation_start = len(conversation)
@@ -2502,6 +2342,67 @@ class _ToolLoopMixin:
                 # a Mistral-style call carries its own id and would open a duplicate. Reuse
                 # the card's id for the first matching call (same tool name) to reconcile.
                 _text_provisional_id = _text_args_id if not has_structured_tc else ""
+                _started_reads: dict = {}
+
+                def _start_following_reads(_call_index, _host, _key):
+                    # Network only: approvals, pricing, the fit and the record stay in call order.
+                    _hosts = {_host, *(_started[1] for _started in _started_reads.values())}
+                    _keys = {_key, *(_started[0].key for _started in _started_reads.values())}
+                    _next = max(_started_reads, default = _call_index) + 1
+                    while _next < len(tool_calls) and len(_hosts) < _WEB_FETCH_CONCURRENCY:
+                        _function = tool_calls[_next].get("function") or {}
+                        # By raw name first: preparing an MCP call can load tools.
+                        if str(_function.get("name") or "").strip() != "web_search":
+                            return
+                        _spec = tool_controller.prepare_call(tool_calls[_next])
+                        _next_host = _web_fetch_host(_spec.tool_name, _spec.arguments)
+                        if (
+                            not _spec.should_execute
+                            or _next_host is None
+                            or _next_host in _hosts
+                            or _spec.key in _keys
+                            or compaction_receipt_field(_spec.arguments) is not None
+                        ):
+                            return
+                        _mode, _bypass = live_permissions.apply(permission_mode, bypass_permissions)
+                        try:
+                            require_tool_access(disable_sandbox = _bypass)
+                        except Exception:
+                            return
+                        if needs_tool_confirmation(
+                            confirm_tool_calls = bool(confirm_tool_calls),
+                            bypass_permissions = _bypass,
+                            permission_mode = _mode,
+                            name = _spec.tool_name,
+                            arguments = _spec.arguments,
+                            is_high_risk = is_high_risk_tool_call,
+                            never_needs = never_needs_approval,
+                            sandbox_level = sandbox_level,
+                            session_id = session_id,
+                        ) or requires_os_isolation(
+                            confirm_tool_calls = bool(confirm_tool_calls),
+                            bypass_permissions = _bypass,
+                            permission_mode = _mode,
+                            name = _spec.tool_name,
+                            arguments = _spec.arguments,
+                            prompted = False,
+                            is_high_risk = is_high_risk_tool_call,
+                            sandbox_level = sandbox_level,
+                        ):
+                            return
+                        _started_reads[_next] = (
+                            _spec,
+                            _next_host,
+                            StartedUrlRead(
+                                _spec.arguments["url"].strip(),
+                                None if tool_call_timeout >= 9999 else tool_call_timeout,
+                                cancel_event,
+                                website_policy,
+                            ),
+                        )
+                        _hosts.add(_next_host)
+                        _keys.add(_spec.key)
+                        _next += 1
 
                 for _call_index, tc in enumerate(tool_calls or []):
                     func = tc.get("function", {})
@@ -2538,10 +2439,7 @@ class _ToolLoopMixin:
 
                     if not decision.should_execute:
                         if provisional_match:
-                            # A provisional tool card is already on screen for this
-                            # id; close it so it never dangles when the controller
-                            # turns the call into an internal no-op (duplicate /
-                            # disabled / render_html_repeat).
+                            # Close the provisional card when the call becomes an internal no-op.
                             resolved_provisional_tool_call_ids.add(decision.tool_call_id)
                             yield {
                                 "type": "tool_end",
@@ -2563,8 +2461,7 @@ class _ToolLoopMixin:
 
                     if not assistant_appended:
                         assistant_msg["tool_calls"] = [decision.as_assistant_tool_call()]
-                        # Merges into a resumed partial, so a continued turn that calls
-                        # a tool stays one assistant message.
+                        # Merges into a resumed partial, so a continued turn that calls a tool stays one assistant message.
                         append_assistant_turn(
                             conversation,
                             assistant_msg,
@@ -2579,6 +2476,9 @@ class _ToolLoopMixin:
                     # Bypass wins here too, so a direct internal caller with both
                     # flags never prompts. "auto" pauses only high-risk calls; "off"
                     # pauses only a high-risk python/terminal call without OS isolation.
+                    permission_mode, bypass_permissions = live_permissions.apply(
+                        permission_mode, bypass_permissions
+                    )
                     needs_confirm = needs_tool_confirmation(
                         confirm_tool_calls = bool(confirm_tool_calls),
                         bypass_permissions = bypass_permissions,
@@ -2588,6 +2488,7 @@ class _ToolLoopMixin:
                         is_high_risk = is_high_risk_tool_call,
                         never_needs = never_needs_approval,
                         sandbox_level = sandbox_level,
+                        session_id = session_id,
                     )
                     # Sending the user's image always asks, whatever the permission mode.
                     needs_confirm = needs_confirm or image_share is not None
@@ -2605,6 +2506,11 @@ class _ToolLoopMixin:
                     decision_slot = (
                         begin_tool_decision(session_id, approval_id) if needs_confirm else None
                     )
+                    bind_permission_upgrade(
+                        decision_slot, live_permissions, eligible = image_share is None
+                    )
+                    if needs_confirm:
+                        note_host_access(approval_id, decision.tool_name, decision.arguments)
                     start_event = decision.tool_start_event()
                     start_event["approval_id"] = approval_id
                     start_event["awaiting_confirmation"] = needs_confirm
@@ -2612,8 +2518,7 @@ class _ToolLoopMixin:
                         start_event["image_disclosure"] = image_share["disclosure"]
 
                     try:
-                        # Gated calls are not running yet; a "Running ..." badge
-                        # counting up while it waits on a human reads as a hang.
+                        # Gated calls are not running yet; a counting badge while waiting on a human reads as a hang.
                         yield {
                             "type": "status",
                             "text": (
@@ -2637,19 +2542,22 @@ class _ToolLoopMixin:
                             if decision_slot is not None
                             else None
                         )
-                        # The slot is where the waiter says WHY: the user's refusal, or an approval
-                        # nobody answered. Read before decision_slot is dropped in the deny branch.
+                        # Read before decision_slot is dropped in the deny branch.
                         _decision_reason = decision_reason(decision_slot)
+                        permission_mode, bypass_permissions = live_permissions.apply(
+                            permission_mode, bypass_permissions
+                        )
+                        if bypass_permissions:
+                            strict_isolation = False
                         if _decision is not None and _decision != "deny":
-                            # Approved: now it really is running.
+                            # tool_approved first: the route forwards it before retaking the model slot.
+                            yield decision.tool_approved_event(approval_id)
                             yield {"type": "status", "text": decision.status_text}
                         if _decision == "deny":
                             decision_slot = None
                             _forced_choice_resolved = True
                             resolved_provisional_tool_call_ids.add(decision.tool_call_id)
-                            # An approval nobody answered is not the user's decision, and this
-                            # string is the only account of the call both the model and the
-                            # reopened card get: the buttons are gone by the time it lands.
+                            # Unanswered approval is not a user decision; this text is the call's only account once buttons go.
                             _denied_text = (
                                 TOOL_APPROVAL_EXPIRED_MESSAGE
                                 if _decision_reason == DECISION_EXPIRED
@@ -2671,22 +2579,13 @@ class _ToolLoopMixin:
                                 denied_message["tool_call_id"] = decision.tool_call_id
                                 _tool_card_by_message[id(denied_message)] = decision.tool_call_id
                             conversation.append(denied_message)
-                            # The denial is itself the `tool` message that makes the
-                            # template render the call it refused, so declining an
-                            # oversized write COSTS the prompt the very arguments it
-                            # declined to afford. The bulk compaction deliberately skips
-                            # denials now that replies are paired with their call, so
-                            # without this the user gets a context error in place of the
-                            # refusal they asked for.
+                            # The denial renders the refused arguments, so compact them or the
+                            # context overflows.
                             if decision.tool_call_id:
                                 conversation[:] = compact_refused_tool_arguments(
                                     conversation, decision.tool_call_id
                                 )
-                                # Rebuilt, not mutated, so the handle this batch is still
-                                # appending to is now detached. Same defect the executed
-                                # path had: the next call in the batch would land on the
-                                # stale object while its RESULT lands in `conversation`,
-                                # and the model receives a result for a call it cannot see.
+                                # Rebuilt, not mutated: rebind the handle or later calls land on a stale object.
                                 for _dmsg in reversed(conversation):
                                     if _dmsg.get("role") != "assistant":
                                         continue
@@ -2704,65 +2603,27 @@ class _ToolLoopMixin:
                         if decision_slot is not None:
                             abort_tool_decision(decision_slot, approval_id)
 
-                    # Can the turn this call is part of still be SERVED once it returns?
-                    # Everything below prices what a result may add; nothing asked whether
-                    # the prompt fits with no result at all. It can already not fit: the
-                    # model's own arguments are in `conversation` by now (appended above),
-                    # and a whole-file `edit_file` puts the file itself there. The budget
-                    # clamps to zero, the result is cut to its notice, the tool runs, and
-                    # llama-server rejects the next request anyway -- with the write on
-                    # disk. Nothing downstream recovers it: the fit protects the newest
-                    # turn, and ctx_shift is off for any mmproj load, so there is no
-                    # sliding window underneath this either.
-                    #
-                    # Two levers, both only once the turn is actually spilling. History
-                    # first, via the arguments of calls that already returned -- pure
-                    # replay, since the tool got them in full and the file is on disk --
-                    # and only then a refusal, which is worth saying precisely because it
-                    # is the one outcome on this path that leaves nothing written.
+                    # Conservative estimate only decides whether to run the exact count, never whether to refuse; base64 is about 1 char per token.
                     _unservable_text: Optional[str] = None
-                    # Set when the gate chose to RUN an oversized call rather than
-                    # refuse it, on the strength of what compacting it will reclaim.
+                    # Set when the gate runs an oversized call rather than refusing, since compaction will reclaim room.
                     _compact_after_execution = False
-                    # The exact count of the prompt that compaction WILL produce, kept so
-                    # the result budget below is priced against it.
+                    # Exact count of the prompt compaction WILL produce, so the result budget below is priced against it.
                     _compacted_turn_tokens: Optional[int] = None
                     if self._effective_context_length:
                         # This iteration's cap, like every other sizing decision in it.
                         _room_target = prompt_budget(
                             self._effective_context_length, _iteration_max_tokens
                         )
-                        # Cheap gate first. The exact count is a template render plus a
-                        # tokenizer pass over the whole conversation, and this runs per
-                        # call; a thread with room to spare must not pay for it. The
-                        # estimate only decides whether to ASK, never whether to refuse.
-                        # Conservative, not the flat dense estimate. That one still
-                        # charges ASCII four characters a token, and base64 tokenises
-                        # near one, so a ~6 KB encoded `edit_file` payload prices at a
-                        # quarter of its real cost and slips under this threshold at a
-                        # 4096 window -- the exact check is skipped, the tool runs, and
-                        # the write lands before the next request is rejected. Erring
-                        # high here only costs an extra count; erring low costs the
-                        # whole gate.
+                        # Cheap conservative estimate decides whether to do an exact count (base64
+                        # ~1 char/token).
                         if (
                             estimate_messages_tokens_conservative(
-                                messages_without_unpriced_media(conversation)
+                                self._countable_messages(conversation)
                             )
                             > 0.7 * _room_target
                         ):
-                            # Priced with a STAND-IN tool message for the call about to
-                            # run, not on the conversation as it stands. A chat template
-                            # renders an assistant turn's `tool_calls` only once a `tool`
-                            # message answers them -- until then the arguments cost the
-                            # prompt nothing, so counting the conversation as-is misses
-                            # exactly the tokens this gate exists to catch. Measured on
-                            # Qwen3.8-27B: the same messages price at 1,063 tokens without
-                            # the stand-in and 2,172 with it, and the request the loop goes
-                            # on to send is the second number.
-                            #
-                            # Empty content, because that is the best case: a result can be
-                            # cut to its notice but the call itself cannot be unsent. If
-                            # even this does not fit, nothing the tool returns will.
+                            # Templates render tool_calls only once a tool reply follows, so add an
+                            # empty stand-in.
                             _probe_message: dict = {
                                 "role": "tool",
                                 "name": decision.tool_name,
@@ -2775,7 +2636,7 @@ class _ToolLoopMixin:
                                 try:
                                     _turn_tokens = self.count_chat_tokens(
                                         neutralize_control_markup_in_messages(
-                                            messages_without_unpriced_media(
+                                            self._countable_messages(
                                                 [*conversation, _probe_message]
                                             ),
                                             _markup_cache,
@@ -2787,9 +2648,7 @@ class _ToolLoopMixin:
                                         chat_template_kwargs = _reasoning_kw,
                                     )
                                 except Exception:
-                                    # No count, no refusal: the old behaviour (run it and
-                                    # let llama-server decide) beats declining a call on a
-                                    # number that could not be taken.
+                                    # Count failed: run it and let llama-server decide.
                                     logger.debug(
                                         "pre-execution fit: prompt count failed",
                                         exc_info = True,
@@ -2800,8 +2659,7 @@ class _ToolLoopMixin:
                                 ):
                                     break
                                 if _attempt == 0:
-                                    # Spend history, then re-price against the real
-                                    # tokenizer rather than trusting the saving.
+                                    # Compact history first, then re-price against the real tokenizer instead of trusting the saving.
                                     _compacted, _n = compact_completed_tool_arguments(
                                         conversation, protect_last = 1
                                     )
@@ -2814,18 +2672,7 @@ class _ToolLoopMixin:
                                             _n,
                                         )
                                         continue
-                                # Last resort before refusing: run it anyway, and compact
-                                # ITS arguments the moment it returns.
-                                #
-                                # Running a tool needs no context -- only the next prompt
-                                # does, and by then the arguments describe a file on disk.
-                                # Refusing does not avoid their cost either, because the
-                                # refusal is itself the `tool` message that renders them;
-                                # it just spends the same tokens with nothing written, and
-                                # the model retries with a fresh oversized call. Measured
-                                # over three rounds of one thread, each retry reclaimed
-                                # less (50%, 34%, 15%) and the turn ended in a
-                                # one-character reply.
+                                # The refusal renders the call arguments, so compact them too or the next generation overflows the window; nothing ran, so nothing on disk reflects them.
                                 if decision.tool_call_id:
                                     _as_if_run = compact_executed_call_arguments(
                                         [*conversation, _probe_message],
@@ -2834,7 +2681,7 @@ class _ToolLoopMixin:
                                     try:
                                         _after_tokens = self.count_chat_tokens(
                                             neutralize_control_markup_in_messages(
-                                                messages_without_unpriced_media(_as_if_run),
+                                                self._countable_messages(_as_if_run),
                                                 _markup_cache,
                                                 self.markup_profile,
                                             ),
@@ -2879,9 +2726,7 @@ class _ToolLoopMixin:
                                 break
 
                     if _unservable_text is not None:
-                        # Same shape as the user-denied path above, so the frontend needs
-                        # no new case and the model gets a tool result it can read rather
-                        # than a stream that stops mid-turn.
+                        # Same as the user-denied path: no new frontend case; the model reads a result, not a stalled stream.
                         resolved_provisional_tool_call_ids.add(decision.tool_call_id)
                         yield {
                             "type": "tool_end",
@@ -2899,11 +2744,7 @@ class _ToolLoopMixin:
                             _refused_message["tool_call_id"] = decision.tool_call_id
                             _tool_card_by_message[id(_refused_message)] = decision.tool_call_id
                         conversation.append(_refused_message)
-                        # The refusal is itself the `tool` message that makes this call's
-                        # arguments start rendering, so declining without this leaves the
-                        # next generation over the window anyway: observed as an accurate
-                        # refusal followed four seconds later by the 400 it was issued to
-                        # prevent. Nothing ran, so nothing on disk reflects them.
+                        # The refusal renders the call's arguments, so compact them too.
                         _before_refused_compaction = len(json.dumps(conversation, default = str))
                         conversation[:] = compact_refused_tool_arguments(
                             conversation, decision.tool_call_id
@@ -2918,14 +2759,9 @@ class _ToolLoopMixin:
                             )
                         if _forced_tool_call_pending:
                             _forced_tool_call_pending = False
-                        # The forced choice is spent by this refusal, as it is by a user
-                        # denial. Left unresolved, the next iteration advertises the same
-                        # tool as required and the model is pushed into calling it again
-                        # for the same refusal, instead of being free to say what went
-                        # wrong or finish the turn another way.
+                        # Worker thread so output streams while the tool blocks; result is byte-identical to a direct call; _invoke_tool fills _last_result_budget for the log.
                         _forced_choice_resolved = True
-                        # This assistant turn was rebuilt by the compaction above, so the
-                        # handle the batch is appending to no longer belongs to it.
+                        # Compaction above rebuilt this assistant turn, so the handle the batch appends to is stale.
                         for _rmsg in reversed(conversation):
                             if _rmsg.get("role") != "assistant":
                                 continue
@@ -2955,15 +2791,34 @@ class _ToolLoopMixin:
 
                         # Only a call the user answered: the executor lets it reach the host paths it names.
                         _host_access_approved = _decision not in (None, "deny")
+                        _started_spec, _, _started_read = _started_reads.pop(
+                            _call_index, (None, None, None)
+                        )
+                        if (
+                            _started_spec is None
+                            or _started_spec.key != decision.key
+                            or needs_confirm
+                            or strict_isolation
+                        ):
+                            _started_read = None
+                        _read_host = _web_fetch_host(decision.tool_name, decision.arguments)
+                        if (
+                            _read_host is not None
+                            and not forced_name
+                            and mcp_image is None
+                            and not (cancel_event is not None and cancel_event.is_set())
+                            and accepts_kwarg(execute_tool, "started_read")
+                        ):
+                            _start_following_reads(_call_index, _read_host, decision.key)
 
                         def _invoke_tool(
                             _output_callback,
                             _decision = decision,
                             _approved = _host_access_approved,
                             _strict = strict_isolation,
+                            _read = _started_read,
                         ):
-                            # execute_tool is injectable and may be monkey-patched with the
-                            # pre-PR signature; forward output_callback only if it's accepted.
+                            # Bound top_k to the room left: the result lands in the protected tool exchange, so an oversized top_k ends the turn in an unrecoverable context error.
                             kwargs = dict(
                                 cancel_event = cancel_event,
                                 timeout = _effective_timeout,
@@ -2972,6 +2827,8 @@ class _ToolLoopMixin:
                                 rag_scope = rag_scope,
                                 disable_sandbox = bypass_permissions,
                             )
+                            if website_policy:
+                                kwargs["website_policy"] = website_policy
                             # Run unasked only because the OS sandbox was on: refuse if it is not any more.
                             if _strict and accepts_kwarg(execute_tool, "tool_execution_mode"):
                                 kwargs["tool_execution_mode"] = "required"
@@ -2986,63 +2843,12 @@ class _ToolLoopMixin:
                                 kwargs["conversation_branch"] = _extend_live_branch(conversation)
                             if _approved and accepts_kwarg(execute_tool, "host_access_approved"):
                                 kwargs["host_access_approved"] = True
-                            # And the room actually left: the model picks its own top_k and
-                            # the result lands in the current tool exchange, which rolling
-                            # truncation protects, so a top_k the window cannot hold ends
-                            # the turn in an unrecoverable context-length error.
+                            # Exact count with the catalogue, recomputed on every search: a cached count misses the loop's new exchanges; the offset is only the fallback.
                             if self._effective_context_length:
-                                # Priced against the catalogue too: the messages alone
-                                # leave the tools array out, and a big catalogue can put
-                                # the request near its budget while this still reports
-                                # room for several 500-token chunks.
-                                # `fit_rolling_context` returns None when it dropped
-                                # nothing, so a prompt that simply FITS leaves
-                                # `_prompt_token_offset` unset -- after a context-length
-                                # increase, or on a shorter branch. The character estimate
-                                # that stood in for it there leaves out the template's own
-                                # framing, so it can report room that is not there, the
-                                # recall appends a passage too large for the real window,
-                                # and the next iteration cannot evict it again because the
-                                # current tool exchange is protected.
-                                #
-                                # So price it exactly instead, here. A failure falls back
-                                # to the estimate, which is what this did before.
-                                #
-                                # Once per TOOL CALL, not once per retrieval: every result
-                                # is now sized against this figure, not only a retrieval's,
-                                # because a `cat` of a large file overflows the window the
-                                # same way a too-large recall does and is likewise
-                                # protected from eviction once appended. One tokenizer pass
-                                # over the conversation next to running the tool itself.
-                                #
-                                # Recomputed on EVERY search, not cached for the request.
-                                # The count is absolute, and the loop appends the assistant
-                                # call and the tool result of every intervening tool to
-                                # `conversation`, so a cached figure understates the prompt
-                                # by exactly those exchanges and hands the search room that
-                                # is already spent. The offset on the other leg is a
-                                # framing correction rather than a total, so it stays valid
-                                # as the conversation grows.
-                                # Unconditionally, not only when the fit dropped nothing.
-                                # Gated on `_prompt_token_offset is None`, a request that
-                                # HAD compacted priced every later search as a character
-                                # estimate plus an offset measured before the loop's own
-                                # tool exchanges existed, so a dense ASCII result appended
-                                # after that fit -- code, minified JSON, command output --
-                                # was undercounted and the recall spent room that was
-                                # already gone. The exact count covers the same ground as
-                                # the offset leg, since it prices the conversation WITH
-                                # the tool catalogue, so the offset stays only as the
-                                # fallback for a tokenizer call that raises.
+                                # Exact count with the catalogue, recomputed every call; the offset
+                                # is only a fallback.
                                 _exact_prompt_tokens: Optional[int] = None
-                                # Counted WITH a stand-in tool message for the call about
-                                # to run, exactly as the admission gate prices it. Qwen
-                                # and templates like it render an assistant tool call only
-                                # once a `tool` reply follows, so counting `conversation`
-                                # as it stands omits this call's own arguments -- and the
-                                # result is then handed room those arguments already
-                                # occupy. Empty content, because a result can be cut to
-                                # its notice but the call itself cannot be unsent.
+                                # When compaction will run, price the result against the compacted prompt, or a large call gets a near-zero budget and its output is thrown away.
                                 _size_probe: dict = {
                                     "role": "tool",
                                     "name": decision.tool_name,
@@ -3053,9 +2859,7 @@ class _ToolLoopMixin:
                                 try:
                                     _exact_prompt_tokens = self.count_chat_tokens(
                                         neutralize_control_markup_in_messages(
-                                            messages_without_unpriced_media(
-                                                [*conversation, _size_probe]
-                                            ),
+                                            self._countable_messages([*conversation, _size_probe]),
                                             _markup_cache,
                                             self.markup_profile,
                                         ),
@@ -3069,24 +2873,14 @@ class _ToolLoopMixin:
                                         "recall budget: exact prompt count failed",
                                         exc_info = True,
                                     )
-                                # Dense on the fallback leg only: `_prompt_token_offset`
-                                # already carries the fit's exact tokenizer count, so it
-                                # needs no correction, while the estimate that stands in
-                                # for it undercounts CJK and emoji by about half.
-                                # The gate decided to run this call BECAUSE compacting
-                                # its own arguments makes the next prompt fit, and it
-                                # already counted that prompt exactly. Pricing the result
-                                # against the uncompacted conversation instead hands a
-                                # large `python`, `terminal` or file call a near-zero
-                                # budget and throws its output away, in the one case where
-                                # the room is about to be there.
+                                # When compaction will run, price against the compacted prompt.
                                 _spent = (
                                     _compacted_turn_tokens
                                     if _compact_after_execution and _compacted_turn_tokens
                                     else _exact_prompt_tokens
                                     if _exact_prompt_tokens is not None
                                     else estimate_messages_tokens_dense(
-                                        messages_without_unpriced_media(conversation)
+                                        self._countable_messages(conversation)
                                     )
                                     + (
                                         _prompt_token_offset
@@ -3101,14 +2895,7 @@ class _ToolLoopMixin:
                                 # claimed as much as the first, and nothing downstream
                                 # recovers: the fit protects the newest turn.
                                 if accepts_kwarg(execute_tool, "result_budget_tokens"):
-                                    # Split across the calls still to run in this batch,
-                                    # and after their arguments. One assistant turn can
-                                    # call several tools, and the loop appends each call
-                                    # only as it runs it, so `_spent` here knows nothing
-                                    # about the rest of the batch: sized as if it were
-                                    # alone, the first result can take all the room the
-                                    # other calls and their results still need, and the
-                                    # finished exchange is protected as the newest turn.
+                                    # Split across the rest of the batch and their arguments.
                                     _pending = list(tool_calls or [])[_call_index + 1 :]
                                     _pending_msgs = [
                                         {
@@ -3124,11 +2911,7 @@ class _ToolLoopMixin:
                                                 _over_cap, _MAX_TOOL_CALLS_PER_TURN
                                             )
                                         )
-                                    # Measured, not estimated: the estimator charges ASCII
-                                    # four characters per token, and a pending call can
-                                    # carry base64, minified JSON or a block of code, which
-                                    # run nearer one or two. Under-priced, the first result
-                                    # is handed room the later ARGUMENTS already occupy.
+                                    # A near-zero budget yields only a truncation notice the model reads as a failure and retries; compact first, since compaction reclaims that room.
                                     _pending_args = 0
                                     _pending_exact = True
                                     if _pending_msgs:
@@ -3195,16 +2978,7 @@ class _ToolLoopMixin:
                                         _result_max_tokens,
                                         _spent + _pending_args,
                                     ) // (len(_pending) + 1)
-                                    # A budget at or near zero means the call cannot deliver
-                                    # anything: the result is cut to a notice saying it was
-                                    # cut, which reads to the model as a fresh failure rather
-                                    # than a wall, so it tries again. Observed at a 4096
-                                    # window, reading a 2401-byte file back: six of the last
-                                    # eight calls priced at zero and returned the same
-                                    # 109-char notice, and the turn went on 18 calls.
-                                    #
-                                    # Room is exactly what compaction reclaims, so spend it
-                                    # here before the call rather than after the turn is lost.
+                                    # A near-zero budget yields only a truncation notice; compact first.
                                     if (
                                         _result_budget < _MIN_USEFUL_RESULT_TOKENS
                                         and self._effective_context_length
@@ -3215,15 +2989,10 @@ class _ToolLoopMixin:
                                         if _n_roomier:
                                             conversation[:] = _roomier
                                             try:
-                                                # With the same stand-in reply the initial
-                                                # sizing used. Without it, this call's own
-                                                # arguments vanish from the count on the
-                                                # templates that render a call only once a
-                                                # reply follows, and the room they occupy
-                                                # is handed to the result.
+                                                # Same stand-in reply as initial sizing; else reply-gated templates drop this call's args from count.
                                                 _spent_after = self.count_chat_tokens(
                                                     neutralize_control_markup_in_messages(
-                                                        messages_without_unpriced_media(
+                                                        self._countable_messages(
                                                             [*conversation, _size_probe]
                                                         ),
                                                         _markup_cache,
@@ -3261,19 +3030,11 @@ class _ToolLoopMixin:
                                                 _result_budget = max(_result_budget, _rescued)
                                     kwargs["result_budget_tokens"] = _result_budget
                                     _last_result_budget[0] = kwargs["result_budget_tokens"]
-                                    # Known before the tool runs, so there is no reason to
-                                    # spend calls rediscovering it: the repeat guard below
-                                    # would reach the same conclusion three calls later.
+                                    # Known before the tool runs; the repeat guard below would only reach it three calls later.
                                     _starved_call[0] = _result_budget < _MIN_USEFUL_RESULT_TOKENS
                                 if accepts_kwarg(execute_tool, "conversation_budget_tokens"):
                                     if accepts_kwarg(execute_tool, "conversation_token_counter"):
-                                        # The admission check estimates a result's size by
-                                        # characters, which is optimistic for ASCII that
-                                        # tokenises densely: code, minified JSON, hashes and
-                                        # command output all run nearer two or three
-                                        # characters per token than four. This path has a
-                                        # tokenizer, so hand it over and let the check spend
-                                        # the budget as exactly as it computes it.
+                                        # Hand over the tokenizer: char estimates undercount dense ASCII.
                                         kwargs["conversation_token_counter"] = lambda text: (
                                             self.count_chat_tokens(
                                                 [{"role": "tool", "content": text}],
@@ -3282,15 +3043,10 @@ class _ToolLoopMixin:
                                                 strict = False,
                                             )
                                         )
-                                    # The result and reply are protected on the next fit, so
-                                    # the result cannot spend their entire shared budget.
+                                    # Result and reply are protected on the next fit, so the result cannot spend the whole shared budget.
                                     kwargs["conversation_budget_tokens"] = _retrieval_budget(
                                         self._effective_context_length,
-                                        # This iteration's cap, like the result budget
-                                        # beside it. Reserving the caller's whole
-                                        # allowance on a continuation that has a fraction
-                                        # of it left returns a near-zero budget and drops
-                                        # recall the request had room for.
+                                        # Iteration cap: a near-spent continuation must not reserve the whole allowance and starve recall.
                                         _iteration_max_tokens,
                                         _spent,
                                         reply_returns = True,
@@ -3300,6 +3056,8 @@ class _ToolLoopMixin:
                             kwargs.update(search_images_kwargs(execute_tool, _decision.tool_name))
                             if image_share is not None:
                                 kwargs["mcp_image"] = image_share["image"]
+                            if _read is not None:
+                                kwargs["started_read"] = _read
                             return execute_tool(
                                 _decision.tool_name,
                                 _decision.arguments,
@@ -3322,9 +3080,7 @@ class _ToolLoopMixin:
                                 started_events = _started_events,
                             )
                         except _LlamaStreamCancelled:
-                            # Subclasses Exception, so the arm below would eat
-                            # the cancel signal. CancelledError needs no arm:
-                            # a BaseException passes straight through.
+                            # Nudge only on evidence of truncation, since short results like OK can be complete; a false nudge makes the model discard a write or repeat it.
                             raise
                         except Exception as _tool_exc:
                             if cancel_event is not None and cancel_event.is_set():
@@ -3337,25 +3093,16 @@ class _ToolLoopMixin:
                             result = f"Error: tool raised an exception: {_tool_exc}"
                         if decision.tool_name in RAG_SEARCH_TOOLS:
                             _kb_search_count += 1
-                    # What the result actually cost against what it was allowed. The pair
-                    # is the only way to tell a budget that was never delivered from one
-                    # that was delivered and ignored, and a 400 one second after a tool
-                    # returns cannot distinguish them on its own.
+                    # Logs actual cost beside allowance: only the pair tells an undelivered budget from an ignored one.
                     logger.info(
                         "tool result: name=%s budget_tokens=%s chars=%d",
                         decision.tool_name,
                         _last_result_budget[0],
                         len(result) if isinstance(result, str) else -1,
                     )
-                    # The window priced this result at nothing before the call ran, so the
-                    # model is told now rather than after three calls prove it.
+                    # Result was priced at zero before the call ran; tell the model now, not after three calls prove it.
                     _result_was_starved = False
-                    # The budget says what the window ALLOWED, not what the tool returned.
-                    # A short result fits a few tokens completely -- "Created a.py", "OK",
-                    # the acknowledgement a mutation gives -- and telling the model that
-                    # nothing usable came back invites it to discard a successful write or
-                    # do it a second time. So the nudge waits for evidence the result was
-                    # actually cut: the truncation notice, or nothing at all.
+                    # Nudge only on evidence of truncation: short results like 'OK' can be complete.
                     if (
                         _starved_call[0]
                         and isinstance(result, str)
@@ -3375,27 +3122,13 @@ class _ToolLoopMixin:
                             lambda body: _starved_result_message(decision.tool_name, body),
                         )
                     else:
-                        # Cleared either way: it describes THIS call's budget, and leaving
-                        # it set would hand the notice to the next call instead.
+                        # Cleared either way: it describes THIS call's budget, else the notice would pass to the next call.
                         _starved_call[0] = False
 
                     # ── No-progress guard: the same answer, over and over ──
-                    # Keyed on the RESULT, not the arguments. In the turn this came from,
-                    # the arguments differed every time (different line ranges of one file)
-                    # while the answer was the same 109-char truncation notice, so an
-                    # argument-keyed guard would have watched all 18 calls go by. OpenClaw
-                    # keys on the result for the same reason and never fires while results
-                    # are still changing, which is what makes this safe for polling.
+                    # No-progress guard keyed on the RESULT, so it never fires while results change.
                     if isinstance(result, str):
-                        # The arguments are part of the key UNLESS the result is one the
-                        # window itself produced. A tool that answers every distinct
-                        # mutation with `OK` is making progress, and the nudge below --
-                        # which says different arguments will not change the answer -- can
-                        # talk it out of the operations it has left. A starved result is
-                        # the opposite: it is the notice, not the tool's answer, so the
-                        # arguments are exactly what must NOT be part of the key. That was
-                        # the observed turn, where 18 calls read different line ranges of
-                        # one file and got the same 109-char truncation notice each time.
+                        # Arguments are in the key unless the result is the window's own truncation notice.
                         _result_key = (
                             decision.tool_name,
                             hashlib.sha1(result.encode("utf-8", "replace")).hexdigest(),
@@ -3433,9 +3166,7 @@ class _ToolLoopMixin:
                             _last_tool_result_key[0] = None
                     completion = tool_controller.record_result(decision, result)
                     resolved_provisional_tool_call_ids.add(decision.tool_call_id)
-                    # A real execution opens the post-tool phase; carrying the pre-tool
-                    # stall text over would read the same sentence as a repeat and
-                    # swallow the one post-tool nudge.
+                    # Reset so the post-tool nudge isn't swallowed as a repeat.
                     _last_reprompt_text = ""
                     # A tool ran this turn, so it counts against the caller's budget. Loading
                     # MCP tools does not, or a budget of one could never call what it found.
@@ -3457,10 +3188,7 @@ class _ToolLoopMixin:
                     if _completion_images:
                         batch_mcp_images.append(_completion_images)
                     if _compact_after_execution and decision.tool_call_id:
-                        # The promise the gate made when it let this run. Applied here
-                        # rather than on the next pass because the next pass may not
-                        # come: this turn's own generation is the request that would
-                        # otherwise be rejected.
+                        # Compaction rebuilds the messages, so rebind to the live message carrying this call; scan backwards because ids restart at call_0 every turn.
                         _before_len = len(json.dumps(conversation, default = str))
                         conversation[:] = compact_executed_call_arguments(
                             conversation, decision.tool_call_id
@@ -3471,17 +3199,7 @@ class _ToolLoopMixin:
                             _before_len,
                             len(json.dumps(conversation, default = str)),
                         )
-                        # The compaction rebuilds the messages rather than mutating them,
-                        # so the local handle now points at a dict that is no longer in
-                        # `conversation`. One assistant turn can carry several calls, and
-                        # the next one in the batch appends its tool_call to this handle
-                        # while its RESULT goes to `conversation`: the model would receive
-                        # a tool result answering a call it cannot see. Rebind to the live
-                        # message carrying this call.
-                        # Backwards: generated ids restart at `call_0` every turn, so a
-                        # forward scan binds to the OLDEST turn carrying the id and the
-                        # rest of this batch is appended to history instead of to the live
-                        # exchange. The call being compacted is always the current one.
+                        # The loop also ends on the outer iteration range that no-op and continuation turns consume; missing it causes a retry and a no-tools user turn.
                         for _msg in reversed(conversation):
                             if _msg.get("role") != "assistant":
                                 continue
@@ -3495,16 +3213,12 @@ class _ToolLoopMixin:
                     if _forced_tool_call_pending:
                         _forced_tool_call_pending = False
 
-                # On the turn that ends the loop no tools are offered again, so the notice
-                # must not ask for a retry and rides the tool result like the budget nudge.
+                # Loop-ending turn offers no tools, so this notice must not ask for a retry; it rides the result.
                 _over_cap_final = bool(_over_cap) and (
                     tool_controller.force_final_answer
-                    or not tool_controller.active_tools()
+                    or not tool_controller.has_active_tools()
                     or (_turn_executed_real_tool and _tool_iters_done + 1 >= max_tool_iterations)
-                    # The tool-iteration cap is not the only way out: the loop also stops on
-                    # the outer iteration range, which no-op and continuation turns consume
-                    # without advancing _tool_iters_done. Missing it asks for a retry and then
-                    # tells the model not to call any tools, in adjacent user turns.
+                    # Fold feedback only into a result from the SAME tool, since templates label the block with the tool name; a retry notice for skipped calls is never folded.
                     or iteration + 1 >= max_tool_iterations + _extra + _continuation_credits
                 )
                 _final_over_cap = _over_cap if _over_cap_final else []
@@ -3546,9 +3260,7 @@ class _ToolLoopMixin:
                 elif deferred_noop_msgs and assistant_appended:
                     append_deferred_nudges(conversation, deferred_noop_msgs)
                 else:
-                    # A blank trace is not a turn: reuse the same emptiness test as
-                    # the field above so a whitespace-only split never appends an
-                    # empty assistant message.
+                    # Blank trace is not a turn: reuse the field's emptiness test so whitespace-only splits add nothing.
                     if not assistant_appended and (
                         content_text or assistant_msg.get("reasoning_content") or _resumed_reasoning
                     ):
@@ -3581,10 +3293,7 @@ class _ToolLoopMixin:
                     _limit_text = tool_call_limit_nudge(
                         _final_over_cap, _MAX_TOOL_CALLS_PER_TURN, final = True
                     )["content"]
-                    # Same rule as _fold_target_matches above: a template labels the folded
-                    # block with the result's own tool name, so a note about tool A inside
-                    # tool B's result reads as B's output. Fold only when every skipped call
-                    # belongs to the result's own tool.
+                    # Same rule as _fold_target_matches.
                     _limit_names = {
                         (_tc.get("function") or {}).get("name") for _tc in _final_over_cap
                     }
@@ -3605,10 +3314,7 @@ class _ToolLoopMixin:
                             conversation.append({"role": "user", "content": _limit_text})
 
                 if batch_mcp_images and self.is_vision:
-                    # One block after the whole batch. With a single result "the tool
-                    # call above" is exact; with several it names whichever ran last,
-                    # which may have returned no picture at all, so the block says so
-                    # instead -- the external loop's rule.
+                    # One block after the batch: 'the tool call above' fits one result; with several it says so instead.
                     _batch_results = sum(
                         1
                         for m in conversation[batch_conversation_start:]
@@ -3643,11 +3349,10 @@ class _ToolLoopMixin:
 
                 # Clear tool status badge before next generation/final pass.
                 yield {"type": "status", "text": ""}
-                if tool_controller.force_final_answer or not tool_controller.active_tools():
+                if tool_controller.force_final_answer or not tool_controller.has_active_tools():
                     _append_budget_exhausted_nudge = False
                     break
-                # Count only real tool turns against the cap so reserved re-prompt slots can't become
-                # extra tool rounds; a no-op correction turn doesn't consume budget (GGUF parity).
+                # Only real tool turns use the cap, so reserved re-prompt slots never add rounds (GGUF parity).
                 if _turn_executed_real_tool:
                     _tool_iters_done += 1
                     if _browser_turns:
@@ -3691,9 +3396,7 @@ class _ToolLoopMixin:
                 raise
 
         # ── Tool iteration cap reached -- synthesize final answer ──
-        # The model used all iterations without a final text response. Nudge
-        # the final streaming pass to produce a useful answer instead of
-        # continuing to request tools.
+        # Cap reached with no final text: nudge the final streaming pass to answer rather than request tools.
         if max_tool_iterations > 0 and _append_budget_exhausted_nudge:
             if not _attach_internal_feedback_to_tool_result(BUDGET_EXHAUSTED_NUDGE):
                 # Ride the trailing user turn (over-cap notice or promoted image): two in a row break Gemma.
@@ -3716,8 +3419,9 @@ class _ToolLoopMixin:
         _final_tools = _last_sent_tools
         from core.inference.chat_template_helpers import neutralize_control_markup_in_messages
 
-        _reasoning_kw = self._request_reasoning_kwargs(
-            enable_thinking, reasoning_effort, preserve_thinking
+        _reasoning_kw = _with_template_extras(
+            self._request_reasoning_kwargs(enable_thinking, reasoning_effort, preserve_thinking),
+            chat_template_kwargs,
         )
         _final_max_tokens = (
             max_tokens
@@ -3751,11 +3455,12 @@ class _ToolLoopMixin:
                 )
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
+                    on_compacting = _compaction_reporter(perf_callback),
                     context_length = self._effective_context_length,
                     max_tokens = _final_max_tokens,
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
-                            messages_without_unpriced_media(fitted), None, self.markup_profile
+                            self._countable_messages(fitted), None, self.markup_profile
                         ),
                         None,
                         _final_tools,
@@ -3763,7 +3468,7 @@ class _ToolLoopMixin:
                         chat_template_kwargs = _reasoning_kw,
                         should_abort = lambda: bool(cancel_event and cancel_event.is_set()),
                     ),
-                    estimate_message = estimate_message_tokens_without_unpriced_media,
+                    estimate_message = self._estimate_countable_message,
                     anchor_ids = _rolling_anchor_ids,
                     keeps_boundary = _keeps_compaction_boundary(thread_id),
                     can_reset = _final_can_reset,
@@ -3778,11 +3483,12 @@ class _ToolLoopMixin:
                         conversation,
                         _before_final_fit,
                         branch_messages = _extend_live_branch(_before_final_fit),
+                        # The budget nudge and loop notices are user turns; search for the user's question.
+                        query_messages = _request_branch,
                         thread_id = thread_id,
                         # Inline: under tool_choice "none" a forged tool role breaks strict templates.
                         style = "inline",
-                        # Checkpoint mode recalls once, on the turn that reset; rolling has no
-                        # such key and keeps recalling on every turn that evicted anything.
+                        # Checkpoint mode recalls once, on the reset turn; rolling mode recalls on every turn that evicted.
                         force_recall = bool(truncation.get("checkpoint_started", True)),
                         # A rescued refusal may evict messages; archive them without recall.
                         recall_done = _conversation_recall_done or not truncation["fits"],
@@ -3794,7 +3500,7 @@ class _ToolLoopMixin:
                         ),
                         count_tokens = lambda fitted: self.count_chat_tokens(
                             neutralize_control_markup_in_messages(
-                                messages_without_unpriced_media(fitted),
+                                self._countable_messages(fitted),
                                 None,
                                 self.markup_profile,
                             ),
@@ -3803,6 +3509,8 @@ class _ToolLoopMixin:
                             strict = True,
                             chat_template_kwargs = _reasoning_kw,
                         ),
+                        cancel_check = lambda: bool(cancel_event and cancel_event.is_set()),
+                        background = True,
                     )
                     conversation = _recalled["conversation"]
                     truncation = {**truncation, **_recalled["counts"]}
@@ -3819,22 +3527,14 @@ class _ToolLoopMixin:
                             conversation, _request_branch, compaction_headroom_ratio
                         ),
                     }
-                # `fits` False too: it carries the diagnosis the client needs to explain
-                # WHY. Otherwise the user only sees llama-server's error, which reports
-                # the whole conversation's size and advises shortening it even when the
-                # single message just sent is the part that does not fit.
+                # Re-cost here, not at the breaks: results and nudges appended after the last re-cost left the pool unaware of this final pass, the largest request.
                 if truncation:
                     yield {"type": "context_truncated", **truncation}
                 _final_preflight_succeeded = True
             except Exception as exc:
                 logger.warning("Could not preflight the rolling context window: %s", exc)
 
-        # The loop's callback fires at the TOP of a round, so the breaks leading here (the
-        # tool-iteration cap, a controller turning tools off) leave the assistant turn,
-        # its tool results and any nudge appended after the last re-cost -- making this
-        # final pass the largest request of the run and the one the pool never heard
-        # about. Here rather than at the breaks: the recall above can rebind
-        # `conversation`, and every path reaches this point with the list about to be sent.
+        # Continuations for the final pass: it runs after the loop breaks, so the tool loop continuation never reaches a turn cut off mid-answer.
         if on_conversation_grew is not None:
             try:
                 on_conversation_grew(conversation)
@@ -3914,11 +3614,12 @@ class _ToolLoopMixin:
             try:
                 conversation, truncation = _fit_with_instruction_pins(
                     conversation,
+                    on_compacting = _compaction_reporter(perf_callback),
                     context_length = self._effective_context_length,
                     max_tokens = max_tokens,
                     count_tokens = lambda fitted: self.count_chat_tokens(
                         neutralize_control_markup_in_messages(
-                            messages_without_unpriced_media(fitted), None, self.markup_profile
+                            self._countable_messages(fitted), None, self.markup_profile
                         ),
                         None,
                         _final_tools,
@@ -3926,7 +3627,7 @@ class _ToolLoopMixin:
                         chat_template_kwargs = _reasoning_kw,
                         should_abort = lambda: bool(cancel_event and cancel_event.is_set()),
                     ),
-                    estimate_message = estimate_message_tokens_without_unpriced_media,
+                    estimate_message = self._estimate_countable_message,
                     anchor_ids = _rolling_anchor_ids,
                     keeps_boundary = _keeps_compaction_boundary(thread_id),
                     can_reset = _can_reset_epoch(
@@ -3947,10 +3648,11 @@ class _ToolLoopMixin:
                             style = "inline",
                             recall_done = True,
                             branch_messages = _extend_live_branch(conversation),
+                            cancel_check = lambda: bool(cancel_event and cancel_event.is_set()),
+                            background = True,
                         )["counts"]
                     )
-                # Recorded rather than only forwarded, for the same reason as the
-                # iteration refit above.
+                # Recorded, not only forwarded, for the same reason as the iteration refit above.
                 from core.inference import context_refusal  # noqa: PLC0415
 
                 context_refusal.record_fit(truncation)
@@ -4016,10 +3718,7 @@ class _ToolLoopMixin:
         _metadata_finish_reason = None
         _stream_done = False
 
-        # The tool loop's continuation does not reach here: this generation runs AFTER
-        # the loop breaks, so a turn that spends its whole tool budget and is then cut
-        # off mid-answer had nothing to recover it. Observed live: 25 tool calls, 22387
-        # tokens, stopped inside drawBird() with the game left half-written.
+        # A caller cap yields only its remainder, never a fresh one, so continuations cannot exceed the limit; None when unset or the whole window.
         _final_length_continuations = 0
         _continue_final = False
         _final_replayed_chars = 0
@@ -4043,10 +3742,7 @@ class _ToolLoopMixin:
             window = self._effective_context_length or 0
             if window and max_tokens >= window:
                 return None
-            # This attempt's own cost. A server that reported usage gives it exactly;
-            # without one, a `length` stop still means the attempt produced the whole
-            # allowance it was given, so charge that. Guessing LOW here is what lets the
-            # caller's cap be overrun, which is the defect this exists to prevent.
+            # Whether the continuation fits once the partial is appended, so a reopen is not rejected before any token; an uncountable prompt fails open.
             _this_attempt = (
                 _backfill_usage_from_timings(_metadata_usage, _metadata_timings) or {}
             ).get("completion_tokens", 0) or int(stream_payload.get("max_tokens") or 0)
@@ -4057,22 +3753,13 @@ class _ToolLoopMixin:
             continue_flag: bool,
             reasoning_kw = _UNSET,
         ) -> bool:
-            """Whether the retry's own prompt still fits, now that the partial is in it.
-
-            The first pass reached `finish_reason: length` by consuming the physical
-            context, so appending everything it produced makes the next prompt roughly
-            context-sized. Reopening the stream without asking gets it rejected before a
-            single extra token arrives, which is worse than stopping: the user keeps the
-            partial either way, and one of the two paths also shows an error.
-
-            A count that cannot be taken is not a refusal. Failing open here restores the
-            behaviour this continuation had before the check, which is the safe side.
-            """
+            """Whether the continuation fits once the partial is appended; an uncountable prompt
+            fails open."""
             if not self._effective_context_length:
                 return True
             try:
                 _tokens = self.count_chat_tokens(
-                    messages_without_unpriced_media(candidate_messages),
+                    self._countable_messages(candidate_messages),
                     None,
                     _final_tools,
                     strict = True,
@@ -4086,12 +3773,7 @@ class _ToolLoopMixin:
             except Exception:
                 logger.debug("final continuation: prompt count failed", exc_info = True)
                 return True
-            # NOT `turn_is_servable`: that charges `_RESULT_NOTICE_RESERVE`, the room a
-            # truncated TOOL RESULT needs for its notice, and a continuation has no tool
-            # result. Borrowing it here refuses continuations that would have been served
-            # and produced text, which is the working behaviour this check exists beside,
-            # not instead of. llama-server admits a prompt on size alone, so that is the
-            # line, minus only enough room to answer in.
+            # Not turn_is_servable: that reserves room for a tool-result notice.
             _floor = _reply_floor(self._effective_context_length)
             if _tokens + _floor <= self._effective_context_length:
                 return True
@@ -4103,11 +3785,7 @@ class _ToolLoopMixin:
             )
             return False
 
-        # Where the visible answer stood when THIS attempt began. `has_content_tokens`
-        # and `_last_emitted` are cumulative across continuations by design, so without a
-        # per-attempt mark a continuation that emitted nothing but reasoning still looked
-        # like another truncated visible answer: it replayed an empty suffix with thinking
-        # left on instead of taking the reasoning-only recovery.
+        # Per-attempt mark: emitted state is cumulative across continuations.
         _attempt_started_at = ""
         while True:
             try:
@@ -4156,12 +3834,7 @@ class _ToolLoopMixin:
                                             _metadata_finish_reason,
                                             promote_reasoning_only,
                                         )
-                                        # The block is closed now, so the flag must say
-                                        # so. Left set, the thinking-off retry below
-                                        # closes it a SECOND time on its first content
-                                        # token: `<think>...</think></think>answer`, and
-                                        # the route parses only the leading pair, so the
-                                        # stray tag is shown to the user as answer text.
+                                        # Clear it, or the retry closes the block twice and shows a stray tag.
                                         in_thinking = False
                                         _prov_entry = None
                                         yield {"type": "content", "text": cumulative}
@@ -4235,18 +3908,27 @@ class _ToolLoopMixin:
                                             if auto_heal_tool_calls
                                             else cumulative
                                         )
+                                        if auto_heal_tool_calls:
+                                            cleaned = _final_answer_visible(cleaned, answer_text)
                                         # Emit only when cleaned text grows (monotonic).
-                                        if len(cleaned) > len(_last_emitted):
+                                        if cleaned is not None and len(cleaned) > len(
+                                            _last_emitted
+                                        ):
                                             _last_emitted = cleaned
                                             yield {"type": "content", "text": cleaned}
                             except json.JSONDecodeError:
                                 logger.debug(f"Skipping malformed SSE line: {line[:100]}")
                         if _stream_done:
                             break  # exit outer for
-                    # Cut off mid-answer with real text on screen: resume it rather than
-                    # stop here. Same rule as the in-loop path -- the partial goes back to
-                    # be EXTENDED, thinking is left alone because it was not the problem,
-                    # and an answer that is mostly an echo of itself is left as it is.
+                    if auto_heal_tool_calls and has_content_tokens and not in_thinking:
+                        # Release an answer still held as a possible bare-JSON call.
+                        _flushed = _final_answer_visible(
+                            _final_answer_stripper.strip(cumulative), answer_text, at_end = True
+                        )
+                        if len(_flushed) > len(_last_emitted):
+                            _last_emitted = _flushed
+                            yield {"type": "content", "text": _flushed}
+                    # Commit the candidate only once another stream runs, so usage is not double counted; replay only new text, or the fragment is repeated.
                     _shown_this_attempt = _last_emitted[len(_attempt_started_at) :]
                     if (
                         _metadata_finish_reason == "length"
@@ -4266,16 +3948,7 @@ class _ToolLoopMixin:
                             _final_length_continuations,
                             _MAX_LENGTH_CONTINUATIONS,
                         )
-                        # Built as a CANDIDATE, committed only once another stream is
-                        # certain to run. Mutating the payload first and folding the usage
-                        # in first meant a refused continuation had already spent both:
-                        # `_build_metadata_event` adds the same usage again, so the reply
-                        # reported roughly double the tokens it really cost.
-                        #
-                        # Only what is NEW since the last replay goes back. `_last_emitted`
-                        # is cumulative across attempts, and the helper PREPENDS the
-                        # trailing assistant text, so handing it the cumulative value a
-                        # second time yields "fragment1 + fragment1 + continuation1".
+                        # Neutralize the replayed text before it is counted, so delimiters are not read back as chat structure and the count matches the payload.
                         _candidate_messages = list(stream_payload["messages"])
                         _merged_f = trailing_assistant_text(_candidate_messages) is not None
                         _append_assistant_turn(
@@ -4286,11 +3959,7 @@ class _ToolLoopMixin:
                             },
                             continue_final_message = True,
                         )
-                        # The replay is text the MODEL just produced, and the first payload
-                        # neutralized everything it carried. Sent raw, a template delimiter
-                        # inside it -- printed code being the obvious case -- is read back
-                        # as chat structure. Neutralized before it is counted as well, so
-                        # the admission number describes the payload actually sent.
+                        # Neutralize the model's replayed text so delimiters aren't read as chat structure.
                         _candidate_messages = neutralize_control_markup_in_messages(
                             _candidate_messages, None, self.markup_profile
                         )
@@ -4300,9 +3969,7 @@ class _ToolLoopMixin:
                             _candidate_messages, True
                         )
                         if _next_cap != 0 and not _served:
-                            # Same reason as the in-loop path: this is the last decision
-                            # of the turn, so a candidate one eviction short of servable
-                            # gets that eviction rather than being abandoned.
+                            # As the in-loop path: last decision of the turn, so one eviction short still gets that eviction.
                             _evicted_f = _evict_until_it_fits(
                                 _candidate_messages,
                                 _final_tools,
@@ -4322,8 +3989,7 @@ class _ToolLoopMixin:
                             stream_payload["add_generation_prompt"] = False
                             if _next_cap is not None:
                                 stream_payload["max_tokens"] = _next_cap
-                            # Folded in only now, else the reported usage counts the last
-                            # fragment alone.
+                            # Folded in only now, else the reported usage counts just the last fragment.
                             _fu_f = (
                                 _backfill_usage_from_timings(_metadata_usage, _metadata_timings)
                                 or {}
@@ -4334,23 +4000,13 @@ class _ToolLoopMixin:
                             _accumulated_predicted_n += _it_f.get("predicted_n", 0)
                             _stream_done = False
                             _metadata_finish_reason = None
-                            # Per attempt, like the finish reason. This attempt's usage has
-                            # just been folded into the accumulator, so leaving it here lets
-                            # a next attempt that reports none be charged these numbers a
-                            # second time -- and the cap read off that total can then look
-                            # spent when it is not.
+                            # Reset per attempt so the next one is not charged twice.
                             _metadata_usage = None
                             _metadata_timings = None
-                            # The next attempt starts from what is on screen now, so a
-                            # continuation that shows nothing new is judged on its own.
+                            # Next attempt starts from what is on screen now, so a continuation with nothing new is judged alone.
                             _attempt_started_at = _last_emitted
                             _continue_final = True
-                            # NO blank status here, unlike the in-loop re-prompt. An empty
-                            # status is the route's iteration boundary and resets its
-                            # `prev_text` cursor, but this pass keeps `cumulative` across
-                            # attempts by design: the retry's first content event carries
-                            # the whole prefix again, and diffed from a cursor that has
-                            # just been cleared the client is sent the partial twice.
+                            # No blank status: it resets the route cursor and the partial would be sent twice.
                             yield {
                                 "type": "status",
                                 "text": _CONTINUE_TRUNCATED_ANSWER_STATUS,
@@ -4366,11 +4022,7 @@ class _ToolLoopMixin:
                         and not _shown_this_attempt.strip()
                         and reasoning_text.strip()
                     ):
-                        # The other half of the same failure, and the one the in-loop
-                        # continuation cannot reach: this pass runs AFTER the loop has
-                        # broken, so a turn that spends its last tool call here and then
-                        # thinks until the window is gone renders as an empty message.
-                        # `force_final_answer` from a one-shot tool lands here too.
+                        # Reasoning-only stop after the loop broke; would render empty otherwise.
                         if _final_length_continuations < _MAX_LENGTH_CONTINUATIONS:
                             from core.inference.chat_template_helpers import (  # noqa: PLC0415
                                 append_assistant_turn as _append_assistant_turn,
@@ -4384,9 +4036,7 @@ class _ToolLoopMixin:
                                 _final_length_continuations,
                                 _MAX_LENGTH_CONTINUATIONS,
                             )
-                            # Candidate first, committed only if it will actually run.
-                            # See the answer continuation above: spending the payload and
-                            # the usage before the decision double-counted both.
+                            # Build the candidate first; commit only if it will run, else payload and usage are double-counted.
                             _candidate_r = list(stream_payload["messages"])
                             _merged_r = (
                                 bool(stream_payload.get("continue_final_message"))
@@ -4405,17 +4055,15 @@ class _ToolLoopMixin:
                             _candidate_r.append(
                                 {"role": "user", "content": _continue_after_length_message()}
                             )
-                            # Same reason as the answer continuation above: the progress
-                            # note quotes the model's own reasoning.
+                            # Neutralize: the progress note quotes the model's reasoning.
                             _candidate_r = neutralize_control_markup_in_messages(
                                 _candidate_r, None, self.markup_profile
                             )
-                            # The retry runs with thinking OFF, so it has to be ADMITTED
-                            # with thinking off too. Counting the candidate under the
-                            # original thinking-on kwargs prices a different rendered
-                            # prompt from the one about to be sent, which refuses a retry
-                            # that would have fit or admits one llama-server then rejects.
-                            _off_kw = self._request_reasoning_kwargs(False, None, preserve_thinking)
+                            # Admit with thinking-off kwargs, matching the request actually sent.
+                            _off_kw = _with_template_extras(
+                                self._request_reasoning_kwargs(False, None, preserve_thinking),
+                                chat_template_kwargs,
+                            )
                             _next_cap_r = _remaining_output_budget()
                             # Protect the current user turn and recovery tail.
                             _recovery_tail = _candidate_r[-2:]
@@ -4459,39 +4107,24 @@ class _ToolLoopMixin:
                                 _accumulated_predicted_n += _it_r.get("predicted_n", 0)
                                 _stream_done = False
                                 _metadata_finish_reason = None
-                                # Per attempt, like the finish reason. This attempt's usage has
-                                # just been folded into the accumulator, so leaving it here lets
-                                # a next attempt that reports none be charged these numbers a
-                                # second time -- and the cap read off that total can then look
-                                # spent when it is not.
+                                # Reset per attempt so the next one is not charged twice.
                                 _metadata_usage = None
                                 _metadata_timings = None
-                                # The next attempt starts from what is on screen now, so a
-                                # continuation that shows nothing new is judged on its own.
+                                # Next attempt starts from what is on screen now, so a continuation with nothing new is judged alone.
                                 _attempt_started_at = _last_emitted
                                 _continue_final = True
-                                # Same reason as the answer continuation above: clearing
-                                # the route's cursor here replays what has already been
-                                # streamed, reasoning included.
+                                # No blank status here: it would replay what was already streamed.
                                 yield {
                                     "type": "status",
                                     "text": _CONTINUE_AFTER_LENGTH_STATUS,
                                 }
                             else:
                                 yield {"type": "status", "text": ""}
-                                # Content events on this stream are CUMULATIVE, so an
-                                # explanation sent on its own replaces whatever is on
-                                # screen. Once a previous attempt has shown an answer,
-                                # keeping it is worth more than the advice: the partial
-                                # already offers Continue.
+                                # Content events are cumulative: don't overwrite an answer already shown.
                                 if not _last_emitted.strip():
                                     yield {
                                         "type": "content",
-                                        # Same distinction the in-loop give-up makes. A
-                                        # spent output cap is not the context window, and
-                                        # this text reaches the client as ordinary
-                                        # content, so naming the wrong lever here is the
-                                        # last word the user gets.
+                                        # Allowance spent with nothing shown: say so, since an empty message is not actionable; re-read the cap, as the last attempt may have hit Max Tokens.
                                         "text": (
                                             _reasoning_cap_spent_message(max_tokens)
                                             if _next_cap_r == 0
@@ -4508,17 +4141,10 @@ class _ToolLoopMixin:
                                 if _meta is not None:
                                     yield _meta
                         else:
-                            # Allowance spent and still nothing on screen. Saying so is
-                            # the point: an empty message gives the user nothing to act on.
-                            #
-                            # Which allowance, re-read here rather than assumed: the last
-                            # permitted attempt may itself have finished off an explicit
-                            # Max Tokens, and this branch is reached with no decision
-                            # about the cap ever having been made.
+                            # Allowance spent with nothing shown: say so. Re-read the cap here.
                             _cap_left_g = _remaining_output_budget()
                             yield {"type": "status", "text": ""}
-                            # As above: cumulative content, so this must not overwrite an
-                            # answer an earlier attempt already put on screen.
+                            # Content is cumulative: this must not overwrite an answer an earlier attempt already showed.
                             if not _last_emitted.strip():
                                 yield {
                                     "type": "content",
@@ -4556,10 +4182,7 @@ class _ToolLoopMixin:
                 break
 
             except _LlamaStreamCancelled:
-                # No flush here: the buffers ``_cancelled_hold_text`` reads are bound inside the
-                # TOOL LOOP and are never rebound for this pass, which emits incrementally and
-                # holds nothing back. Flushing them replayed the previous iteration's planning
-                # text as this pass's answer, after the status boundary reset the route cursor.
+                # Strict callers raise, others get 0; should_abort is polled between the two calls; prefer_native tries /v1/chat/completions/input_tokens first.
                 return
             except httpx.ConnectError:
                 raise RuntimeError("Lost connection to llama-server")

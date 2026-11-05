@@ -11,27 +11,16 @@ from typing import Optional
 
 from .log import logger
 
-# Canonical reasoning_effort levels, weakest -> strongest. Used to read the
-# discrete set a template branches on (e.g. GLM-5.2 uses 'high' | 'max', Inkling
-# uses the full 'none'..'max' ladder) so we only ever offer levels the template
-# actually understands. Must stay in sync with REASONING_EFFORT_SCALE in
+# Ordered weakest -> strongest. Must stay in sync with REASONING_EFFORT_SCALE in
 # studio/frontend/src/features/chat/provider-capabilities.ts.
 _REASONING_EFFORT_SCALE = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Match a Qwen3.8 path/repo segment without treating future names such as
-# Qwen3.80 as part of the family. Official ids continue after the version with
-# a dash (for example Qwen3.8-27B-GGUF).
+# Matches Qwen3.8 but not future names such as Qwen3.80.
 _QWEN38_MODEL_RE = re.compile(r"(?:^|[^a-z0-9])qwen3\.8(?:$|[-_/\\])", re.IGNORECASE)
 
 
 def _extract_reasoning_effort_levels(chat_template: str) -> list:
-    """Return the reasoning_effort levels a template references, in canonical
-    (weakest -> strongest) order.
-
-    Looks for the quoted literals (e.g. ``'high'`` / ``"max"``) the template
-    compares ``reasoning_effort`` against, so we surface exactly the levels it
-    branches on and nothing else.
-    """
+    """Reports only the levels the template quotes, in canonical order, not the whole scale."""
     return [
         level
         for level in _REASONING_EFFORT_SCALE
@@ -39,17 +28,23 @@ def _extract_reasoning_effort_levels(chat_template: str) -> list:
     ]
 
 
+def _reasoning_effort_allowlist(chat_template: str) -> list:
+    match = _REASONING_EFFORT_ALLOWLIST_RE.search(chat_template)
+    return _extract_reasoning_effort_levels(match.group(1)) if match else []
+
+
+# Only a validation guard: a plain membership branch can group levels or reject the ones it names.
+_REASONING_EFFORT_ALLOWLIST_RE = re.compile(
+    r"\{%-?\s*if\s+reasoning_effort\s+not\s+in\s+\[([^\]]*)\]\s*-?%\}\s*\{\{-?\s*raise_exception\("
+)
+
+
 # Log each substitution once per (levels, requested) pair.
 _REASONING_EFFORT_CLAMPS_LOGGED: set = set()
 
 
 def _clamp_reasoning_effort_to_levels(effort: Optional[str], levels) -> Optional[str]:
-    """Match the UI clamp: prefer the nearest lower level, then the weakest.
-
-    Use max for an unavailable xhigh if offered. Return None for an absent or
-    unknown effort or an empty ladder. See clampReasoningEffortToLevels in
-    studio/frontend/src/features/chat/provider-capabilities.ts.
-    """
+    """Mirrors the UI clamp in provider-capabilities.ts: prefer the nearest lower level, then the weakest; an unavailable xhigh becomes max when offered."""
     if effort not in _REASONING_EFFORT_SCALE or not levels:
         return None
     if effort == "xhigh" and "xhigh" not in levels and "max" in levels:
@@ -64,19 +59,35 @@ def _clamp_reasoning_effort_to_levels(effort: Optional[str], levels) -> Optional
     return below[-1] if below else offered[0]
 
 
-# Headers already described in the log, keyed on identity rather than name so a rebuilt
-# GGUF at the same path is described again. Bounded; a dropped entry only re-logs once.
+def _rendered_chat_template(backend) -> Optional[str]:
+    # getattr: test doubles skip __init__ and borrow backend methods unbound.
+    return getattr(backend, "_chat_template_override", None) or getattr(
+        backend, "_chat_template", None
+    )
+
+
+def _fit_reasoning_effort_to_template(
+    chat_template: Optional[str],
+    effort,
+    thinking_off: bool = False,
+):
+    """A level the template's raising allowlist rejects becomes one it accepts, so the render cannot fail."""
+    allowed = _reasoning_effort_allowlist(chat_template or "")
+    if not allowed or effort in allowed:
+        return effort
+    if thinking_off and "none" in allowed:
+        return "none"
+    return _clamp_reasoning_effort_to_levels(effort, allowed) or effort
+
+
+# Keyed on identity, not name, so a rebuilt GGUF at the same path is logged again.
 _GGUF_METADATA_LOGGED: "dict[tuple, bool]" = {}
 _GGUF_METADATA_LOGGED_MAX = 32
 _GGUF_METADATA_LOGGED_LOCK = threading.Lock()
 
 
 def _note_gguf_metadata_read(gguf_path: str) -> bool:
-    """True the first time this exact file is read, False for repeats.
-
-    Falls open when the file cannot be stat'd: an unidentifiable read is better logged
-    than silently swallowed.
-    """
+    """True on the first read of this file or when its stat fails; False on repeat reads."""
     try:
         st = os.stat(gguf_path)
         key = (os.path.abspath(gguf_path), st.st_size, st.st_mtime_ns)
@@ -99,18 +110,7 @@ def detect_reasoning_flags(
     log_source: Optional[str] = None,
     log_level: str = "info",
 ) -> dict:
-    """Classify a chat template's reasoning and tool-calling capabilities.
-
-    Returns the same seven keys as the GGUF sniffer: ``supports_reasoning``,
-    ``reasoning_style`` (``"enable_thinking"`` | ``"reasoning_effort"`` |
-    ``"enable_thinking_effort"``), ``reasoning_always_on``,
-    ``reasoning_effort_levels``, ``supports_preserve_thinking``,
-    ``preserve_thinking_default``, ``supports_tools``. A falsy
-    ``chat_template`` yields the all-default dict.
-    Used by both the llama-server backend at load time and the
-    safetensors/transformers paths in ``routes/inference`` so they agree on
-    what the frontend sees.
-    """
+    """Shared by the llama-server and safetensors paths so both agree on the flags the frontend sees."""
     flags = {
         "supports_reasoning": False,
         "reasoning_style": "enable_thinking",
@@ -124,24 +124,17 @@ def detect_reasoning_flags(
         return flags
     tpl = chat_template
     prefix = f"{log_source}: " if log_source else ""
-    # The GGUF sniffer re-derives these several times per request and the lines say the
-    # same thing every time, so it asks for debug after the first read of a file.
+    # The GGUF sniffer re-derives these per request, so it logs at debug after the first read of a file.
     _log = logger.debug if log_level == "debug" else logger.info
 
-    # 'none' is this style's disable sentinel, not an effort level: the off
-    # switch is enable_thinking=false, and the Think menu already hides it.
-    # Left in, it is the weakest level, so a stored effort the model does not
-    # offer clamps onto it and silently disables thinking (Kimi-K3).
+    # 'none' is this style's disable sentinel; left in, a clamp would silently disable thinking.
     effort_levels = (
         [lv for lv in _extract_reasoning_effort_levels(tpl) if lv != "none"]
         if ("reasoning_effort" in tpl and "enable_thinking" in tpl)
         else []
     )
     if effort_levels:
-        # DeepSeek-V4's encoder accepts reasoning_effort {'high', 'max'} but its
-        # template only branches on 'max', so the literal scan misses 'high'. Add it
-        # (matched on whole repo-name segments, so 'deepseek-v40' won't false-match)
-        # to expose the full high/max ladder instead of max alone.
+        # DeepSeek-V4 takes high but its template only branches on max, so add it; match whole repo-name segments so deepseek-v40 does not false-match.
         from core.inference.model_ids import hf_cache_repo_id
 
         # A snapshot path's last component is the revision, so read it as its repo id first.
@@ -152,11 +145,7 @@ def detect_reasoning_flags(
         )
         if is_dsv4 and "high" not in effort_levels:
             effort_levels = sorted(set(effort_levels) | {"high"}, key = _REASONING_EFFORT_SCALE.index)
-        # GLM-5.2-style: an enable_thinking on/off gate PLUS a reasoning_effort
-        # level among a discrete set (e.g. 'high' | 'max'). Distinct from
-        # gpt-oss (reasoning_effort only, no on/off gate) and Qwen
-        # (enable_thinking only). Disabling is enable_thinking=false; the levels
-        # are the quoted effort literals the template actually branches on.
+        # GLM-5.2 style: enable_thinking gate plus a discrete reasoning_effort level set.
         flags["supports_reasoning"] = True
         flags["reasoning_style"] = "enable_thinking_effort"
         flags["reasoning_effort_levels"] = effort_levels
@@ -169,18 +158,14 @@ def detect_reasoning_flags(
         flags["reasoning_style"] = "enable_thinking"
         _log(f"{prefix}model supports reasoning (enable_thinking)")
     elif "reasoning_effort" in tpl:
-        # gpt-oss / Harmony use reasoning_effort
-        # ("low" | "medium" | "high"), not a boolean. Inkling maps a wider
-        # named ladder ('none'..'max'); surface the levels the template
-        # actually branches on so the Think menu offers exactly those and
-        # nothing more ('none' renders as thinking off: effort 0). Guard:
-        # trust the scan only when it includes the core 'low' and 'high'
-        # literals, so a template that quotes e.g. 'none' for an unrelated
-        # comparison keeps the default low/medium/high set.
+        # gpt-oss / Harmony use reasoning_effort levels; trust the scan only if it has 'low' and 'high'.
         flags["supports_reasoning"] = True
         flags["reasoning_style"] = "reasoning_effort"
         scanned = _extract_reasoning_effort_levels(tpl)
-        if "low" in scanned and "high" in scanned:
+        allowed = _reasoning_effort_allowlist(tpl)
+        if any(level != "none" for level in allowed):
+            flags["reasoning_effort_levels"] = allowed
+        elif "low" in scanned and "high" in scanned:
             flags["reasoning_effort_levels"] = scanned
         _log(
             f"{prefix}model supports reasoning "
@@ -193,21 +178,17 @@ def detect_reasoning_flags(
             flags["supports_reasoning"] = True
             _log(f"{prefix}model supports reasoning (DeepSeek thinking)")
 
-    # Hardcoded <think> tags or reasoning_content in the template mean
-    # thinking is always on (no toggle).
+    # Hardcoded <think> or reasoning_content means thinking is always on.
     if not flags["supports_reasoning"]:
         if ("<think>" in tpl and "</think>" in tpl) or "reasoning_content" in tpl:
             flags["supports_reasoning"] = True
             flags["reasoning_always_on"] = True
             _log(f"{prefix}model always reasons (<think> tags in template)")
 
-    # preserve_thinking: independent kwarg on some Qwen templates that
-    # keeps historical <think> blocks in prior assistant turns.
+    # preserve_thinking is an independent kwarg on some Qwen templates that keeps prior <think> blocks.
     if "preserve_thinking" in tpl:
         flags["supports_preserve_thinking"] = True
-        # Qwen3.8 deliberately changed the family default from the off behavior
-        # used by Qwen3.6 and Gemma 4. Keep the product override family-scoped:
-        # other templates that happen to expose the same kwarg stay off.
+        # Qwen3.8 deliberately defaults preserve_thinking on; keep it family-scoped.
         flags["preserve_thinking_default"] = bool(_QWEN38_MODEL_RE.search(model_identifier or ""))
         _log(f"{prefix}model supports preserve_thinking")
 
@@ -220,10 +201,7 @@ def detect_reasoning_flags(
     return flags
 
 
-# Inkling's template takes a numeric thinking-effort dial (0..0.99) and its
-# float() coercion turns unrecognized named levels into 0, i.e. no thinking.
-# Map OpenAI-style names to the values the model was trained on. Module-level
-# so duck-typed engine stand-ins in tests do not need the attribute.
+# Inkling's float() coercion turns unknown names into 0 (no thinking), so map them.
 _INKLING_REASONING_EFFORT = {
     "none": 0.0,
     "minimal": 0.1,

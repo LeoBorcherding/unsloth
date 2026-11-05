@@ -25,11 +25,7 @@ def _probe_dns_dead(host: Optional[str] = None, timeout: float = 2.0) -> bool:
 
 
 def _hf_env_offline() -> bool:
-    """True when an HF offline env var is set to any truthy value (1/true/yes/on).
-
-    Mirrors utils.models.model_config._env_offline so a user-set HF_HUB_OFFLINE=true
-    (not just "1") still routes through the local-cache reuse path below.
-    """
+    """Accepts any truthy HF_HUB_OFFLINE (1, true, yes, on) to match _env_offline, not only 1."""
     try:
         from utils.models.model_config import _env_offline
         return _env_offline()
@@ -38,20 +34,12 @@ def _hf_env_offline() -> bool:
 
 
 def _hf_unreachable() -> bool:
-    """True when the Hub can't be reached: dead DNS, or DNS that resolves with no egress.
-
-    DNS alone misses the common shapes (WAN down behind a live router, captive portal,
-    stale cache), leaving every hub call to burn its retry backoff. The DNS shortcut stands
-    down when a proxy is configured, since the proxy resolves the host.
-    """
+    """DNS alone misses captive portals and WAN outages; the DNS shortcut is skipped when a proxy is set."""
     try:
         from utils.utils import hf_dns_dead, hf_reachability_memo, hf_unreachable
     except Exception:
         return False
-    # A fresh verdict already answers this. One request opens several guards, and the DNS
-    # shortcut is only cheap when DNS is fast: a slow resolver costs its full timeout per
-    # guard and leaves a stuck thread behind each time. Peek only, never record: a dead
-    # lookup fails fast anyway, and recording it would make recovery sticky for the TTL.
+    # Reuse a fresh verdict (a slow resolver costs a timeout per guard). Peek only, never record: recording a dead lookup would make recovery sticky for the TTL.
     memo = hf_reachability_memo()
     if memo is not None:
         return memo
@@ -68,16 +56,12 @@ _MISS = object()
 _GGUF_UINT_WIDTHS = {0: 1, 2: 2, 4: 4, 10: 8}
 
 
+_GGUF_MARKUP_FIRST_BYTES = frozenset(b"<[")
+
+
 @contextlib.contextmanager
 def _hf_offline_if_unreachable():
-    """Force HF offline for this block only when the Hub is unreachable; restores on exit
-    so a transient hiccup can't quarantine the process. No-op if the USER set the env var.
-
-    Env vars alone are too late mid-process (the offline constants are read at import), so
-    this holds a refcounted force_hf_offline window. Overlapping requests each take their
-    own reference: no-opping would let another guard's exit restore the network
-    mid-operation and drop this request back onto the retry path.
-    """
+    """Refcounted so one guard exit cannot re-enable the Hub mid-request. Forces offline only when unreachable; no-op if the user set the env var."""
     try:
         from utils.utils import force_hf_offline, force_hf_offline_state, hf_env_offline
     except Exception:
@@ -85,13 +69,11 @@ def _hf_offline_if_unreachable():
         return
 
     ours, hf_hub_env_present = force_hf_offline_state()
-    # Membership preserves HF_HUB_OFFLINE=0 as an explicit stay-online override.
-    # Read it with the refcount so a concurrent guard cannot look user-owned.
+    # Membership keeps HF_HUB_OFFLINE=0 as a stay-online override. Read it under the refcount so a concurrent guard cannot look user-owned.
     if hf_hub_env_present and not ours:
         yield False
         return
-    # TRANSFORMERS_OFFLINE alone still asks for offline, and the hub does not read it.
-    # Honour it directly: probing would put network traffic in an explicitly offline process.
+    # The hub ignores TRANSFORMERS_OFFLINE, so honour it here without probing.
     if not ours and hf_env_offline():
         with force_hf_offline():
             yield True
@@ -120,12 +102,7 @@ def _hf_offline_if_unreachable_for(model_name):
 
 
 def _hf_repo_from_url(url: Optional[str]) -> Optional[str]:
-    """Strip `https://huggingface.co/owner/name(/...)` -> `owner/name`.
-
-    A mirrored HF_ENDPOINT is recognised too, so a URL recorded on a mirror
-    still resolves to its repo id. huggingface.co stays accepted either way:
-    the same install can hold entries written before the mirror was set.
-    """
+    """Strips a huggingface.co or mirrored HF_ENDPOINT URL to owner/name; huggingface.co still accepted."""
     if not url:
         return None
     from utils.hf_endpoint import get_hf_endpoint

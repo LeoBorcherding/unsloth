@@ -13,93 +13,29 @@ from utils.gguf_archs import (
 )
 
 from .log import logger
+from utils import gguf_archs as _gguf_archs
+from utils.gguf_archs import is_foreign_asr_gguf_architecture
 
 
 class _PreflightMixin:
     # ── Lifecycle ─────────────────────────────────────────────────
 
-    # GGUF ``general.architecture`` values for diffusion / image models.
-    # llama.cpp has no such architectures, so loading one as a chat model dies
-    # with "unknown model architecture: '<arch>'". These match the patched
-    # stable-diffusion.cpp / ComfyUI-GGUF enums. Unsloth publishes FLUX and
-    # Qwen-Image GGUFs under
-    # https://huggingface.co/collections/unsloth/unsloth-diffusion-ggufs.
-    # Matched exactly (not a substring) so a chat arch containing "wan"/"sd1"
-    # (e.g. "taiwan") isn't misrouted to Images.
-    _IMAGE_ARCHES = frozenset(
-        (
-            "qwen_image",
-            "qwen_image21",
-            "flux",
-        )
-    )
-    # Archs shared by more than one family, so the header alone does NOT say whether the
-    # Images page can run the file: Z-Image's DiT is a Lumina2 derivative, so its GGUFs
-    # declare "lumina2" too (measured on unsloth/Z-Image-Turbo-GGUF/z-image-turbo-Q2_K.gguf
-    # and on calcuis/lumina-gguf). ``routes.models._arch_to_task`` resolves these from the
-    # repo id and the filename and tags the rest ``image-diffusion-unsupported``, hiding
-    # them from the Images picker, so the refusal must run the SAME resolution before it
-    # names that page -- e.g. ``neta-art/neta-lumina-gguf/checkpoint-e3_s9658-*.gguf``
-    # declares "lumina2" and resolves to no family ("lumina-2" is not aliased to bare
-    # "lumina"). Mirrors ``routes.models._AMBIGUOUS_DIFFUSION_GGUF_ARCHS``.
-    _AMBIGUOUS_IMAGE_ARCHES = frozenset(("lumina2",))
-    # Text-to-video archs the Video page can offer. Split from the image set so the refusal
-    # names Video: sending a Wan / LTX-2 GGUF to Images is a second dead end.
-    _VIDEO_ARCHES = frozenset(
-        (
-            "ltxv",
-            "wan",
-        )
-    )
-    # Media archs Unsloth recognises but NO page can run, so the refusal must not promise
-    # one. Mirrors ``routes.models._UNSUPPORTED_DIFFUSION_GGUF_ARCHS``, which tags these
-    # ``image-diffusion-unsupported`` and so hides them from the Images AND Video pickers.
-    #   * "cosmos": no VideoFamily exists at all (``detect_video_family`` returns None for
-    #     every cosmos repo id and for override="cosmos"), and the published cosmos GGUFs
-    #     are Cosmos-Predict2-14B-Text2Image, which Images cannot assemble either.
-    #   * "hyvid": HunyuanVideo 1.0 has no VideoFamily, and the 1.5 GGUFs that do map to
-    #     one are still tagged unsupported (that family ships no ``gguf_repo``).
-    #   * "sd1" / "sd3" / "sdxl" / "aura" / "hidream": unsupported on the image side for
-    #     the same reason, so "use the Images page" was always an empty promise.
-    # Kept inside _DIFFUSION_ARCHES so the pre-launch refusal still fires, it just names no
-    # destination. Mirrors the whole set: a partial mirror leaves the same dead end.
-    _UNRUNNABLE_MEDIA_ARCHES = frozenset(
-        (
-            "cosmos",
-            "hyvid",
-            "sd1",
-            "sd3",
-            "sdxl",
-            "aura",
-            "hidream",
-        )
-    )
+    _IMAGE_ARCHES = _gguf_archs.DIFFUSION_IMAGE_GGUF_ARCHS
+    _AMBIGUOUS_IMAGE_ARCHES = _gguf_archs.AMBIGUOUS_DIFFUSION_GGUF_ARCHS
+    _VIDEO_ARCHES = _gguf_archs.VIDEO_GGUF_ARCHS
+    _UNRUNNABLE_MEDIA_ARCHES = _gguf_archs.UNSUPPORTED_DIFFUSION_GGUF_ARCHS
     _DIFFUSION_ARCHES = (
         _IMAGE_ARCHES | _AMBIGUOUS_IMAGE_ARCHES | _VIDEO_ARCHES | _UNRUNNABLE_MEDIA_ARCHES
     )
-    # TTS archs llama.cpp cannot load (CSM support is only on an unmerged upstream branch). One
-    # shared definition, so this gate and the listing classifier cannot drift.
     _SPEECH_ARCHES = _SPEECH_GGUF_ARCHS
 
-    # Not architectures: the literal placeholders gguf-connector writes into
-    # general.architecture for its diffusion GGUFs (gguf-org/flux2-dev-gguf and
-    # calcuis/cosmos-predict2-gguf both declare "pig"); ComfyUI-GGUF special cases the same
-    # two. llama.cpp knows neither, so without this they slip past the arch sets and die in
-    # llama-server as the opaque failure this preflight exists to prevent.
-    _PLACEHOLDER_ARCHES = frozenset(("pig", "cow"))
+    _PLACEHOLDER_ARCHES = _gguf_archs.PLACEHOLDER_DIFFUSION_GGUF_ARCHS
 
     @staticmethod
     def _video_arch_is_pickable(
         arch: Optional[str], gguf_path: Optional[str], model_identifier: Optional[str]
     ) -> bool:
-        """Whether the Video page would actually OFFER this GGUF.
-
-        Same fixed order ``_arch_to_task`` asks in: the ARCHITECTURE first, since some map
-        straight to a family (``detect_video_family("", override = "ltxv")`` resolves LTX-2
-        with no name to go on), then the repo id, then the filename. Whatever resolves must
-        be an MoE only when the file names one expert of a high/low noise pair (the loader
-        assembles the pair) and must be buildable by the video engine -- bare "wan" resolves
-        nothing, and an unpaired QuantStack/Wan2.2-T2V-A14B-GGUF file is not promised the page."""
+        """Asks arch, repo id, then filename in _arch_to_task's order; an MoE counts only if it names one expert of a high/low noise pair, and the engine can build it."""
         try:
             from core.inference.video_families import detect_video_family
 
@@ -124,11 +60,19 @@ class _PreflightMixin:
             return True
 
     @staticmethod
-    def _image_arch_is_pickable(gguf_path: Optional[str], model_identifier: Optional[str]) -> bool:
+    def _image_arch_is_pickable(
+        gguf_path: Optional[str],
+        model_identifier: Optional[str],
+        arch: Optional[str] = None,
+    ) -> bool:
         """The Images picker's fail-open buildability gate (Qwen-Image-2.1 needs diffusers 0.41)."""
         try:
-            from routes.models import _gguf_family_buildable
-            return _gguf_family_buildable((model_identifier, os.path.basename(gguf_path or "")))
+            from routes.models import _diffusion_gguf_family_hints, _gguf_family_buildable
+            return _gguf_family_buildable(
+                _diffusion_gguf_family_hints(
+                    arch, (model_identifier, os.path.basename(gguf_path or ""))
+                )
+            )
         except Exception as e:  # noqa: BLE001 -- never lose the page over a probe failure
             logger.debug("Family probe failed for image arch: %s", e)
             return True
@@ -137,19 +81,7 @@ class _PreflightMixin:
     def _ambiguous_image_arch_is_pickable(
         gguf_path: Optional[str], model_identifier: Optional[str]
     ) -> bool:
-        """Whether the Images page would actually OFFER this shared-arch GGUF.
-
-        The same three questions ``routes.models._arch_to_task`` asks in its
-        ``_AMBIGUOUS_DIFFUSION_GGUF_ARCHS`` branch, over the same evidence (repo id, then
-        filename): does a family resolve, can a GGUF transformer be assembled for it, can an
-        engine on THIS host build it. Both sides must answer alike -- the picker's answer is
-        what decides whether the row the refusal points at exists.
-
-        Imported lazily inside the function since ``routes`` imports this module, so the
-        canonical classifier cannot be imported from here.
-
-        Fails OPEN on a probe error, like every family probe on the listing side: naming the
-        page is a nicety, not worth losing over a broken import."""
+        """Matches routes.models._arch_to_task so the refusal never names a missing Images row; imported lazily (routes imports this module); fails open on probe error."""
         try:
             from core.inference.diffusion_engine_router import family_buildable_here
             from core.inference.diffusion_families import (
@@ -171,39 +103,27 @@ class _PreflightMixin:
             return True
 
     def _non_chat_gguf_refusal(self, gguf_path: str) -> Optional[str]:
-        """Why this GGUF cannot be a chat model, decided from its own header BEFORE
-        llama-server is launched; None when there is no such verdict.
-
-        Otherwise a media GGUF opened in a chat runs the whole download-and-launch path only
-        to die in llama-server as "llama-server failed to start", with no hint that the file
-        was never a chat model (the reported Video-model case).
-
-        The header alone is enough to be certain, in two ways:
-
-        * A declared architecture in the image / video sets. llama.cpp has no such
-          architectures, so this is exactly the failure it would hit, one launch earlier.
-        * NO ``general.architecture`` at all -- a mandatory key for anything llama.cpp can
-          load, and Unsloth's video GGUFs (MiniMax-H3) carry a bare tensor header with zero
-          KV pairs, so they never reach the arch test. Gated on ``_gguf_header_parsed`` so a
-          read that FAILED still gets its chance in llama-server.
-
-        Naming the destination page is the point, so when the architecture does not say
-        which it is, the family detectors are asked about the repo id and the filename."""
+        """Header-only refusal of adapter and media GGUFs: an adapter, a media architecture, or none
+        at all once the header parsed."""
+        # Metadata, not filenames: an adapter may declare a chat arch; a merged LoRA is a full model.
+        # Checked before the walk gate: a type that was read is definitive even from a partial prefix.
+        if getattr(self, "_gguf_type", None) == "adapter":
+            return (
+                "This GGUF is a LoRA adapter and needs a matching base model. "
+                "Select a full model GGUF for chat, or use this adapter with its base model."
+            )
         arch = (self._architecture or "").strip().lower()
-        # A declared media arch is the whole answer, and it is KV #0 in every GGUF measured,
-        # so the remote probe's prefix can carry it even where bulkier later metadata leaves
-        # the walk unfinished. The walk still gates the no-architecture fallback below, the
-        # one case where an incomplete read is indistinguishable from declaring nothing.
+        # A media arch is KV 0 so a partial remote prefix can carry it; the walk still gates the no-arch fallback, since an incomplete read looks like none.
         if (
             arch not in self._DIFFUSION_ARCHES
             and not is_speech_gguf_architecture(arch)
             and not is_audio_cpp_gguf_architecture(arch)
+            and not is_foreign_asr_gguf_architecture(arch)
             and not getattr(self, "_gguf_header_parsed", False)
         ):
             return None
         if arch in self._PLACEHOLDER_ARCHES:
-            # Names no architecture, so treat it like a GGUF that declares none and let the
-            # name-based branch below name a page.
+            # A placeholder arch counts as no architecture, so the name-based branch below decides the page.
             arch = ""
         if arch:
             if is_audio_cpp_gguf_architecture(arch):
@@ -211,9 +131,15 @@ class _PreflightMixin:
                     "This is an audio GGUF (speech, music or transcription), which cannot run as "
                     "a chat model. Open it from the Audio page instead."
                 )
+            if is_foreign_asr_gguf_architecture(arch):
+                return (
+                    f"This is a '{arch}' speech-recognition GGUF (parakeet.cpp / LocalAI), which "
+                    "llama.cpp cannot load. Updating llama.cpp will not help. For Parakeet in "
+                    "Unsloth, open the Audio page and use the curated audio.cpp model "
+                    "(Parakeet-TDT-0.6B-v3-GGUF)."
+                )
             if is_speech_gguf_architecture(arch):
-                # Points at the Transformers build, not this file on the Audio page: that page
-                # cannot list a speech GGUF either, so it would promise a row that is not there.
+                # Points at the Transformers build: the Audio page cannot list a speech GGUF either.
                 return (
                     "This is a text-to-speech GGUF, which llama.cpp cannot load: it has no "
                     "CSM decoder. Run the model's Transformers build (for example "
@@ -227,9 +153,7 @@ class _PreflightMixin:
                     "accepts it."
                 )
             if arch in self._VIDEO_ARCHES:
-                # Shared like the image archs: the canonical classifier resolves a
-                # VideoFamily by name and rejects an MoE the GGUF loader cannot assemble,
-                # so "wan" alone does not mean the Video page will list it.
+                # wan alone is not enough: the canonical classifier resolves the family by name and rejects an MoE the GGUF loader cannot assemble.
                 if self._video_arch_is_pickable(arch, gguf_path, self._model_identifier):
                     return (
                         f"This is a text-to-video GGUF (architecture '{arch}'), which "
@@ -241,7 +165,7 @@ class _PreflightMixin:
                     "from a GGUF, so the Video page does not list it either."
                 )
             if arch in self._IMAGE_ARCHES:
-                if self._image_arch_is_pickable(gguf_path, self._model_identifier):
+                if self._image_arch_is_pickable(gguf_path, self._model_identifier, arch):
                     return (
                         f"This is an image-generation GGUF (architecture '{arch}'), which "
                         "cannot run as a chat model. Open it from the Images page instead."
@@ -266,23 +190,14 @@ class _PreflightMixin:
                 )
             return None
 
-        # A shard past the first of a gguf-split set declares no architecture (shard 1 holds
-        # it) but is no media GGUF, and llama.cpp's own "model must be loaded with the first
-        # split" is more use than "carries no metadata". Needs split.no > 0 AND nothing
-        # declared: shard 1 carries the split keys too, and a placeholder arch is blanked
-        # above, so a looser test would wave through the very files the placeholder handling
-        # exists to catch. Only reachable with a hand-written variant anyway: every producer
-        # here strips the shard suffix and sorts, landing on shard 1.
+        # A later gguf-split shard declares no architecture; llama.cpp's own first-split error is better.
+        # Requires split.no > 0 and nothing declared, since shard 1 has the split keys too.
         if self._architecture is None and (self._gguf_split_index or 0) > 0:
             return None
 
-        # No architecture declared: not loadable by llama-server whatever it is. Say which
-        # page runs it when the identifiers make that clear.
+        # No architecture declared: not loadable by llama-server whatever it is; name a page only when the identifiers make that clear.
         needles = [n for n in (self._model_identifier, os.path.basename(gguf_path or "")) if n]
-        # Naming a page answers to the same predicates as the arch branches above: a family
-        # that resolves is not enough, the picker also drops an MoE it cannot assemble and a
-        # family no installed engine can build. So detect first, then ask whether the page
-        # would list it, rather than pointing at a page the model is missing from.
+        # Name a page only if its picker would actually list the model.
         try:
             from core.inference.video_families import detect_video_family
             if any(detect_video_family(n) is not None for n in needles):
@@ -322,16 +237,11 @@ class _PreflightMixin:
             "packaged this way -- try the Images or Video page, or pick a chat GGUF."
         )
 
-    # Distro package names for the shared libraries the Linux prebuilt links,
-    # so the loader failure below can say what to install.
+    # Distro packages for the Linux prebuilt's shared libs, for the loader-failure hint.
     _SHARED_LIB_PACKAGES = {
         "libgomp.so.1": " (Debian/Ubuntu: libgomp1, Fedora/RHEL: libgomp)",
     }
 
-    # Shared objects Unsloth ships itself, next to llama-server in build/bin
-    # (see runtime_payload_health_groups in install_llama_prebuilt.py, and
-    # _llama_server_env_for_binary which puts that dir on the platform's
-    # loader search path -- DYLD_LIBRARY_PATH on macOS). No
-    # distro packages these, so a loader failure naming one means the managed
-    # runtime is incomplete or mismatched, not that something must be installed.
+    # Libraries Unsloth ships in build/bin; a loader failure naming one means a broken managed
+    # runtime, not a missing package.
     _BUNDLED_LIB_PREFIXES = ("libllama", "libggml", "libmtmd")

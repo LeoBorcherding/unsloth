@@ -66,6 +66,38 @@ from .moe_cache import (
     _effective_lazy_mode,
     _lazy_read_bytes,
 )
+from core.inference.llama_server_args import _effective_tensor_parallel
+from core.inference.lookup_tables import is_per_layer_embedding as _is_per_layer_embedding
+from typing import Sequence
+from .binary_runtime import (
+    _HOST_RAM_HEADROOM_MIB,
+    _LLAMA_SHARED_LIB_RE,
+    _resolve_llama_binary,
+)
+from .draft_args import (
+    _sidecar_adapter_paths,
+)
+from .launch_flags import (
+    _env_fixes_gpu_layers,
+)
+from .launch_support import (
+    _extra_args_have_tensor_split,
+)
+from .memory_policy import (
+    _FIT_CONTROL_ENV_VARS,
+    _FIT_CONTROL_FLAGS,
+)
+from .moe_cache import (
+    _LAZY_MODE_SPELLINGS,
+    _LAZY_RESIDENT_MARGIN_FRAC,
+    _gpu_device_node_present,
+    _host_forced_in_files,
+    _is_host_input_or_head_tensor,
+    _lazy_read_names,
+    _override_places_tensor_on_device,
+    _prompt_cache_host_bytes,
+    _without_torch_gpu_probe,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -189,7 +221,9 @@ class _GpuDevicesMixin:
             named: dict[str, int] = {}
             experts = 0
             for p in paths:
-                arch, part, part_experts = self._gguf_scan_tensor_bytes(p)
+                arch, part, part_experts = self._gguf_scan_tensor_bytes(
+                    p, also = _is_host_input_or_head_tensor
+                )
                 # Shard 1 carries the metadata.
                 architecture = architecture or arch
                 for name, size in part.items():
@@ -267,11 +301,78 @@ class _GpuDevicesMixin:
         shared_gpu_ids: Optional[Iterable[int]],
         is_vulkan_backend: bool,
         probe_integrated_cuda: bool = True,
+        extra_args: Optional[Iterable[str]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        device_list: Optional[bool] = None,
+        tensor_parallel: Optional[bool] = None,
+        integrated_gpu_ids: Optional[Iterable[int]] = None,
+        child_gpu_order: Optional[Sequence[int]] = None,
     ) -> bool:
-        """Whether llama.cpp resolves ``--lazy-mode auto`` to ``off`` for this child: a model
-        device without mmap support (ggml-org/llama.cpp#28160), i.e. every selected device
-        integrated, since the default list holds iGPUs only when no discrete GPU is seen.
-        ``probe_integrated_cuda`` False uses only a cached SoC answer (no new context)."""
+        """Whether llama.cpp resolves ``--lazy-mode auto`` to ``off`` for this child.
+
+        ``child_gpu_order``: the ids the child's visibility mask will hold, in order
+        (``_planned_child_gpu_order``), for a preview whose ``env`` does not carry that
+        mask yet; a compact ``CUDA<k>`` / ``ROCm<k>`` names entry k of it."""
+        tensor = (
+            _effective_tensor_parallel(extra_args, False, env)
+            if tensor_parallel is None
+            else bool(tensor_parallel)
+        )
+        selected = None
+        override = self._effective_device_ids(extra_args, env)
+        one_device = not tensor and _split_mode_confines_to_one_device(extra_args, env)
+        if one_device:
+            main = self._effective_main_gpu(extra_args, env)
+            main = 0 if main is None else main
+            if main < 0:
+                return False
+        if override is not None and one_device:
+            override = [d for d in override if d.lower() not in _CPU_DEVICE_VALUES]
+            override = override[main : main + 1]
+        if override is not None:
+            # An RPC device reports mmap support (ggml-rpc.cpp device_get_props), so it never turns
+            # auto off.
+            gpu_names = [
+                d
+                for d in override
+                if d.lower() not in _CPU_DEVICE_VALUES and not d.strip().lower().startswith("rpc")
+            ]
+            ordinals = [self._device_ordinal(d) for d in gpu_names]
+            if all(o is not None for o in ordinals):
+                if child_gpu_order is not None and not is_vulkan_backend:
+                    _order = [int(i) for i in child_gpu_order]
+                    selected = [_order[o] for o in ordinals if 0 <= o < len(_order)] or _order
+                else:
+                    selected = list(self._physical_ordinals(ordinals, env, is_vulkan_backend) or ())
+        elif tensor or (device_list if device_list is not None else is_vulkan_backend):
+            try:
+                selected = list(gpu_indices or ()) or None
+            except TypeError:
+                selected = None
+            if selected is None and tensor:
+                selected = [row[0] for row in (detected_gpus or ())] or None
+        if selected is not None:
+            if selected and override is None and one_device:
+                main = self._effective_main_gpu(extra_args, env)
+                main = 0 if main is None else main
+                selected = selected[main : main + 1] if main >= 0 else []
+            selected = set(selected)
+            if not selected:
+                return False
+        if selected:
+            if is_vulkan_backend:
+                return bool(selected & (set(shared_gpu_ids or ()) | set(integrated_gpu_ids or ())))
+            try:
+                if selected & LlamaCppBackend._rocm_unified_memory_gpu_ids():
+                    return True
+            except Exception:
+                pass
+            if not probe_integrated_cuda and not self._integrated_cuda_probe_is_free():
+                return False
+            try:
+                return bool(selected & LlamaCppBackend._integrated_cuda_gpu_ids())
+            except Exception:
+                return False
         rows = [(row[0], row[1]) for row in (detected_gpus or ())]
         if self._offload_target_shares_system_memory(
             is_vulkan_backend = is_vulkan_backend,
@@ -287,6 +388,303 @@ class _GpuDevicesMixin:
         return self._integrated_cuda_selection_is_all_shared(
             list(gpu_indices) if gpu_indices else None
         )
+
+    def _apple_lookup_table_discount(
+        self,
+        probe_discount: int,
+        model_path: Optional[str],
+        *,
+        caps: Optional[Mapping[str, object]],
+        extra_args: Optional[Iterable[str]],
+        model_size_fit: int,
+        need_at_ctx: Optional[int],
+        budget_mib: int,
+        cache_ram: Optional[int],
+        env: Optional[Mapping[str, str]] = None,
+        binary: Optional[str] = None,
+        cpu_forced: bool = False,
+    ) -> int:
+        """The Metal embedding discount with the lazily read lookup table settled."""
+        source_env = os.environ if env is None else env
+        self._apple_lazy_flags = []
+        table = self._lazy_read_host_bytes(
+            model_path, caps = caps, extra_args = extra_args, env = source_env
+        )
+        if table <= 0:
+            auto_table = self._lazy_read_host_bytes(model_path, caps = caps, extra_args = (), env = {})
+            if (
+                auto_table > 0
+                and _effective_lazy_mode(
+                    extra_args,
+                    source_env,
+                    flag = str((caps or {}).get("lazy_mode_flag") or "--lazy-mode"),
+                )
+                == "off"
+            ):
+                return max(0, int(probe_discount) - auto_table)
+            return probe_discount
+        if _sidecar_adapter_paths(extra_args):
+            return probe_discount
+        scan = self._gguf_tensor_scan(model_path)
+        streamed = (
+            _lazy_read_names(
+                scan[0],
+                scan[1],
+                _effective_lazy_mode(
+                    extra_args,
+                    source_env,
+                    flag = str((caps or {}).get("lazy_mode_flag") or "--lazy-mode"),
+                ),
+            )
+            if scan is not None
+            else frozenset()
+        )
+        if (
+            scan is not None
+            and scan[0] not in self._host_forced_table_archs(binary)
+            and any(
+                _override_places_tensor_on_device(name, extra_args, source_env)
+                for name in scan[1]
+                if _is_per_layer_embedding(name) and name not in streamed
+            )
+        ):
+            return probe_discount
+
+        def _resident_fits(table_bytes: int) -> Optional[bool]:
+            if self._child_runs_on_cpu(binary, extra_args, source_env, cpu_forced = cpu_forced):
+                return None
+            if any(
+                str(source_env.get(name) or "").strip()
+                for name in ("LLAMA_ARG_MMPROJ", "LLAMA_ARG_MMPROJ_URL")
+            ):
+                return None
+            avail = self._available_system_memory_mib()
+            prompt = _prompt_cache_host_bytes(
+                cache_ram,
+                extra_args,
+                source_env,
+                supports_cache_ram = bool((caps or {}).get("supports_cache_ram")),
+            )
+            if (
+                avail is None
+                or prompt is None
+                or need_at_ctx is None
+                or budget_mib <= 0
+                or not self._can_estimate_kv()
+            ):
+                return None
+            need = (
+                int(model_size_fit)
+                + int(need_at_ctx)
+                + int(prompt)
+                + int(table_bytes * _LAZY_RESIDENT_MARGIN_FRAC)
+            )
+            ceiling_mib = min(int(budget_mib), int(avail) - _HOST_RAM_HEADROOM_MIB)
+            return need <= max(0, ceiling_mib) * 1024 * 1024
+
+        self._apple_lazy_flags = self._managed_lazy_mode_flags(
+            model_path,
+            caps = caps,
+            extra_args = extra_args,
+            env = source_env,
+            resident_fits = _resident_fits,
+            binary = binary,
+        )
+        if self._apple_lazy_flags:
+            return max(0, int(probe_discount) - table)
+        if table > probe_discount:
+            logger.info(
+                "Metal fit: %.2f GB of lookup tables are read lazily from disk, outside "
+                "the Metal working set; not charged to unified memory.",
+                table / (1024**3),
+            )
+        return max(int(probe_discount), table)
+
+    def _managed_lazy_mode_flags(
+        self,
+        model_path: Optional[str],
+        *,
+        caps: Optional[Mapping[str, object]],
+        extra_args: Optional[Iterable[str]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        auto_resolves_off: bool = False,
+        resident_fits: Callable[[int], Optional[bool]],
+        binary: Optional[str] = None,
+    ) -> list[str]:
+        """``[<lazy flag>, "off"]`` to keep a lazily read lookup table resident, else ``[]``."""
+        caps = caps or {}
+        if not model_path or not caps.get("supports_lazy_mode"):
+            return []
+        flag = str(caps.get("lazy_mode_flag") or "--lazy-mode")
+        source_env = os.environ if env is None else env
+        flags, env_name = _LAZY_MODE_SPELLINGS.get(flag, (frozenset({flag}), ""))
+        if (env_name and str(source_env.get(env_name) or "").strip()) or _extra_args_set_any_flag(
+            extra_args, flags
+        ):
+            return []
+        if auto_resolves_off:
+            return []
+        table = self._lazy_read_host_bytes(
+            model_path, caps = caps, extra_args = extra_args, env = source_env
+        )
+        if table <= 0:
+            return []
+        scan = self._gguf_tensor_scan(model_path)
+        if scan is None or (
+            scan[0] not in self._host_forced_table_archs(binary)
+            and any(
+                _override_places_tensor_on_device(name, extra_args, source_env)
+                for name in scan[1]
+                if _is_per_layer_embedding(name)
+            )
+        ):
+            return []
+        try:
+            fits = resident_fits(table)
+        except Exception as e:  # noqa: BLE001 -- unpriced: keep llama.cpp's default
+            logger.debug("Lookup tables: resident fit unpriced (%s)", e)
+            fits = None
+        key = (model_path, table, bool(fits))
+        if getattr(self, "_lazy_mode_decision_logged", None) != key:
+            self._lazy_mode_decision_logged = key
+            if fits:
+                logger.info(
+                    "Lookup tables: keeping the %.1f GB lookup table in RAM (%s off); "
+                    "free RAM covers it beside the weights and the KV cache.",
+                    table / (1024**3),
+                    flag,
+                )
+            else:
+                logger.info(
+                    "Lookup tables: streaming the %.1f GB lookup table from disk "
+                    "(llama.cpp's lazy read); RAM cannot hold it beside the weights and "
+                    "the KV cache. Prefill and decode can be slower and vary.",
+                    table / (1024**3),
+                )
+        return [flag, "off"] if fits else []
+
+    def lookup_tables_stream_by_default(
+        self,
+        extra_args: Optional[Iterable[str]] = None,
+        env: Optional[Mapping[str, str]] = None,
+        *,
+        gpu_ids: Optional[Iterable[int]] = None,
+        tensor_parallel: Optional[bool] = None,
+    ) -> bool:
+        """Whether a launch on this host leaves lazily read lookup tables on disk."""
+        _env = dict(os.environ if env is None else env)
+        try:
+            binary = self._find_llama_server_binary()
+            caps = self.probe_server_capabilities(binary)
+            if not caps.get("supports_lazy_mode"):
+                return False
+            mode = _effective_lazy_mode(
+                extra_args, _env, flag = str(caps.get("lazy_mode_flag") or "--lazy-mode")
+            )
+            if mode != "auto":
+                return mode == "on"
+            tensor = (
+                _effective_tensor_parallel(extra_args, False, _env)
+                if tensor_parallel is None
+                else bool(tensor_parallel)
+            )
+            self._reconcile_split_mode_env(_env, tensor_parallel = tensor)
+            cpu_child = self._child_runs_on_cpu(binary, extra_args, _env, tensor_parallel = tensor)
+            vulkan = not cpu_child and self._is_vulkan_backend(binary)
+            rows = []
+            if not cpu_child:
+                with _without_torch_gpu_probe():
+                    rows = list(self._get_gpu_memory(binary, for_llama_server = True) or ())
+                # An empty Vulkan inventory is a failed probe: it may be an iGPU, where auto is off.
+                if not rows and (vulkan or _gpu_device_node_present()):
+                    return False
+            shared = {idx for idx, _free, total in rows if total <= 0} if vulkan else set()
+            picked = [int(i) for i in gpu_ids] if gpu_ids else None
+            return not self._lazy_auto_resolves_off(
+                gpu_indices = picked,
+                detected_gpus = [(idx, free) for idx, free, _total in rows],
+                shared_gpu_ids = shared,
+                is_vulkan_backend = vulkan,
+                probe_integrated_cuda = False,
+                extra_args = extra_args,
+                env = _env,
+                device_list = None if picked else False,
+                tensor_parallel = tensor_parallel,
+                integrated_gpu_ids = shared,
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _host_forced_table_archs(binary: Optional[str] = None) -> frozenset[str]:
+        """Archs whose table the build keeps on the host whatever -ot says; none if unreadable."""
+        binary = binary or LlamaCppBackend._find_llama_server_binary()
+        if not binary:
+            return frozenset()
+        try:
+            resolved = _resolve_llama_binary(binary)
+            libs = sorted(
+                p
+                for p in resolved.parent.iterdir()
+                if _LLAMA_SHARED_LIB_RE.match(p.name) and p.is_file()
+            )
+            key = tuple(
+                (str(p), st.st_size, st.st_mtime_ns)
+                for p in (libs or [resolved])
+                for st in (p.stat(),)
+            )
+        except OSError:
+            return frozenset()
+        return _host_forced_in_files(key)
+
+    @staticmethod
+    def _metal_placement_unset(
+        extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]], *, layers_fixed: bool
+    ) -> bool:
+        """Whether nothing but Studio places this Metal launch, so a measured discount may pin full
+        offload."""
+        source_env = os.environ if env is None else env
+        return not (
+            layers_fixed
+            or _extra_args_set_any_flag(extra_args, _GPU_LAYER_FLAGS)
+            or _env_fixes_gpu_layers(source_env)
+            or _device_selection_is_cpu(extra_args, source_env)
+            or _args_place_tensors_on_cpu(extra_args)
+            or _env_places_tensors_on_cpu(source_env)
+            or _extra_args_set_any_flag(extra_args, _FIT_CONTROL_FLAGS)
+            or any(source_env.get(name) for name in _FIT_CONTROL_ENV_VARS)
+            or fit_is_enabled_in(extra_args)
+            # A pass-through adapter sits on the base tensor's buffer (llama-adapter.cpp:335) and
+            # nothing here charges it: keep the discount unspent.
+            or _sidecar_adapter_paths(extra_args)
+        )
+
+    def _child_runs_on_cpu(
+        self,
+        binary: Optional[str],
+        extra_args: Optional[Iterable[str]],
+        env: Optional[Mapping[str, str]],
+        *,
+        cpu_forced: bool = False,
+        tensor_parallel: Optional[bool] = None,
+    ) -> bool:
+        """Whether the child gets no model device (CPU build, CPU --device or forced CPU launch)."""
+        if (
+            cpu_forced
+            or self._binary_ships_no_gpu_backend(binary, env)
+            or _device_selection_is_cpu(extra_args, env)
+        ):
+            return True
+        tensor = (
+            _effective_tensor_parallel(extra_args, False, env)
+            if tensor_parallel is None
+            else bool(tensor_parallel)
+        )
+        # Split mode none with a negative main GPU clears the model's devices (src/llama.cpp).
+        if not tensor and _split_mode_confines_to_one_device(extra_args, env):
+            main = self._effective_main_gpu(extra_args, env)
+            return main is not None and main < 0
+        return False
 
     @staticmethod
     def _installed_ggml_backends(binary: Optional[str] = None) -> frozenset[str]:
@@ -323,28 +721,11 @@ class _GpuDevicesMixin:
         reason: str,
         clear_record: bool = True,
     ):
-        """Take the no-reserve DirectIO pair back out of an argv whose placement
-        is no longer the confirmed full offload it was chosen for.
-
-        ``use_mmap`` covers mmap / mmap+mlock / auto only, so under dio every
-        layer llama.cpp leaves on the CPU is read into an allocated buffer
-        instead of a mapping the kernel can page: the reservation the setting
-        exists to avoid. Only Unsloth's own tokens; a user's --load-mode is
-        theirs, exactly as with the fit's mode.
-
-        ``clear_record`` False when the caller strips a COPY and `cmd` still
-        carries the pair, which is the arm the fit's own mode already takes for
-        the same reason: the arch-crash and CPU rungs respawn from `cmd`, and
-        forgetting the tokens here leaves their own strip a no-op on an argv that
-        still has them. The applicable flag goes either way, because it describes
-        the child about to spawn, and the `_mem_policy_for_cmd` snapshot restores
-        `cmd`'s value for the rung that goes back to it.
-        """
+        """Strip Unsloth's own DirectIO pair unless full offload is confirmed (DirectIO reads CPU layers into buffers); never the user's --load-mode."""
         if not self._memory_dio_flags:
             self._memory_dio_applicable = False
             return argv
-        # The record says a pair exists SOMEWHERE, not in THIS argv: a rung that strips a
-        # copy keeps it for `cmd`, so strip only while this argv holds more than the user wrote.
+        # Strip only while this argv holds more pairs than the user wrote.
         if _count_subsequence(list(argv), self._memory_dio_flags) <= _count_subsequence(
             list(getattr(self, "_memory_dio_user_tokens", []) or []), self._memory_dio_flags
         ):
@@ -356,22 +737,14 @@ class _GpuDevicesMixin:
         if clear_record:
             self._memory_dio_flags = []
         self._memory_dio_applicable = False
-        # The pair may have been the only mark, and a child equal to an unmanaged one must
-        # not be torn down when the toggles go off.
+        # A child equal to an unmanaged one must not be torn down when toggles go off.
         self._memory_policy_active = self._memory_policy_extras_touched
         logger.info("Model Memory: dropping the managed --load-mode dio; %s", reason)
         return stripped
 
     @staticmethod
     def _vulkan_offload_is_discrete(binary: Optional[str], gpu_indices = None) -> bool:
-        """True only when the probe ANSWERED and every device in play is discrete.
-
-        ``_vulkan_targets_are_igpus`` folds "probe failed" into "not an iGPU",
-        which is the safe direction for its own caller (that one only skips a
-        page-lock) and the wrong one here: an iGPU's VRAM is system RAM, so
-        confirming an offload we could not read hands DirectIO to weights that
-        are really host-backed. Absence of an answer declines.
-        """
+        """An unanswered probe declines, since an iGPU's VRAM is system RAM and DirectIO would be wrong."""
         try:
             rows = LlamaCppBackend._run_vulkan_probe(binary)
         except Exception:
@@ -385,8 +758,7 @@ class _GpuDevicesMixin:
         # EVERY ordinal, not merely some: a partial intersection confirmed an unclassified one.
         if wanted is not None and wanted - {r["index"] for r in selected}:
             return False
-        # The probe reports all-False when the type query fails, so "not integrated" and
-        # "unread" share a value. Right for the page-lock caller, wrong here.
+        # The probe reports all-False when the type query fails, so require type_known.
         if not all(r.get("type_known") for r in selected):
             return False
         return not any(r["is_igpu"] for r in selected)
@@ -401,30 +773,11 @@ class _GpuDevicesMixin:
         dio_possible: bool,
         extra_args = None,
     ) -> bool:
-        """Whether this launch really puts the weights on a discrete GPU.
-
-        The one predicate behind managed DirectIO. Confirming wrongly is worse than
-        not acting: DirectIO over host-resident weights replaces a pageable mapping
-        with a model-sized allocated buffer. Two questions, and anything unanswered
-        declines:
-
-        1. Will these devices exist for the child? ``--list-devices`` is the loader's
-           own verdict, so a missing runtime, a disabled plugin, a wrong-vendor plugin
-           and a ``GGML_BACKEND_PATH`` plugin all resolve without reading a filename.
-        2. Is the device discrete? ggml does not report it. Vulkan has the separate
-           probe, CUDA and ROCm are classified upstream by `_weights_in_host_memory`,
-           and a SYCL or OpenCL id can be an integrated GPU nothing here recognises.
-
-        ``dio_possible`` is the platform-and-build gate, NOT the toggle: off Windows
-        no answer can reach a flag, so the probes are not worth spawning. Gating on
-        the toggle would be wrong, because the verdict is recorded as this launch's
-        placement and compared against a later save.
-        """
+        """Whether weights sit on a discrete GPU; unanswered decline (DirectIO over host RAM is worse than nothing); gate on dio_possible, never the toggle."""
         if not dio_possible or host_resident:
             return False
         devices = cls._enumerated_gpu_devices(binary, env)
-        # A pass-through `--device` is appended last and decides placement, so the
-        # auto-selected ordinals are not what runs. Its values are ggml ids.
+        # A pass-through --device is appended last and decides placement; values are ggml ids.
         override = cls._effective_device_ids(extra_args, env)
         if override is not None:
             if any(d.lower() in _CPU_DEVICE_VALUES for d in override):
@@ -438,8 +791,7 @@ class _GpuDevicesMixin:
             devices = [d for d in (devices or []) if d.lower() in {o.lower() for o in override}]
         if not cls._offload_devices_are_live(devices, gpu_indices):
             return False
-        # EVERY selected device: returning the first kind's verdict confirmed a mixed set
-        # that still had weights on an integrated GPU.
+        # Check EVERY selected device; the first kind's verdict alone would pass a mixed set with an iGPU.
         selected = cls._selected_devices(devices, gpu_indices)
         backends = {cls._device_backend(d) for d in selected}
         if backends - {"vulkan"} - _SELF_EVIDENTLY_DISCRETE - _NEEDS_ROCM_CLASSIFICATION:
@@ -469,18 +821,11 @@ class _GpuDevicesMixin:
         env: Optional[Mapping[str, str]],
         is_vulkan = False,
     ):
-        """Physical ordinals translated into the child's COMPACT space.
-
-        A mask reindexes survivors from 0, so the adapter this launch calls physical 1
-        is ``CUDA0`` to the child, and comparing the two rejected a narrowed launch that
-        was fully offloaded. The mask lists survivors in order, so a physical id's
-        position in it IS its compact ordinal. Unchanged with no mask, or one we cannot
-        map.
-        """
+        """A mask reindexes survivors from 0, so a physical id's position in the mask is its compact
+        ordinal."""
         if not gpu_indices or not env or is_vulkan:
             return gpu_indices
-        # GGML_VK_VISIBLE_DEVICES is deliberately absent: ggml passes it through, so a
-        # Vulkan ordinal is ALREADY compact and translating it again picked another row.
+        # GGML_VK_VISIBLE_DEVICES omitted: ggml already compacts Vulkan ordinals.
         for name in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
             raw = env.get(name)
             if not raw or not str(raw).strip():
@@ -504,12 +849,7 @@ class _GpuDevicesMixin:
         env: Optional[Mapping[str, str]],
         is_vulkan = False,
     ):
-        """The inverse of `_compact_ordinals`: compact ordinals back to physical ids.
-
-        `--device` names compact ids, but `_amd_apu_wants_unified_memory` is documented
-        to take PHYSICAL ones, so a selection that arrives compact has to be mapped
-        back before residency can classify it.
-        """
+        """--device takes compact ids but _amd_apu_wants_unified_memory needs physical ones, so map back."""
         if not compact or not env or is_vulkan:
             return compact
         for name in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
@@ -531,13 +871,7 @@ class _GpuDevicesMixin:
 
     @classmethod
     def _effective_main_gpu(cls, extra_args, env) -> Optional[int]:
-        """The sole device a ``--split-mode none`` launch puts every weight on.
-
-        llama.cpp keeps only ``devices[main_gpu]``, and ``--main-gpu`` can name a device
-        OUTSIDE the automatic plan, so it replaces the selection rather than narrowing
-        it. Missing that confirmed a discrete card while the child put the weights on a
-        shared-memory iGPU.
-        """
+        """--main-gpu may name a device outside the plan, so it replaces the selection, not narrowing it."""
         if not _split_mode_confines_to_one_device(extra_args, env):
             return None
         value = _extra_args_device(extra_args, {"--main-gpu", "-mg"})
@@ -560,24 +894,7 @@ class _GpuDevicesMixin:
         dio_possible = True,
         is_vulkan = False,
     ):
-        """The ordinals the child will really use.
-
-        A pass-through ``--device`` is appended last, so it beats the auto selection.
-        Resolved once and handed to every consumer, because the host-residency verdict
-        and the confirmation must be about the SAME devices: computed apart, an override
-        onto a unified-memory APU was priced against the discrete card it replaced.
-
-        Returns ``(physical, compact)``, because the consumers need the SAME selection
-        in DIFFERENT spaces and collapsing them broke one or the other:
-        `_amd_apu_wants_unified_memory` is documented to take physical ids, while
-        `--list-devices` reports the child's compact ordinals.
-
-        Unchanged when there is no override, when it names no GPU, or when it names a
-        device the build never enumerated; the confirmation declines those on their own
-        terms, and answering them here would hide the reason.
-        """
-        # Gated like the confirmation: with no dio decision to follow, the enumeration
-        # cannot change an outcome and is not worth a subprocess.
+        """Returns (physical, compact), resolved once for all consumers so verdict and confirmation match; the APU check needs physical ids, --list-devices compact."""
         if not dio_possible:
             return gpu_indices, gpu_indices
         override = cls._effective_device_ids(extra_args, env)
@@ -600,12 +917,7 @@ class _GpuDevicesMixin:
 
     @classmethod
     def _effective_device_ids(cls, extra_args, env) -> Optional[list[str]]:
-        """The explicit ``--device`` selection, or None when there is none.
-
-        Same precedence llama.cpp uses and `_device_selection_is_cpu` already mirrors:
-        the last argv value, then ``LLAMA_ARG_DEVICE``. The values are ggml device ids,
-        the same namespace ``--list-devices`` prints, so they compare directly.
-        """
+        """Last argv value wins, then LLAMA_ARG_DEVICE, as llama.cpp does; values are ggml ids."""
         value = _extra_args_main_device(extra_args)
         if value is None and env:
             value = env.get("LLAMA_ARG_DEVICE")
@@ -633,15 +945,7 @@ class _GpuDevicesMixin:
 
     @classmethod
     def _offload_devices_are_live(cls, devices: Optional[list[str]], gpu_indices) -> bool:
-        """Whether every device this launch pins was enumerated by the build.
-
-        Replaces "do the host's GPUs exist": a device the host reports but the child
-        cannot open is the case that confirmed an offload which never happened.
-
-        By ORDINAL COVERAGE, not device count: a multi-backend build can enumerate the
-        same ordinal twice (``CUDA0`` and ``Vulkan0``), and counting ids rejected a
-        pinned launch whose devices were all live.
-        """
+        """Ordinal coverage, not device count: a multi-backend build can list one ordinal twice."""
         selected = cls._selected_devices(devices, gpu_indices)
         if not selected:
             return False
@@ -670,12 +974,8 @@ class _GpuDevicesMixin:
         binary: Optional[str] = None,
         env: Optional[Mapping[str, str]] = None,
     ) -> Optional[list[str]]:
-        """The ggml device ids ``--list-devices`` reports, or None for no usable answer.
-
-        Tri-state like ``sd_cpp_accelerator_device_verdict``: ``[]`` is the build
-        saying it has no devices, None is an older build rejecting the flag, a timeout
-        or a crash. Both decline, but empty is a real answer and is not folded in.
-        """
+        """None means an old build, timeout or crash; [] is a real answer of no devices, and both
+        decline."""
         binary = binary or cls._find_llama_server_binary()
         if not binary:
             return None
@@ -706,9 +1006,7 @@ class _GpuDevicesMixin:
             probe_env = LlamaCppBackend._llama_server_env_for_binary(binary)
         except Exception:
             probe_env = child_env_without_native_path_secret()
-        # The probe must see what the CHILD sees: on Windows only
-        # `_llama_server_env_for_binary` puts the managed venv's CUDA runtime on PATH, so
-        # the caller's REMOVALS are replayed rather than its whole mapping.
+        # Probe must see the child env: replay only the caller's removals, not its whole mapping, since on Windows the venv CUDA runtime is added to PATH.
         if env is not None:
             # BOTH directions: removals alone dropped a narrowing rung's new mask.
             for name in _DEVICE_VISIBILITY_ENV:
@@ -739,14 +1037,8 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _is_vulkan_backend(binary: Optional[str] = None) -> bool:
-        """True if the installed llama.cpp build is Vulkan-only.
-
-        The official prebuilts are single-backend, so the Vulkan ggml lib next
-        to llama-server identifies a Vulkan build. Keeps the free-memory probe
-        and GPU pin in ggml's Vulkan device-index space. For a custom
-        multi-backend build with a CUDA or HIP ggml lib alongside Vulkan, defer
-        to that backend (torch-usable, better-understood probe/pin).
-        """
+        """Vulkan build is identified by its ggml lib; a CUDA or HIP lib beside it defers to that
+        backend."""
         backends = LlamaCppBackend._installed_ggml_backends(binary)
         return "vulkan" in backends and not backends.intersection({"cuda", "hip"})
 
@@ -754,11 +1046,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _sysmem_fallback_risk(binary: Optional[str] = None) -> bool:
-        """True when an over-budget allocation would be absorbed by host RAM, not refused.
-
-        Windows + CUDA build only. Discreteness needs no probe: integrated CUDA parts are
-        Linux-only, and get_device_properties would pin a ~700 MiB CUDA context.
-        """
+        """True when over-budget allocations spill to host RAM; Windows CUDA only, no probe (integrated CUDA is Linux-only; a probe would pin a CUDA context)."""
         if sys.platform != "win32":
             return False
         if binary is None:
@@ -790,18 +1078,13 @@ class _GpuDevicesMixin:
         try:
             import torch
 
-            # Same ROCm detection as _emit_child_gpu_visibility (AMD SDK wheels leave
-            # version.hip unset but encode "rocm" in __version__). If the two
-            # disagree an inherited ROCR mask reads back as "no mask" and the child's
-            # new pin re-exposes the GPU it was hiding.
+            # Same ROCm detection as _emit_child_gpu_visibility: if they differ an inherited ROCR mask reads as none and the child re-exposes hidden GPUs.
             is_rocm = LlamaCppBackend._torch_is_rocm(torch)
         except Exception:
             is_rocm = False
         if is_rocm:
             hip_v = os.environ.get("HIP_VISIBLE_DEVICES")
-            # ROCR_VISIBLE_DEVICES is Linux-only: Windows HIP has no ROCr layer, so a
-            # stray ROCR var there masks nothing and must not be read as the
-            # ordinal->physical mapping (mirrors _emit_child_gpu_visibility).
+            # ROCR_VISIBLE_DEVICES is Linux-only: on Windows a stray ROCR var masks nothing and must not be read as the ordinal to physical mapping.
             rocr_v = None if sys.platform == "win32" else os.environ.get("ROCR_VISIBLE_DEVICES")
             cvd = (
                 hip_v
@@ -832,16 +1115,14 @@ class _GpuDevicesMixin:
             spec = _get_parent_visible_gpu_spec()
         except Exception:
             return None
+        if spec.get("index_kind") == "cuda_device":
+            # R570+ MIG ids are CUDA devices; the MIG paths pin through the snapshot.
+            return None
         return spec["numeric_ids"] if spec.get("raw") == cvd.strip() else None
 
     @staticmethod
     def _visibility_mask_is_unmappable() -> bool:
-        """True when a mask IS set but does not resolve to physical ids: ROCr and CUDA
-        accept UUID tokens (ROCR_VISIBLE_DEVICES="0,GPU-DEADBEEF..."), CUDA also MIG
-        ids. Torch ordinals cannot be mapped back, so re-emitting them numerically
-        would REPLACE the mask with ids the runtime resolves against the whole host,
-        handing the child cards the parent hid, including one a gate just dropped.
-        Callers that would pin fail open. False when unset and for an empty mask."""
+        """True if a mask is set but unresolvable (UUID or MIG): pinning callers fail open, since numbers would expose hidden cards. False if unset or empty."""
         return (
             LlamaCppBackend._active_gpu_visibility_mask() is not None
             and LlamaCppBackend._resolve_visible_physical_ids() is None
@@ -854,32 +1135,15 @@ class _GpuDevicesMixin:
         *,
         prefer_rocr: bool = False,
     ) -> None:
-        """Write the child's GPU visibility mask: CUDA, plus a ROCm mirror on AMD
-        (masking only CUDA_VISIBLE_DEVICES leaves an AMD child seeing every GPU).
-
-        Default: HIP_VISIBLE_DEVICES, clearing any inherited ROCR mask so the two
-        cannot stack (ROCR re-indexes from 0, a non-zero HIP pin then points out of
-        range, HIP sees 0 devices, and llama.cpp falls back to CPU).
-
-        prefer_rocr masks at the ROCr/HSA layer instead (clearing HIP): a HIP mask
-        filters only AFTER the HSA runtime enumerates every agent, and that
-        enumeration segfaults on a GPU the build has no kernels for (gfx1036 iGPU
-        under a gfx103X prebuilt) before llama-server logs a line.
-
-        The CPU sentinel ("-1") keeps the HIP mask and leaves an inherited ROCR mask
-        alone: HIP sees zero devices either way, so the anti-stacking clear buys
-        nothing while dropping the mask re-exposes hidden agents to that same
-        enumeration. Windows keeps the HIP mask too, ROCR being Linux-only."""
+        """Default masks HIP, clearing inherited ROCR (they stack); prefer_rocr masks ROCR to avoid HSA segfaults; CPU -1 keeps masks so none re-expose hidden GPUs."""
         env["CUDA_VISIBLE_DEVICES"] = pinned
         if pinned == "-1":
-            # An inherited LLAMA_ARG_DEVICE / LLAMA_ARG_MAIN_GPU naming a device that
-            # no longer enumerates makes llama.cpp exit rather than use our CPU.
+            # An inherited LLAMA_ARG_DEVICE or LLAMA_ARG_MAIN_GPU naming a device that no longer enumerates makes llama.cpp exit rather than use CPU.
             LlamaCppBackend._clear_device_placement_env(env)
         try:
             import torch as _torch
 
-            # torch.version.hip is set on ROCm, None on CUDA; AMD SDK wheels may
-            # leave it unset but encode "rocm" in __version__ (mirrors detect_hardware).
+            # AMD SDK wheels may leave torch.version.hip unset; also check 'rocm' in __version__.
             if (
                 getattr(_torch.version, "hip", None) is not None
                 or "rocm" in getattr(_torch, "__version__", "").lower()
@@ -887,11 +1151,7 @@ class _GpuDevicesMixin:
                 if prefer_rocr and pinned != "-1" and sys.platform != "win32":
                     env["ROCR_VISIBLE_DEVICES"] = pinned
                     env.pop("HIP_VISIBLE_DEVICES", None)
-                    # ROCR re-indexes the visible agents from 0, and with HIP
-                    # cleared HIP honours CUDA_VISIBLE_DEVICES -- so it must carry
-                    # the post-ROCR ordinals (0..N-1), not the physical ids, else a
-                    # non-zero pick points out of range and HIP sees 0 devices (the
-                    # same stacking the default path avoids by clearing ROCR).
+                    # ROCR re-indexes from 0 and HIP reads CUDA_VISIBLE_DEVICES here, so pass post-ROCR ordinals 0..N-1, not physical ids: else HIP sees 0 devices.
                     env["CUDA_VISIBLE_DEVICES"] = ",".join(
                         str(i) for i in range(len(pinned.split(",")))
                     )
@@ -913,20 +1173,12 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _inherited_child_gpu_order(pinned_ids: Iterable[int]) -> Optional[list[int]]:
-        """``pinned_ids`` in the parent mask's order, or None to keep them as given.
-
-        A numeric visibility mask defines enumeration ORDER as well as membership
-        (CUDA_VISIBLE_DEVICES=1,0 makes physical 1 the child's device 0), and every
-        producer of gpu_indices sorts ascending, so re-emitting it verbatim silently
-        reverses a deliberate reordering and the user has no way to place a card
-        first. Same rule _pin_visible_gpu_order_for_split applies to a manual
-        --tensor-split, which is where it was already spelled out.
-
-        Only when the mask covers the whole pinned set: a partial mask cannot say
-        where the ids it omits belong. None when the order is already what we would
-        emit, so callers can treat non-None as "this changed something".
-        """
+        """Ids in parent mask order, or None if already that order or the mask is partial; numeric masks set device order, so re-emitting verbatim undoes it."""
         inherited = LlamaCppBackend._resolve_visible_physical_ids()
+        if not inherited:
+            # A uuid mask the ordinal resolvers leave open (FASTEST_FIRST) still orders
+            # the cards the memory probe matched by uuid.
+            inherited = LlamaCppBackend._smi_uuid_mask_order()
         if not inherited:
             return None
         wanted = [int(i) for i in pinned_ids]
@@ -935,17 +1187,64 @@ class _GpuDevicesMixin:
             return None
         return ordered
 
+    def _planned_child_gpu_order(
+        self,
+        *,
+        gpu_ids,
+        gpu_indices,
+        tp_tensor_split,
+        extra_args,
+        env,
+        is_vulkan_backend: bool,
+        cpu_forced: bool = False,
+    ) -> "tuple[Optional[list[int]], Optional[list[int]]]":
+        """``(device order, visibility mask order)`` the spawn will give the child; mask None when
+        inherited."""
+        order, split = self._picker_ordered_gpu_indices(gpu_ids, gpu_indices, tp_tensor_split)
+        if order is None or is_vulkan_backend or cpu_forced:
+            return (None if order is None else [int(i) for i in order]), None
+        order = [int(i) for i in order]
+        mask = list(order)
+        if not gpu_ids:
+            inherited = self._inherited_child_gpu_order(mask)
+            if (
+                inherited is not None
+                and not _extra_args_have_tensor_split(extra_args, env)
+                and (not split or len(split) == len(mask))
+            ):
+                mask = inherited
+        try:
+            if LlamaCppBackend._pinned_child_visibility(mask) is None:
+                return order, None
+        except Exception:
+            return order, None
+        return order, mask
+
+    @staticmethod
+    def _picker_ordered_gpu_indices(gpu_ids, gpu_indices, tp_tensor_split):
+        """``(gpu_indices, tp_tensor_split)`` in the picker's order; a reorder the shares cannot
+        follow is vetoed."""
+        if not gpu_ids:
+            return gpu_indices, tp_tensor_split
+        picked = [int(i) for i in gpu_ids]
+        if gpu_indices is None:
+            return picked, tp_tensor_split
+        before = [int(i) for i in gpu_indices]
+        kept = set(before)
+        reordered = [i for i in picked if i in kept] + [i for i in before if i not in set(picked)]
+        if tp_tensor_split and len(tp_tensor_split) == len(before):
+            share_by_id = dict(zip(before, tp_tensor_split))
+            if all(i in share_by_id for i in reordered):
+                return reordered, [share_by_id[i] for i in reordered]
+        elif not tp_tensor_split:
+            return reordered, tp_tensor_split
+        return gpu_indices, tp_tensor_split
+
     @staticmethod
     def _repoint_emitted_tensor_split(
         cmd: list, old_order: list[int], new_order: list[int]
     ) -> bool:
-        """Move Unsloth's own ``--tensor-split`` shares onto the reordered devices.
-
-        _plan_tensor_parallel returns the shares positional over gpu_indices, so a
-        reordered mask without this hands the roomier card's share to the smaller
-        one. Returns False when the shares cannot be moved, which vetoes the whole
-        reorder: emitting the mask alone would be the same bug.
-        """
+        """Moves --tensor-split shares onto reordered devices, since shares are positional: else the roomier card gets the smaller share. False vetoes the reorder."""
         try:
             at = len(cmd) - 1 - cmd[::-1].index("--tensor-split")
         except ValueError:
@@ -974,6 +1273,17 @@ class _GpuDevicesMixin:
         sort. The visible set itself never changes. No mask, an empty mask, or a
         UUID/MIG mask (which resolves to None) is left alone -- the multi-GPU
         controls are hidden for the latter."""
+        mig_rows = LlamaCppBackend._mig_snapshot_rows()
+        if mig_rows is not None:
+            # R570+ MIG: pin UUIDs; numeric ids would resolve against the whole host.
+            from utils.hardware import mig
+
+            # Snapshot order = picker order; never sort (a numeric mask 2,0 is not ascending).
+            order = [int(r["index"]) for r in mig_rows]
+            if not order:
+                return None
+            env["CUDA_VISIBLE_DEVICES"] = mig.visibility_for(mig_rows, order)
+            return tuple(order)
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         inherited = LlamaCppBackend._resolve_visible_physical_ids()
         if not inherited:
@@ -990,13 +1300,7 @@ class _GpuDevicesMixin:
             logger.debug("Could not read reported GPU order for split pin: %s", e)
         if order is None:
             order = sorted(inherited)
-        # Re-emit at the layer that produced the mapping. A parent masked only
-        # via ROCR_VISIBLE_DEVICES hides agents at the driver layer, and the
-        # default HIP re-emission clears that mask -- HSA then enumerates every
-        # agent again and can segfault at startup on an unsupported GPU the
-        # parent was hiding (the crash prefer_rocr exists to avoid). Linux-only,
-        # mirroring _resolve_visible_physical_ids: on Windows a stray ROCR var
-        # is dead and was not the mapping's source.
+        # Re-emit via ROCR when the parent masked there, else HSA sees hidden GPUs and may segfault.
         prefer_rocr = (
             sys.platform != "win32"
             and env.get("HIP_VISIBLE_DEVICES") is None
@@ -1009,12 +1313,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _vulkan_probe_answered(binary: Optional[str]) -> bool:
-        """Whether the Vulkan device probe produced rows at all.
-
-        `_vulkan_targets_are_igpus` folds "no answer" into "not integrated", which is
-        right for the page-lock question it was written for and not something the
-        bookkeeping can read as a measurement.
-        """
+        """Whether the Vulkan probe returned any rows; the iGPU check maps no answer to not integrated."""
         try:
             return bool(LlamaCppBackend._run_vulkan_probe(binary))
         except Exception:
@@ -1022,15 +1321,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _vulkan_targets_are_igpus(binary: Optional[str], gpu_indices = None) -> bool:
-        """True when any Vulkan device in play is integrated.
-
-        An iGPU's reported "VRAM" is shared system RAM (see
-        ``_apply_igpu_host_reserve_mib``), so a model "fully offloaded" onto one
-        is still backed by pageable host memory and is worth page-locking. Any,
-        not every: a mixed selection splits weights onto the iGPU too, and those
-        pages are as evictable as if it were the only device. An unreadable probe
-        answers False.
-        """
+        """True if any Vulkan device is an iGPU, whose VRAM is shared host RAM and worth page-locking."""
         try:
             rows = LlamaCppBackend._run_vulkan_probe(binary)
         except Exception:
@@ -1055,32 +1346,18 @@ class _GpuDevicesMixin:
         probe_vulkan: bool = True,
         fit_active: bool = False,
     ) -> bool:
-        """True when the weights will sit in pageable host RAM, so mlock helps.
-
-        Only the Model Memory gate uses this, and only to SKIP page-locking, so
-        it errs towards True: that is the pre-existing behaviour.
-
-        ``probe_vulkan`` False skips the Vulkan probe, the one subprocess in
-        here, for a bookkeeping-only call; that keeps the conservative True.
-        """
+        """Errs towards True: it only gates skipping page-lock, so an unknown placement must keep mlock."""
         from utils.hardware import is_apple_silicon
 
-        # A CPU placement extra keeps weights in RAM whatever the layer count,
-        # so it applies to the auto path too and cannot be short-circuited past.
-        # Inherited env does the same and outlives any token stripping.
+        # CPU placement in extras or inherited env keeps weights in RAM whatever the layer count: check on the auto path too, never short-circuit past it.
         if _args_place_tensors_on_cpu(extra_args):
             return True
         if _env_places_tensors_on_cpu(env):
             return True
-        # A --device that names no GPU beats any layer count: llama.cpp has
-        # nowhere to offload to, so the whole model stays in host RAM.
+        # A --device naming no GPU beats any layer count: nowhere to offload, so the model stays in host RAM.
         if _device_selection_is_cpu(extra_args, env):
             return True
-        # fully_gpu_offloaded predicts OUR "-ngl -1 --fit off", but auto keeps the
-        # user's extras and appends them after, and llama.cpp is last-wins, so an
-        # -ngl 0 lands the model in RAM. Only a fit that is switched ON voids the
-        # prediction: "--fit off" is what we already pass, and a disabled fitter
-        # cannot move anything to the CPU.
+        # User extras are appended last (last-wins), so -ngl or an enabled fit voids the prediction.
         if _extra_args_set_any_flag(extra_args, _GPU_LAYER_FLAGS) or fit_is_enabled_in(extra_args):
             fully_gpu_offloaded = False
         all_on_gpu = fully_gpu_offloaded or self._offloads_every_layer(
@@ -1091,14 +1368,11 @@ class _GpuDevicesMixin:
         )
         if not all_on_gpu:
             return True
-        # Unified memory: the "VRAM" is host RAM, so the weights stay pageable
-        # however fully they are offloaded.
+        # Unified memory: the VRAM is host RAM, so weights stay pageable however fully they are offloaded.
         if is_apple_silicon():
             return True
         if is_vulkan_backend:
-            # gpu_indices are Vulkan ordinals here, which the ROCm APU helper
-            # would read as physical ids and answer for the wrong device. The
-            # Vulkan probe owns device type; unprobed keeps the True answer.
+            # gpu_indices are Vulkan ordinals here; the ROCm helper would misread them.
             return not probe_vulkan or self._vulkan_targets_are_igpus(binary, gpu_indices)
         return self._amd_apu_wants_unified_memory(gpu_indices)
 
@@ -1110,27 +1384,18 @@ class _GpuDevicesMixin:
         extra_args: Optional[Iterable[str]],
         fit_active: bool = False,
     ) -> bool:
-        """True when every layer lands on the GPU by a route ``fully_gpu_offloaded``
-        does not cover: manual mode at its full-offload maximum, or a user -ngl.
-
-        Only the Model Memory gate uses this, and only to SKIP page-locking, so
-        every unknown answers False and keeps the pre-existing behaviour: an
-        unreadable block count, CPU-side experts, a tensor override that places
-        weights by name, or an unparseable -ngl.
-        """
+        """Full offload via a route fully_gpu_offloaded misses (manual max or user -ngl); unknowns (unreadable blocks, CPU experts, tensor overrides) answer False."""
         n_layers = self.n_layers
         if not n_layers:
             return False
         if self._n_cpu_moe:
             return False
-        # The parsed predicate, not flag presence: --n-cpu-moe 0 places nothing,
-        # and answering False here would pin host RAM for an all-GPU launch.
+        # Parsed predicate, not presence: --n-cpu-moe 0 places nothing.
         if _args_place_tensors_on_cpu(extra_args):
             return False
         requested: Optional[int] = None
         if gpu_memory_mode == "manual" and gpu_layers is not None and gpu_layers >= 0:
-            # Manual owns offload and strips -ngl from the extras, so the field
-            # is what the child gets. The picker's maximum is n_layers + 1.
+            # Manual owns offload and strips -ngl from extras, so the field rules; picker max is n_layers + 1.
             requested = gpu_layers
         else:
             try:
@@ -1139,11 +1404,7 @@ class _GpuDevicesMixin:
                 return False
         if requested is None:
             return False
-        # -1 is "all layers"; llama.cpp needs a count ABOVE the block count to
-        # cover the output layer too, which is what the picker's maximum sends.
-        # -1 is also llama.cpp's DEFAULT, so an active fitter is free to lower it
-        # (common/fit.cpp aborts only on a count the user really set); a concrete
-        # count stands, which is why only this arm is gated.
+        # -1 is llama.cpp's default, so an active fitter may lower it; a concrete count stands.
         if requested == -1:
             return not fit_active
         return requested > n_layers
@@ -1154,20 +1415,7 @@ class _GpuDevicesMixin:
         env: Optional[Mapping[str, str]] = None,
         fit_implies_partial: bool = True,
     ) -> bool:
-        """Whether the effective main-model layer policy is partial GPU offload.
-
-        A concrete layer count owns placement even when ``--fit on`` is present.
-        Otherwise ``-1`` (or an omitted count) is partial only while the fitter may
-        lower it. Zero is CPU-only rather than partial offload, and keeps CPU MTP,
-        and so is a ``--device`` selection naming no GPU: llama.cpp then runs the
-        model on the CPU whatever the layer count and the fitter say.
-
-        ``fit_implies_partial`` is what an active fitter is allowed to mean. In Auto
-        it is evidence: the planner ran and could not prove the model fits, which is
-        why the fitter is on. In Manual mode the planner is skipped by design, so
-        ``--fit on`` is a default rather than a verdict and says nothing about
-        placement -- pass False there and let a concrete count answer instead.
-        """
+        """A concrete layer count owns placement; 0 is CPU-only, not partial, and keeps CPU MTP; --fit on implies partial only in Auto, never Manual."""
         n_layers = self.n_layers
         if not n_layers:
             return False
@@ -1188,8 +1436,7 @@ class _GpuDevicesMixin:
         if requested == 0:
             return False
         if requested is not None and requested > 0:
-            # llama.cpp needs a count above block_count to include the output
-            # layer, matching _offloads_every_layer.
+            # llama.cpp needs a count above block_count to include the output layer (_offloads_every_layer).
             return requested <= n_layers
         return fit_implies_partial and fit_is_effectively_on(args, source_env)
 
@@ -1215,16 +1462,8 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _rocm_classification_answered() -> bool:
-        """Whether `_rocm_unified_memory_gpu_ids` could actually look at the devices.
-
-        Kept separate from it because the two questions have opposite safe answers:
-        skipping a page-lock may treat "no APU" and "could not tell" alike, choosing
-        a loader may not. DirectIO over a unified-memory APU replaces a pageable
-        mapping with a model-sized allocated buffer.
-
-        Answering it means reading every device, not finding the machinery to read
-        them with, so this repeats the classify call rather than trusting a count.
-        """
+        """Kept apart: a page-lock skip may treat no APU and could-not-tell alike; a loader choice
+        may not."""
         try:
             import torch
 
@@ -1237,11 +1476,7 @@ class _GpuDevicesMixin:
             count = torch.cuda.device_count()
             if count <= 0:
                 return False
-            # Actually classify them. An enumerable device is not a classified one: the
-            # loop below skips whatever it cannot read with `except: continue`, so that
-            # device is simply absent from the unified set, which reads as discrete.
-            # Every VISIBLE device, not just the selected ones, because mapping a ggml
-            # ordinal onto a torch one is a translation this does not own.
+            # Classify every visible device, not just the selected ones: mapping ggml ordinals onto torch ones is not owned here; unreadable ones read discrete.
             for ordinal in range(count):
                 _rocm_classify_unified_memory(torch.cuda.get_device_properties(ordinal))
             return True
@@ -1250,14 +1485,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _rocm_unified_memory_gpu_ids() -> set[int]:
-        """PHYSICAL ids of visible ROCm GPUs whose "VRAM" is shared system RAM.
-
-        Delegates to the training worker's classifier so both paths agree on what
-        an APU is: it reads the driver's own ``is_integrated`` first, then the
-        arch-name spellings, then the Radeon name table, because AMD SDK wheels
-        may populate none of the arch attributes. Empty off ROCm and on error, so
-        every caller keeps its discrete-GPU default.
-        """
+        """PHYSICAL ids of visible ROCm APUs, classified by the training worker so both paths agree."""
         try:
             import torch
 
@@ -1267,8 +1495,7 @@ class _GpuDevicesMixin:
                 return set()
             from core.training.worker import _rocm_classify_unified_memory
 
-            # Map visible ordinal -> physical id via the active ROCm mask (HIP,
-            # then ROCR, then CUDA), mirroring _get_gpu_memory's ROCm branch.
+            # Map ordinal to physical id via the ROCm mask (HIP, then ROCR, then CUDA), as _get_gpu_memory does.
             physical_ids = LlamaCppBackend._resolve_visible_physical_ids()
             unified: set[int] = set()
             for ordinal in range(torch.cuda.device_count()):
@@ -1291,12 +1518,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _rocm_selected_pool_mib(gpu_indices = None) -> Optional[int]:
-        """Return selected ROCm APUs' combined carve-out in MiB.
-
-        Return ``None`` unless every requested device is present, readable, and a
-        unified-memory APU. The ggml setting is process-wide, so mixed selections
-        fail closed.
-        """
+        """Combined carve-out MiB of selected APUs, or None if any device is not one (ggml's is global)."""
         try:
             import torch
 
@@ -1338,13 +1560,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _unified_memory_would_help(gpu_indices = None, need_bytes = None) -> bool:
-        """Whether managed allocation is worth taking for the selected APUs.
-
-        Host RAM must be the larger pool, against the carve-out's TOTAL (over-asking
-        the carve-out fails cleanly, over-asking host RAM is an OOM kill), AND the
-        weights must not fit that carve-out: managed pages fault in k_set_rows on
-        Linux ROCm gfx1151 (HF Qwen3.8-Flash-Next-GGUF discussion 30, #10330).
-        """
+        """Only if host RAM is the larger pool vs the carve-out total and weights overflow the carve-out, since managed pages fault in k_set_rows on gfx1151."""
         try:
             pool_mib = LlamaCppBackend._rocm_selected_pool_mib(gpu_indices)
             if not pool_mib:
@@ -1362,15 +1578,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _rocm_arch_by_physical_id() -> dict[int, str]:
-        """Base gfx arch (lowercased, ``:xnack`` stripped) per PHYSICAL device id,
-        honoring the active ROCm visibility mask (HIP, then ROCR, then CUDA).
-
-        Read through the training worker's classifier so the alternate spellings
-        AMD SDK / Radeon wheels use (``gcn_arch_name``, ``arch_name``,
-        ``gfx_arch_name``) are covered as well as canonical ``gcnArchName``;
-        reading only the canonical name would leave the map empty on those wheels
-        and silently fail the gate open. Devices torch cannot describe are omitted;
-        empty off ROCm and on any error."""
+        """Lowercased base gfx arch per PHYSICAL id, honoring the ROCm mask; alternate SDK attr spellings are needed or the gate silently fails open."""
         arch_by_id: dict[int, str] = {}
         try:
             import torch
@@ -1406,19 +1614,7 @@ class _GpuDevicesMixin:
     def _offload_target_shares_system_memory(
         *, is_vulkan_backend: bool, shared_gpu_ids, detected_gpus, gpu_indices
     ) -> bool:
-        """True when EVERY device this launch offloads to reports host RAM as its VRAM.
-
-        An iGPU or a unified-memory APU has no separate pool and no bus between the
-        two: a buffer llama.cpp calls "host RAM" and one it calls "VRAM" are the same
-        physical memory. Tuning that exists to avoid moving bytes across PCI-E
-        therefore buys nothing there, and any recovery path it disables is pure loss.
-
-        Fails closed. A mixed selection, an unreadable inventory or a launch that
-        pins nothing all answer False, so the caller keeps the behaviour it has.
-        The two index spaces are kept apart the way the rest of this file keeps
-        them: Vulkan ordinals against shared_gpu_ids, physical HIP/CUDA ids
-        against the unified-memory sets.
-        """
+        """True only when every device shares host RAM as VRAM; mixed, unreadable or unpinned is False. Keep Vulkan ordinals and physical ids in separate sets."""
         devices = (
             list(gpu_indices) if gpu_indices else [idx for idx, _free in (detected_gpus or ())]
         )
@@ -1427,11 +1623,7 @@ class _GpuDevicesMixin:
         if is_vulkan_backend:
             shared = set(shared_gpu_ids or ())
             return bool(shared) and all(idx in shared for idx in devices)
-        # ROCm only, deliberately. The one caller is the Windows full-offload branch and
-        # every integrated CUDA part is Linux-only, so _integrated_cuda_gpu_ids() could
-        # only answer False here -- at the price of a get_device_properties() call, which
-        # leaks a ~700 MiB primary context (see _get_gpu_memory). The ROCm helper answers
-        # empty on a CUDA torch without touching the device.
+        # ROCm only: a CUDA get_device_properties() leaks a ~700 MiB primary context.
         try:
             unified = LlamaCppBackend._rocm_unified_memory_gpu_ids()
         except Exception:
@@ -1440,12 +1632,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _amd_apu_wants_unified_memory(gpu_indices = None) -> bool:
-        """True only for AMD unified-memory APUs, where GGML_CUDA_ENABLE_UNIFIED_MEMORY
-        lets llama.cpp use shared system RAM (it hurts discrete GPUs). gpu_indices
-        (PHYSICAL ids) scopes the check, so a dGPU on a mixed host is not treated as
-        unified-memory; None means every visible GPU."""
-        # Guarded like the rest of this family: a bad gpu_indices (not iterable,
-        # unhashable members) answers False rather than failing the load.
+        """True only for AMD APUs, since GGML_CUDA_ENABLE_UNIFIED_MEMORY hurts discrete GPUs."""
         try:
             unified = LlamaCppBackend._rocm_unified_memory_gpu_ids()
             if gpu_indices is None:
@@ -1454,8 +1641,7 @@ class _GpuDevicesMixin:
         except Exception:
             return False
 
-    # PHYSICAL integrated ids per visibility mask. Integratedness cannot change under
-    # a fixed mask, and the mask decides which devices the answer is about.
+    # PHYSICAL integrated ids, keyed per visibility mask; integratedness cannot change under a fixed mask.
     _INTEGRATED_CUDA_IDS: dict[tuple, set[int]] = {}
 
     @staticmethod
@@ -1467,34 +1653,12 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _integrated_cuda_probe_is_free() -> bool:
-        """True when ``_integrated_cuda_gpu_ids()`` costs no NEW CUDA context.
-
-        The launch preflight runs AFTER the VRAM budget was taken, so a probe there
-        would price a tightly fitted child against a stale budget. So the preflight
-        never probes: it reads an answer only if one is cached for this mask.
-        ``_get_gpu_memory`` fills that cache before reading any free/total figure, which
-        puts the cost inside the snapshot.
-
-        BOTH its arms fill it now. The torch arm always did, and that was assumed to be
-        the arm an integrated SoC takes, because nvidia-smi answers ``[N/A]`` on a DGX
-        Spark and the CLI probe parses nothing. A Windows RTX Spark N1X answers 8128 MiB
-        instead -- a real number, scoped to the dedicated carve-out -- so the CLI arm
-        wins there and an integrated host reached the preflight with nothing cached.
-        The probe reads ``get_device_properties`` only, which creates no primary context
-        (measured at 0 MiB on an N1X, against 116 MiB for ``mem_get_info``).
-        """
+        """True if the integrated-CUDA answer is cached for this mask; the preflight never probes, since the budget is already taken and both arms fill the cache."""
         return LlamaCppBackend._integrated_cuda_mask_key() in LlamaCppBackend._INTEGRATED_CUDA_IDS
 
     @staticmethod
     def _integrated_cuda_gpu_ids() -> set[int]:
-        """PHYSICAL ids of visible CUDA GPUs whose "VRAM" is shared system RAM.
-
-        Jetson and DGX Spark class parts set cudaDeviceProp::integrated, which torch
-        surfaces as ``is_integrated``; the diffusion memory policy reads the same flag
-        (diffusion_memory.py:292-294). ROCm is excluded because it reuses
-        ``torch.cuda.*`` and ``_rocm_unified_memory_gpu_ids`` already answers for it.
-        Empty off CUDA and on error, so every caller keeps its discrete-GPU default.
-        """
+        """PHYSICAL ids of visible integrated CUDA GPUs; ROCm is left to _rocm_unified_memory_gpu_ids."""
         cached = LlamaCppBackend._INTEGRATED_CUDA_IDS.get(
             LlamaCppBackend._integrated_cuda_mask_key()
         )
@@ -1508,13 +1672,10 @@ class _GpuDevicesMixin:
                 return set()
             if not (hasattr(torch, "cuda") and torch.cuda.is_available()):
                 return set()
-            # Same ordinal -> physical mapping the ROCm twin uses, so a masked host
-            # (CUDA_VISIBLE_DEVICES=2) does not answer for the wrong card.
+            # Same ordinal-to-physical map as the ROCm twin, so masked CUDA_VISIBLE_DEVICES=2 hosts stay correct.
             physical_ids = LlamaCppBackend._resolve_visible_physical_ids()
             integrated: set[int] = set()
-            # A device that did not answer leaves this incomplete: still returned, so
-            # an unqueryable card keeps its discrete default, but not remembered, since
-            # a caller reading it as settled would retry the query that failed.
+            # An incomplete pass is returned but not cached, so a failed query is retried.
             complete = True
             for ordinal in range(torch.cuda.device_count()):
                 try:
@@ -1522,8 +1683,7 @@ class _GpuDevicesMixin:
                 except Exception:
                     complete = False
                     continue
-                # Both spellings: the attribute was `integrated` before torch renamed
-                # it, and an old wheel exposing neither reads discrete.
+                # Both attribute spellings: torch renamed `integrated`.
                 if not (
                     getattr(props, "is_integrated", False) or getattr(props, "integrated", False)
                 ):
@@ -1533,8 +1693,7 @@ class _GpuDevicesMixin:
                     if physical_ids is not None and ordinal < len(physical_ids)
                     else ordinal
                 )
-            # Cached for the preflight, but only a pass that reached every device: a
-            # torch that raised says nothing about the hardware.
+            # Cached for the preflight only if the pass reached every device; a torch that raised says nothing.
             if complete:
                 LlamaCppBackend._INTEGRATED_CUDA_IDS[
                     LlamaCppBackend._integrated_cuda_mask_key()
@@ -1548,16 +1707,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _integrated_cuda_pool_total_mib() -> dict[int, int]:
-        """Pool size in MiB for each visible integrated CUDA device.
-
-        ``props.total_memory`` is what an integrated part can actually allocate, and it
-        is the figure nvidia-smi contradicts on a Windows RTX Spark N1X: 46477 MiB here
-        against the 8128 MiB carve-out the CLI reports. Read from the device list, so
-        it costs no primary context (measured at 0 MiB, against 116 MiB for
-        mem_get_info on the same part) and is cached per mask like the flag itself.
-
-        Empty off CUDA, on ROCm and on any error, so callers keep the CLI's total.
-        """
+        """Pool MiB per integrated CUDA device, from props.total_memory: what it can actually allocate."""
         key = LlamaCppBackend._integrated_cuda_mask_key()
         cached = LlamaCppBackend._INTEGRATED_CUDA_POOL_MIB.get(key)
         if cached is not None:
@@ -1592,38 +1742,17 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _widen_integrated_cuda_rows(gpus: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
-        """Re-price nvidia-smi rows for an integrated CUDA SoC against its shared pool.
-
-        The torch arm of ``_get_gpu_memory`` already sizes an integrated part this way,
-        but it is only reached when the CLI answers nothing, which is the DGX Spark
-        shape (memory.total reads ``[N/A]`` there) and not the Windows RTX Spark N1X
-        shape, where the CLI answers 8128 MiB of a 46477 MiB budget and the nvidia-smi
-        arm returns first. A model was told it needed "7.9 GB of a 6.9 GB budget" on a
-        machine with 45 GiB. So the same policy is applied to a CLI answer that came
-        back scoped to the carve-out.
-
-        Widening only: a total is replaced solely by a LARGER one, and the free half is
-        floored at the reading it replaces, so no device is offered less than the CLI
-        already vouched for. A discrete host gets its rows back unchanged, having paid
-        one classification that is cached for the life of the process.
-        """
+        """Only widens: a total is replaced by a larger pool, and free is floored at the CLI reading."""
         try:
             integrated = LlamaCppBackend._integrated_cuda_gpu_ids()
             if not integrated or not gpus:
                 return gpus
-            # These rows are nvidia-smi indices; `_integrated_cuda_gpu_ids` answers in
-            # CUDA's, which CUDA_DEVICE_ORDER defaults to FASTEST_FIRST, pinning only
-            # device 0 (docs.nvidia.com/cuda/cuda-programming-guide, environment
-            # variables). An unmappable mask is worse: no physical ids AND, since
-            # `_visible_devices_mask` cannot parse it either, unfiltered CLI rows. Join
-            # only when both halves are mappable, as `_cuda_join_is_unsafe` does.
+            # nvidia-smi and CUDA order differ unless CUDA_DEVICE_ORDER=PCI_BUS_ID and the mask maps.
             order = (os.environ.get("CUDA_DEVICE_ORDER") or "").strip().upper()
             raw_mask = os.environ.get("CUDA_VISIBLE_DEVICES")
             mask_unset = raw_mask is None or not raw_mask.strip()
             mappable = mask_unset or LlamaCppBackend._resolve_visible_physical_ids() is not None
-            # No single-row exemption: `gpus` is what SURVIVED parsing (the N1X's own
-            # NPU row does not), so it is not a device count. main.py:19 sets PCI_BUS_ID,
-            # so every Spark, Jetson and N1X still qualifies below.
+            # No single-row exemption; main.py sets PCI_BUS_ID, so Spark/Jetson/N1X qualify.
             if not (mappable and order == "PCI_BUS_ID"):
                 logger.debug(
                     "Not widening integrated CUDA rows: CUDA_DEVICE_ORDER is %r and "
@@ -1636,9 +1765,7 @@ class _GpuDevicesMixin:
             totals = LlamaCppBackend._integrated_cuda_pool_total_mib()
             avail = LlamaCppBackend._available_system_memory_mib()
             cgroup_mib = LlamaCppBackend._cgroup_available_memory_mib()
-            # One pool, however many integrated devices draw on it: the same reason the
-            # torch arm divides. No shipping product pairs two integrated SoCs, so this
-            # is a division by 1 everywhere it currently runs.
+            # Integrated devices share one pool, so divide by their count.
             shared_count = max(1, sum(1 for idx, _f, _t in gpus if idx in integrated))
             out: list[tuple[int, int, int]] = []
             for idx, free_mib, total_mib in gpus:
@@ -1650,27 +1777,22 @@ class _GpuDevicesMixin:
                 if pool_mib > total_mib:
                     total_mib = pool_mib
                 raw_mib = free_mib
-                # MemAvailable, as the torch arm uses: both free readings undercount here
-                # (#9889). A zero total means unsized, so it never becomes a cap.
+                # MemAvailable: both free readings undercount here. A zero total never caps.
                 if avail is not None and total_mib > 0:
                     raw_mib = min(total_mib, max(raw_mib, avail))
                 cgroup_bound = False
                 if cgroup_mib is not None and cgroup_mib <= raw_mib:
-                    # Charged to the cgroup, so publish no total and let the fit price
-                    # off the free reading, which IS the container's ceiling.
+                    # Charged to the cgroup, so the free reading is the real ceiling.
                     raw_mib = cgroup_mib
                     cgroup_bound = True
                 if shared_count > 1:
                     raw_mib //= shared_count
                     total_mib //= shared_count
                 capped = _apply_igpu_host_reserve_mib(raw_mib, True)
-                # Never below what the driver already vouched for. NOT under a cgroup:
-                # allocations are charged to memory.max, so the floor would hand the fit
-                # planner a budget the kernel kills.
+                # Floor at the driver's free reading, except under a cgroup (charged to memory.max).
                 if not cgroup_bound:
                     capped = max(capped, free_mib // shared_count)
-                # Only when something moved: _get_gpu_memory is uncached and
-                # _wait_for_vram_settle polls it every 0.25 s.
+                # Log only on change: _get_gpu_memory is uncached and polled every 0.25 s.
                 if capped != free_mib or total_mib != cli_total_mib:
                     logger.info(
                         f"CUDA device {idx} is a unified-memory SoC sharing system RAM; "
@@ -1686,13 +1808,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _integrated_cuda_unified_memory(gpu_indices = None) -> bool:
-        """True when a credited CUDA device is an integrated (unified-memory) SoC.
-
-        Scoped by gpu_indices (PHYSICAL ids) like its ROCm twin, so a dGPU on a
-        mixed host is not treated as unified; None means every visible GPU. Any
-        integrated device is enough: one shared pool in the credited set is already
-        the double count.
-        """
+        """True if any credited CUDA device is an integrated SoC, since its pool would be double counted."""
         try:
             integrated = LlamaCppBackend._integrated_cuda_gpu_ids()
             if gpu_indices is None:
@@ -1703,14 +1819,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _integrated_cuda_selection_is_all_shared(gpu_indices = None) -> bool:
-        """True when EVERY credited CUDA device is an integrated SoC.
-
-        Stricter than ``_integrated_cuda_unified_memory``, which answers for ANY, and
-        that difference matters here: this guard charges the WHOLE model against system
-        RAM, and layers placed on a discrete card in a mixed selection never touch the
-        shared pool. Answering for any would call an otherwise fitting load oversized,
-        warn about it, and override an explicitly unmapped load to use mmap.
-        """
+        """True only if EVERY credited CUDA device is integrated; any discrete card voids it, else an otherwise fitting load is called oversized."""
         try:
             integrated = LlamaCppBackend._integrated_cuda_gpu_ids()
             if not integrated:
@@ -1731,13 +1840,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _unified_memory_opted_out(env = None) -> bool:
-        """True when GGML_CUDA_ENABLE_UNIFIED_MEMORY must be ABSENT from this launch.
-
-        ggml tests presence, not value, so `=0` is not an off switch (#8651). Both
-        opt-outs (UNSLOTH_DISABLE_UNIFIED_MEMORY=1, mirroring UNSLOTH_DISABLE_DC_TUNING,
-        or a falsy GGML_CUDA_ENABLE_UNIFIED_MEMORY) must end in the name unset.
-        Fails open (False) so a bad env never blocks a load.
-        """
+        """True if GGML_CUDA_ENABLE_UNIFIED_MEMORY must be unset (ggml tests presence, so =0 is no opt-out); UNSLOTH_DISABLE_UNIFIED_MEMORY=1 also unsets it."""
         try:
             source = os.environ if env is None else env
             if str(source.get("UNSLOTH_DISABLE_UNIFIED_MEMORY", "")).strip() == "1":
@@ -1772,31 +1875,21 @@ class _GpuDevicesMixin:
             return True
         return LlamaCppBackend._unified_memory_would_help(gpu_indices, need_bytes = need_bytes)
 
-    # Datacenter / professional NVIDIA parts that get the FP32-accum tuning.
-    # Whole-word (\b) so "a100" does not fire on "RTX A1000".
+    # Whole-word so "a100" does not match "RTX A1000".
     _DATACENTER_GPU_RE = re.compile(
         r"\b(?:a100|a30|h100|h200|h800|gh200|b200|b100|b300|gb200|gb300|"
         r"l40s?|l4|rtx pro 6000|rtx 6000 ada)\b"
     )
 
-    # The NVLink-capable subset. The rest (RTX 6000 Ada/PRO, L40/L40S, L4) have no
-    # NVLink connector, so peer copies cross PCIe, where a translating IOMMU on
-    # bare metal discards them silently while CUDA reports success (#10613).
-    # NECESSARY, never SUFFICIENT: _p2p_veto_reason also demands a positive NV#
-    # link, since a name cannot see an absent bridge.
+    # NVLink-capable subset; PCIe peer copies may be silently dropped by an IOMMU.
+    # Necessary, not sufficient: _p2p_veto_reason also needs a positive NV# link.
     _NVLINK_FABRIC_GPU_RE = re.compile(
         r"\b(?:a100|a30|h100|h200|h800|gh200|b200|b100|b300|gb200|gb300)\b"
     )
 
     @staticmethod
     def _all_selected_gpus_match(pattern, gpu_indices = None) -> bool:
-        """True iff every selected NVIDIA GPU's name matches ``pattern``. False for
-        consumer GeForce / ROCm / CPU / errors and for a mixed selection.
-
-        gpu_indices are PHYSICAL ids (see _get_gpu_free_memory) but
-        get_device_properties wants mask-relative ordinals, so names are keyed by
-        physical id via CUDA_VISIBLE_DEVICES; otherwise a masked host would drop
-        the tuning or probe the wrong GPU."""
+        """True iff every selected NVIDIA GPU name matches pattern (mixed, consumer, ROCm or CPU is False); maps physical ids to mask-relative ordinals for lookup."""
         try:
             import torch
 
@@ -1806,8 +1899,7 @@ class _GpuDevicesMixin:
                 return False
             count = torch.cuda.device_count()
 
-            # Mirror _get_gpu_free_memory: map visible ordinal -> physical id via
-            # CUDA_VISIBLE_DEVICES; unset/unparsable leaves physical id == ordinal.
+            # Mirror _get_gpu_free_memory; unset or unparsable CUDA_VISIBLE_DEVICES keeps physical id == ordinal.
             physical_ids = LlamaCppBackend._resolve_visible_physical_ids()
 
             names_by_id: dict[int, str] = {}
@@ -1844,15 +1936,12 @@ class _GpuDevicesMixin:
             LlamaCppBackend._DATACENTER_GPU_RE, gpu_indices
         )
 
-    # `nvidia-smi topo -m` vocabulary: NV# is a bonded set of # NVLinks; SYS /
-    # NODE / PHB / PXB / PIX all traverse PCIe and are unsafe. The header is
-    # ANSI-underlined, so escapes are stripped before parsing.
+    # NV# is a bonded NVLink set; SYS/NODE/PHB/PXB/PIX cross PCIe. Header is ANSI-underlined.
     _TOPO_GPU_LABEL_RE = re.compile(r"^GPU(\d+)$")
     _TOPO_NVLINK_RE = re.compile(r"^NV\d+$")
     _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
-    # One probe per process, not per launch. None = not yet probed; otherwise a
-    # 1-tuple whose value may itself be None ("probed and unavailable").
+    # None = not probed; else a 1-tuple whose value may be None (unavailable).
     _NVLINK_TOPO_CACHE = None
     # Bumped on refresh so a slow prime cannot publish over a newer invalidation.
     _NVLINK_TOPO_GENERATION = 0
@@ -1936,16 +2025,7 @@ class _GpuDevicesMixin:
 
     @classmethod
     def _probe_nvml_nvlink_topology_inner(cls) -> Optional[dict]:
-        """Same matrix as _probe_nvlink_topology, from NVML instead of a shell-out:
-        ~85 ms against ~1200 ms on an 8x B200. Keyed by the NVML device index, which
-        is the nvidia-smi index (both enumerate in PCI order and both ignore
-        CUDA_VISIBLE_DEVICES, verified on 8x B200). None when the answer is not
-        conclusive, which sends the caller to the shell-out.
-
-        Evidence is per PAIR: an active link whose remote endpoint is an NVSwitch
-        proves only that the GPU is attached to a switch, and switch fabrics can be
-        partitioned, so "every GPU has a switch link" must NOT be read as "every pair
-        is reachable"."""
+        """NVML per-pair evidence: an NVSwitch link proves only attachment, so every GPU linked is not every pair reachable; None when inconclusive, then shell out."""
         lib = cls._nvml_library()
         if lib is None:
             return None
@@ -2015,8 +2095,7 @@ class _GpuDevicesMixin:
                             "definite answer; treating the topology as unreadable"
                         )
                         return None
-                    # No live NVLink on an endpoint means the pair cannot be NVLinked.
-                    # An OK on a PCIe-only box becomes unknown, not a false positive (#10613).
+                    # An OK on a PCIe-only box becomes unknown, not a false positive.
                     if linked and not (active_links[a] and active_links[b]):
                         logger.debug(
                             f"NVML says GPU {a}<->{b} is NVLink but they report "
@@ -2043,13 +2122,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _probe_nvlink_topology() -> Optional[dict]:
-        """Parse ``nvidia-smi topo -m`` into {(i, j): "NV18" | "NODE" | ...}, keyed
-        by the *nvidia-smi* index (PCI order, NOT the CUDA ordinal), both orders
-        present. None when the topology cannot be established. Never raises.
-
-        The table also carries NIC rows/columns, affinity columns and a Legend, so
-        the GPU columns are the leading run of GPU<n> header labels and only GPU<n>
-        rows are read."""
+        """Keyed by nvidia-smi PCI index, not CUDA ordinal; only GPU<n> rows and columns are read; None when the topology cannot be established."""
         try:
             from utils.hardware import gpu_query
 
@@ -2097,10 +2170,7 @@ class _GpuDevicesMixin:
                 for col, label in zip(columns, labels):
                     if col != source:
                         matrix[(source, col)] = label.upper()
-            # Every directed pair the header promised, or nothing. Row-truncated
-            # output still exits 0 and parses cleanly, and the rows that arrived can
-            # be uniformly NV#, which reads as "the whole box is NVLinked" and would
-            # enable P2P on cards whose links were never seen (#10613).
+            # Require every directed pair: truncated rows can look uniformly NVLinked.
             expected = {(a, b) for a in columns for b in columns if a != b}
             if set(matrix) != expected:
                 logger.debug(
@@ -2115,13 +2185,7 @@ class _GpuDevicesMixin:
 
     @classmethod
     def _probe_interconnect_matrix(cls) -> Optional[dict]:
-        """NVML first, `nvidia-smi topo -m` second, nothing third. Both answer in the
-        same index space and shape; NVML is ~14x faster, so the shell-out is only paid
-        on drivers too old to answer.
-
-        UNSLOTH_P2P_TOPO_CROSSCHECK=1 runs both and logs any disagreement, to qualify
-        the fast path on fabrics not available here (PCIe-only, partially bridged); an
-        NVML-positive / topo-negative pair is the result that would matter."""
+        """NVML first, nvidia-smi topo -m only as fallback; UNSLOTH_P2P_TOPO_CROSSCHECK=1 runs both."""
         matrix = cls._probe_nvml_nvlink_topology()
         if matrix is not None and os.environ.get("UNSLOTH_P2P_TOPO_CROSSCHECK") == "1":
             topo = cls._probe_nvlink_topology()
@@ -2142,22 +2206,11 @@ class _GpuDevicesMixin:
 
     @classmethod
     def prime_nvlink_topology(cls) -> None:
-        """Warm the cache with NVML only, for a speculative caller off the load path.
-
-        Deliberately skips the `nvidia-smi` fallback. A prime is an optimisation, so
-        it may pay the cheap path and nothing else: spawning a subprocess that can run
-        for its full timeout, on a background thread, perturbs whatever else shares
-        the process. If NVML cannot answer the cache stays cold and the load path does
-        the slow probe inline, exactly as it would have without a prime.
-
-        Publishes only a success, for the reason cache_failure documents below: a miss
-        cached this early would outlive the condition that caused it."""
+        """NVML only: a background prime must not spawn nvidia-smi (it can run its full timeout) and publishes only a success, never a miss."""
         if cls._NVLINK_TOPO_CACHE is not None:
             return
         if os.environ.get("UNSLOTH_P2P_TOPO_CROSSCHECK") == "1":
-            # The cross-check lives in _probe_interconnect_matrix, which only the load
-            # path reaches, and the warm stage always primes first: publishing here
-            # would retire the diagnostic. Cold cache costs the inline slow probe.
+            # Do not publish here: only the load path runs the cross-check, and warm always primes first.
             return
         matrix = cls._probe_nvml_nvlink_topology()
         if matrix is None:
@@ -2172,11 +2225,7 @@ class _GpuDevicesMixin:
         refresh = False,
         cache_failure = True,
     ) -> Optional[dict]:
-        """_probe_interconnect_matrix, cached for the life of the process.
-
-        The probe runs outside the lock (slow, and a duplicate pass is harmless), but
-        publication is guarded: a background prime and a model load can both be in
-        flight, and the generation check stops a slow winner from overwriting a newer
+        """Probe runs unlocked; the generation check stops a slow result overwriting a newer
         invalidation."""
         if not refresh and cls._NVLINK_TOPO_CACHE is not None:
             return cls._NVLINK_TOPO_CACHE[0]
@@ -2195,8 +2244,7 @@ class _GpuDevicesMixin:
                     return None
                 existing = cls._NVLINK_TOPO_CACHE
                 if probed is None and existing is not None and existing[0] is not None:
-                    # The generation only guards a refresh, so without this a racing
-                    # transient failure would erase a concurrent pass's good matrix.
+                    # Without this a racing transient failure would erase a concurrent pass's good matrix.
                     return existing[0]
                 cls._NVLINK_TOPO_CACHE = (probed,)
                 return probed
@@ -2206,10 +2254,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _running_virtualized() -> bool:
-        """True when this kernel runs under a hypervisor. CUDA supports peer copies
-        via VM pass-through but NOT on bare metal behind a translating IOMMU, so the
-        IOMMU veto applies only off this path. False when unknown (no flags line on
-        non-x86), which keeps the veto in play."""
+        """True under a hypervisor, where the IOMMU veto does not apply; False when unknown, keeping it."""
         try:
             with open("/proc/cpuinfo", "r", encoding = "utf-8", errors = "replace") as f:
                 for line in f:
@@ -2222,16 +2267,18 @@ class _GpuDevicesMixin:
     # One directory per IOMMU group, each with a `type`. Overridable for tests.
     _IOMMU_GROUPS_ROOT = "/sys/kernel/iommu_groups"
 
-    # Whether _get_gpu_memory ids are nvidia-smi PCI indices (True) or torch CUDA
-    # ordinals (False, the fallback); None until a probe has run. They coincide
-    # only under PCI_BUS_ID, so a caller pinning the child's device order has to
-    # know which it holds (#10613).
+    # True if _get_gpu_memory ids are nvidia-smi PCI indices, False if torch ordinals; None until
+    # probed. They coincide only under PCI_BUS_ID.
     _GPU_IDS_ARE_PCI_INDICES = None
     # index -> inherited uuid, when CUDA_VISIBLE_DEVICES named the NVML rows by uuid.
     _NVML_ROWS: list = []  # the last NVML inventory; _child_visibility_for reads it
 
-    # Boot-time property: read once, not per launch (the #10613 host has 175
-    # groups). Only the default root is cached; an explicit root (tests) re-reads.
+    # MIG cards that same probe saw (None = discovery unknown), so pinning uses its snapshot.
+    _SMI_MIG_INDICES: Optional[frozenset] = None
+
+    _SMI_UUID_ROWS: list = []  # (index, uuid) from the last nvidia-smi memory probe
+
+    # Boot-time property: cached for the default root only; an explicit root (tests) re-reads.
     _IOMMU_CACHE = None
 
     @classmethod
@@ -2246,15 +2293,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _iommu_is_translating(root = None) -> Optional[bool]:
-        """Whether the IOMMU translates DMA: True for DMA / DMA-FQ groups, False
-        when every group is identity/passthrough or there are none, None when the
-        groups exist but none is readable. Never raises.
-
-        CUDA C++ Programming Guide, "IOMMU on Linux": bare-metal PCIe peer-to-peer
-        is unsupported while the IOMMU translates, and the dropped write looks like
-        a successful copy rather than an error (#10613). Read per group, not per
-        GPU: a host with ANY translating group is not one to infer P2P safety on,
-        and resolving each GPU's PCI address needs a third index-space join."""
+        """True if any IOMMU group translates DMA (bare-metal P2P then drops writes silently); None when groups exist but none is readable."""
         root = root or LlamaCppBackend._IOMMU_GROUPS_ROOT
         try:
             groups = os.listdir(root)
@@ -2279,6 +2318,17 @@ class _GpuDevicesMixin:
             return None
         return any(not kind.startswith("IDENTITY") for kind in kinds)
 
+    @staticmethod
+    def _mig_snapshot_rows():
+        """R570+ MIG rows _get_gpu_memory sized under this mask and order, else None (index = CUDA id)."""
+        snapshot = getattr(LlamaCppBackend, "_MIG_DEVICE_SNAPSHOT", None)
+        if snapshot is not None and snapshot[:2] == (
+            os.environ.get("CUDA_VISIBLE_DEVICES"),
+            os.environ.get("CUDA_DEVICE_ORDER"),
+        ):
+            return snapshot[2]
+        return None
+
     @classmethod
     def _p2p_veto_reason(
         cls,
@@ -2302,38 +2352,26 @@ class _GpuDevicesMixin:
         launch_order_pinned = False,
         ids_are_pci_indices = None,
     ) -> Optional[str]:
-        """Why GGML_CUDA_P2P must NOT be set for this selection, or None once a
-        working NVLink fabric is confirmed for every selected pair. Fails CLOSED on
-        every unknown.
-
-        Before #10613 the flag came from the device NAME alone, which cannot see an
-        absent NVLink bridge: 2x RTX 6000 Ada matched the allowlist and every model
-        returned garbage. The driver is no better, since cudaDeviceCanAccessPeer
-        and `nvidia-smi topo -p2p w` both answered OK on that host, so the only
-        evidence accepted here is a positive NV# link.
-
-        Index spaces: gpu_indices are physical ids, the matrix is keyed by
-        nvidia-smi index, and the two coincide only under
-        CUDA_DEVICE_ORDER=PCI_BUS_ID (CUDA otherwise enumerates FASTEST_FIRST).
-        Rather than lose the tuning on every host that never set it, an inexact
-        mapping demands a uniformly NV# matrix, which holds under any permutation.
-
-        Overrides come first: UNSLOTH_DISABLE_DC_P2P=1 drops P2P while KEEPING
-        FP32-accum (all-or-nothing UNSLOTH_DISABLE_DC_TUNING would discard a tuning
-        that is not implicated), UNSLOTH_FORCE_DC_P2P=1 opts back in for a real but
-        unparsable fabric -- check it with scripts/p2p_integrity_probe.py."""
+        """Reason GGML_CUDA_P2P must stay off, or None once every pair has a confirmed NV# link. Fails closed; device names and driver peer checks are not proof."""
         if os.environ.get("UNSLOTH_DISABLE_DC_P2P") == "1":
             return "disabled by UNSLOTH_DISABLE_DC_P2P=1"
         if os.environ.get("UNSLOTH_FORCE_DC_P2P") == "1":
             return None
+        mig_rows = cls._mig_snapshot_rows()
+        if mig_rows is not None:
+            # MIG instances have no NVLink matrix row; whole cards keep it via physical_index.
+            by_id = {int(r["index"]): r for r in mig_rows}
+            selected = (
+                sorted(by_id) if gpu_indices is None else sorted(set(int(i) for i in gpu_indices))
+            )
+            if any(i not in by_id or by_id[i].get("mig") for i in selected):
+                return "MIG device UUIDs cannot be verified by the physical-card NVLink matrix"
+            gpu_indices = [int(by_id[i]["physical_index"]) for i in selected]
+            ids_are_pci_indices = True
 
         def _pcie(reason: str) -> str:
-            """Append the IOMMU diagnosis to a veto that implies a PCIe peer path.
-            On bare-metal Linux with a translating IOMMU such a copy is not merely
-            slow but unsupported, the write silently discarded. Hangs off EVERY such
-            veto, not just the topology one: the #10613 reporter's 2x RTX 6000 Ada
-            fails the NAME gate first and would otherwise never learn why its output
-            was garbled."""
+            """Appended to every PCIe peer veto; on bare-metal Linux a translating IOMMU makes
+            copies unsupported."""
             if cls._iommu_is_translating_cached() and not cls._running_virtualized():
                 reason += (
                     "; bare-metal Linux with a translating IOMMU, where CUDA "
@@ -2350,20 +2388,11 @@ class _GpuDevicesMixin:
 
         gpu_ids = sorted({i for pair in matrix for i in pair})
 
-        # gpu_indices are ALREADY nvidia-smi indices (_get_gpu_memory reads
-        # `--query-gpu=index`, the same enumeration as `topo -m`), so they index the
-        # matrix VERBATIM and remapping them as CUDA ordinals is wrong: under
-        # FASTEST_FIRST that would turn a PCIe-crossing selection into an
-        # NVLinked-looking one and enable the flag this gate exists to withhold. A
-        # usable matrix means nvidia-smi answered, so the selection came from its
-        # branch too.
+        # gpu_indices are already nvidia-smi indices (same enumeration as topo -m). Remapping them as
+        # CUDA ordinals could make a PCIe pair look NVLinked under FASTEST_FIRST.
         if gpu_indices is not None:
-            # Verifying these ids means something only if the CHILD resolves the
-            # same cards. Without a PCI_BUS_ID pin it reads them in FASTEST_FIRST
-            # order, so [0,1] here can be [0,2] there: refuse rather than confirm
-            # NVLink for a pair that is not the one about to run (#10613).
-            # Unless the whole box is NVLinked, where the mapping cannot matter and
-            # vetoing would lose P2P on every auto-fit NVSwitch launch (#6098).
+            # Without a PCI_BUS_ID pin the child may resolve these ids to other cards, so refuse,
+            # unless the whole box is uniformly NVLinked and the mapping cannot matter.
             uniformly_nvlinked = all(cls._label_is_nvlink(v) for v in matrix.values())
             if not (
                 launch_order_pinned
@@ -2376,8 +2405,7 @@ class _GpuDevicesMixin:
                     "the ones it runs on; set CUDA_DEVICE_ORDER=PCI_BUS_ID to "
                     "enable P2P here"
                 )
-            # A usable `topo -m` proved nvidia-smi enumerated the selection; NVML does
-            # not, and torch ordinals index this matrix wrongly under FASTEST_FIRST (#10613).
+            # topo -m proves nvidia-smi enumerated the selection; torch ordinals misread it under FASTEST_FIRST.
             pci_ids = (
                 cls._GPU_IDS_ARE_PCI_INDICES is True
                 if ids_are_pci_indices is None
@@ -2392,15 +2420,8 @@ class _GpuDevicesMixin:
                 )
             selected = sorted(set(gpu_indices))
         else:
-            # No explicit selection: the child uses every VISIBLE GPU. nvidia-smi
-            # ignores CUDA_VISIBLE_DEVICES, so the matrix covers devices the child
-            # never touches, and filtering it to the mask keeps a clean NVLinked
-            # pair from being vetoed by a PCIe edge to a hidden device.
-            # Sound only when mask and matrix share an index space: numeric mask
-            # entries are CUDA ordinals, the matrix is PCI indices, and under
-            # FASTEST_FIRST mask "0,1" can mean physical 0,2, which could confirm
-            # NV# for a pair that is not the one in use (_cuda_compute_caps declines
-            # the same mapping). Unmappable means check the whole box.
+            # No explicit selection: filter the matrix to the visible mask, but only when the mask maps to
+            # PCI indices (numeric entries are CUDA ordinals); otherwise check the whole box.
             visible = cls._resolve_visible_physical_ids()
             mappable = os.environ.get("CUDA_DEVICE_ORDER") == "PCI_BUS_ID"
             selected = (
@@ -2438,9 +2459,7 @@ class _GpuDevicesMixin:
             return 0
         return 0
 
-    # Values a user writes to mean "off". ggml tests GGML_CUDA_P2P for PRESENCE, not
-    # value, so passing any of these through ENABLES what they turned off; only
-    # absence is off. Same trap as GGML_CUDA_ENABLE_UNIFIED_MEMORY (#8651).
+    # ggml tests GGML_CUDA_P2P for presence, not value, so these would ENABLE it; only absence is off.
     _FALSY_ENV_VALUES = frozenset({"", "0", "false", "off", "no"})
 
     # Property of the host, not the model, so warn once rather than per launch.
@@ -2451,16 +2470,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _sanitize_p2p_env(env: dict) -> Optional[str]:
-        """Drop an inherited GGML_CUDA_P2P that must not reach the child; return the
-        removed value for logging, else None. ggml tests the variable for PRESENCE
-        and not value, so both cases mean OFF and neither is honoured upstream: a
-        falsy value ("0", "false", "off", ""), or UNSLOTH_DISABLE_DC_P2P=1, where
-        suppressing our own default is not enough because an inherited truthy value
-        would sail past it (#10613).
-
-        Belongs at the call site on EVERY launch path: env is inherited from
-        os.environ, and a consumer-GPU user who set the flag off by hand never
-        reaches the datacenter gate at all."""
+        """Drops an inherited GGML_CUDA_P2P (ggml tests presence, not value); call on every launch path, since consumer GPUs never reach the DC gate."""
         value = env.get("GGML_CUDA_P2P")
         if value is None:
             return None
@@ -2498,25 +2508,7 @@ class _GpuDevicesMixin:
         launch_order_pinned = False,
         ids_are_pci_indices = None,
     ) -> bool:
-        """Inject DC llama.cpp tuning into env in place via setdefault (user values
-        win); return whether the box qualified. Only datacenter NVIDIA parts qualify
-        (consumer/ROCm/CPU/error are a no-op); opt out with
-        UNSLOTH_DISABLE_DC_TUNING=1. Any qualifying GPU gets
-        GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F (FP32 accum: ~0% cost on B200).
-
-        GGML_CUDA_P2P (+33-51% pp tensor-split on B200) additionally needs a
-        CONFIRMED NVLink fabric across the selection (_p2p_veto_reason): without one
-        the peer copy is silently discarded and every model emits garbage (#10613).
-        CUDA_SCALE_LAUNCH_QUEUES=4x (+8-16% pipeline split) is deliberately NOT
-        gated with it: it sizes a command buffer, moves no data across the bus, and
-        measured clean in isolation on the affected host.
-
-        p2p_opted_out records that the call site already removed a falsy
-        user-supplied GGML_CUDA_P2P (_sanitize_p2p_env), so the default must not put
-        it straight back."""
-        # Defence in depth, idempotent: called directly with a falsy value,
-        # setdefault would keep "0" and log "GGML_CUDA_P2P=0 (user)", which reads as
-        # off to a human and ON to ggml (#10613).
+        """Injects DC tuning via setdefault (user wins); GGML_CUDA_P2P only on a confirmed NVLink fabric; falsy values removed; UNSLOTH_DISABLE_DC_TUNING=1 opts out."""
         if LlamaCppBackend._sanitize_p2p_env(env) is not None:
             p2p_opted_out = True
         if os.environ.get("UNSLOTH_DISABLE_DC_TUNING") == "1":
@@ -2533,8 +2525,7 @@ class _GpuDevicesMixin:
         if LlamaCppBackend._effective_gpu_count(gpu_indices) > 1:
             # Moves no data between GPUs, so it is not gated on the fabric.
             applied.append(_apply("CUDA_SCALE_LAUNCH_QUEUES", "4x"))
-            # Asked for off: skip the probe rather than pay up to its 10s timeout to
-            # decide something the user already decided.
+            # User asked for off: skip the probe (up to 10s).
             veto = (
                 "GGML_CUDA_P2P was turned off in the environment"
                 if p2p_opted_out
@@ -2545,8 +2536,7 @@ class _GpuDevicesMixin:
             if veto is None:
                 applied.append(_apply("GGML_CUDA_P2P", "1"))
             elif "GGML_CUDA_P2P" in env:
-                # Truthy and user-supplied: their value stands, but it steers
-                # straight into the #10613 failure.
+                # A truthy user-supplied GGML_CUDA_P2P stands, but it steers straight into the known P2P failure.
                 logger.warning(
                     "GGML_CUDA_P2P is set in the environment (%s), so peer copies stay "
                     "ON despite: %s. Unset it entirely -- not =0, which reads as ON "
@@ -2555,9 +2545,7 @@ class _GpuDevicesMixin:
                     veto,
                 )
             elif p2p_opted_out or os.environ.get("UNSLOTH_DISABLE_DC_P2P") == "1":
-                # Asked for off and got off. The fabric was never inspected, so
-                # calling it unconfirmed would warn about corruption on a box that
-                # may be perfectly healthy.
+                # Asked for off: the fabric was never inspected, so do not warn about it.
                 logger.info("GGML_CUDA_P2P left unset: %s", veto)
             elif not LlamaCppBackend._warned_no_nvlink:
                 LlamaCppBackend._warned_no_nvlink = True
@@ -2578,12 +2566,7 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _visible_devices_mask(env_name: str) -> Optional[set[int]]:
-        """Physical indices a ``*_VISIBLE_DEVICES`` mask permits, or None if unset.
-
-        ``if x.strip()`` filters trailing-comma masks ("0,1,"); an empty mask
-        ("") yields an empty set (all devices hidden), distinct from an unset
-        var (None, no mask). Used by the nvidia-smi probe.
-        """
+        """Empty mask hides every device, unlike an unset variable (None); blank entries are dropped."""
         raw = os.environ.get(env_name)
         if raw is None:
             return None
@@ -2602,15 +2585,8 @@ class _GpuDevicesMixin:
 
     @staticmethod
     def _vulkan_pin_args(gpu_indices: Optional[Iterable[int]]) -> list[str]:
-        """``--device Vulkan<i>,...`` to pin a Vulkan launch to selected GPUs.
-
-        The indices are ggml's compact Vulkan ordinals (as _get_gpu_free_memory
-        reports and the registry names ``Vulkan<i>``). Pin by that name, NOT via
-        GGML_VK_VISIBLE_DEVICES: ggml parses that env var in the raw
-        vkEnumeratePhysicalDevices space (before dropping CPU/llvmpipe devices
-        and deduplicating ICDs), so a compact ordinal there could select a
-        different physical device or the CPU rasterizer.
-        """
+        """Pin with --device Vulkan<i>; GGML_VK_VISIBLE_DEVICES uses raw indices, not the compact
+        ordinals."""
         if not gpu_indices:
             return []
         return ["--device", ",".join(f"Vulkan{i}" for i in gpu_indices)]

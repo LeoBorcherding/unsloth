@@ -27,16 +27,16 @@ from utils.subprocess_compat import (
 
 from .log import logger
 from .server_log import _TRACE_VERBOSITY_HELP_RE
+from .launch_flags import (
+    _fit_measures_borrowed_drafts,
+)
 
 
 class _CapabilityProbeMixin:
     # ── llama-server capability probe ─────────────────────────────
 
-    # Prebuilts based on llama.cpp b10259..b10268 advertise draft-dspark but land between
-    # the reshape regression (ggml-org/llama.cpp#26531) and its fix (#26577), so a DSpark
-    # launch aborts on load. Matched on the base build number, not one exact tag: every
-    # release in that window is affected. Source builds carry no install marker, so only
-    # managed prebuilts are gated.
+    # ── llama-server capability probe ─────────────────────────────
+    # b10259..b10268 advertise draft-dspark but abort on load; match the base build number, gate only managed prebuilts (source builds carry no marker).
     _BROKEN_DSPARK_BUILDS = range(10259, 10269)
 
     @classmethod
@@ -44,9 +44,7 @@ class _CapabilityProbeMixin:
         match = re.match(r"b(\d+)", str(release_tag or ""))
         return bool(match) and int(match.group(1)) in cls._BROKEN_DSPARK_BUILDS
 
-    # Keyed on the file's revision, since `unsloth studio update` replaces it in place.
-    # Nanoseconds and size, not int(st_mtime): an update landing in the same second as
-    # the probe kept the key identical and got the old build's capabilities.
+    # Keyed on (mtime_ns, size): updates replace the binary in place within the same second.
     _CAPABILITY_PROBE_RETRY_SECONDS = 30.0
     _CAPABILITY_PROBE_RETRY_MAX_SECONDS = 600.0
     _capability_cache: dict[tuple[str, int, int], dict[str, object]] = {}
@@ -56,38 +54,25 @@ class _CapabilityProbeMixin:
     _capability_retry_backoff: dict[tuple[str, int, int], float] = {}
     _capability_cache_lock = threading.Lock()
 
-    # The value form of the flash-attention flag. Newer llama.cpp declares it
-    # with an enum, "-fa, --flash-attn [on|off|auto]"; older builds take a bare
-    # boolean and reject a following "on" as a stray positional, which is an
-    # immediate "invalid argument" exit rather than a degraded launch.
+    # Older builds take a bare boolean -fa and exit on a following "on".
     _FLASH_ATTN_ENUM_RE = re.compile(
         r"(?im)^[^\n]*--flash-attn[^\n]*\bon\b[ \t]*\|[ \t]*\boff\b[^\n]*$"
     )
 
     @classmethod
     def _flash_attn_takes_value(cls, help_text: str) -> bool:
-        """Whether this build's --flash-attn accepts on/off/auto.
-
-        Fails open: a build whose help never mentions the flag at all keeps
-        today's behaviour, because the pinned prebuilt is the value form and a
-        wrong answer there would break the supported path for a hypothetical
-        one.
-        """
+        """Fails open: a help text without --flash-attn keeps the value form, which the pinned
+        prebuilt uses."""
         if not help_text or "--flash-attn" not in help_text:
             return True
         return bool(cls._FLASH_ATTN_ENUM_RE.search(help_text))
 
-    # ggml-org/llama.cpp#23861 capped the output rows a context reserves at the rows it
-    # can emit. Builds before it reserve a row for every micro-batch token.
+    # llama.cpp#23861 capped reserved output rows; older builds reserve one per ubatch token.
     _OUTPUT_ROWS_CAPPED_BUILD = 9460
 
     @classmethod
     def probe_build_number(cls, binary: Optional[str] = None) -> Optional[int]:
-        """The llama.cpp build number from ``llama-server --version``, cached per binary.
-
-        Current builds print ``version: X.Y.Z (build NNNN, commit ...)``, older ones
-        ``version: NNNN (commit)``. None when the binary is missing, the probe fails,
-        or the build reports 1 (a source build without tags)."""
+        """None for a missing binary, a failed probe, or build 1, which is a source build without tags."""
         bin_path = cls._exec_path_for_launch(binary or cls._find_llama_server_binary())
         if not bin_path or not Path(bin_path).is_file():
             return None
@@ -129,10 +114,8 @@ class _CapabilityProbeMixin:
 
     @classmethod
     def reserves_micro_batch_outputs(cls, binary: Optional[str] = None) -> bool:
-        """Whether this llama-server reserves an output row per micro-batch token.
-
-        Known builds before b9460, including the older-macOS b9415 fallback, do.
-        Unknown builds are priced as current, matching Studio's prebuilts."""
+        """Builds before b9460, and the b9415 macOS fallback, reserve rows; unknown builds count as
+        current."""
         try:
             build = cls.probe_build_number(binary)
         except Exception:
@@ -157,11 +140,8 @@ class _CapabilityProbeMixin:
 
     @classmethod
     def _advertised_int_default(cls, help_block: Optional[str]) -> Optional[int]:
-        """The integer a flag's help block declares as its default, else None.
-
-        llama.cpp wraps the block across columns, so the caller passes the joined
-        text. None means "this build did not say", never a numeric guess.
-        """
+        """None means the build did not say; help wraps across columns, so the caller passes the
+        joined text."""
         if not help_block:
             return None
         match = cls._ADVERTISED_DEFAULT_RE.search(help_block)
@@ -169,27 +149,7 @@ class _CapabilityProbeMixin:
 
     @classmethod
     def probe_server_capabilities(cls, binary: Optional[str] = None) -> dict[str, object]:
-        """Parse `llama-server --help` for feature flags. Returns
-        {found, mtp_token, supports_mtp, supports_dspark, supports_dflash,
-        ngram_mod_flavor, supports_ngram_mod, spec_draft_n_max_flag, cache flag
-        support}.
-
-        ``ngram_mod_flavor``: ``"new"`` when the post-rename
-        ``--spec-ngram-mod-n-match / -n-min / -n-max`` are real args;
-        ``"legacy"`` when only the pre-rename
-        ``--spec-ngram-size-n / --draft-min / --draft-max`` are real (the
-        rename ships stub removal entries for legacy names, told apart by
-        the "argument has been removed" description); ``None`` if neither
-        set is usable.
-
-        ``spec_draft_n_max_flag``: the flag the binary accepts --
-        ``--spec-draft-n-max`` post-rename, ``--draft-max`` on legacy.
-        ``None`` means n_max cannot be set.
-        """
-        # Not only in load_model: startup, status and preflight probe directly,
-        # and a wrapper loses DYLD_* to SIP before reaching the real server. The
-        # inconclusive capabilities that follow clamp slots and disable
-        # DSpark/DFlash sizing on a server that supports both (#8566).
+        """Parse llama-server --help for flags; ngram_mod_flavor needs descriptions (legacy names are removal stubs); use the real exec path (SIP strips DYLD)."""
         bin_path = cls._exec_path_for_launch(binary or cls._find_llama_server_binary())
         if not bin_path or not Path(bin_path).is_file():
             return {
@@ -205,9 +165,7 @@ class _CapabilityProbeMixin:
                 "spec_draft_n_max_flag": None,
                 "spec_draft_n_max_default": None,
                 "supports_kv_unified": False,
-                # Fail OPEN, unlike every key above. These three are emitted on
-                # every launch today, so a failed probe must keep emitting them;
-                # only a build whose --help positively lacks one drops it.
+                # Fail OPEN: these are emitted on every launch; only a positive absence drops one.
                 "supports_no_context_shift": True,
                 "supports_jinja": True,
                 "supports_api_key_file": True,
@@ -215,6 +173,7 @@ class _CapabilityProbeMixin:
                 "flash_attn_takes_value": True,
                 "supports_fit_ctx": False,
                 "supports_fit_target": False,
+                "fit_measures_borrowed_drafts": False,
                 "supports_cache_ram": False,
                 "supports_ctx_checkpoints": False,
                 "ctx_checkpoints_flag": None,
@@ -230,6 +189,8 @@ class _CapabilityProbeMixin:
                 "supports_no_mmproj_offload": False,
                 "supports_trace_verbosity": False,
                 "supports_video_fps": False,
+                "supports_video_timestamp_interval": False,
+                "supports_video_ffmpeg_dir": None,
                 "supports_load_mode": False,
                 "supports_moe_cache": False,
                 "supports_moe_cache_auto": False,
@@ -249,16 +210,26 @@ class _CapabilityProbeMixin:
             mtime_ns = 0
             size = 0
         cache_key = (bin_path, mtime_ns, size)
+        hit = None
         with cls._capability_cache_lock:
             cached = cls._capability_cache.get(cache_key)
             if cached is not None:
-                if not cached.get("mtp_probe_inconclusive"):
-                    return cached
                 retry_after = cls._capability_retry_after.get(cache_key)
-                if retry_after is not None and time.monotonic() < retry_after:
-                    return cached
-                cls._capability_cache.pop(cache_key, None)
-                cls._capability_retry_after.pop(cache_key, None)
+                if not cached.get("mtp_probe_inconclusive") or (
+                    retry_after is not None and time.monotonic() < retry_after
+                ):
+                    hit = cached
+                else:
+                    cls._capability_cache.pop(cache_key, None)
+                    cls._capability_retry_after.pop(cache_key, None)
+        if hit is not None:
+            # A copy: the cached dict is shared across threads.
+            if hit.get("supports_fit_target"):
+                hit = {
+                    **hit,
+                    "fit_measures_borrowed_drafts": _fit_measures_borrowed_drafts(bin_path),
+                }
+            return hit
 
         mtp_token: Optional[str] = None
         supports_dspark = False
@@ -289,6 +260,8 @@ class _CapabilityProbeMixin:
         supports_reasoning_flag = False
         supports_no_mmproj_offload = False
         supports_video_fps = False
+        supports_video_timestamp_interval = False
+        supports_video_ffmpeg_dir = None
         supports_load_mode = False
         supports_moe_cache = False
         supports_moe_cache_auto = False
@@ -300,14 +273,9 @@ class _CapabilityProbeMixin:
         saw_spec_type = False
         probe_ok = False
         help_text = ""
-        # Every flag this build documents, with its help text. Pre-initialised for
-        # the same reason as the booleans above: a failed probe must fall back to
-        # "nothing known", not raise.
+        # Pre-initialised: a failed probe must fall back to nothing known, not raise.
         blocks: dict[str, str] = {}
-        # Same reason, and the reason it lives out here rather than beside the parse
-        # loop: a probe that times out leaves the loop unrun, and the catalogue below
-        # is still built. Reading an unset local there turned a slow binary into an
-        # UnboundLocalError instead of "nothing known about this build".
+        # Out here: a timed-out probe skips the loop but the catalogue is still built.
         takes_value: dict[str, bool] = {}
 
         def _is_real(flag: str) -> bool:
@@ -319,17 +287,12 @@ class _CapabilityProbeMixin:
 
         try:
             probe_env = cls._llama_server_env_for_binary(bin_path)
-            # Capability detection describes the binary, independently of the
-            # user's launch defaults. In particular, a device selected through
-            # LLAMA_ARG_* becomes invalid when the macOS probe disables Metal.
+            # Describe the binary, not the user's LLAMA_ARG_* defaults.
             for name in tuple(probe_env):
                 if name.startswith("LLAMA_ARG_"):
                     probe_env.pop(name, None)
             if sys.platform == "darwin":
-                # Building --help asks llama_supports_rpc(), which otherwise
-                # initializes Metal and compiles its embedded shaders. A cold
-                # compile exceeds this probe's timeout; no device is needed to
-                # enumerate the command-line flags.
+                # --help would otherwise init Metal and compile shaders, exceeding the timeout.
                 probe_env["GGML_METAL_DEVICES"] = "0"
             code_integrity_blocked: Optional[str] = None
             result = subprocess.run(
@@ -347,8 +310,7 @@ class _CapabilityProbeMixin:
             probe_ok = result.returncode == 0
             help_text = (result.stdout or "") + "\n" + (result.stderr or "")
             if not probe_ok:
-                # The LOADER kills the created process: the NTSTATUS arrives as
-                # a return code, or in the output when a DLL was refused.
+                # The loader kills the process: NTSTATUS arrives as the return code or in output.
                 code_integrity_blocked = code_integrity_block_reason(
                     result.returncode
                 ) or code_integrity_block_reason(help_text)
@@ -357,9 +319,7 @@ class _CapabilityProbeMixin:
                         "llama-server is blocked by Windows code integrity policy: "
                         f"{code_integrity_blocked}. Binary: {bin_path}"
                     )
-            # Split into per-flag blocks (each --flag line + its indented
-            # continuation), so the "argument has been removed" description
-            # sits with its flag.
+            # One block per flag, so a removed-argument description stays with its flag.
             current_flags: list[str] = []
             current_desc: list[str] = []
             # Flag -> whether its declaration shows a value placeholder.
@@ -375,13 +335,7 @@ class _CapabilityProbeMixin:
                             takes_value[f] = current_takes_value
                     current_flags = []
                     current_desc = [stripped]
-                    # Whether the flag takes a value at all, which is what tells
-                    # "--verbose foo" (a typo llama-server refuses) from "--numa
-                    # distribute". A placeholder follows its flag by a SINGLE space
-                    # ("--threads N"); the description sits in an aligned column two
-                    # or more spaces away. Only the yes/no is taken from this: how
-                    # many values, and of what shape, is not worth guessing at from
-                    # help text that wraps.
+                    # A placeholder follows its flag by a single space; the description sits 2+ spaces away.
                     current_takes_value = False
                     _previous_end = None
                     for _match in re.finditer(r"\S+", stripped):
@@ -392,24 +346,17 @@ class _CapabilityProbeMixin:
                         if _flag_shaped:
                             _previous_end = _match.end()
                             continue
-                        # The first token that is not an alias: a placeholder when it
-                        # is one space away, the description when it is further.
+                        # The first non-alias token: a value placeholder when one space away, otherwise the description.
                         current_takes_value = (
                             _previous_end is not None and _match.start() - _previous_end == 1
                         )
                         break
-                    # Extract long-form flag tokens from the DECLARATION
-                    # prefix only (comma-separated aliases). Stop at the
-                    # first non-flag token so flag references inside
-                    # descriptions are ignored.
+                    # Declaration prefix only, so flag references in descriptions are ignored.
                     for tok in re.split(r"[,\s]+", stripped):
                         if tok.startswith("--") and re.match(r"--[A-Za-z][A-Za-z0-9_-]*$", tok):
                             current_flags.append(tok)
                         elif tok.startswith("-") and re.match(r"-[A-Za-z][A-Za-z0-9_-]*$", tok):
-                            # A short alias (-fa, -t, -ngl). Kept, not just skipped:
-                            # the catalogue is what the editor checks a typed flag
-                            # against, and -t is as valid as --threads, so dropping
-                            # it warned that a correct flag was unknown.
+                            # Short aliases kept: the editor validates typed flags like -t against them.
                             current_flags.append(tok)
                         elif tok.startswith("-") and len(tok) > 1:
                             # A value placeholder like -1; keep scanning aliases.
@@ -425,9 +372,7 @@ class _CapabilityProbeMixin:
                     blocks[f] = desc
                     takes_value[f] = current_takes_value
 
-            # MTP token from the full --spec-type help block (decl + indented
-            # continuation). First-line-only probing missed builds putting the
-            # enum on the next line (#7302). Prefer draft-mtp (PR #22673) over mtp.
+            # Read the full --spec-type block, since some builds put the enum on the next line; prefer draft-mtp over mtp.
             spec_help = blocks.get("--spec-type") or ""
             if not spec_help:
                 # Fallback: join --spec-type lines, avoiding incidental "mtp" in --help.
@@ -453,13 +398,10 @@ class _CapabilityProbeMixin:
                     spec_help.lower(),
                 )
             )
-            # Only a resolved --spec-type block confirms missing MTP; empty/crash
-            # leaves saw_spec_type False so supports_mtp fails open.
+            # Only a resolved --spec-type block confirms missing MTP; otherwise fail open.
             saw_spec_type = bool(spec_help.strip()) and "--spec-type" in spec_help
 
-            # ngram-mod flag flavor. Post-rename builds advertise both new
-            # args (real) and legacy ones (stubs); pre-rename builds only
-            # have legacy ones as real.
+            # Post-rename builds keep legacy args as stubs; pre-rename ones only have legacy.
             new_ngram_real = (
                 _is_real("--spec-ngram-mod-n-match")
                 and _is_real("--spec-ngram-mod-n-min")
@@ -480,10 +422,7 @@ class _CapabilityProbeMixin:
                 spec_draft_n_max_flag = "--spec-draft-n-max"
             elif _is_real("--draft-max"):
                 spec_draft_n_max_flag = "--draft-max"
-            # And the build's OWN default for it, off the same help line. Needed
-            # where the extras own --spec-type: Unsloth emits no depth then, so the
-            # child runs on this number and the Hybrid Mamba rollback reserve
-            # scales by it. None when the line carries no default.
+            # The build's own default depth, needed when extras own --spec-type: the child runs on it and the Hybrid Mamba rollback reserve scales by it.
             if spec_draft_n_max_flag:
                 _n_max_default = re.search(
                     r"default:\s*(\d+)", blocks.get(spec_draft_n_max_flag) or ""
@@ -498,11 +437,7 @@ class _CapabilityProbeMixin:
                 and _is_real("--verbosity")
                 and _TRACE_VERBOSITY_HELP_RE.search(blocks.get("--verbosity") or "")
             )
-            # Only once the help actually parsed AND `--help` succeeded. Empty
-            # `blocks` means the probe told us nothing, and a nonzero exit means
-            # the listing may be a fragment; neither may read as "absent" for a
-            # flag we would otherwise always send. A real llama-server prints
-            # usage and exits 0, so this costs no supported build anything.
+            # Empty or failed --help must never read as absent for a flag we always send.
             if probe_ok and blocks:
                 supports_no_context_shift = _is_real("--no-context-shift")
                 supports_jinja = _is_real("--jinja")
@@ -515,17 +450,13 @@ class _CapabilityProbeMixin:
             supports_fit_ctx = _is_real("--fit-ctx")
             supports_fit_target = _is_real("--fit-target")
             supports_cache_ram = _is_real("--cache-ram")
-            # --swa-checkpoints is the older spelling, kept as an alias on newer
-            # builds. Probing the modern name alone drops the Checkpoints control on
-            # a build carrying only the old one, so record WHICH name this build has,
-            # like the draft-cache pair below.
+            # --swa-checkpoints is the older alias; probing only the modern name drops the Checkpoints control on old builds, so record which name this build has.
             for _alias in ("--ctx-checkpoints", "--swa-checkpoints"):
                 if _is_real(_alias):
                     ctx_checkpoints_flag = _alias
                     break
             supports_ctx_checkpoints = ctx_checkpoints_flag is not None
-            # The default shipped at 3 (ggml-org/llama.cpp#15293) and is 32 today, so a
-            # hardcoded 32 would RAISE an older build's count instead of capping it.
+            # The default was 3 on older builds, so a hardcoded 32 would raise their count.
             if ctx_checkpoints_flag:
                 ctx_checkpoints_default = cls._advertised_int_default(
                     blocks.get(ctx_checkpoints_flag)
@@ -539,6 +470,10 @@ class _CapabilityProbeMixin:
             supports_reasoning_flag = _is_real("--reasoning")
             supports_no_mmproj_offload = _is_real("--no-mmproj-offload")
             supports_video_fps = _is_real("--video-fps")
+            supports_video_timestamp_interval = _is_real("--video-timestamp-interval")
+            supports_video_ffmpeg_dir = (
+                _is_real("--video-ffmpeg-dir") if probe_ok and blocks else None
+            )
             # --load-mode supersedes --mlock / --no-mmap, which are deprecated.
             # Pre-initialised above: a failed probe must fall back, not raise.
             supports_load_mode = _is_real("--load-mode")
@@ -564,10 +499,8 @@ class _CapabilityProbeMixin:
                 if _is_real(_alias):
                     spec_draft_ngl_flag = _alias
                     break
-            # Same alias dance for the draft KV cache pair: --spec-draft-type-* is
-            # the modern spelling, --cache-type-*-draft the older, and a build with
-            # only one exits on the other. K and V probed independently (upstream
-            # renamed them together; a fork need not have). Long forms only.
+            # Draft cache K and V are probed separately, since builds may carry only one flag
+            # spelling.
             for _alias in ("--spec-draft-type-k", "--cache-type-k-draft"):
                 if _is_real(_alias):
                     spec_draft_cache_k_flag = _alias
@@ -592,9 +525,7 @@ class _CapabilityProbeMixin:
             help_text = ""
 
         help_nonempty = bool(help_text.strip())
-        # Confirmed only when a successful --help lists a --spec-type block with
-        # mtp/draft-mtp; nonempty --help without it is a definitive pre-spec
-        # binary; failed/empty probes stay inconclusive (#7302).
+        # Confirmed only by a successful --help with an MTP --spec-type block.
         if saw_spec_type and probe_ok:
             supports_mtp = mtp_token is not None
             mtp_probe_inconclusive = False
@@ -640,6 +571,8 @@ class _CapabilityProbeMixin:
             "flash_attn_takes_value": flash_attn_takes_value,
             "supports_fit_ctx": supports_fit_ctx,
             "supports_fit_target": supports_fit_target,
+            "fit_measures_borrowed_drafts": supports_fit_target
+            and _fit_measures_borrowed_drafts(bin_path),
             "supports_cache_ram": supports_cache_ram,
             "supports_ctx_checkpoints": supports_ctx_checkpoints,
             "ctx_checkpoints_flag": ctx_checkpoints_flag,
@@ -654,6 +587,8 @@ class _CapabilityProbeMixin:
             "supports_no_mmproj_offload": supports_no_mmproj_offload,
             "supports_trace_verbosity": supports_trace_verbosity,
             "supports_video_fps": supports_video_fps,
+            "supports_video_timestamp_interval": supports_video_timestamp_interval,
+            "supports_video_ffmpeg_dir": supports_video_ffmpeg_dir,
             "supports_load_mode": supports_load_mode,
             "supports_moe_cache": supports_moe_cache,
             "supports_moe_cache_auto": supports_moe_cache_auto,
@@ -662,23 +597,13 @@ class _CapabilityProbeMixin:
             "spec_draft_ngl_flag": spec_draft_ngl_flag,
             "spec_draft_cache_k_flag": spec_draft_cache_k_flag,
             "spec_draft_cache_v_flag": spec_draft_cache_v_flag,
-            # The whole parsed catalogue, not just the booleans above. The UI
-            # validates pass-through args against THIS build rather than a list
-            # bundled with Unsloth, since a custom or newer llama.cpp is exactly
-            # the case where a bundled list would be wrong. Removal stubs are
-            # excluded: a build that still lists --draft-max only to say the
-            # argument has been removed would otherwise read as supporting it,
-            # and the editor would stay quiet about a flag the load then refuses.
+            # Validate pass-through args against this build; removal stubs are excluded, since a stub reads as supported and the editor stays quiet on refused flags.
             "flags": {flag: desc for flag, desc in blocks.items() if _is_real(flag)},
-            # The flags that take no value, so the editor can tell "--verbose foo"
-            # (a typo llama-server refuses) from "--numa distribute".
+            # Switch flags take no value, so the editor can reject '--verbose foo' that llama-server refuses.
             "switch_flags": sorted(
                 flag for flag, takes in takes_value.items() if not takes and _is_real(flag)
             ),
-            # Whether --help actually succeeded. A run that exits nonzero after
-            # printing part of its help still leaves a non-empty catalogue, and a
-            # caller that equated "parsed something" with "read the whole thing"
-            # would call every flag past the failure point unknown.
+            # A nonzero exit can leave a partial catalogue.
             "help_probe_ok": bool(probe_ok),
         }
         with cls._capability_cache_lock:
@@ -686,17 +611,11 @@ class _CapabilityProbeMixin:
             if published is not None and (
                 not published.get("mtp_probe_inconclusive") or mtp_probe_inconclusive
             ):
-                # Concurrent callers may finish out of order. Never replace a
-                # conclusive result with a timeout, or a newer retry result with
-                # another result of the same confidence.
+                # Callers may finish out of order; never replace a conclusive result with a weaker one.
                 return published
             cls._capability_cache[cache_key] = info
             if mtp_probe_inconclusive:
-                # Bound both failure modes: do not pin a transient failure for
-                # the process lifetime, and do not make every caller repeat a
-                # 10-second timeout while a persistent failure remains (#8317).
-                # Only a CONFIRMED block doubles, being permanent; escalating on
-                # an inconclusive probe would strand a busy machine on stale caps.
+                # Do not pin transient failures forever or repeat timeouts; double only confirmed blocks, else busy machines get stuck on stale caps.
                 if code_integrity_blocked is not None:
                     delay = cls._capability_retry_backoff.get(
                         cache_key, cls._CAPABILITY_PROBE_RETRY_SECONDS
@@ -722,13 +641,7 @@ class _CapabilityProbeMixin:
         reasoning_budget: int,
         reasoning_budget_message: str,
     ) -> dict[str, object]:
-        """Reject configured reasoning flags before replacing a live server.
-
-        Explicit config only: the first-class fields and the passthrough extras.
-        LLAMA_ARG_THINK_BUDGET* is a machine-wide llama.cpp default no Studio control
-        can clear, so gating on it would fail loads with no way out of the UI.
-        llama-server validates its own env; effective state still reports it.
-        """
+        """Reject configured reasoning flags before a live swap; explicit config only, since LLAMA_ARG_THINK_BUDGET* is machine-wide and no Studio control clears it."""
         effective_budget = resolve_reasoning_budget(extra_args, reasoning_budget)
         effective_message = resolve_reasoning_budget_message(extra_args, reasoning_budget_message)
         needs_budget, needs_message = cls.reasoning_budget_settings_requested(
@@ -765,8 +678,7 @@ class _CapabilityProbeMixin:
             if value_key not in caps:
                 probe_binary = cls._exec_path_for_launch(binary)
                 probe_env = cls._llama_server_env_for_binary(probe_binary)
-                # Same shape as the --help probe: llama-server parses LLAMA_ARG_* before
-                # argv, so a stale inherited value would read as "rejects the budget".
+                # llama-server parses LLAMA_ARG_* before argv, so clear stale inherited values.
                 for name in tuple(probe_env):
                     if name.startswith("LLAMA_ARG_"):
                         probe_env.pop(name, None)
@@ -806,11 +718,8 @@ class _CapabilityProbeMixin:
 
     @staticmethod
     def _mtp_token_from_spec_help(spec_help: str) -> Optional[str]:
-        """Extract ``draft-mtp`` / ``mtp`` from a ``--spec-type`` help snippet.
-
-        Prefers ``draft-mtp`` (llama.cpp PR #22673) over the later bare ``mtp``
-        rename. Returns ``None`` when neither token appears as an enum value.
-        """
+        """Prefers draft-mtp over the later bare mtp rename; None when neither is a --spec-type enum
+        value."""
         text = spec_help or ""
         if "draft-mtp" in text:
             return "draft-mtp"

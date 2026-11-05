@@ -36,6 +36,11 @@ from .memory_policy import (
     _extra_args_set_spec_type,
     _vram_usable_mib,
 )
+import time
+from .binary_runtime import (
+    _llama_lib_dir,
+    _resolve_llama_binary,
+)
 
 
 def _linux_math_core_count(
@@ -46,13 +51,7 @@ def _linux_math_core_count(
     pinnable_cpus: Optional[set[int]] = None,
     probe_affinity: Optional[bool] = None,
 ) -> Optional[int]:
-    """Linux x86 cores useful to llama.cpp's default math pool.
-
-    ``thread_siblings`` mirrors llama.cpp's physical-core count. Intel's hybrid
-    PMU masks identify performance cores on kernels without ``cpu_capacity``;
-    heterogeneous capacity remains the fallback. AMD capacity classes do not
-    trigger llama.cpp's hybrid CPUID branch, so they retain every physical core.
-    """
+    """Physical cores as llama.cpp counts them: SMT siblings dropped; hybrid Intel keeps only P-cores; AMD capacity classes keep every physical core."""
     if logical_cpus is not None and logical_cpus < 1:
         return None
 
@@ -206,26 +205,7 @@ def _linux_math_core_count(
 def _spilled_decode_threads(
     n_threads: Optional[int] = None, extra_args: Optional[Iterable[str]] = None
 ) -> Optional[int]:
-    """How many threads the spilled-decode cost model should price.
-
-    A positive override follows the launched command's managed-flag, then
-    pass-through precedence. An inherited ``LLAMA_ARG_THREADS`` is ignored here
-    because Studio removes it before spawn whenever argv has no thread flag; if
-    argv does have one, that later flag wins. Explicit SMT oversubscription and
-    explicit or inherited CPU affinity cannot be represented by this
-    physical-core model, so those settings return ``None`` and the caller declines.
-    Otherwise llama.cpp sizes its pool from
-    ``common_cpu_get_num_math``, which counts physical cores
-    and skips SMT siblings and efficiency cores. ``os.cpu_count()`` counts every
-    hyperthread, so on a 6-core / 12-thread desktop it told the cost model the
-    host had twice the cores the child would ever use, and the generation
-    penalty came out about half of what a spill really costs there.
-
-    Linux x86 reads the same sibling topology as llama.cpp and uses the kernel's
-    capacity classes for hybrid CPUs. psutil is the cross-platform fallback. If
-    neither can answer, match llama.cpp's last resort: keep up to four logical
-    CPUs, otherwise halve them, and use four when no logical count is available.
-    """
+    """Physical cores as llama.cpp counts them, not os.cpu_count; inherited LLAMA_ARG_THREADS is ignored; explicit affinity or SMT oversubscription returns None."""
     requested: Optional[int] = None
     if n_threads is not None and n_threads > 0:
         requested = int(n_threads)
@@ -296,8 +276,7 @@ def _strip_flag_pairs(args: Iterable[str], flags: frozenset[str]) -> list[str]:
 # common_params defaults in the bundled llama.cpp runtime.
 _DEFAULT_LLAMA_N_BATCH = 2048
 _DEFAULT_LLAMA_N_UBATCH = 512
-# Non-causal image decoding requires one image chunk to fit in the micro-batch.
-# These are the per-image limits from clip.cpp. Exact values avoid excess VRAM use.
+# Non-causal image decoding needs one image chunk per micro-batch; limits from clip.cpp.
 _MMPROJ_NON_CAUSAL_IMAGE_TOKENS = {
     "gemma4v": 1120,
     "gemma4uv": 1120,
@@ -315,19 +294,12 @@ _LLAMA_ARG_TRUE_FALSE_AUTO_VALUES = _LLAMA_ARG_TRUE_OR_AUTO_VALUES | _LLAMA_ARG_
 
 
 def _diffusion_manual_ngl(gpu_memory_mode: str, gpu_layers: int) -> Optional[int]:
-    """The --ngl the diffusion runner would launch with, or None for its default.
-
-    Only an explicit manual count reaches the child; Auto (-1) and Unsloth mode defer.
-    Shared with both dedup guards, so an inert manual preference cannot loop.
-    """
+    """The --ngl the diffusion runner launches with, set only by an explicit manual count, else None; shared with dedup guards so an inert pref cannot loop."""
     return int(gpu_layers) if (gpu_memory_mode == "manual" and int(gpu_layers) >= 0) else None
 
 
 def _scale_diffusion_required_gb(required_gb: float, ngl: int, n_layers: Optional[int]) -> float:
-    """GPU share of a partially offloaded diffusion GGUF, for the training guard.
-
-    Only the ``ngl`` resident layers compete for VRAM; sizing the whole file 409s a
-    split that fits. An unknown layer count keeps the full estimate."""
+    """Only ngl resident layers compete for VRAM, so sizing the whole file 409s a split that fits; an unknown layer count keeps the full estimate."""
     if not n_layers or n_layers <= 0 or ngl >= n_layers:
         return required_gb
     return required_gb * (ngl / n_layers)
@@ -374,11 +346,7 @@ def _diffusion_auto_ngl(
 
 
 def _source_declares_option(source: str, option: str) -> bool:
-    """True iff ``source`` really registers ``option`` on an argparse parser.
-
-    Parsed, not grepped: a substring test matches the flag in a comment and misses it
-    when quoted differently. Falls back to a substring scan when the file will not parse.
-    """
+    """Parsed with ast, not grepped (substring hits comments, misses quoted flags); falls back to a substring scan when the file will not parse."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
@@ -396,16 +364,8 @@ def _source_declares_option(source: str, option: str) -> bool:
 
 
 def _shim_supports_ngl(shim_cmd: List[str]) -> bool:
-    """Whether the resolved diffusion shim accepts --ngl.
-
-    The package floor still allows an unsloth_zoo without the flag and argparse exits
-    on an unknown option, so emitting it blindly breaks the launch. Read the source
-    rather than spawning a probe: the launch path is already slow.
-    """
-    # _find_diffusion_assets emits a file override ([python, <path>]) or the installed
-    # package ([python, -m, <module>]). Key on the shape, not the suffix (an override may
-    # be extensionless, .pyw or SHIM.PY), and probe that exact file: a sibling shim.py
-    # answers for a different shim than argparse will run.
+    """Reads the source, not a spawned probe; an unsloth_zoo lacking --ngl makes argparse exit."""
+    # Key on the command shape, not the suffix, and probe that exact override file.
     if len(shim_cmd) >= 2 and "-m" not in shim_cmd:
         candidates = [Path(shim_cmd[-1])]
     else:
@@ -455,6 +415,160 @@ def _binary_has_marker(path: str, _mtime_ns: int, _size: int, marker: bytes) -> 
         return False
 
 
+def _fit_measures_borrowed_drafts(bin_path: Optional[str]) -> bool:
+    """Whether ``bin_path``'s fitter sizes a borrowed-tensor draft itself; fails closed."""
+    if not bin_path:
+        return False
+    candidates = [Path(bin_path)]
+    try:
+        # A wrapper script execs the real server.
+        server = Path(_resolve_llama_binary(bin_path))
+        candidates.append(server)
+        lib_dir = _llama_lib_dir(bin_path)
+        for lib in _linked_llama_libs(server, lib_dir):
+            candidates.append(lib)
+            candidates.extend(l for l in _linked_llama_libs(lib, lib_dir) if l not in candidates)
+    except Exception:  # noqa: BLE001 -- an unreadable lib dir is "not known"
+        pass
+    seen: set = set()
+    for candidate in candidates:
+        try:
+            candidate = candidate.resolve()
+            if candidate in seen or not candidate.is_file():
+                continue
+            seen.add(candidate)
+            st = candidate.stat()
+        except OSError:
+            continue
+        if _binary_has_marker(
+            str(candidate), st.st_mtime_ns, st.st_size, _FIT_MEASURES_BORROWED_DRAFT_MARKER
+        ):
+            return True
+    return False
+
+
+def _distinct_device_count(devices) -> int:
+    """Distinct names in a ``--device`` list: a repeated card is one memory pool."""
+    return len({d.strip().lower() for d in str(devices).split(",") if d.strip()})
+
+
+def _draft_pin_device_index(
+    pin: Optional[str], spawn_devices: Optional[str], device_count: int
+) -> Optional[int]:
+    """The child device index a one-card draft pin names, or None."""
+    names = {d.strip().lower() for d in (pin or "").split(",") if d.strip()}
+    if len(names) != 1:
+        return None
+    (name,) = names
+    if spawn_devices:
+        listed = [d.strip().lower() for d in spawn_devices.split(",") if d.strip()]
+        if name not in listed or len(set(listed)) != len(listed):
+            return None
+        return listed.index(name)
+    if not _CUDA_LIKE_DEVICE_RE.match(name):
+        return None
+    k = int(re.sub(r"\D", "", name))
+    return k if 0 <= k < device_count else None
+
+
+def _sidecar_borrows_target_tensors(path: Optional[str]) -> bool:
+    """Whether the draft borrows token_embd or output, which the fitter cannot measure
+    (src/llama-context.cpp)."""
+    if not path:
+        return True
+    try:
+        from utils.models.gguf_metadata import _gguf_shard_has_named_tensor
+        from utils.models.model_config import colocated_split_shards
+
+        shards, complete = colocated_split_shards(Path(path))
+        if not complete or not shards:
+            return True
+        return any(
+            not any(_gguf_shard_has_named_tensor(str(shard), name) is True for shard in shards)
+            for name in ("token_embd.weight", "output.weight")
+        )
+    except Exception:
+        return True
+
+
+def _sidecar_borrows_output(path: Optional[str]) -> bool:
+    """Whether the draft's logits use the target's output head (src/models/dflash.cpp); unknown
+    counts as borrowed."""
+    if not path:
+        return True
+    try:
+        from utils.models.gguf_metadata import _gguf_shard_has_named_tensor
+        from utils.models.model_config import colocated_split_shards
+
+        shards, complete = colocated_split_shards(Path(path))
+        return not (
+            complete
+            and any(
+                _gguf_shard_has_named_tensor(str(shard), "output.weight") is True
+                for shard in shards
+            )
+        )
+    except Exception:
+        return True
+
+
+_CUDA_LIKE_DEVICE_RE = re.compile(r"(?i)(cuda|rocm|hip)\d+$")
+
+
+def _linked_llama_libs(binary: Path, lib_dir: Path) -> list:
+    """The server-impl / common libraries ``binary`` links by name (DT_NEEDED, LC_LOAD_DYLIB, PE
+    imports), not stray siblings."""
+    try:
+        st = binary.stat()
+        key = (str(binary), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    embedded = _LINKED_LIB_NAMES_CACHE.get(key)
+    if embedded is None:
+        try:
+            data = binary.read_bytes()
+        except OSError:
+            return []
+        embedded = tuple(
+            tuple(n for n in names if n.encode() in data)
+            for names in (_LLAMA_SERVER_IMPL_LIB_NAMES, _LLAMA_COMMON_LIB_NAMES)
+        )
+        _LINKED_LIB_NAMES_CACHE[key] = embedded
+    linked = []
+    for names in embedded:
+        hit = next((n for n in names if (lib_dir / n).exists()), None)
+        if hit is not None:
+            linked.append(lib_dir / hit)
+    return linked
+
+
+# (path, mtime_ns, size) -> embedded library names; the server binary is ~100 MB.
+_LINKED_LIB_NAMES_CACHE: dict = {}
+
+
+# The server links libllama-server-impl, which links libllama-common.
+_LLAMA_SERVER_IMPL_LIB_NAMES = (
+    "libllama-server-impl.so",
+    "libllama-server-impl.dylib",
+    "llama-server-impl.dll",
+)
+
+
+_LLAMA_COMMON_LIB_NAMES = (
+    "libllama-common.so.0",
+    "libllama-common.so",
+    "libllama-common.0.dylib",
+    "libllama-common.dylib",
+    "llama-common.dll",
+)
+
+
+# No --help flag or build number announces it: read the trace string the new fit path compiles in.
+_FIT_MEASURES_BORROWED_DRAFT_MARKER = (
+    b"measuring the extra model next to an allocation-free target context"
+)
+
+
 def _swa_full_from_args_or_env(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
@@ -474,17 +588,64 @@ def _reasoning_from_env(env: Mapping[str, str]) -> Optional[bool]:
     return None
 
 
+def _template_preserves_thinking_by_default(template: str, context: Mapping) -> bool:
+    """Whether ``template`` replays an earlier turn's reasoning with preserve_thinking
+    omitted (Qwen3.8's own does, ``|default(false)`` does not); False if unrenderable."""
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    def _raise(message):
+        raise ValueError(message)
+
+    marker = "unsloth-preserve-thinking-probe"
+    messages = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1", "reasoning_content": marker},
+        {"role": "user", "content": "q2"},
+    ]
+    try:
+        jinja = ImmutableSandboxedEnvironment(
+            trim_blocks = True,
+            lstrip_blocks = True,
+            extensions = ["jinja2.ext.loopcontrols", "jinja2.ext.do"],
+        )
+        jinja.globals.update(raise_exception = _raise, strftime_now = lambda fmt: time.strftime(fmt))
+        rendered = jinja.from_string(template).render(
+            **{**context, "messages": messages, "add_generation_prompt": True}
+        )
+    except Exception:
+        return False
+    return marker in rendered
+
+
+def _reasoning_preserve_from_args_or_env(
+    extra_args: Optional[Iterable[str]], env: Mapping[str, str]
+) -> Optional[bool]:
+    """The user's --[no-]reasoning-preserve choice, else None: last flag wins, as in
+    llama.cpp's parser, and the extras beat the inherited LLAMA_ARG_REASONING_PRESERVE."""
+    choice: Optional[bool] = None
+    for raw in extra_args or ():
+        flag = _flag_name(str(raw))
+        if flag == "--reasoning-preserve":
+            choice = True
+        elif flag == "--no-reasoning-preserve":
+            choice = False
+    if choice is not None:
+        return choice
+    value = env.get("LLAMA_ARG_REASONING_PRESERVE")
+    if value in _LLAMA_ARG_TRUE_VALUES:
+        return True
+    if value in _LLAMA_ARG_FALSE_VALUES:
+        return False
+    return None
+
+
 def _reasoning_effort_from_env(env: Mapping[str, str]) -> Optional[str]:
     value = env.get("LLAMA_ARG_REASONING_EFFORT")
     return None if value == "default" else value
 
 
 def _env_asks_for_the_native_context(env: Optional[Mapping[str, str]] = None) -> bool:
-    """Whether an inherited LLAMA_ARG_CTX_SIZE is 0.
-
-    llama.cpp resolves the variable through -c's own handler, so 0 pins the
-    native length here exactly as on the command line. Anything unparseable is
-    left to llama.cpp to reject."""
+    """LLAMA_ARG_CTX_SIZE=0 pins the native context, as -c 0 does; llama.cpp rejects unparseable ones."""
     value = (os.environ if env is None else env).get("LLAMA_ARG_CTX_SIZE")
     try:
         return int(str(value).strip()) == 0
@@ -493,13 +654,7 @@ def _env_asks_for_the_native_context(env: Optional[Mapping[str, str]] = None) ->
 
 
 def _env_ctx_checkpoints_override(env: Optional[Mapping[str, str]] = None) -> Optional[int]:
-    """An inherited LLAMA_ARG_CTX_CHECKPOINTS count, else None.
-
-    llama.cpp applies the variable before parsing argv (arg.cpp's env loop runs ahead of
-    the flag loop), so an emitted --ctx-checkpoints would OVERRULE it. It is as explicit
-    an instruction as a typed flag, so the automatic cap stands down for it and the
-    estimate prices it. Anything unparseable is left to llama.cpp to reject.
-    """
+    """Env count is explicit: an emitted --ctx-checkpoints would overrule it, so the auto cap yields."""
     value = (os.environ if env is None else env).get("LLAMA_ARG_CTX_CHECKPOINTS")
     try:
         count = int(str(value).strip())
@@ -511,19 +666,7 @@ def _env_ctx_checkpoints_override(env: Optional[Mapping[str, str]] = None) -> Op
 def _kv_offload_from_args(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """Resolve llama.cpp's environment and last-wins KV-offload flags (default on):
-    LLAMA_ARG_KV_OFFLOAD parses before argv, and ``-kvo`` / ``--kv-offload`` is the
-    positive form, so a CLI re-enable beats a false env.
-
-    Both env spellings, as with the projector pair above. ``-kvo`` is registered with
-    a negative form (``{"-nkvo", "--no-kv-offload"}``, common/arg.cpp), so
-    ``common_arg::get_value_from_env`` rewrites LLAMA_ARG_ to LLAMA_ARG_NO_, and if
-    that variable EXISTS it forces the value to "0" and never reads the affirmative
-    one (common/arg.cpp:127-141). Presence, empty value included, because llama.cpp
-    tests it with getenv. Missing it is the optimistic direction here: the whole KV
-    cache is then on the host (llama-kv-cache.cpp only upgrades a layer's buffer
-    type inside ``if (offload)``) while the fit still lets free VRAM pay for it.
-    """
+    """LLAMA_ARG_NO_KV_OFFLOAD counts by presence, even when empty, and forces KV offload off; a CLI -kvo beats a false LLAMA_ARG_KV_OFFLOAD."""
     source_env = os.environ if env is None else env
     enabled = True
     if source_env.get("LLAMA_ARG_NO_KV_OFFLOAD") is not None:
@@ -552,16 +695,11 @@ def _is_positive_int(value: Optional[str]) -> bool:
 
 
 def _args_place_tensors_on_cpu(extra_args: Optional[Iterable[str]] = None) -> bool:
-    """True when extras keep weights on the CPU, whatever the layer count says.
-
-    The arg-side twin of ``_env_places_tensors_on_cpu``, including its rule that
-    a CPU-MoE or CPU-FFN count only counts when positive: ``--n-cpu-moe 0`` places nothing.
-    """
+    """True when extras keep weights on CPU whatever the layer count says; a CPU-MoE or CPU-FFN count counts only when positive (-ncmoe 0 places nothing)."""
     values = [str(raw) for raw in extra_args or ()]
     for i, raw in enumerate(values):
         flag = _flag_name(raw)
-        # Any -ot counts even if it matches nothing: the list need only be
-        # non-empty, and guessing at the pattern is not worth it.
+        # Any -ot counts, even if it matches nothing: non-empty is enough, and the pattern is not guessed at.
         if flag in _CPU_PLACEMENT_PRESENCE_FLAGS:
             return True
         if flag in _CPU_MOE_COUNT_FLAGS | _CPU_FFN_COUNT_FLAGS:
@@ -572,12 +710,7 @@ def _args_place_tensors_on_cpu(extra_args: Optional[Iterable[str]] = None) -> bo
 
 
 def _env_places_tensors_on_cpu(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when inherited env keeps weights on the CPU, whatever the argv says.
-
-    The child inherits these, so they survive stripping the equivalent flags.
-    Shared with the Model Memory host-residency gate, which must not call a load
-    fully offloaded while one of them is holding tensors in RAM.
-    """
+    """True when inherited env keeps weights on CPU whatever argv says; it survives argv stripping, and the host-residency gate must not miss it."""
     source_env = os.environ if env is None else env
     return bool(
         source_env.get("LLAMA_ARG_OVERRIDE_TENSOR")
@@ -588,23 +721,7 @@ def _env_places_tensors_on_cpu(env: Optional[Mapping[str, str]] = None) -> bool:
 
 
 def _env_fixes_gpu_layers(env: Optional[Mapping[str, str]] = None) -> bool:
-    """True when an inherited ``LLAMA_ARG_N_GPU_LAYERS`` owns the layer placement.
-
-    The env twin of ``_GPU_LAYER_FLAGS``, and it bites harder than the tokens do:
-    the fitting path emits ``--fit on`` and no ``-ngl`` at all, so an inherited
-    count is the ONLY layer policy the child sees. llama.cpp's fitter then refuses
-    to touch it -- ``common_params_fit_impl`` throws "n_gpu_layers already set by
-    user" (common/fit.cpp:377) on any value but the default, and the caller
-    downgrades that to a warning (common/fit.cpp:805) -- so the launch proceeds
-    with the count as given, placing a prefix of the weights and running the rest
-    out of host RAM the fit just credited to a card.
-
-    ``auto`` / ``-1`` is that default (common/common.h:465,
-    llama-model.cpp:2453), so it leaves the fitter free to choose and is not an
-    override. Everything else is, ``all`` included: a count that stands is a count
-    this fit did not price. Empty counts as unset -- llama.cpp's ``std::stoi``
-    would throw on it and the child would never start.
-    """
+    """Any inherited count but auto/-1 overrides the fit; empty counts as unset (stoi would throw)."""
     raw = (os.environ if env is None else env).get("LLAMA_ARG_N_GPU_LAYERS")
     value = str(raw or "").strip().lower()
     return bool(value) and value not in _LLAMA_ARG_AUTO_VALUES
@@ -615,35 +732,17 @@ def _pipeline_parallel_disabled_by_args(
     env: Optional[Mapping[str, str]] = None,
     n_layers: Optional[int] = None,
 ) -> bool:
-    """Whether the launch turns OFF llama.cpp's pipeline parallelism, i.e. the 4x in
-    ``_CTX_COMPUTE_SPLIT_MULT``. llama-context.cpp requires ``-sm layer``, KV offload
-    on and an empty tensor-override list (among other things); anything here is back to
-    1x, and charging the multiplier anyway would waste context. Unsloth passes none of
-    it, but extra_args and the environment can.
-
-    ``-cmoe`` / ``-ncmoe`` count: both push into ``tensor_buft_overrides`` exactly like
-    ``-ot`` (common/arg.cpp). ``-otd`` does not - it targets the draft model.
-    LLAMA_ARG_SPLIT_MODE is not read here: the launch pops a non-layer inherited value
-    on the layer path, so it never reaches the child. Ambiguous input resolves to
-    "still pipelined" - over-reserving only costs context, under-reserving OOMs the
-    split. ``n_layers`` is the GGUF block count for the ``-ngl`` check below; None/0
-    means unknown."""
+    """Pipelining needs -sm layer, KV offload on, no tensor overrides (-ot, -cmoe, -ncmoe, not -otd); ambiguous input stays pipelined, as under-reserving OOMs."""
     source_env = os.environ if env is None else env
     if _env_places_tensors_on_cpu(source_env):
         return True
     if not _kv_offload_from_args(extra_args, env = env):
         return True
-    # -sm none/row keep the layer path and pass through, so they really do disable
-    # it. -sm tensor does not: the layer branch is only reached after a downgrade,
-    # which strips the flag (strip_split_mode_only) and leaves the child on layer.
+    # -sm tensor reaches here only after a downgrade strips it, so only none/row disable it.
     split_mode = parse_split_mode_override(extra_args)
     if split_mode is not None and split_mode.strip().lower() not in {"layer", "tensor"}:
         return True
-    # Pipelining needs n_gpu_layers > n_layer_all, so a user -ngl (appended after
-    # Unsloth's -ngl -1, last-wins) that cannot exceed the count loads a prefix and
-    # turns it off. Negative (all layers) or above the count keeps the step, even
-    # in between: n_layers is block_count, which IS n_layer_all (llama-model.cpp
-    # reads the key straight into it); hparams.n_layer() is the smaller MTP-less one.
+    # Pipelining needs n_gpu_layers > n_layer_all (block_count, not the MTP-less hparams n_layer); a user -ngl that cannot exceed it turns it off.
     if n_layers:
         try:
             gpu_layers = parse_gpu_layers_override(extra_args)
@@ -651,8 +750,7 @@ def _pipeline_parallel_disabled_by_args(
             gpu_layers = None  # malformed: unknown, so keep the step
         if gpu_layers is not None and 0 <= gpu_layers <= n_layers:
             return True
-    # Same predicate the Model Memory host-residency gate uses; -ncmoe 0 pushes
-    # no override, so it leaves pipelining on.
+    # Same predicate as the Model Memory host-residency gate; -ncmoe 0 pushes no override, so pipelining stays on.
     return _args_place_tensors_on_cpu(extra_args)
 
 
@@ -669,8 +767,7 @@ def _kv_unified_from_args(
     elif value in _LLAMA_ARG_FALSE_VALUES:
         enabled = False
     if default:
-        # Unsloth's managed --kv-unified flag is appended after environment
-        # parsing and before user extras.
+        # Unsloth's managed --kv-unified is appended after environment parsing and before user extras.
         enabled = True
     for raw in extra_args or ():
         flag = _flag_name(str(raw))
@@ -681,8 +778,7 @@ def _kv_unified_from_args(
     return enabled
 
 
-# llama_init_from_model forces flash attention off for LLM_ARCH_GROK whatever the launch
-# asks for: Grok softcaps the KQ logits, which the fused kernel does not carry.
+# llama.cpp forces flash attention off for Grok (KQ logit softcap).
 _FLASH_ATTN_INCOMPATIBLE_ARCHITECTURES = frozenset({"grok"})
 
 
@@ -713,8 +809,7 @@ def _planned_flash_attn_state(
     if quantized_v:
         # Not a choice: llama.cpp turns it on itself rather than refusing the load.
         return True
-    # Prepended because ``load_model`` appends a managed ``--flash-attn on``: the env loses
-    # to it and only the user's own extras beat it (#9697, #10489).
+    # Prepended: load_model appends a managed --flash-attn on that only user extras beat.
     effective_args = ["--flash-attn", "on", *(str(arg) for arg in extra_args or ())]
     if _asked_for_auto_flash_attn(effective_args, env = env):
         if _effective_tensor_parallel(extra_args, tensor_parallel, env):
@@ -779,12 +874,7 @@ def _reserved_flash_attn_state(
     gpu_layers: Optional[int] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> bool:
-    """``planned``, held to the conservative reading where a respawn cannot be re-placed.
-
-    A flash-attention crash respawns with it off, which pads V model-wide, so where the
-    fitter cannot re-place that respawn the larger cache lands on a placement chosen for the
-    smaller one. Tensor mode has no such respawn, and pricing it would refuse loads that fit.
-    """
+    """A flash-attn respawn pads V model-wide and may not be re-placed, so keep the planned state; tensor mode has no respawn, so skip this."""
     if not planned:
         return planned
     if _effective_tensor_parallel(extra_args, tensor_parallel, env):
@@ -824,8 +914,7 @@ def _flash_attn_enabled_from_args(
 ) -> bool:
     """Resolve llama.cpp's environment and last-wins flash-attention settings."""
     enabled = default
-    # llama.cpp applies LLAMA_ARG_FLASH_ATTN before parsing argv (arg.cpp set_env),
-    # so the CLI still wins. --flash-attn has no args_neg, so no LLAMA_ARG_NO_ twin.
+    # llama.cpp applies the env before argv, so the CLI still wins.
     value = (os.environ if env is None else env).get("LLAMA_ARG_FLASH_ATTN")
     if value in _LLAMA_ARG_FALSE_VALUES:
         enabled = False
@@ -849,10 +938,7 @@ def _flash_attn_enabled_from_args(
 def _effective_spec_type(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[str]:
-    """The last --spec-type label a launch carries: final CLI --spec-type (or
-    --spec-default, which resolves non-MTP), else LLAMA_ARG_SPEC_TYPE. A display and
-    comparison label only, NOT what llama.cpp enables: types accumulate there, so ask
-    _extra_args_requests_mtp whether MTP is on. None if neither sets it."""
+    """Display label only: llama.cpp accumulates spec types, so ask _extra_args_requests_mtp for MTP."""
     args = [str(a) for a in extra_args] if extra_args else []
     cli_present = False
     cli_value: Optional[str] = None
@@ -875,19 +961,13 @@ def _effective_spec_type(
 def _child_spec_env(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Mapping[str, str]:
-    """The spec env the child will actually see: empty unless extras name a
-    --spec-type, because the launch scrubs LLAMA_ARG_SPEC_* whenever Unsloth owns the
-    spec block. Predict from this, not os.environ, or you describe a server that is
-    not the one being started."""
+    """Spec env the child sees: empty unless extras name --spec-type (launch scrubs LLAMA_ARG_SPEC_*); predict from this, not os.environ."""
     if not _extra_args_set_spec_type(extra_args):
         return {}
     return os.environ if env is None else env
 
 
-# The speculative types llama.cpp gives the TARGET context recurrent-state rollback
-# snapshots for -- n_rs_seq = --spec-draft-n-max, per
-# common_params_speculative::need_n_rs_seq. Every draft-model type but draft-simple,
-# and both MTP spellings, since which one a build advertises varies.
+# Spec types giving the target context recurrent-state rollback snapshots; both MTP spellings are listed since builds advertise either name.
 _TARGET_ROLLBACK_SPEC_TYPES = frozenset(
     {"mtp", "draft-mtp", "draft-eagle3", "draft-dflash", "draft-dspark"}
 )
@@ -899,24 +979,8 @@ _SSM_EVERY_LAYER_ARCHS = frozenset({"mamba", "mamba2", "falcon-h1"})
 _SSM_FFN_FREE_LAYER_ARCHS = frozenset({"nemotron_h", "nemotron_h_moe"})
 
 
-# Architectures whose TARGET context leaves the embedded MTP/NextN blocks out of
-# its KV cache, so block_count must lose them before the target is priced.
-#
-# This is NOT every architecture that carries {arch}.nextn_predict_layers.
-# llama_hparams::n_layer() subtracts nextn everywhere (llama-hparams.cpp:297),
-# but llama_kv_cache walks hparams.n_layer_all (llama-kv-cache.cpp:100) and drops
-# blocks only through an optional per-arch filter (:169). That filter is installed
-# for the hybrids at llama-model.cpp:2289 (Qwen3-Next/Qwen3.5/MiniMax-01 and, via
-# is_recr, Nemotron-H), for GLM-DSA and DeepSeek3.2 at :2129, and for the
-# STEP35/HY_V3/MIMO2 group at :2356. Everywhere else -- deepseek2, glm4, glm4moe,
-# bailingmoe2, cohere2moe, exaone4 -- filter is nullptr and the trailing MTP block
-# DOES get target KV, so subtracting it under-reserves.
-#
-# Fail closed: an arch not named here keeps every block, because over-reserving
-# costs context while under-reserving OOMs the load. Recurrent state is the one
-# thing that always excludes nextn, llama_memory_recurrent sizing on n_layer()
-# directly (llama-memory-recurrent.cpp:29), which is why
-# _mamba_recurrent_state_bytes subtracts unconditionally.
+# Archs whose target KV excludes embedded MTP/NextN blocks (per-arch llama_kv_cache filter).
+# Fail closed: unlisted archs keep every block; under-reserving OOMs the load.
 _TARGET_KV_EXCLUDES_NEXTN_ARCHS = frozenset(
     {
         # Hybrid attention + recurrent, llama-model.cpp:2289
@@ -943,10 +1007,7 @@ _TARGET_KV_EXCLUDES_NEXTN_ARCHS = frozenset(
 def _accumulated_spec_types(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> set:
-    """Every speculative type a launch carries, lowercased. Types accumulate rather
-    than replace: llama.cpp applies the env first through the same handler and every
-    --spec-type inserts at the end, so a later flag cannot clear an earlier one (even
-    --spec-type none only appends NONE). Look at all of them, not just the last."""
+    """Types accumulate rather than replace, and even --spec-type none only appends, so read them all."""
     values = []
     args = [str(a) for a in extra_args] if extra_args else []
     for i, raw in enumerate(args):

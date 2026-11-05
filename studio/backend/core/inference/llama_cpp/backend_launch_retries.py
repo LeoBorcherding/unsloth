@@ -90,6 +90,10 @@ from .placement_args import (
     _resolved_mmproj_offload,
 )
 from .swa_cache import _swa_cache_path
+from utils.child_stdio import utf8_child_env
+from .binary_runtime import (
+    _parse_listed_devices,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -117,67 +121,20 @@ class _LaunchRetryMixin:
         scratch_cache_type_kv: Optional[str] = None,
         explicit_ctx: bool = False,
     ) -> tuple[int, int, list[int], Optional[list[int]]]:
-        """Plan a ``--split-mode tensor`` load. Pure: no model or GPU needed.
-
-        ``gpus`` is a list of ``(gpu_index, free_mib)``; ``model_size`` is the
-        weight size in bytes; ``target_ctx`` is the context to fit (the explicit
-        request, or the model's native length for auto). ``max_target_ctx`` is
-        the native/hardware ceiling used only for the UI bound (defaults to
-        ``target_ctx``). Returns
-        ``(effective_ctx, max_available_ctx, gpu_indices, tensor_split)``.
-
-        Policy (assumes >= 2 GPUs; the caller drops the toggle below that):
-        - Cap context to the KV that fits the pooled VRAM after the weights, one
-          per-device flat compute-graph buffer (``_estimate_compute_buffer_bytes``,
-          deterministic from dims; flat fallback when dims are unavailable), and the
-          per-device context-linear compute growth (``_compute_buffer_ctx_bytes``,
-          replicated on every device in tensor mode, so summed over the split).
-          llama.cpp's ``--fit`` is a no-op in tensor mode, so this is the only
-          cap, honored even for an explicit ``-c``. It is more accurate than the
-          0.80 whole-pool heuristic, which over-reserves and leaves VRAM unused.
-        - ``tensor_split`` is None (llama.cpp's even default, safe for every arch
-          incl. Gemma 3n which GGML_ASSERTs on a weighted split) when an even
-          share fits the smallest GPU; otherwise it is weighted by usable budget
-          so the roomier GPU absorbs more weight and the smallest keeps room for KV.
-        ``total_by_idx`` enables the total-based occupancy cap; ``n_ubatch`` sizes
-        the compute buffer. ``soft_overhead_bytes`` is the CUDA-context / mmproj /
-        MTP-draft-graph reserve the layer path folds into ``model_size_fit``;
-        charged against the pooled budget so tensor mode reserves the same overhead.
-        ``cache_type_kv`` is the HEAVIER planned axis (KV bytes);
-        ``scratch_cache_type_kv`` is the LIGHTER one and prices the dequant scratch,
-        so an asymmetric pair keeps both terms conservative. Defaults to
-        ``cache_type_kv`` when unset, which is the symmetric case.
-
-        ``explicit_ctx`` only matters when the KV cache cannot be sized: the fallback is then
-        a guess, so it may shrink Auto but never overrule a request (#9653).
-        """
-
-        # Per-GPU usable budget: free - (1-frac)*total, else (unknown total, e.g. a
-        # two-column probe) the legacy free*frac. Mirrors _select_gpus and
-        # _gpu_usable so the 5% cushion is kept on every path, not dropped here.
-        # Prefer the caller's resolved budget, so placement and ranking price the
-        # SAME fraction even if a save lands mid-load; resolved here only for the
-        # direct callers (tests) with no load to inherit from, and once, not per GPU.
+        """Plans a --split-mode tensor load, capping context to pooled VRAM; if KV cannot be sized it may shrink Auto but never overrule an explicit context."""
         _tp_frac = vram_fraction if vram_fraction is not None else _active_vram_fraction()
 
         _tp_sysmem_fallback = LlamaCppBackend._sysmem_fallback_risk()
 
         def _usable(idx: int, free_mib: int) -> float:
-            # Through the shared helper, so the floor reserve the ranking and the
-            # layer path apply is charged here too. Tensor mode has no --fit valve,
-            # so a budget spent above the floor fails at startup rather than
-            # offloading. Clamped on both branches, unlike _select_gpus: this pool
-            # is summed, and one negative card must not fund another.
+            # Clamped on both branches: this pool is summed, so a negative card must not fund another.
             t = total_by_idx.get(idx, 0) if total_by_idx else 0
             return max(
                 0.0,
                 _vram_usable_mib(free_mib, t, _tp_frac, sysmem_fallback = _tp_sysmem_fallback),
             )
 
-        # Drop GPUs whose usable budget can't hold the per-device compute-graph
-        # buffer; they'd OOM in tensor mode. Admitting on raw free would let a
-        # partly-used big card in with no budget left. Defense-in-depth (load_model
-        # gates too). Derived per-device reserve; flat fallback.
+        # Drop GPUs whose usable budget cannot hold the per-device compute buffer (OOM in TP).
         _reserve_bytes = self._estimate_compute_buffer_bytes(
             n_ubatch = n_ubatch, n_parallel = n_parallel, per_device_tensor = True
         )
@@ -189,8 +146,7 @@ class _LaunchRetryMixin:
         usable_gpus = [g for g in gpus if _usable(g[0], g[1]) >= reserve_mib]
         gpu_indices = sorted(idx for idx, _ in usable_gpus)
         if len(gpu_indices) < 2:
-            # Tensor parallelism is meaningless on <2 GPUs (the caller drops the
-            # toggle before this); be defensive and never emit a split here.
+            # Tensor parallelism is meaningless below 2 GPUs; the caller drops it, so never emit a split.
             return (
                 target_ctx if target_ctx > 0 else 4096,
                 target_ctx if target_ctx > 0 else 4096,
@@ -200,19 +156,11 @@ class _LaunchRetryMixin:
         free_by_idx = {idx: free for idx, free in usable_gpus}
         usable_by_idx = {idx: _usable(idx, free_by_idx[idx]) for idx in gpu_indices}
         pool_mib = sum(usable_by_idx.values())
-        # MTP reserve: byte-accurate per-ctx inside _fit_ctx (mtp_overhead_fn) plus
-        # a flat cushion that the byte fn can't size -- 2 GiB when dims are wholly
-        # unavailable (no fn), or mtp_flat_reserve_bytes when the fn is weights-only
-        # because the draft KV couldn't be sized (_mtp_kv_unsized). Without this the
-        # binary search spends the unsized-KV cushion on main context and OOMs.
+        # Flat MTP cushion for what the byte fn cannot size; without it the search OOMs.
         flat_mtp_bytes = max(0, mtp_flat_reserve_bytes)
         if mtp_engaged and mtp_overhead_fn is None:
             flat_mtp_bytes = max(flat_mtp_bytes, 2 * 1024**3)
-        # soft_overhead_bytes is the CUDA-context / mmproj / MTP-draft-graph reserve
-        # the layer path folds into model_size_fit. Tensor mode has no --fit valve, so
-        # an unreserved overshoot OOMs at startup rather than offloading; charge it here
-        # too. Once (pooled), mirroring the layer path -- the per-device CUDA context is
-        # a known slight under-charge, left for real multi-GPU data.
+        # Tensor mode has no --fit valve, so charge the soft overhead here too (pooled, once).
         kv_budget_b = (
             (pool_mib - len(gpu_indices) * reserve_mib) * 1024 * 1024
             - model_size
@@ -234,40 +182,25 @@ class _LaunchRetryMixin:
                 flash_attn = flash_attn,
             )
 
-        # Context-linear compute buffer, summed over the split. Tensor mode
-        # replicates the compute graph on EVERY device (measured: the per-device
-        # buffer grows a flat n_ubatch*2 bytes/token, ~1024 B/tok on Qwen3.5-9B at
-        # f16, independent of n_embd), so the growth is n_dev x the per-device
-        # term. The flat reserve_mib above only covers ctx->0; without this the fit
-        # over-pins and OOMs at high context on a tight pool (0.5-4 GiB unreserved
-        # at 262k-1M across 2-4 GPUs), the tensor-mode analog of the layer-split
-        # compute bug.
-        #
-        # Priced from the LIGHTER axis, not the heavier budget type: since
-        # ggml-org/llama.cpp#23792 an asymmetric -ctk q4_0 -ctv f16 reaches the child,
-        # and the heavier scalar (f16) would drop the dequant scratch the q4 axis
-        # allocates. No --fit valve here, so that under-reservation OOMs at startup.
+        # Tensor mode replicates the compute graph on every device, so growth is n_dev x per-device.
+        # Priced from the lighter KV axis so a q4 axis keeps its dequant scratch.
         n_dev = len(gpu_indices)
         cc_cache_type = (
             scratch_cache_type_kv if scratch_cache_type_kv is not None else cache_type_kv
         )
 
         def _cc_ctx(ctx: int) -> int:
-            # The same resolved state ``_kv_at`` prices with: tensor mode usually answers
-            # True, but not always, and the mask this buffer carries is f32 when it does not.
+            # Same state _kv_at prices with: the mask is f32 whenever tensor mode does not answer True.
             return n_dev * self._compute_buffer_ctx_bytes(
                 ctx, n_ubatch, cc_cache_type, flash_attn = flash_attn
             )
 
         def _fit_ctx(ctx: int) -> int:
-            # Largest context whose KV (+ MTP draft reserve + context-linear
-            # compute) fits the pooled budget. Floors small, but never raises an
-            # explicit ctx above asked.
+            # Largest ctx whose KV, MTP reserve and compute fit the pooled budget; never above an explicit ctx.
             if self._can_estimate_kv() and ctx > 0:
                 ctx_floor = min(2048, ctx)
                 if kv_budget_b <= 0:
-                    # Weights + buffers exceed the pool -> floor; the load then
-                    # falls back to layer split.
+                    # If weights and buffers exceed the pool, use the floor; the load then falls back to layer split.
                     return ctx_floor
 
                 def _consumer(c: int) -> int:
@@ -287,36 +220,27 @@ class _LaunchRetryMixin:
             # KV size unknown -> can't prove a safe cap; floor.
             return min(_TP_UNMEASURED_CTX, ctx) if ctx > 0 else _TP_UNMEASURED_CTX
 
-        # max_available_ctx is the hardware ceiling for the UI bound, sized from
-        # the native context independent of an explicit small -c (which only
-        # caps effective_ctx).
+        # Hardware ceiling for the UI bound, independent of an explicit small -c.
         max_ctx_target = max_target_ctx if (max_target_ctx and max_target_ctx > 0) else target_ctx
         max_available_ctx = _fit_ctx(max_ctx_target)
         effective_ctx = min(_fit_ctx(target_ctx), max_available_ctx)
         if not self._can_estimate_kv() and explicit_ctx and target_ctx > 0:
-            # The min() above would apply a guess to a typed context: 262,144 requested came
-            # back as 4,096, for the launch and for max_context_length (#9653).
+            # Never apply the guessed min() to an explicitly typed context.
             effective_ctx = target_ctx
             max_available_ctx = max(max_available_ctx, effective_ctx)
 
         min_usable_mib = min(usable_by_idx.values())
         kv_bytes = _kv_at(effective_ctx) if (self._can_estimate_kv() and effective_ctx > 0) else 0
-        # The MTP reserve also has to fit the even split (mirror the pooled budget):
-        # byte-accurate per-ctx (0 when no fn) plus the same flat cushion as above.
+        # The MTP reserve must also fit the even split: per-ctx bytes plus the same flat cushion.
         mtp_bytes = (_mtp_at(effective_ctx) if effective_ctx > 0 else 0) + flat_mtp_bytes
-        # Context-linear compute is replicated per device; charge the whole split so
-        # the weighted ratio reflects it (mirrors kv_budget_b's per-device reserve).
+        # Context-linear compute is replicated per device, so charge the whole split, as kv_budget_b does.
         cc_bytes = _cc_ctx(effective_ctx) if effective_ctx > 0 else 0
         even_share_mib = (
             (model_size + kv_bytes + mtp_bytes + cc_bytes) / len(gpu_indices) / (1024 * 1024)
         )
         tensor_split: Optional[list[int]] = None
         if even_share_mib > (min_usable_mib - reserve_mib):
-            # Each device also holds its replicated share of the context-linear
-            # compute (cc_bytes/n_dev) on top of the flat reserve. The even-share
-            # gate above charges cc_bytes; the split weights must subtract it too, or
-            # the smaller card is weighted above its real usable budget and OOMs (the
-            # per-device analog of the layer path's per-GPU overhead in _select_gpus).
+            # Subtract the replicated compute share per device, or the smaller card is overweighted.
             cc_per_dev_mib = (cc_bytes // len(gpu_indices)) // (1024 * 1024) if cc_bytes else 0
             adj = [
                 max(0, int(usable_by_idx[i] - reserve_mib - cc_per_dev_mib)) for i in gpu_indices
@@ -346,23 +270,8 @@ class _LaunchRetryMixin:
         soft_overhead_bytes: int = 0,
         scratch_cache_type_kv: Optional[str] = None,
     ) -> bool:
-        """Check that a caller-supplied tensor split fits each selected GPU.
-
-        The auto planner returns ``None`` when an even share fits, but a user
-        ratio may still overshoot one card. Validate the ratio against the same
-        per-device budget the planner uses (usable VRAM minus the replicated
-        compute-graph reserve and context-linear buffer).
-
-        "The same budget" is the whole claim, so the operands are the planner's,
-        including the two that are easy to leave out. ``soft_overhead_bytes`` is
-        the CUDA context plus the vision and MTP reserves the planner subtracts
-        from its own KV budget; omitting it makes this check OPTIMISTIC, and a
-        tensor load has no ``--fit`` valve to spill into when the card it
-        over-filled runs out. ``scratch_cache_type_kv`` is the lighter of an
-        asymmetric K/V pair, which is what the context-linear dequant scratch is
-        actually sized from; pricing it from the heavier axis misreads a
-        ``-ctk q4_0 -ctv f16`` load by several gigabytes per device.
-        """
+        """Mirrors the planner budget, including soft_overhead and the lighter K/V type, or it is
+        optimistic."""
         if not split or sum(split) <= 0 or len(split) != len(gpu_indices):
             return False
 
@@ -378,11 +287,7 @@ class _LaunchRetryMixin:
             )
 
         free_by_idx = {idx: free for idx, free in gpus}
-        # Fail closed on a device the survey does not cover. ``gpus`` is the set
-        # the tensor-parallel reserve filter admitted and ``gpu_indices`` is what
-        # the load ended up pinned to; they can disagree, and indexing straight
-        # into the first with the second raised KeyError out of load_model. A
-        # budget that cannot be priced is not a budget that passed.
+        # Fail closed: gpus and gpu_indices can disagree; an unpriceable budget is not a pass.
         if any(idx not in free_by_idx for idx in gpu_indices):
             return False
         usable_by_idx = {idx: _usable(idx, free_by_idx[idx]) for idx in gpu_indices}
@@ -416,14 +321,7 @@ class _LaunchRetryMixin:
         mtp_bytes = (
             mtp_overhead_fn(effective_ctx) if mtp_overhead_fn is not None else 0
         ) + flat_mtp
-        # REPLICATED, not split: every device allocates the whole
-        # context-linear buffer whatever its weight, which is why the planner
-        # subtracts one per-device slice from each card BEFORE weighting rather
-        # than distributing the aggregate. Weighting the aggregate is the same
-        # arithmetic only for an even ratio; away from even it charges a
-        # low-weight card less than the buffer it must allocate and a high-weight
-        # card more, so it both under-refuses and over-refuses. Mirror the
-        # planner: flat per device, alongside the compute-graph reserve.
+        # Replicated, not split: every device allocates the whole buffer, so charge it flat per device.
         cc_per_device_bytes = self._compute_buffer_ctx_bytes(
             effective_ctx,
             n_ubatch,
@@ -445,12 +343,7 @@ class _LaunchRetryMixin:
     def _with_mmproj_offload_disabled(
         cmd: Sequence[str], env: Optional[Mapping[str, str]] = None
     ) -> Optional[List[str]]:
-        """Return a vision-preserving retry with the projector pinned to CPU.
-
-        llama.cpp's boolean placement flags are last-wins, so the recovery pin
-        must follow pass-through arguments that may have enabled GPU offload.
-        None means no projector is present or it already runs on CPU.
-        """
+        """Returns a retry argv with the projector pinned to CPU at the end, since llama.cpp boolean flags are last-wins; None when no projector or already on CPU."""
         args = [str(arg) for arg in cmd]
 
         def _flag(token: str) -> str:
@@ -458,26 +351,14 @@ class _LaunchRetryMixin:
 
         if not any(_flag(arg) in ("--mmproj", "-mm") for arg in args):
             return None
-        # Argv and environment at arg.cpp's own precedence. Two placements the
-        # spelling list below cannot see: LLAMA_ARG_NO_MMPROJ_OFFLOAD (falsey on
-        # presence alone) and the `disabled` token. Either already has the projector in
-        # host RAM, so respawning cannot clear the allocation failure and costs the
-        # caller the real error, which only surfaces when this returns None.
-        #
-        # Only a resolved False means "already on CPU". An explicit --mmproj-offload is
-        # overridden deliberately: this is crash recovery, and the alternative is
-        # losing vision altogether.
+        # Only a resolved False means on CPU; argv and env at arg.cpp precedence (LLAMA_ARG_NO_MMPROJ_OFFLOAD, disabled token); explicit --mmproj-offload is overridden.
         if _resolved_mmproj_offload(args, env or {}) is False:
             return None
         placements = [
             _flag(arg) for arg in args if _flag(arg) in ("--mmproj-offload", "--no-mmproj-offload")
         ]
         if not placements:
-            # Colloquial spellings arg.cpp itself rejects: `no` parses as neither truthy
-            # nor falsey, so common_params_parse throws and the child never starts, which
-            # no retry can fix. Kept as a deliberate superset of the resolution above
-            # rather than tightened, so a value that used to skip the futile retry still
-            # does.
+            # Deliberate superset of the resolution above: arg.cpp rejects 'no', so no retry helps.
             env_value = str((env or {}).get(_MMPROJ_OFFLOAD_ENV_VAR) or "").strip().lower()
             if env_value in ("0", "false", "off", "no"):
                 return None
@@ -517,13 +398,7 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _is_projector_incompatibility(output: str) -> bool:
-        """True when llama-server aborted because it cannot load the model's
-        vision/audio projector (mmproj), typically an installed llama.cpp
-        that predates the projector format. Conservative: only matches
-        projector-format errors so unrelated failures (OOM, bad GGUF, port
-        bind, ...) keep their own handling, and a bare 'clip'/'mmproj'
-        mention in a normal startup log does not match.
-        """
+        """Matches only projector-format errors, so OOM or bad-GGUF failures keep their own handling."""
         text = (output or "").lower()
         if any(
             m in text
@@ -543,12 +418,7 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _mmproj_retry_failure_message(*, projector_confirmed: bool, detail: str) -> str:
-        """User-facing error when the text-only --mmproj strip retry also fails.
-
-        Confirmed projector-format mismatches keep the historical wording.
-        Bare signal crashes (common on some ROCm/driver paths) must not be
-        reported as "Vision projector incompatible" — that misled #7302.
-        """
+        """Only a confirmed projector mismatch keeps the historical wording; bare signal crashes do not."""
         if projector_confirmed:
             return (
                 "Vision projector incompatible with this llama.cpp "
@@ -561,12 +431,7 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _output_has_nonprojector_diagnostic(output: str) -> bool:
-        """True when the output already names a concrete non-projector cause (out
-        of memory, an unsupported architecture, a tensor-parallel limit). A hard
-        crash carrying such a marker must surface that error, not be silently
-        retried text-only as if the vision projector were at fault; a bare crash
-        with no marker still gets the text-only retry.
-        """
+        """Output naming a real non-projector cause, like OOM, must surface instead of a text-only retry."""
         text = (output or "").lower()
         return any(
             m in text
@@ -579,26 +444,16 @@ class _LaunchRetryMixin:
             )
         )
 
-    # llama.cpp before ggml-org/llama.cpp#23792 (build b9455) refused a quantized KV
-    # cache under --split-mode tensor outright, in llama_init_from_model:
-    #   "simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented"
-    # Unlike the #6415 split-axis abort this is a clean LLAMA_LOG_ERROR + return
-    # nullptr (exit 1, no signal), so _should_record_tensor_split_abort cannot see it.
-    # Matched on the middle of the string, so the surrounding log format is irrelevant.
-    # Unsloth dropped its own pre-emptive gate once #23792 shipped, so this marker is
-    # what keeps an older binary cheap: without it every load burns two doomed model
-    # loads (tensor attempt plus --fit retry) before the route's layer fallback.
+    # llama.cpp before b9455 refused quantized KV under --split-mode tensor with a clean exit 1;
+    # this marker avoids two doomed loads on older binaries.
     _TENSOR_QUANT_KV_UNSUPPORTED_MARKER = (
         "split_mode_tensor and kv cache quantization not implemented"
     )
 
     @classmethod
     def _is_tensor_quant_kv_unsupported(cls, output: str) -> bool:
-        """True for the pre-b9455 refusal of a quantized KV cache in tensor mode.
-
-        Deterministic and binary-wide: only a different llama.cpp helps, so the
-        caller latches it and downgrades instead of retrying --fit or flash-attn.
-        """
+        """Matches the quantized-KV tensor-mode refusal; no retry helps, only a different llama.cpp
+        build."""
         return cls._TENSOR_QUANT_KV_UNSUPPORTED_MARKER in (output or "").lower()
 
     @staticmethod
@@ -612,15 +467,10 @@ class _LaunchRetryMixin:
         # the split-axis enum token, unique to this assert (not the source file).
         return "split_axis" in text
 
-    # The prepend covers the whole system ROCm dir, so any lib in it can be the
-    # one that fails to resolve, not just HIP. Matched on the basename so a path
-    # component (/opt/librocm-custom/...) cannot stand in for the object.
+    # Matched on basename so a path component cannot stand in for the object.
     _ROCM_OBJECT_HINTS = ("libamdhip", "libamd_comgr", "libhsa-runtime", "libhip", "libroc")
 
-    # Build dirs where a bundle-only launch has come up healthy after the mix
-    # crashed, paired with the binary revision that proved it. The installer
-    # swaps a new runtime into the same path, so the revision prevents an old
-    # proof from suppressing the system ROCm prepend for the new build.
+    # Paired with the binary revision so an old proof does not apply to a newly swapped build.
     _bundle_only_rocm_dirs: dict[str, tuple] = {}
     _bundle_only_rocm_lock = threading.Lock()
 
@@ -638,17 +488,71 @@ class _LaunchRetryMixin:
         with LlamaCppBackend._bundle_only_rocm_lock:
             return LlamaCppBackend._bundle_only_rocm_dirs.get(str(resolved.parent)) == revision
 
+    _system_rocm_probe_lock = threading.Lock()
+
+    # Build dirs whose system ROCm prepend was already probed, keyed like the latch above.
+    _system_rocm_probed: dict[str, tuple] = {}
+
+    @staticmethod
+    def _system_rocm_hides_gpu(binary: str, system_dirs: "list[str]") -> bool:
+        """True when llama-server lists no GPU with system ROCm first but does with its bundle.
+
+        The prepend crash-proofs hosts whose bundled ROCR mismatches amdkfd (#7208), but
+        where the system copy is the mismatched one HIP init fails silently and the server
+        runs on CPU (#14906). No crash means the load_model retry never fires, so this asks
+        the binary directly, once per build. Any other answer keeps the prepend.
+        """
+        resolved = _resolve_llama_binary(binary)
+        key = str(resolved.parent)
+        revision = LlamaCppBackend._binary_stamp(resolved)
+        with LlamaCppBackend._system_rocm_probe_lock:
+            # A caller that waited out the first probe re-reads its verdict from the latch.
+            if LlamaCppBackend._system_rocm_probed.get(key) == revision:
+                return LlamaCppBackend._prefers_bundle_only_rocm(binary)
+            mixed = LlamaCppBackend._list_devices_under(
+                binary,
+                LlamaCppBackend._llama_server_env_for_binary(binary, verify_system_rocm = False),
+            )
+            bundled = None
+            if mixed == []:
+                bundled = LlamaCppBackend._list_devices_under(
+                    binary,
+                    LlamaCppBackend._llama_server_env_for_binary(binary, use_system_rocm = False),
+                )
+            LlamaCppBackend._system_rocm_probed[key] = revision
+            if not bundled:
+                return False
+            logger.warning(
+                "llama-server lists no GPU with the system ROCm libraries (%s) ahead of its "
+                "bundled runtime, but lists %s without them; using the bundled ROCm runtime.",
+                ":".join(system_dirs),
+                ", ".join(bundled),
+            )
+            LlamaCppBackend._remember_bundle_only_rocm(binary)
+            return True
+
+    @staticmethod
+    def _list_devices_under(binary: str, env: Mapping[str, str]) -> Optional[list[str]]:
+        try:
+            result = subprocess.run(
+                [binary, "--list-devices"],
+                capture_output = True,
+                encoding = "utf-8",
+                errors = "replace",
+                timeout = 30,
+                env = utf8_child_env(dict(env)),
+                **_windows_hidden_subprocess_kwargs(),
+            )
+        except Exception as e:
+            logger.debug(f"llama-server --list-devices failed: {e}")
+            return None
+        if result.returncode != 0:
+            return None
+        return _parse_listed_devices(result.stdout)
+
     @staticmethod
     def _bundled_hip_symbol_miss(output: str) -> "Optional[tuple[str, str]]":
-        """(object, symbol) when a bundled ROCm lib failed a symbol lookup (#8998).
-
-        glibc prints ``symbol lookup error: <object>: undefined symbol: <sym>[,
-        version <v>]``. A ggml symbol, or an absent .so (``error while loading
-        shared libraries``), is a different failure. The object is echoed
-        verbatim, so split on the ": undefined symbol:" that follows it rather
-        than on whitespace, the same way the missing-library branch above keeps
-        "/opt/My Runtime/libfoo.so" whole.
-        """
+        """Splits glibc's symbol lookup error at ': undefined symbol:', so paths with spaces stay whole."""
         match = re.search(
             r"symbol lookup error:[ \t]*([^\r\n]{1,4096}?):"
             r"[ \t]*undefined symbol:[ \t]*([^\s,]+)",
@@ -676,8 +580,7 @@ class _LaunchRetryMixin:
             return False
         if "cur_backend_id" in text:
             return True
-        # Never sched_reserve / graph_reserve alone (a reserve-time CUDA OOM passes through them);
-        # split_graph has other aborts, so its bare frame counts only with no other message.
+        # Never sched_reserve / graph_reserve alone (reserve-time OOM passes through them).
         if "failed to initialize context" in text or "ggml_assert(" in text:
             return False
         return "ggml_backend_sched_split_graph" in text
@@ -695,10 +598,7 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _is_signal_crash(returncode: Optional[int]) -> bool:
-        """True only on a hard fault (SIGSEGV/SIGABRT/SIGILL/SIGFPE/SIGBUS or a
-        Windows 0xC0000000+ status), not SIGKILL/SIGTERM/SIGINT (OOM killer /
-        unload) nor a clean exit or still-running (None) process.
-        """
+        """Hard faults only: SIGKILL, SIGTERM and SIGINT are excluded since they mean OOM kill or unload."""
         if returncode is None:
             return False
         if returncode >= 0xC0000000:  # Windows access violation / illegal instruction
@@ -719,13 +619,8 @@ class _LaunchRetryMixin:
             cls._is_signal_crash(returncode) or cls._is_abort_exit(returncode)
         )
 
-    # ROCm's arch-mismatch crash: no compiled kernels for the device it launched on
-    # (#7624). Deterministic, so only a different device helps, not a fit / flash-attn
-    # retry. Four spellings because clr returns four codes for "no code object for
-    # THIS device": hip_fatbin.cpp raises them, hip_platform.cpp propagates them out
-    # of the launch path, and ggml reprints hipGetErrorString verbatim. Matching only
-    # hipErrorInvalidImage (what both field logs show) would leave a build raising
-    # hipErrorNoBinaryForGpu on the misleading GGUF/memory error.
+    # ROCm arch-mismatch crash: deterministic, only a different device helps.
+    # clr reports it with four different codes.
     _KERNEL_IMAGE_INVALID_MARKERS = (
         "device kernel image is invalid",  # hipErrorInvalidImage
         "no kernel image is available for execution",  # hipErrorNoBinaryForGpu
@@ -735,8 +630,7 @@ class _LaunchRetryMixin:
 
     @classmethod
     def _kernel_image_invalid(cls, output: str) -> bool:
-        # Case-folded: hipGetErrorString is lowercase, but the layers that
-        # reprint it are not consistent about that.
+        # Case-folded, since hipGetErrorString is lowercase but the layers that reprint it vary in case.
         text = (output or "").lower()
         return any(marker in text for marker in cls._KERNEL_IMAGE_INVALID_MARKERS)
 
@@ -808,14 +702,8 @@ class _LaunchRetryMixin:
 
     @classmethod
     def _arch_crash_retry_gpu_ids(cls, selected, enumerated) -> list[int]:
-        """Devices to retry on after a "device kernel image is invalid" crash.
-
-        Prefer the enumerated GPUs the failed launch never touched. When it used every
-        one the crash does not name the offending card, so narrow instead: drop the
-        unified-memory devices, where this mismatch keeps landing (#7624, the
-        shared-pool APU's system-RAM "free memory" outranked the dGPU). Empty when
-        nothing would change, when narrowing leaves no device, or on a single-GPU
-        host."""
+        """Prefers GPUs the failed launch never touched; else drops unified-memory devices, where
+        this recurs."""
         _selected = set(selected or ())
         if not _selected:
             return []
@@ -832,17 +720,7 @@ class _LaunchRetryMixin:
     def _cache_tuning_target_unknown(
         extra_args: Optional[Iterable[str]], device_flags_owned: bool, env: Mapping[str, str]
     ) -> bool:
-        """Whether the device this cache tuning would be chosen against is the one
-        the child actually gets.
-
-        A user device selection is not stripped on an automatic load and llama.cpp
-        reads it last (argv) or first (env, before argv either way), so it, not the
-        automatic placement, names the target. Both spellings count: only a pick that
-        OWNS placement clears LLAMA_ARG_DEVICE, so otherwise the env twin survives
-        into the child verbatim. Fail-closed by design -- the failure that
-        matters is emitting --cache-ram 0 against a shared pool, while keeping the
-        prompt cache on a discrete card only forgoes a tuning.
-        """
+        """Fails closed: a user device pick can redirect the child, so the target device is unknown."""
         if device_flags_owned:
             return False
         return bool(
@@ -858,18 +736,9 @@ class _LaunchRetryMixin:
         ctx_checkpoints: Optional[int],
         server_caps: Mapping[str, Any],
     ) -> list[str]:
-        """The cache tuning to append when an arch-crash retry lands on a discrete GPU.
-
-        The extras were appended to ``cmd`` long before the retry, so anything added
-        here wins the last-wins parse -- the reverse of the initial launch, where a
-        typed --cache-ram overrides the tuning. So a setting the command already
-        states is skipped, keeping that precedence rather than zeroing a value the
-        panel still shows. An explicit field is handled by the caller's own
-        None checks, exactly as at launch.
-        """
-        # Every spelling llama.cpp accepts, from the sets the arg layer already keeps: a
-        # short -cram or -ctxcp states the setting exactly as the long form does, so
-        # appending after one would zero a value the user typed and the panel shows.
+        """Skips any cache setting the command already states, since appended flags win the last-
+        wins parse."""
+        # Short spellings state the setting too; appending after one would clobber the user's value.
         stated = {_flag_name(str(token)) for token in cmd}
         flags: list[str] = []
         if (
@@ -885,14 +754,8 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _without_flag_pairs(cmd: list[str], pairs: list[str]) -> list[str]:
-        """Remove flag/value pairs THIS process appended, by exact token match.
-
-        Only ever called with tokens the cache tuning emitted itself, every one of them
-        a flag followed by its value, so the two-token step cannot swallow a following
-        user extra the way it would for a valueless flag (the reason the mlock path
-        refuses to strip at all). A pair that is no longer present is skipped rather
-        than searched for again, so a repeated call is a no-op.
-        """
+        """Safe only for pairs this process emitted: a two-token step would swallow a following user
+        extra."""
         out = list(cmd)
         for index in range(0, len(pairs) - 1, 2):
             flag, value = pairs[index], pairs[index + 1]
@@ -904,22 +767,12 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _without_tensor_split(cmd: list[str]) -> Optional[list[str]]:
-        """Return cmd with ``--tensor-split``/``-ts`` removed (both spellings and the
-        ``--tensor-split=1,2`` form), or None when it carries none.
-
-        The shares are positional over the child's VISIBLE device list, so a respawn
-        that masks a device out re-indexes the survivors while keeping the old
-        weights, handing card N the share sized for card N-1. Dropping the flag falls
-        back to llama.cpp's free-VRAM split, correct for any device set."""
+        """Drops the flag: split shares are positional over visible devices, and masking re-indexes them."""
         return LlamaCppBackend._without_flags(cmd, ("--tensor-split", "-ts"))
 
     @staticmethod
     def _without_flags(cmd: list[str], names: Collection[str]) -> Optional[list[str]]:
-        """Return cmd with every ``names`` flag (and its value) dropped, or None when
-        it carries none. ``_flag_name`` peels ``--key=value`` and underscore
-        spellings; only the two-token form swallows the next entry. Pass VALUE-TAKING
-        flags only: valueless ones (``--mlock``, ``--no-mmap``, bare ``-fa``) would
-        drop whatever argv entry follows."""
+        """Value-taking flags only: a valueless one such as --mlock would drop the next argv entry."""
         out: list[str] = []
         found = False
         skip = False
@@ -939,13 +792,14 @@ class _LaunchRetryMixin:
     def _requires_symmetric_kv(kv_lora_rank, architecture) -> bool:
         """Whether llama.cpp rejects K != V for a model with this metadata.
 
-        Mirrors ``is_mla() || arch == LLM_ARCH_DEEPSEEK4``: kv_lora_rank stands in
-        for is_mla() (the MLA archs' converter writes it alongside the MLA head
-        dims), and deepseek4 is checked by name because it sets neither.
+        Mirrors ``is_mla() || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41``:
+        kv_lora_rank stands in for is_mla() (the MLA archs' converter writes it
+        alongside the MLA head dims), and deepseek4 / deepseek41 are checked by name
+        because they set neither.
         """
         if kv_lora_rank is not None:
             return True
-        return (architecture or "").strip().lower() == "deepseek4"
+        return (architecture or "").strip().lower() in ("deepseek4", "deepseek41")
 
     def _target_kv_symmetry(self) -> bool:
         """Whether the TARGET model requires K == V."""
@@ -956,26 +810,7 @@ class _LaunchRetryMixin:
         cmd: Optional[Iterable[str]] = None,
         env: Optional[Mapping[str, str]] = None,
     ) -> Optional[bool]:
-        """Whether the DRAFTER requires K == V; None when it cannot be determined.
-
-        Derived from the drafter the launch actually resolves to, which is the one
-        named on the command being launched. The stored ``_mtp_draft_path`` is the
-        wrong source twice over: it only ever holds the managed sidecar, so an
-        ``extra_args`` ``--model-draft``/``--hf-repo-draft`` (the drafter llama.cpp
-        would really load) is invisible to it, and it is not assigned until after
-        the launch-site reset has already run, so it is stale there anyway. The
-        managed path emits ``--model-draft <sidecar>`` into the same command, so
-        reading the command covers both.
-
-        None only when no drafter is named at all, in which case there are no draft
-        flags to reset and the value cannot matter. A drafter that IS named but
-        whose metadata cannot be read (a Hugging Face repo id rather than a local
-        file, or an unreadable GGUF) resolves to True rather than to the target's
-        answer: the two mistakes are not symmetric. Resetting a non-MLA drafter's K
-        needlessly costs memory, whereas failing to reset an MLA drafter's K leaves
-        it quantized against an f16 draft V and aborts the draft context outright,
-        which is the failure this whole path exists to avoid.
-        """
+        """Reads the drafter the command names, not the stored sidecar; an unreadable one counts as True."""
         path, is_remote = _extra_args_mtp_draft_source(list(cmd or []), env)
         if not path:
             return None
@@ -999,44 +834,8 @@ class _LaunchRetryMixin:
         mla: bool = False,
         draft_mla: Optional[bool] = None,
     ) -> list[str]:
-        """Return cmd with any quantized V cache reset to f16, for a launch that
-        runs without flash attention.
-
-        A quantized V cache requires flash attention in llama.cpp: the init aborts
-        with "V cache quantization requires flash_attn". A quantized K cache has no
-        such requirement and runs fine without FA, so it is left untouched --
-        resetting it would needlessly enlarge the K cache and can OOM a
-        memory-constrained config.
-
-        ``mla`` overrides that on the models where leaving K alone is now itself
-        fatal. llama-context.cpp gained this in #25871, and it sits ABOVE the
-        V-quantization check, so it decides first:
-
-            if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4)
-                    && params.type_k != params.type_v) {
-                LLAMA_LOG_ERROR("model does not support different K (%s) and V
-                                 (%s) cache types");
-                return nullptr;
-            }
-
-        is_mla() is n_embd_head_k_mla_impl and n_embd_head_v_mla_impl both being
-        set, which covers DeepSeek V2/V3/R1, Kimi K2 and GLM-4.7/5.x. DeepSeek4 is
-        the separate arch term in that condition rather than a second is_mla()
-        model: it has its own KV cache (llama-kv-cache-dsv4.cpp), never sets the
-        MLA head dims, and its converter writes q_lora_rank but no kv_lora_rank, so
-        a kv_lora_rank probe alone does not see it. Resetting V
-        alone on one of those turns a quantized KV into K=q8_0 V=f16, which is a
-        hard abort for a DIFFERENT reason than the one being avoided: the retry
-        that exists to recover from a flash-attention crash fails on the K/V
-        mismatch instead. Both axes go to f16 together there, since equal is what
-        the rule asks for and f16 is the only value guaranteed to satisfy the V
-        rule as well. Main and draft V are both reset (the draft context shares the
-        global --flash-attn flag, so its V cache aborts too) to f16 (the llama.cpp
-        default); K follows per model, ``mla`` for the target flags and
-        ``draft_mla`` for the draft pair. Non-quantized types -- f16/bf16/f32 --
-        run fine without FA and are left untouched. The value is rewritten in place
-        so the list length is preserved for downstream slices.
-        """
+        """Quantized V needs flash attention, so it goes to f16; MLA and DeepSeek4 reset K to f16 as
+        well."""
         out = list(cmd)
         _v_cache_flags = (
             "--cache-type-v",
@@ -1047,12 +846,7 @@ class _LaunchRetryMixin:
         )
         _cache_reset = False
         for i, tok in enumerate(out):
-            # llama.cpp rewrites '_' to '-' for any argv token starting with
-            # '--' before matching, so a legal pass-through spelling such as
-            # --cache_type_v parses as --cache-type-v and still enables a
-            # quantized V cache. Canonicalize the flag name the same way so the
-            # reset recognizes the underscore aliases too; short flags (-ctv)
-            # and the type value are left untouched.
+            # llama.cpp rewrites '_' to '-' in '--' flags, so match underscore aliases too.
             name = _flag_name(tok)
             if name not in _v_cache_flags:
                 continue
@@ -1065,25 +859,7 @@ class _LaunchRetryMixin:
                 if out[i + 1].strip().lower() not in LlamaCppBackend._NON_QUANTIZED_KV_TYPES:
                     out[i + 1] = "f16"
                     _cache_reset = True
-        # Symmetry, not size: an MLA model rejects K != V outright, so the K cache
-        # has to follow V down rather than stay quantized. This is not conditional
-        # on having just reset V here: on this flash-attn-off path V always ends up
-        # f16 anyway (reset above when it was quantized on argv, dropped by
-        # _drop_env_quantized_v_cache when it was quantized in the environment,
-        # otherwise already f16/bf16/f32), so a quantized K left on argv is a
-        # guaranteed K != V abort. The asymmetric case that motivates this is
-        # -ctk q8_0 on argv with LLAMA_ARG_CACHE_TYPE_V in the environment: nothing
-        # quantized appears on argv for V, so a V-triggered reset would never fire.
-        #
-        # The target and the drafter are separate models with separate contexts, and
-        # llama.cpp applies the restriction per context, so each side is gated on its
-        # OWN model. Mixing them is wrong in both directions: an MLA target with a
-        # non-MLA drafter would needlessly double the drafter's K cache (the very OOM
-        # the size argument above warns about), and a non-MLA target with an MLA
-        # drafter would leave the draft K quantized against an f16 draft V and abort
-        # the draft context. ``draft_mla`` defaults to ``mla`` when the caller cannot
-        # read the drafter's metadata, which is the safe direction: an unnecessary
-        # reset only costs memory, a missing one aborts.
+        # MLA rejects K != V, so K follows V; gated per model, and an unreadable drafter counts as MLA.
         _main_k_flags = ("--cache-type-k", "-ctk")
         _draft_k_flags = ("--cache-type-k-draft", "--spec-draft-type-k", "-ctkd")
         if draft_mla is None:
@@ -1123,13 +899,7 @@ class _LaunchRetryMixin:
         mla: bool = False,
         draft_mla: Optional[bool] = None,
     ) -> Optional[list[str]]:
-        """Return cmd with flash attention forced off, or None when its effective
-        (last-wins) value is already off/absent so there is nothing to retry. FA
-        kernels hard-crash at startup on some ROCm builds; disabling FA keeps
-        vision and MTP, the least destructive rung. A bare --flash-attn/-fa reads
-        as on, so it counts toward the effective value and is neutralised too --
-        by dropping it, since only the older boolean builds accept the bare form
-        and they take no value. Valued forms are flipped in place."""
+        """Turns flash attention off; a bare --flash-attn is dropped, since older builds take no value."""
         out = list(cmd)
 
         def explicit(i):
@@ -1145,12 +915,7 @@ class _LaunchRetryMixin:
                 effective = explicit(i) or "on"
         if effective not in _LLAMA_ARG_TRUE_OR_AUTO_VALUES:
             return None
-        # A bare flag cannot be turned off in place: llama.cpp looks each argv
-        # token up verbatim (only '_' -> '-'), so --flash-attn=off is "invalid
-        # argument" everywhere, and the boolean builds that are the only ones
-        # accepting the bare form take no value at all. Dropping the token is
-        # what disables FA there. Collected first, removed back to front, so the
-        # indices stay valid.
+        # A bare flag cannot take =off, so dropping the token disables FA; remove back to front.
         bare_at: list[int] = []
         for i, tok in enumerate(out):
             name = _flag_name(tok)
@@ -1166,9 +931,7 @@ class _LaunchRetryMixin:
         for i in reversed(bare_at):
             del out[i]
 
-        # Unsloth launches with FA on, so a quantized --cache-type-v is legal at
-        # launch but would make THIS FA-off retry crash on init instead of
-        # recovering.
+        # Quantized V is legal with FA on but would crash this FA-off retry.
         return LlamaCppBackend._reset_quantized_v_cache(
             out,
             "disabled by the crash-recovery fallback",
@@ -1183,28 +946,7 @@ class _LaunchRetryMixin:
         mla: bool = False,
         draft_mla: Optional[bool] = None,
     ) -> bool:
-        """Drop an inherited quantized V-cache env var (main or draft) in place
-        before a flash-attn-off retry, returning True if anything was removed.
-
-        The argv rewrite in ``_with_flash_attn_off`` only reaches flags on the
-        command line. Unsloth deliberately lets an env-only cache type reach the
-        child untouched (an asymmetric K/V env must survive), so a quantized V
-        cache set purely through ``LLAMA_ARG_CACHE_TYPE_V`` (or the draft
-        ``LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V``) would still abort the FA-off retry
-        with "V cache quantization requires flash_attn". Dropping it lets
-        llama.cpp fall back to the f16 default.
-
-        On a non-MLA model only V is dropped: a quantized K cache runs fine
-        without flash attention, so its env var is preserved. On an MLA model
-        (DeepSeek V2/V3/R1, Kimi K2, GLM-4.7/5.x) llama.cpp rejects K != V
-        outright, and it checks that *before* the V/flash-attn rule, so the
-        quantized K env vars have to go too, each gated on its own model
-        (``mla`` for the target var, ``draft_mla`` for the draft one, since the
-        drafter is a separate model with its own context). Every caller runs this after the
-        argv reset has already forced V to f16, so a surviving quantized K env
-        is a guaranteed "model does not support different K and V cache types"
-        abort rather than the recovery the retry is trying to perform.
-        """
+        """Env-only quantized V caches would abort the FA-off retry; MLA also drops the K env vars."""
         dropped = False
         variables = ["LLAMA_ARG_CACHE_TYPE_V", "LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V"]
         if draft_mla is None:
@@ -1222,19 +964,10 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _drop_env_flash_attn(env: MutableMapping[str, str]) -> bool:
-        """Drop an inherited LLAMA_ARG_FLASH_ATTN in place before a flash-attn-off
-        retry, returning True if anything was removed.
-
-        On the older builds whose --flash-attn takes no value the argv rewrite can
-        only drop the flag, never negate it, and llama.cpp reads the env var before
-        parsing argv, so LLAMA_ARG_FLASH_ATTN=1 would turn the kernel that just
-        crashed straight back on. Newer builds get an explicit --flash-attn off,
-        which already beats the env, so dropping it changes nothing there.
-        """
+        """Env is read before argv, and older builds cannot negate a bare --flash-attn; drop the env var."""
         return env.pop("LLAMA_ARG_FLASH_ATTN", None) is not None
 
-    # On the wording, not an architecture name, so the next model needs no list.
-    # glm5next spells it as the GGML_ASSERT of ggml-org/llama.cpp#27754.
+    # Matched on wording, not architecture name.
     _KV_UNIFIED_REFUSED_MARKERS = (
         "a unified kv cache is only supported with a single sequence",
         "needs one sequence per stream",
@@ -1247,12 +980,8 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _with_single_sequence(cmd: list[str]) -> Optional[list[str]]:
-        """Return cmd re-run as one sequence, or None when it already is one.
-
-        Studio adds --kv-unified itself above one slot, so this reverses Studio's
-        choice, not the user's. Every alias goes, from _PARALLEL_FLAGS so it cannot
-        drift from the denylist; llama.cpp is last-wins.
-        """
+        """Reverses Studio's own --kv-unified choice above one slot; every parallel-flag alias is
+        removed."""
         out: list[str] = []
         saw_kv_unified = False
         multi_slot = False
@@ -1298,11 +1027,8 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _drop_env_single_sequence(env: MutableMapping[str, str]) -> bool:
-        """Drop inherited unified-cache and slot-count env before that retry.
-
-        llama.cpp reads its environment before argv. Dropped, not negated with
-        --no-kv-unified, which needs every build reaching here to know it.
-        """
+        """Drops the env twins instead of negating them, since --no-kv-unified needs every build to
+        know it."""
         dropped = env.pop("LLAMA_ARG_KV_UNIFIED", None) is not None
         return env.pop("LLAMA_ARG_N_PARALLEL", None) is not None or dropped
 
@@ -1323,14 +1049,8 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _vulkan_prebuilt_was_auto_selected(binary: Optional[str]) -> bool:
-        """Whether this managed Vulkan bundle was detected rather than chosen.
-
-        Only an automatic Vulkan install may be quietly replaced with CPU placement
-        on a crash: someone who picked Vulkan in Settings > System (or exported
-        the variable) picked it over a GPU backend that presumably crashed too, and
-        silently undoing that would be the same bug in the other direction. The
-        managed marker also excludes custom and PATH binaries.
-        """
+        """Only an auto-detected Vulkan bundle may fall back to CPU on a crash; a user-chosen one
+        must not."""
         if not binary:
             return False
         from utils.llama_cpp_update import _llama_install_root
@@ -1339,10 +1059,7 @@ class _LaunchRetryMixin:
             marker_backend_was_chosen,
         )
 
-        # The same precedence the installer applied when it chose this bundle, so
-        # a stale UNSLOTH_FORCE_VULKAN cannot mark an install explicit that
-        # UNSLOTH_LLAMA_CPP_BACKEND=auto had setup detect. Only a concrete
-        # override is a choice; "auto" still has to pass the marker check below.
+        # Same precedence the installer used; only a concrete override counts as a choice.
         override = environment_backend_override(
             os.environ.get("UNSLOTH_LLAMA_CPP_BACKEND"),
             os.environ.get("UNSLOTH_FORCE_VULKAN"),
@@ -1464,10 +1181,14 @@ class _LaunchRetryMixin:
             return intent
         if not source_matches and not self.matches_load_source(intent):
             return intent
+        # Decided by this load's own probe: only a zero-device answer takes the CPU route.
+        if not source_matches and self._cpu_fallback_reason in (
+            "vulkan_no_device",
+            "vulkan_startup_stall",
+        ):
+            return intent
         extras = list(intent.extra_args) if intent.extra_args is not None else None
-        # Judge the env the replay runs with, not this process's: _cpu_isolated_replay
-        # pops every main-model placement var first. Using os.environ would drop the
-        # recovery over a value no child saw, re-running the crash on every reload.
+        # Judge the env the replay runs with (_cpu_isolated_replay pops placement vars).
         replay_env = {
             name: value
             for name, value in os.environ.items()
@@ -1491,6 +1212,7 @@ class _LaunchRetryMixin:
         mmproj_has_audio: bool,
         disable_vision: bool,
         vision_disabled_by_user: bool,
+        reason: str = "vulkan_startup_crash",
     ) -> GgufLoadIntent:
         intent = self._as_cpu_fallback_intent(intent)
         self._gpu_memory_mode = intent.gpu_memory_mode
@@ -1503,13 +1225,10 @@ class _LaunchRetryMixin:
         self._layer_preserves_tensor_intent = False
         self._is_vision = is_vision
         self._mmproj_has_audio = mmproj_has_audio
-        # The caller returns straight after this, before the load's own assignment of
-        # these two, so a recovery that skipped them left the response describing the
-        # PREVIOUS load's Vision state: the control flips back on, and an unchanged
-        # disable_vision request then fails runtime matching and reloads the model.
+        # Caller returns before the load assigns these; without it Vision state stays stale.
         self._disable_vision = bool(disable_vision)
         self._vision_disabled_by_user = bool(vision_disabled_by_user)
-        self._cpu_fallback_reason = "vulkan_startup_crash"
+        self._cpu_fallback_reason = reason
         return intent
 
     @staticmethod
@@ -1529,11 +1248,8 @@ class _LaunchRetryMixin:
         *,
         drop_full_offload_threads: bool = False,
     ) -> Optional[list[str]]:
-        """Build a replay that cannot initialize or schedule on a GPU.
-
-        Unlike ``-ngl 0``, ``--device none`` removes GPU devices. Refuse companions
-        that this binary cannot pin to CPU.
-        """
+        """Uses --device none, not -ngl 0, and returns None when a companion mmproj cannot be pinned
+        to CPU."""
         original = [str(arg) for arg in cmd]
         has_mmproj = cls._launch_has_mmproj(original, env)
         if has_mmproj and not _paravirtual_mmproj_pinnable(server_caps):
@@ -1545,10 +1261,7 @@ class _LaunchRetryMixin:
 
         replay = cls._strip_cpu_fallback_main_placement(original)
         if drop_full_offload_threads:
-            # Windows full-offload tuning pins 2 threads and PASSIVE OpenMP because
-            # the GPU was doing the work, so a CPU replay would decode on 2 cores.
-            # Only Unsloth's own values: a user --threads override is reported by
-            # the caller, and the env vars were setdefault'd.
+            # Windows full-offload pins 2 threads; a CPU replay would decode on 2 cores.
             replay = _strip_flag_pairs(replay, _THREAD_OVERRIDE_FLAGS)
             for name in ("OMP_NUM_THREADS", "OMP_WAIT_POLICY"):
                 env.pop(name, None)
@@ -1563,10 +1276,7 @@ class _LaunchRetryMixin:
         return replay
 
     def _undo_moe_spill_batch(self, argv: "list[str]") -> "list[str]":
-        """``argv`` with the expert-spill batch pair restored.
-
-        Replaces only Unsloth's own contiguous tokens; a launch that did not raise
-        them comes back unchanged."""
+        """Restores only the batch tokens Unsloth itself raised; otherwise argv comes back unchanged."""
         tokens = getattr(self, "_moe_spill_batch_tokens", None)
         if not tokens:
             return list(argv)
@@ -1638,11 +1348,8 @@ class _LaunchRetryMixin:
         detected_gpus: Optional[Iterable[tuple[int, int]]],
         shared_gpu_ids: Optional[Iterable[int]] = None,
     ) -> bool:
-        """Whether host-resident experts would stream to a discrete GPU.
-
-        The raise only pays off over a PCIe copy. Unified memory (Apple Silicon, an
-        AMD APU, an integrated CUDA SoC, a Vulkan iGPU) has nothing to stream, and no
-        GPU means a CPU launch."""
+        """Unified memory has nothing to stream and a CPU launch has no GPU, so only a discrete GPU
+        counts."""
         detected = list(detected_gpus or ())
         if not detected or _metal_capable_host():
             return False
@@ -1669,19 +1376,8 @@ class _LaunchRetryMixin:
         drop_full_offload_threads: bool = False,
         avail_mib: Optional[int] = None,
     ) -> Optional[tuple[list[str], Optional[str], Optional[str]]]:
-        """Build the CPU replay, or None when this install cannot host one.
-
-        Returns ``(argv, cwd, pageable_note)``. The note is the sentence
-        ``_page_an_oversized_unmapped_load`` produces when it had to override an
-        unmapped load mode, for the caller to put in front of the user; None when
-        nothing was rewritten.
-
-        ``avail_mib`` is the host pool the preflight read, carried down so the rewrite
-        below and ``_reprice_after_cpu_only_fallback`` price the replay against the same
-        number and cannot reach opposite conclusions about the same child.
-        """
-        # Staging only removes GPU backends; a non-Vulkan install would report a
-        # Vulkan crash that never happened.
+        """Returns (argv, cwd, pageable_note) or None; avail_mib is shared so rewrite and repricing
+        agree."""
         if not self._is_vulkan_backend(binary):
             return None
         replay = self._cpu_isolated_replay(
@@ -1689,15 +1385,14 @@ class _LaunchRetryMixin:
         )
         if replay is None:
             return None
-        # The replay runs on no GPU, so the VRAM half of the fit that chose "none" is
-        # void and mmap is what keeps the host-RAM load survivable: hand the CPU attempt
-        # llama.cpp's auto back. Only Unsloth's own tokens; a user's is theirs.
+        # Replay runs on no GPU, so give the CPU attempt llama.cpp's auto mmap back.
         if self._fit_load_mode_flags:
             replay = _without_subsequence(replay, self._fit_load_mode_flags)
             logger.info(
                 "Load mode: dropping the fit's --load-mode none for the CPU "
                 "fallback; it runs entirely from host RAM."
             )
+        replay = self._drop_managed_lazy_mode(replay, "CPU fallback")
         # And the managed pair: this replay appends "--device none".
         replay = self._drop_managed_dio(
             replay, "the CPU fallback runs entirely from host RAM", clear_record = False
@@ -1718,9 +1413,7 @@ class _LaunchRetryMixin:
         replay, pageable_note = self._page_an_oversized_unmapped_load(
             replay,
             env,
-            # honor_opt_out=False for the same reason _launch_is_oversized reads it that
-            # way: UNSLOTH_ALLOW_HOST_OFFLOAD silences a message and must never withdraw
-            # the rewrite that makes the load possible.
+            # UNSLOTH_ALLOW_HOST_OFFLOAD silences a message; it must not withdraw the rewrite.
             lambda: bool(
                 self._launch_host_shortfall_message(
                     _priced_replay,
@@ -1739,23 +1432,11 @@ class _LaunchRetryMixin:
         loader_path = _loader_path_var()
         env[loader_path] = loader_env[loader_path]
         replay[0] = cpu_binary
-        # Staging covers only the executable and libraries, so keep Unsloth's working
-        # directory: relative paths in user extra args resolve against it.
+        # Keep the working directory: relative paths in user extra args resolve against it.
         return replay, None, pageable_note
 
     def _cpu_isolated_binary(self, binary: Optional[str]) -> Optional[str]:
-        """Stage managed llama.cpp without GPU backend libraries.
-
-        Backend loading precedes ``--device none``, so isolation prevents the
-        Vulkan plugin from loading first.
-
-        Gated on the install tree, not on _is_unsloth_managed_binary: that one
-        answers "would `unsloth studio update` replace this file", which is a
-        question about repair advice, and it now answers no for a
-        --with-llama-cpp-dir tree. Staging a CPU copy needs neither the updater
-        nor write access to the source, so those installs keep the fallback
-        they had on every platform.
-        """
+        """Backend libs load before --device none, so the CPU copy is staged without GPU backend libs."""
         if not binary or not self._is_llama_install_tree(binary):
             return None
         source_binary = _resolve_llama_binary(binary)
@@ -1779,8 +1460,7 @@ class _LaunchRetryMixin:
                 dir = runtime_root,
             )
             staged_dir = Path(staged_runtime.name)
-            # A kill -9 skips TemporaryDirectory's atexit hook, so stamp the owner
-            # and let the next stage collect what no live Unsloth holds.
+            # kill -9 skips the atexit hook, so stamp the owner for later collection.
             (staged_dir / _CPU_RUNTIME_OWNER_FILE).write_text(str(os.getpid()), encoding = "utf-8")
             lib_dir = _llama_lib_dir(str(source_binary))
             gpu_backend = _GGML_GPU_BACKEND_RE
@@ -1832,13 +1512,8 @@ class _LaunchRetryMixin:
 
     @staticmethod
     def _binary_revision(binary: Optional[str]) -> tuple:
-        """Which build of llama-server a path currently holds, () when unreadable.
-
-        The path alone cannot say, since an update swaps the file in place. Empty on an
-        unreadable file so callers read "cannot tell" as "unchanged": the install window
-        is itself unreadable, and treating it as a finished update would tear a healthy
-        server down for a binary that is not there yet.
-        """
+        """Path cannot tell the build, as updates swap the file in place; () when unreadable means
+        unchanged."""
         if not binary:
             return ()
         stamp = LlamaCppBackend._binary_stamp(Path(binary))
@@ -1847,8 +1522,7 @@ class _LaunchRetryMixin:
     def _cleanup_cpu_fallback_runtime(self) -> None:
         runtime = getattr(self, "_cpu_fallback_runtime", None)
         self._cpu_fallback_runtime = None
-        # cleanup() detaches its finalizer before removing the tree, so dropping a
-        # failed one (locked DLL on Windows) orphans it. Retry it on the next call.
+        # A failed cleanup() detaches its finalizer, so retry it on the next call.
         pending = getattr(self, "_pending_cpu_fallback_cleanups", [])
         if runtime is not None:
             pending.append(runtime.tempdir)
@@ -1915,27 +1589,14 @@ class _LaunchRetryMixin:
     def _start_llama_process(
         self, cmd: list[str], env: dict, *, child_gpu_physical_ids: Optional[tuple[int, ...]]
     ) -> bool:
-        """Spawn llama-server from cmd and start draining its output.
-
-        Caller holds self._lock. Resets the stdout buffer, opens a fresh
-        per-attempt tee log, launches the process, and starts the drain
-        thread. Used for the initial start and the text-only mmproj retry.
-
-        Returns False without spawning once app teardown has begun. Reported rather
-        than silent so the caller can stop instead of health-waiting on the previous
-        child and then reading a reference the teardown is clearing.
-        """
-        # Defensive kill: if a concurrent load slipped past Phase 1
-        # (because its `self._process` was None at the time) and already
-        # stored a Popen handle here, drop that orphan before we overwrite
-        # the reference. See issue #5161.
+        """Returns False without spawning once teardown has begun, so callers stop instead of
+        health-waiting."""
+        # Drop an orphan Popen a concurrent load may have stored past Phase 1.
         self._kill_process()
         self._child_gpu_physical_ids = child_gpu_physical_ids
 
         self._stdout_lines = []
-        # Tee llama-server output to a dedicated log file so a post-mortem
-        # in CI (or after a remote-debug session) has the full subprocess
-        # trail even when the parent only stored the last 50 lines.
+        # Tees llama-server output to a log file for post-mortems; the parent keeps only the last 50 lines.
         self._llama_log_fh = None
         try:
             log_dir = _swa_cache_path().parent / "logs" / "llama-server"
@@ -1959,8 +1620,7 @@ class _LaunchRetryMixin:
         # with --mmproj stripped), redacting the API key.
         logger.info(f"Starting llama-server: {' '.join(self._redacted_cmd_for_log(cmd))}")
 
-        # Check with publication under one lock: the mmproj text-only retry reaches
-        # a spawn without passing _spawn_and_wait's boundary.
+        # The mmproj text-only retry reaches a spawn without passing _spawn_and_wait.
         with self._spawn_lock:
             if self._spawn_is_stale():
                 logger.info("app is shutting down; not starting llama-server")
@@ -1982,16 +1642,13 @@ class _LaunchRetryMixin:
                 )
             )
             self._process = _spawned
+            # The env picks companions too (LLAMA_ARG_MMPROJ, ...): load_progress sizes them from it.
+            self._process_env = (_spawned, env)
             _invalidate_gpu_memory("llama-server spawned")
-            # Cross-session backstop for when parent-death cleanup did not run.
-            # Under the lock: see _spawn_and_wait.
+            # Serialise loads so two llama-servers never coexist; /unload is not blocked; lifecycle read first.
             self._note_server_pid(_spawned.pid)
 
-        # The stale check above and the process-wide latch are only atomic for the
-        # instance run.py tears down, which sets its own flag under this same lock. A
-        # helper load owns a backend nothing marks, so its check can pass microseconds
-        # before the latch is set and the child then outlives the sweep. Recheck once
-        # the pid is recorded and reap it, as the inference worker spawn does.
+        # A helper load's stale check is not atomic with the latch; recheck and reap.
         if self._spawn_is_stale():
             logger.info("shutdown began during the spawn; killing the new llama-server")
             self._kill_process()
@@ -2008,22 +1665,13 @@ class _LaunchRetryMixin:
 
     @contextlib.contextmanager
     def _serial_load_scope(self):
-        """Hold the serial load lock and release pending launch state with it.
-
-        The pending fraction is armed before the download, so every exit ahead of
-        the spawn has to give it back or the settings route, which reads it before
-        is_active, answers from a load that is over. Clearing it on the way out of
-        the lock rather than on the way out of the call is what makes that safe:
-        a queued load arms its own value the instant it takes the lock, and a
-        clear running after that point would discard the marker of a load that is
-        still going.
-        """
+        """Clears the pending fraction on leaving the lock, so a queued load's freshly armed value
+        survives."""
         with self._serial_load_lock:
             try:
                 yield
             finally:
                 self._vram_fraction_pending = None
                 self._binary_revision_pending = None
-                # Same for the placement marker: released at the end of the call instead, a
-                # finished load could blank the marker of a queued one that had published.
+                # Cleared here, or a finished load could blank a queued load's marker.
                 self._memory_pending_launch = None

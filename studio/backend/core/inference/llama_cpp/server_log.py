@@ -11,6 +11,17 @@ from typing import (
 )
 
 from .memory_policy import _extra_args_set_any_flag
+from core.inference.llama_server_args import _flag_name
+from pathlib import Path
+from typing import Mapping
+import sys
+from .draft_args import (
+    _extra_args_mtp_draft_source,
+    _sidecar_adapter_paths,
+)
+from .gguf_cache import (
+    _gguf_set_bytes,
+)
 
 _PARAVIRTUAL_DIFFUSION_NO_NGL_ERROR = (
     "This Mac's Metal device is virtualised, where offloaded layers can return "
@@ -29,11 +40,8 @@ _VULKAN_DIFFUSION_GPU_IDS_ERROR = (
 )
 
 
-# llama-server can serve HTTP 200 while running a model entirely on CPU when a
-# GPU backend fails to init (#5807 / #5106 / #5830). Classify the startup log so
-# Unsloth can warn. Priority: explicit "offloaded N/M layers to GPU" counts
-# (authoritative), then GPU "model buffer size" lines (host-pinned _Host
-# excluded), then the "device_info:" device table (disconfirm only).
+# llama-server may serve HTTP 200 on CPU when a GPU backend fails to init; classify the log.
+# Priority: offload counts, then GPU model buffer lines, then device table (disconfirm only).
 _GPU_OFFLOAD_MARKERS = (
     "CUDA",
     "ROCm",
@@ -64,6 +72,22 @@ _LOG_LEVEL_TOKEN_RE = re.compile(rf"^{_ANSI}(?:\d+\.\d+\.\d+\.\d+{_ANSI} )?{_ANS
 _STDOUT_TRIM_AT = 20000
 _STDOUT_TAIL_KEEP = 5000
 _STDOUT_HEAD_MAX = 5000
+
+
+# Left in startup output when the ownership gate refuses, so it is not reported as a bad GGUF.
+_PORT_OWNER_REFUSED_MARKER = "llama-server port ownership check refused the listener"
+
+
+def _socket_owner_is_always_named() -> bool:
+    """Windows' connection tables carry every socket's owning pid, so an unnamed one there is a
+    psutil quirk rather than another user's listener (#15022)."""
+    return sys.platform == "win32"
+
+
+# Bind addresses whose listener accepts the health probe's 127.0.0.1 connection.
+_LOOPBACK_REACHABLE_BIND_IPS = frozenset(
+    {"127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1", "::ffff:0.0.0.0"}
+)
 
 
 def _llama_line_is_warning_or_error(line: str, line_lower: str) -> bool:
@@ -105,6 +129,175 @@ _GPU_DEVICE_PREFIXES = (
     "opencl",
     "musa",
     "cann",
+)
+
+
+def _extra_weight_file_bytes(argv, env: Optional[Mapping[str, str]] = None) -> int:
+    """GGUF sets of the projector, local drafter and adapters a llama-server launch loads. arg.cpp reads
+    the ``LLAMA_ARG_*`` env first and lets argv override it, so ``env`` is the one the child got."""
+    tokens = [str(token) for token in argv] if isinstance(argv, (list, tuple)) else []
+    env_map = env or {}
+    projector: Optional[str] = None
+    for index, token in enumerate(tokens):
+        if _flag_name(token) not in ("--mmproj", "-mm"):
+            continue
+        _, eq, value = token.partition("=")
+        if eq:
+            projector = value
+        elif index + 1 < len(tokens):
+            projector = tokens[index + 1]
+    if projector is None:
+        projector = (env_map.get("LLAMA_ARG_MMPROJ") or "").strip() or None
+    drafter, remote = _extra_args_mtp_draft_source(tokens, env_map)
+    paths = [path for path in (projector, None if remote else drafter) if path]
+    paths += _sidecar_adapter_paths(tokens)
+    return sum(_gguf_set_bytes(Path(path)) for path in dict.fromkeys(paths))
+
+
+def parse_weight_placement(
+    lines: "list[str]", model_bytes: Optional[int] = None
+) -> "Optional[dict]":
+    """Where llama.cpp put the main model's weights, from its startup log.
+
+    ``gpu_mib`` / ``host_mib`` sum the main model's buffer block, the first allocated one (dry runs log 0.00 MiB).
+    "offloaded 31/31" hides an expert spill, so ``overflow_layers`` comes from --fit's final per-device
+    lines; the last device's count includes the output layer, which spills nothing (a 3090 gemma-4-26B
+    load printing "8 overflowing" holds exactly seven layers' worth in CUDA_Host). None without --fit.
+    A ``*_Mapped`` buffer logs its mmap span, first to last host tensor, which covers GPU tensors in
+    between when experts spill; ``model_bytes`` (the main GGUF set) caps host at the file minus the GPU side."""
+    blocks: list[list] = []
+    current: Optional[list] = None
+    # A build without GPU offload logs no "offloaded N/M layers" line, only the buffers: each run of them is a block.
+    unmarked = False
+    moe = False
+    full_phase = False
+    # device -> (layers, overflow or None for a dense-only line), in the order of the final verdict
+    verdict: dict[str, tuple[int, Optional[int]]] = {}
+    dense_only_order: list[str] = []
+    extra_layer_on: set[int] = set()
+    expert_cache_mib: Optional[float] = None
+    for line in lines:
+        if _FIT_DENSE_ONLY_MARK in line:
+            moe = True
+            continue
+        if _FIT_FULL_LAYERS_MARK in line:
+            full_phase = True
+            verdict = {}
+            continue
+        cache = _FIT_MOE_CACHE_RE.search(line)
+        if cache is not None:
+            expert_cache_mib = float(cache.group("mib"))
+            continue
+        extra = _FIT_EXTRA_LAYER_RE.search(line)
+        if extra is not None and full_phase:
+            extra_layer_on.add(int(extra.group("index")))
+            continue
+        fit = _FIT_DEVICE_RE.search(line)
+        if fit is not None:
+            device = fit.group("device")
+            overflow = fit.group("overflow")
+            verdict[device] = (
+                int(fit.group("layers")),
+                int(overflow) if overflow is not None else None,
+            )
+            if not full_phase and device not in dense_only_order:
+                dense_only_order.append(device)
+            continue
+        counts = _OFFLOADED_LAYERS_RE.search(line)
+        if counts is not None:
+            current, unmarked = [int(counts.group(2)), 0.0, 0.0, False], False
+            blocks.append(current)
+            continue
+        buffer = _MODEL_BUFFER_RE.search(line)
+        if buffer is None:
+            if unmarked:
+                current, unmarked = None, False
+            continue
+        if current is None:
+            current, unmarked = [0, 0.0, 0.0, False], True
+            blocks.append(current)
+        mib = float(buffer.group(2))
+        if _host_buffer(buffer.group(1)):
+            current[2] += mib
+            current[3] = current[3] or (mib > 0 and buffer.group(1).upper().endswith("_MAPPED"))
+        else:
+            current[1] += mib
+    # A no-alloc dry run logs the same block with every buffer at 0.00 MiB.
+    loaded = [block for block in blocks if block[1] + block[2] > 0]
+    if not loaded:
+        return None
+    # llama-server loads the main model before any drafter, which can have MORE layers (Gemma 4 E2B: 35 vs 26B A4B: 30).
+    main = loaded[0]
+    host_mib = main[2]
+    if main[3] and main[1] > 0 and model_bytes:
+        host_mib = min(host_mib, max(0.0, model_bytes / (1024 * 1024) - main[1]))
+
+    overflow: Optional[int] = None
+    if verdict:
+        devices = list(verdict)
+        overflow = 0
+        for index, device in enumerate(devices):
+            layers, counted = verdict[device]
+            if counted is None:
+                # Dense-only fill (filled back to front, so the first device it printed is the last one). A dense
+                # model's layers are full. The last device keeps one layer full and its output slot spills nothing.
+                if not moe:
+                    continue
+                last = bool(dense_only_order) and device == dense_only_order[0]
+                counted = max(0, layers - 2) if last else layers
+            elif index < len(devices) - 1:
+                if index in extra_layer_on and counted > 0:
+                    counted -= 1
+            elif counted > 0:
+                counted -= 1
+            overflow += counted
+    return {
+        "gpu_mib": round(main[1], 1),
+        "host_mib": round(host_mib, 1),
+        "overflow_layers": overflow,
+        "all_experts_in_ram": expert_cache_mib is not None,
+        "expert_cache_mib": expert_cache_mib,
+    }
+
+
+def _host_buffer(name: str) -> bool:
+    """CPU* buffers, AMX and a GPU backend's pinned host buffer (CUDA_Host) live in system memory."""
+    upper = name.upper()
+    return "CPU" in upper or upper.endswith("_HOST") or upper == "AMX"
+
+
+# --moe-cache-mib auto: every routed expert stays in host RAM and a cache of the busiest ones goes on the GPU. --fit
+# returns before any per-device line on this path.
+_FIT_MOE_CACHE_RE = re.compile(
+    r"moe cache auto: all routed experts in host RAM, cache (?P<mib>\d+) MiB"
+)
+
+
+# One extra partial layer squeezed onto device i; on any device but the last it overflows to the NEXT GPU, not RAM.
+_FIT_EXTRA_LAYER_RE = re.compile(
+    r"set ngl_per_device\[(?P<index>\d+)\]\.\(n_layer, n_part, overflow_type\)=\(\d+, \d+, (?:UP|GATE|ATTN)\)"
+)
+
+
+# From here the per-device lines carry an explicit "(N overflowing)" count.
+_FIT_FULL_LAYERS_MARK = "converting dense-only layers to full layers"
+
+
+# The MoE-only fill: printed for a model with experts, whose GPU layers then hold only their dense weights.
+_FIT_DENSE_ONLY_MARK = "filling dense-only layers back-to-front"
+
+
+# --fit's verdict per device, e.g. "- CUDA0 (NVIDIA GeForce RTX 3090): 31 layers ( 8 overflowing), 22815 MiB used".
+# An overflowing layer keeps its MoE experts (or part of a layer) out of that device's memory.
+_FIT_DEVICE_RE = re.compile(
+    r"common_params_fit_impl:\s+-\s+(?P<device>[A-Za-z]+\d+)\s+\(.*?\):\s+(?P<layers>\d+)\s+layers?"
+    r"\s*(?:\(\s*(?P<overflow>\d+)\s+overflowing\s*\))?\s*,\s*\d+\s+MiB used"
+)
+
+
+# Any backend's "model buffer size" line (CUDA0, CPU_Mapped, RPC0[host:port], ...).
+_MODEL_BUFFER_RE = re.compile(
+    r"\b([A-Za-z][^\s=]*)\s+model buffer size\s*=\s*([0-9]+(?:\.[0-9]+)?)\s+MiB\b"
 )
 
 
@@ -151,10 +344,7 @@ def llama_saw_gpu_device(lines: "list[str]") -> Optional[bool]:
 def classify_gpu_offload_lines(lines: "list[str]") -> Optional[bool]:
     """True if the model landed on a GPU, False if it stayed on CPU despite GPU
     intent, None when the log has no usable signal."""
-    # Counted offload is authoritative, keyed on the model with the most layers.
-    # A separate MTP/draft model logs its own (much smaller) "offloaded N/M"
-    # line, so decide on the largest-M line: a drafter that fits on GPU must not
-    # mask a main model running on CPU. N>0 on that model is True, 0 is False.
+    # Decide on the largest-M offload line: a drafter on GPU must not mask a CPU main model.
     max_total = -1
     offloaded_at_max = 0
     for line in lines:
@@ -167,9 +357,7 @@ def classify_gpu_offload_lines(lines: "list[str]") -> Optional[bool]:
     if max_total >= 0:
         return offloaded_at_max > 0
 
-    # GPU marker on a *model* buffer; _Host buffers are CPU-pinned, not offload.
-    # Buffer lines are authoritative: present but none on a GPU means CPU-only,
-    # so do not let the device table below override that.
+    # _Host buffers are CPU-pinned; buffer lines are authoritative over the device table.
     saw_model_buffer = False
     for line in lines:
         if "model buffer size" not in line:
@@ -180,10 +368,7 @@ def classify_gpu_offload_lines(lines: "list[str]") -> Optional[bool]:
     if saw_model_buffer:
         return False
 
-    # device_info: lists *available* devices (printed whenever a GPU backend is
-    # visible), not where the model loaded, so it can only disconfirm: an
-    # all-CPU table means no usable GPU. A visible GPU device is not proof the
-    # model used it, so it does not return True.
+    # device_info lists available devices, not where the model loaded: disconfirm only.
     if llama_saw_gpu_device(lines) is False:
         return False
     return None

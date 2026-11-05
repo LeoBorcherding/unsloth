@@ -34,18 +34,14 @@ from .launch_flags import (
 )
 from .log import logger
 from .memory_policy import _TENSOR_SPLIT_FLAGS
+from core.inference.llama_server_args import parse_ctx_override
+from .draft_args import (
+    _draft_n_ubatch,
+)
 
 
 def _emitted_n_batch(n_batch: Optional[int], n_parallel: int) -> Optional[int]:
-    """--batch-size the launch actually emits for a requested ``n_batch``.
-
-    llama-server aborts below 2 and below the slot count, so the loader raises the
-    flag to ``max(slots, 2)``. llama.cpp then derives the micro-batch from the
-    raised value (``cparams.n_ubatch = min(cparams.n_batch, n_ubatch or n_batch)``),
-    so every VRAM budget must be sized from it, not from the requested number, or a
-    small batch with many slots is budgeted at a micro-batch the launch never uses.
-    None (llama.cpp defaults) stays None: nothing is emitted, so nothing is raised.
-    """
+    """Budgets must use this raised value; llama-server aborts below max(slots, 2)."""
     if n_batch is None:
         return None
     return max(int(n_batch), max(2, int(n_parallel or 1)))
@@ -79,8 +75,8 @@ def _extra_args_split_mode(
         found = str(raw).strip().lower()
     args = [str(a) for a in extra_args] if extra_args else []
     for i, arg in enumerate(args):
-        name, _, inline = arg.partition("=")
-        if name not in _SPLIT_MODE_FLAGS:
+        _, _, inline = arg.partition("=")
+        if _flag_name(arg) not in _SPLIT_MODE_FLAGS:
             continue
         value = inline if inline else (args[i + 1] if i + 1 < len(args) else "")
         if value.strip():
@@ -91,19 +87,7 @@ def _extra_args_split_mode(
 def _extra_args_tensor_split(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[list[float]]:
-    """Last-wins ``-ts`` / ``--tensor-split`` proportions, or None.
-
-    llama.cpp copies these into ``splits`` verbatim and prefix-sums them
-    (llama-model.cpp:1436-1447), so they ARE the row-ownership weights that
-    ``split_weights_per_device`` carries. Malformed parses to None rather than
-    raising, which puts the load back on the decline path.
-
-    The delimiter set is llama.cpp's own ``[,/]+`` (common/arg.cpp:2791-2804) and
-    nothing else: ``-ts 3/1`` is exactly ``-ts 3,1`` to the child, while inventing
-    extra delimiters is the same bug pointing the other way -- ``std::stof`` stops
-    at the first non-numeric character, so ``-ts 3;1`` is ``[3, 0]``, not
-    ``[3, 1]``.
-    """
+    """Only llama.cpp's [,/]+ delimit; std::stof stops at the first bad character, so 3;1 is [3, 0]."""
     source_env = os.environ if env is None else env
     raw: Optional[str] = None
     env_value = source_env.get("LLAMA_ARG_TENSOR_SPLIT")
@@ -111,9 +95,9 @@ def _extra_args_tensor_split(
         raw = str(env_value).strip()
     args = [str(a) for a in extra_args] if extra_args else []
     for i, arg in enumerate(args):
-        name, _, inline = arg.partition("=")
-        if name not in _TENSOR_SPLIT_FLAGS:
+        if _flag_name(arg) not in _TENSOR_SPLIT_FLAGS:
             continue
+        _, _, inline = arg.partition("=")
         value = inline if inline else (args[i + 1] if i + 1 < len(args) else "")
         if value.strip():
             raw = value.strip()
@@ -127,11 +111,7 @@ def _extra_args_tensor_split(
         ]
     except (OverflowError, ValueError):
         return None
-    # isfinite, not just >= 0: float() takes "nan"/"inf", and NaN passes BOTH the
-    # other tests (every comparison against NaN is false, sum() of a NaN list is
-    # NaN). The caller's int(round(p * scale)) would then raise ValueError /
-    # OverflowError with nothing catching it, aborting a load llama.cpp itself
-    # merely degenerates on. Rejecting here routes it to the unparseable decline.
+    # isfinite: NaN passes the other tests and later int(round(...)) would raise.
     if not parts or any(not math.isfinite(p) or p < 0 for p in parts) or sum(parts) <= 0:
         return None
     try:
@@ -145,16 +125,21 @@ def _extra_args_tensor_split(
     return parts
 
 
+def _pass_through_reprices_cache(extra_args: Optional[Iterable[str]], n_parallel) -> bool:
+    """Whether an argv -c 0 or a larger --parallel changes the cache Studio priced."""
+    try:
+        if parse_ctx_override(extra_args) == 0:
+            return True
+    except ValueError:
+        return True
+    override = _extra_args_n_parallel(extra_args, {})
+    return override is not None and override > int(n_parallel or 1)
+
+
 def _extra_args_n_parallel(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]] = None
 ) -> Optional[int]:
-    """Serving slots a pass-through overrides to, or None when nothing does.
-
-    Same precedence as the launched command line: extras are appended last
-    (llama_cpp.py emits Unsloth's --parallel first), and llama.cpp is last-wins,
-    so an extras value beats both the emitted flag and the env. 0 is rejected at
-    parse time on the server path, so it is not a value anyone gets.
-    """
+    """Extras beat both the emitted --parallel and LLAMA_ARG_N_PARALLEL, since llama.cpp is last-wins."""
     source_env = os.environ if env is None else env
     found: Optional[int] = None
     raw = source_env.get("LLAMA_ARG_N_PARALLEL")
@@ -182,10 +167,7 @@ def _named_batch_sizes(
     n_batch: Optional[int] = None,
     n_ubatch: Optional[int] = None,
 ) -> tuple[int, int, bool, bool]:
-    """Resolve batch sizes and whether each was explicitly set.
-
-    Precedence is environment, first-class fields, then extra arguments.
-    """
+    """Precedence is environment, first-class fields, then extra arguments."""
     values = {
         "batch": _DEFAULT_LLAMA_N_BATCH,
         "ubatch": _DEFAULT_LLAMA_N_UBATCH,
@@ -249,9 +231,7 @@ def _extra_args_n_ubatch(
     if not (_batch_named or _ubatch_named):
         return None
 
-    # common_params stores signed values, then llama_context_params converts
-    # them to uint32_t. A zero ubatch means "use batch"; the context then caps
-    # ubatch at batch size.
+    # llama.cpp converts to uint32_t; a zero ubatch means use batch.
     batch = values["batch"] & 0xFFFFFFFF
     raw_ubatch = values["ubatch"]
     ubatch = batch if raw_ubatch == 0 else raw_ubatch & 0xFFFFFFFF
@@ -286,10 +266,7 @@ def _mmproj_required_ubatch(
     extra_args: Optional[Iterable[str]] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> int:
-    """Return the required micro-batch, or 0 when the default is sufficient.
-
-    Inspect the image tower because audio-only projectors may still be marked as vision.
-    """
+    """Audio-only projectors can still be marked as vision, so the image tower is inspected."""
     if not mmproj_path:
         return 0
     try:
@@ -324,11 +301,7 @@ def _launch_required_ubatch(
     vision_off: bool = False,
     env: Optional[Mapping[str, str]] = None,
 ) -> int:
-    """Return the largest micro-batch required by any possible launch projector.
-
-    Taking the maximum avoids duplicating llama.cpp's projector precedence and only
-    over-reserves when multiple image towers are supplied.
-    """
+    """Takes the maximum over candidate projectors instead of copying llama.cpp's precedence rules."""
     required = 0
 
     # Pass-through arguments override managed projector flags.
@@ -405,13 +378,7 @@ def _embedding_batch_ubatch(
     return (n_batch if batch_named else n_ctx), (n_ubatch if ubatch_named else n_ctx)
 
 
-# Micro-batch when MoE experts sit in host RAM. Prompt processing copies each
-# layer's routed experts over PCIe once per micro-batch (ggml op offload), so 4x
-# larger means 4x fewer copies. Measured on T4 / L4 / A100 with Qwen3.6-35B-A3B,
-# gemma-4-26B-A4B, Qwen3.8-Flash-Next and GLM-5.3-Flash: prompt +60% to +260%,
-# decode unchanged. 4096 was slower overall: its bigger compute buffer pushed
-# expert layers off the GPU and cost decode. llama.cpp's default batch (2048)
-# already covers it.
+# With MoE experts in host RAM, a larger micro-batch cuts PCIe expert copies; 4096 was slower.
 _MOE_SPILL_N_UBATCH = 2048
 
 
@@ -424,14 +391,7 @@ def _moe_spill_batch_ubatch(
     discrete_gpu: bool,
     user_named_batch: bool,
 ) -> tuple[Optional[int], Optional[int]]:
-    """Raise an unset micro-batch to ``_MOE_SPILL_N_UBATCH`` when experts spill.
-
-    Only for an MoE whose experts are (or may be) in host RAM next to a discrete GPU,
-    the transfer-bound prompt path. A batch or micro-batch the user set (first-class
-    field, pass-through flag or LLAMA_ARG_BATCH / LLAMA_ARG_UBATCH) always wins, and
-    a larger projector value already in ``n_ubatch`` is kept, so this only raises.
-    Read ``user_named_batch`` BEFORE the projector and embedding raises set ``n_ubatch``.
-    """
+    """A user-set batch always wins; read user_named_batch before projector raises set n_ubatch."""
     if user_named_batch or not experts_on_host or not discrete_gpu or n_moe_layers <= 0:
         return n_batch, n_ubatch
     current = _DEFAULT_LLAMA_N_UBATCH if n_ubatch is None else int(n_ubatch)
@@ -456,13 +416,7 @@ def _override_targets_host(value: str) -> bool:
 def _expert_spill_places_tensors_on_cpu(
     extra_args: Optional[Iterable[str]] = None, env: Optional[Mapping[str, str]] = None
 ) -> bool:
-    """Host placement from extras or env, for the expert-spill micro-batch raise.
-
-    ``_args_place_tensors_on_cpu`` / ``_env_places_tensors_on_cpu`` count any ``-ot``,
-    which suits their residency gates. Here an override counts only when it targets
-    host memory: ``-ot exps=CUDA0`` keeps the weights on a GPU, so there is no copy to
-    amortise, and on ``--fit off`` the larger compute buffer would go unpriced.
-    """
+    """An -ot counts only when it targets host memory; -ot exps=CUDA0 keeps weights on a GPU."""
     args = [str(a) for a in extra_args or ()]
     kept: list[str] = []
     i = 0
@@ -480,3 +434,14 @@ def _expert_spill_places_tensors_on_cpu(
     if not _override_targets_host(source_env.get("LLAMA_ARG_OVERRIDE_TENSOR") or ""):
         source_env.pop("LLAMA_ARG_OVERRIDE_TENSOR", None)
     return _args_place_tensors_on_cpu(kept) or _env_places_tensors_on_cpu(source_env)
+
+
+def _capped_draft_n_ubatch(args, env, ctx, *batch_defaults) -> Optional[int]:
+    """--spec-draft-n-ubatch capped as llama_context caps it: at --batch-size, then a positive
+    context. ``batch_defaults`` are _named_batch_sizes' fallbacks."""
+    ub = _draft_n_ubatch(args, env)
+    if ub:
+        ub = min(ub, _named_batch_sizes(args, env, *batch_defaults)[0] & 0xFFFFFFFF)
+        if ctx and ctx > 0:
+            ub = min(ub, int(ctx))
+    return ub

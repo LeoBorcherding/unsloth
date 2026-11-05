@@ -72,34 +72,16 @@ class LlamaCppBackend(
         3. unload_model(): terminate the subprocess
     """
 
-    # Held across "is a teardown running?" and publishing the child, never across a
-    # health wait. On the class: doubles built with __new__ never run __init__.
     _spawn_lock = threading.Lock()
 
-    # Held across a whole teardown, so a lifecycle cannot reopen mid-kill. Separate
-    # from _spawn_lock so that long hold does not also block a spawn, which only
-    # needs to read the flag. Order is always _teardown_lock then _spawn_lock.
+    # Held across a whole teardown so a lifecycle cannot reopen mid-kill; taken before _spawn_lock.
     _teardown_lock = threading.Lock()
 
     def __init__(self, *, manages_processes: bool = True):
-        """``manages_processes = False`` builds an INERT probe.
-
-        The constructor is not free: it reaps orphaned llama-servers, walking /proc,
-        resolving each candidate's exe and signalling the ones it recognises, then
-        registers an atexit handler holding this instance for the life of the process.
-        Both are right for the backend that owns a child, neither for a probe that only
-        reads a header -- and since the memory-estimate route those helpers run on every
-        settings change. Measured on one estimate: five constructions, five /proc scans,
-        five atexit handlers, never released, so fifty estimates left 250 of them
-        holding 250 backends.
-
-        Default True, so every existing caller keeps today's behaviour.
-        """
+        """manages_processes=False is an inert probe: no /proc orphan reaping, no atexit handler held."""
         self._process: Optional[subprocess.Popen] = None
         self._port: Optional[int] = None
-        # Advisory memory notice from the load in flight, handed back on LoadResponse.
-        # Reset by _begin_load_warnings so one load's notice is never reported against
-        # the next.
+        # Load-in-flight memory notice returned on LoadResponse; _begin_load_warnings clears it per load.
         self._last_load_warning: Optional[str] = None
         # Same, for a quant fallback: the download fills the pair, the launch publishes it.
         self._variant_fallback_warning: Optional[str] = None
@@ -110,50 +92,30 @@ class LlamaCppBackend(
         self._last_carveout_advice: Optional[dict] = None
         self._model_identifier: Optional[str] = None
         self._gguf_path: Optional[str] = None
-        # Snapshot of the exact file(s) handed to the resident process. A local
-        # link can be atomically retargeted while `_gguf_path` stays unchanged.
+        # A local link can be retargeted while _gguf_path stays the same.
         self._gguf_load_identity: Optional[tuple] = None
         self._hf_repo: Optional[str] = None
-        # Separate MTP drafter launched with the current model; reload-dedup
-        # key so a drafter that appears next to the weights forces a reload.
+        # Separate MTP drafter for this model; a drafter appearing beside the weights forces a reload.
         self._mtp_draft_path: Optional[str] = None
-        # Drafter this load resolved then suppressed: unloadable sidecar, or virtualised
-        # Metal with no draft-layer flag. The caller keeps detecting it on disk, so
-        # without this record every repeat Apply tears down a healthy server.
+        # Without this record every repeat Apply tears down a healthy server.
         self._mtp_draft_suppressed_path: Optional[str] = None
-        # WHICH drop it was, "unloadable" or "paravirtual": only the unloadable one is a
-        # verdict on the CONTENTS, so only it reloads on repair and renames the reason.
+        # Only 'unloadable' judges the contents, so only it reloads on repair.
         self._mtp_draft_suppressed_reason: Optional[str] = None
-        # Why MTP was disabled on the last load that asked for it (auto on an
-        # MTP model, or forced mtp / mtp+ngram), else None. Drives the "update
-        # llama.cpp" hint in the UI. "binary_no_mtp" / "binary_outdated" ->
-        # a newer prebuilt would help; "runtime_error" -> it may not.
+        # binary_no_mtp / binary_outdated: a newer prebuilt helps; runtime_error: maybe not.
         self._spec_fallback_reason: Optional[str] = None
 
-        # How a requested multimodal projector recovered at startup. `cpu_offload`
-        # keeps vision; the other values accompany a deliberate text-only retry.
+        # Projector recovery at startup: cpu_offload keeps vision; others are a deliberate text-only retry.
         self._mmproj_fallback_reason: Optional[str] = None
-        # Whether THIS load ran against a probe that did not answer, rather than one
-        # that answered "no". An inconclusive probe reports every capability absent, so it
-        # silently degrades speculative decoding, the DSpark sidecar and the --kv-unified
-        # slot clamp alike. Separate from _spec_fallback_reason, whose UI banner stays
-        # suppressed for an unresolved probe, so a reload can still be judged worth
-        # retrying (#8317).
+        # An inconclusive probe reports every capability absent; tracked so a reload can retry.
         self._capability_probe_inconclusive: bool = False
         self._spec_drafter_kind: Optional[str] = None
         self._dspark_sidecar_absent: bool = False
         self._dflash_sidecar_absent: bool = False
-        # Sidecar fetch lost to a blip, not to the repo lacking one
-        # (_dflash_sidecar_absent). Worth one more Apply: under Auto nothing else
-        # records that the load ended up with no drafter.
+        # Sidecar fetch failed transiently, so one more Apply is worth it.
         self._dflash_retry_needed: bool = False
-        # Which llama-server file this load ran. `unsloth studio update` replaces it
-        # in place, so a stand-down blamed on the binary can spot a real update.
+        # Binary this load ran; studio update replaces it in place, so a stand-down can spot a real update.
         self._launch_binary_revision: tuple = ()
-        # Binary a load has selected but not necessarily spawned yet. None means
-        # no load is pending; the settings route compares a populated revision
-        # before is_active becomes true so a concurrent path save cannot hide a
-        # required reload.
+        # Lets the settings route see a pending reload before is_active is true.
         self._binary_revision_pending: Optional[tuple] = None
         # Set after an auto-Vulkan crash recovers with all devices disabled.
         self._cpu_fallback_reason: Optional[str] = None
@@ -161,19 +123,13 @@ class LlamaCppBackend(
         self._pending_cpu_fallback_cleanups: list = []
         self._hf_variant: Optional[str] = None
         self._is_vision: bool = False
-        # Vision deliberately left unloaded by the caller. Tracked so a reload that
-        # flips the toggle cannot be satisfied by the live server, which opened a
-        # different set of files, and echoed to the client so the switch can reseed
-        # from the load it actually ran.
+        # Tracked so a reload flipping the toggle is not satisfied by the live server.
         self._disable_vision: bool = False
-        # Narrower than the raw request: image input is off because the user asked,
-        # not because the model has no usable projector. Only a model that HAS one
-        # can have had it switched off, and the client needs the distinction to point
-        # at the switch rather than at a missing file.
+        # Only a model WITH a projector can have had vision switched off by the user.
         self._vision_disabled_by_user: bool = False
-        # Block-diffusion model (e.g. DiffusionGemma): served by the diffusion
-        # runner, not llama-server. Set from the GGUF architecture at load.
+        # Block-diffusion model, served by the diffusion runner; set from the GGUF architecture at load.
         self._architecture: Optional[str] = None
+        self._gguf_type: Optional[str] = None
         self._is_diffusion: bool = False
         # Whole header walked? Separates "declares no architecture" from "unreadable".
         self._gguf_header_parsed: bool = False
@@ -186,6 +142,8 @@ class LlamaCppBackend(
         self._gpu_offload_active: Optional[bool] = None
         # (offloaded, total) layers llama.cpp reported for this load, when it said.
         self._gpu_offload_layers: Optional[tuple[int, int]] = None
+        # parse_weight_placement's result for this load.
+        self._weight_placement: Optional[dict] = None
         # Whether the user's own extras pinned the layer split for this load.
         self._offload_overridden: bool = False
         # Studio saw a GPU for this load but llama.cpp's device table did not.
@@ -204,8 +162,7 @@ class LlamaCppBackend(
         # Budget the running child was sized against; None before any load, so the
         # settings route reports a stale budget instead of nagging on every save.
         self._vram_fraction_launched: Optional[float] = None
-        # Budget a load has committed to but not published, covering planning ->
-        # Popen as _memory_pending_launch does for Model Memory placement.
+        # Budget a load has committed but not published, from planning to Popen, as _memory_pending_launch.
         self._vram_fraction_pending: Optional[float] = None
         # --batch-size / --ubatch-size the last load asked for; none = defaults or extras / env
         self._requested_n_batch: Optional[int] = None
@@ -247,56 +204,37 @@ class LlamaCppBackend(
         self._gpu_layers: int = -1
         # MoE expert layers to keep on CPU (--n-cpu-moe); 0 = none.
         self._n_cpu_moe: int = 0
-        # Relative model share per GPU (--tensor-split), in GPU order; None =
-        # default (llama.cpp splits by free VRAM).
+        # Relative share per GPU for --tensor-split, in GPU order; None lets llama.cpp split by free VRAM.
         self._tensor_split: Optional[List[float]] = None
-        # Same ratio, but for auto tensor-parallel mode. The planner may emit a
-        # weighted split or fall back to a user-supplied ratio; recording it lets
-        # _runtime_matches_intent detect a changed ratio and reload.
+        # Recorded so _runtime_matches_intent reloads on a changed ratio.
         self._auto_tensor_split: Optional[tuple[float, ...]] = None
-        # The actual split that was emitted to llama-server in auto mode, used for
-        # /status reporting. Manual mode stores this in _tensor_split.
+        # Split actually emitted to llama-server in auto mode, for /status; manual mode uses _tensor_split.
         self._auto_tensor_split_emitted: Optional[tuple[float, ...]] = None
-        # Tokens the tensor-spill plan added to this argv, so a retry that re-places
-        # the model can strip them with _without_subsequence. Empty when it abstained.
+        # Tensor-spill tokens added to argv, stripped by _without_subsequence on retry; empty if abstained.
         self._spill_plan_flags: List[str] = []
-        # Ratio the arch gate dropped from this argv, so the duplicate-load check
-        # knows the live server already IS this request normalized (#7624).
+        # Ratio the arch gate dropped from argv; the live server already runs this request normalized.
         self._arch_gate_dropped_tensor_split: Optional[tuple[float, ...]] = None
-        # Same for the split MODE: the gate drops --split-mode tensor when it forces
-        # CPU or leaves one survivor, and the request still asks for it.
+        # The gate drops --split-mode tensor on forced CPU or one survivor; the request still asks for it.
         self._arch_gate_dropped_tensor_parallel: bool = False
-        # Gate masked every device away, so an AUTOMATIC request became a zero-VRAM
-        # launch (#7624), which is why holds_no_vram cannot demand manual mode.
+        # Gate masked every device, so AUTOMATIC became zero-VRAM; holds_no_vram cannot demand manual mode.
         self._arch_gate_forced_cpu: bool = False
         # User-picked physical GPU indices (None = automatic selection).
         self._gpu_ids: Optional[List[int]] = None
-        # Physical GPU ids in the exact ordinal order exposed to the current
-        # llama-server child.  Automatic placement deliberately leaves
-        # ``_gpu_ids`` unset, so reclaim accounting must not infer this mapping
-        # from status state after a fit/arch gate narrowed the child mask.
+        # Automatic placement leaves _gpu_ids unset, so do not infer this from status state.
         self._child_gpu_physical_ids: Optional[tuple[int, ...]] = None
-        # RAW requested GPU pin, before the fit narrowed it. self._gpu_ids records the
-        # EFFECTIVE (fit-narrowed) pin for /status; dedupe compares this raw value so a
-        # [0, 1] narrowed to [0] and re-sent as [0, 1] still matches (#7239).
+        # RAW pin, so a narrowed [0, 1] re-sent as [0, 1] still dedupes.
         self._requested_gpu_ids: Optional[List[int]] = None
-        # Layer load kept multi-GPU only to honor a downgraded tensor request, so a
-        # later explicit tensor-off reloads instead of deduping to it (#6659).
+        # Layer load kept multi-GPU only to honor a downgraded tensor request, so a later tensor-off reloads.
         self._layer_preserves_tensor_intent: bool = False
         self._reasoning_default: bool = True
         self._speculative_type: Optional[str] = None
-        # Canonical UI-facing mode the user requested
-        # (auto/mtp/ngram/mtp+ngram/off/ngram-simple). Round-tripped through the
-        # status API so the dropdown reflects the picked mode, not the resolved
-        # flag set (auto on a 27B MTP GGUF resolves to draft-mtp but reads "Auto").
+        # UI mode as requested, not the resolved flag set (auto may resolve to draft-mtp).
         self._requested_spec_mode: Optional[str] = None
         # User --spec-draft-n-max override (None = platform default).
         self._spec_draft_n_max: Optional[int] = None
         # KV-cache estimation fields (populated by _read_gguf_metadata)
         self._n_layers: Optional[int] = None
-        # MoE metadata (populated by _read_gguf_metadata): expert count (>0 =
-        # MoE) and leading dense-layer count (offsets --n-cpu-moe, which counts
-        # from layer 0). See the n_moe_layers property.
+        # Leading dense-layer count offsets --n-cpu-moe, which counts from layer 0.
         self._n_experts: Optional[int] = None
         self._leading_dense_block_count: Optional[int] = None
         self._n_kv_heads: Optional[int] = None
@@ -305,8 +243,7 @@ class LlamaCppBackend(
         self._embedding_length: Optional[int] = None
         # llama_pooling_type from the GGUF; present and non-zero marks an embedding model.
         self._pooling_type: Optional[int] = None
-        # For the compute-graph buffer estimate; vocab from the tokens array len.
-        # feed_forward_length is the widest layer when the GGUF stores one per layer.
+        # For the compute-graph buffer estimate; feed_forward_length is the widest layer if stored per layer.
         self._feed_forward_length: Optional[int] = None
         self._feed_forward_length_by_layer: Optional[list[int]] = None
         self._expert_used_count: Optional[int] = None
@@ -336,33 +273,22 @@ class LlamaCppBackend(
         self._ssm_group_count: Optional[int] = None
         self._ssm_conv_kernel: Optional[int] = None
         self._kda_head_dim: Optional[int] = None
-        # Last N layers reuse earlier layers' KV and don't allocate their own
-        # cache (Gemma 3n / Gemma 4: <arch>.attention.shared_kv_layers).
+        # Last N layers reuse earlier KV (Gemma 3n / Gemma 4 shared_kv_layers).
         self._shared_kv_layers: Optional[int] = None
         # MTP head count (llama.cpp #22673); >0 enables --spec-type draft-mtp.
         self._nextn_predict_layers: Optional[int] = None
         self._lock = threading.Lock()
-        # Wraps load_model() end-to-end so concurrent loads serialise and never
-        # coexist as two llama-server processes (#5401). RLock so MTP-crash
-        # recovery can re-acquire it for its nested load_model.
+        # Serialises loads so two llama-server processes never coexist; RLock for MTP recovery.
         self._serial_load_lock = threading.RLock()
-        # Serialises mid-session respawns so many generations hitting a killed
-        # server trigger at most one reload (see _respawn_if_dead).
+        # Serialises respawns so many generations on a killed server trigger one reload (_respawn_if_dead).
         self._respawn_lock = threading.Lock()
-        # Bumped by every unload. load_model clears _cancel_event, so a respawn that
-        # raced an unload needs a signal that survives the clear (see _respawn_if_dead).
+        # load_model clears _cancel_event, so a racing respawn needs this to survive the clear.
         self._unload_epoch = 0
-        # Set by the in-app updater while it swaps prebuilt binaries; load_model()
-        # rejects fast so no server starts from a half-swapped binary.
+        # Set during binary swaps; load_model() rejects fast so no server starts from a half-swapped binary.
         self._llama_update_in_progress = False
-        # Last extra_args / requested n_ctx, preserved across unload so the chat
-        # UI's /unload+/load Apply path can inherit them (#5401).
-        # ``_extra_args_source`` records the (model_identifier, hf_variant) the
-        # stored args came from so the route can refuse cross-model inheritance.
+        # Preserved across unload so /unload+/load Apply can inherit them.
         self._extra_args: Optional[List[str]] = None
-        # Extras as REQUESTED, before a launch-time rewrite (the virtualised-Metal
-        # drafter drop strips the spec group), so the duplicate-load comparators can
-        # compare requested-vs-requested like _requested_n_ctx does.
+        # Extras as REQUESTED, before launch-time rewrites, for duplicate-load checks.
         self._requested_extra_args: Optional[List[str]] = None
         self._extra_args_source: Optional[tuple[str, Optional[str]]] = None
         self._requested_n_ctx: int = 0
@@ -377,10 +303,15 @@ class LlamaCppBackend(
         # True when the launch actually runs MTP (Unsloth- or user/env-driven);
         # gates the watchdog and recovery so pass-through MTP is covered.
         self._mtp_runtime_fallback_active = False
+        # (load key, count) of Metal OOM retirements, and the key that stopped respawning.
+        self._metal_oom_strikes = None
+        self._metal_oom_terminal_key = None
+        # (load key, count) of mid-session GPU OOM deaths, and the child that logged one.
+        self._gpu_oom_strikes = None
+        self._gpu_oom_process = None
         self._stdout_lines: list[str] = []
         self._stdout_thread: Optional[threading.Thread] = None
-        # Wakes the health probe on subprocess readiness/exit, so a ready or crashed
-        # server is not hidden behind the 500 ms fallback poll.
+        # Wakes the health probe on subprocess readiness/exit, not left to the 500 ms fallback poll.
         self._health_probe_event = threading.Event()
         # llama-server tee log (see _drain_stdout / _kill_process).
         self._llama_log_fh = None
@@ -390,52 +321,44 @@ class LlamaCppBackend(
         self._api_key_file: Optional[Path] = None
         self._slot_save_dir: Optional[str] = None
         self._slot_save_binary: Optional[tuple[str, int]] = None
-        # (gguf_identity, launch_fingerprint) snapshotted at load, so a later slot
-        # save can tell whether the model files were swapped on disk since load.
+        # (gguf_identity, launch_fingerprint) at load lets a slot save detect swapped model files.
         self._slot_loaded_identity: Optional[tuple] = None
         self._prompt_cache_disabled: bool = False
         self._swa_full: bool = False
         self._kv_cache_unified: bool = False
-        # (mlock, reserves_ram) the running process was launched with, or None
-        # when this policy does not govern it (the diffusion runner has no
-        # load-mode). _memory_policy_active records that the launch differed
-        # from an unmanaged one, so disabling the toggles can undo it.
+        # (mlock, reserves_ram) the process was launched with; None when this policy does not govern it.
         self._memory_state: Optional[tuple[bool, bool]] = None
         # mmap and dio share the pair above, so without this they are indistinguishable.
         self._memory_direct_io: Optional[bool] = None
-        # The same chain one toggle apart; against _memory_direct_io that is "would
-        # reloading change the loader".
+        # Same chain one toggle apart; against _memory_direct_io it asks if a reload would change the loader.
         self._memory_dio_applicable: bool = False
         # The managed tokens, so a rung that gives up the offload can take them back out.
         self._memory_dio_flags: list[str] = []
         # Compared against by the strip, so it can never remove a hand-typed pair.
         self._memory_dio_user_tokens: list[str] = []
         self._memory_policy_active: bool = False
-        # What still marks the launch with the managed flags removed (scrubbed env, vetoed
-        # extra), so a withdrawing rung can spot a child now equal to an unmanaged one.
+        # Still marks a launch with managed flags removed, so a withdrawing rung can spot an unmanaged child.
         self._memory_policy_extras_touched: bool = False
-        # False when a launch is fully offloaded to a discrete GPU, where
-        # page-locking host RAM is skipped on purpose.
+        # Fully offloaded discrete-GPU launches skip mlock on purpose.
         self._memory_mlock_applicable: bool = True
-        # The "--load-mode none" tokens the FIT emitted, so paths that replace the
-        # placement can take them back out. Empty for a mode the user asked for.
+        # --load-mode none tokens FIT emitted, removed by paths replacing placement; empty if user chose one.
         self._fit_load_mode_flags: list[str] = []
+        self._lazy_mode_flags: list[str] = []
+        self._apple_lazy_flags: list[str] = []
+        # Mixed-pin --tensor-split tokens; the --fit on retry strips them (fit.cpp aborts on a set split).
+        self._mixed_split_flags: list[str] = []
         # The pair a launch in flight is committed to, None when none is. ONE attribute:
         # a separate marker and snapshot read out of step answered a save with
         # reload_required=false about a child already committed to the pre-save flags.
         self._memory_pending_launch: Optional[tuple[bool, bool]] = None
-        # True when the resident model came from an explicit UI load rather than
-        # the OpenAI API, so the idle unload can be scoped to API-loaded models.
-        # Not on GgufLoadIntent: that is compared for equality to detect
-        # duplicate loads, and a provenance field there would force a reload.
+        # Not on GgufLoadIntent: a provenance field there would force duplicate reloads.
         self._loaded_by_user_action: bool = False
         self._n_ubatch: int = self._DEFAULT_N_UBATCH
         self._flash_attn_enabled: bool = True
         self._effective_cache_types: tuple[str, str] = ("f16", "f16")
         # The pair this load ASKED for, before any launch-time rewrite.
         self._requested_cache_types: tuple[str, str] = ("f16", "f16")
-        # Total KV allocation context across all slots. _effective_context_length
-        # becomes the per-slot request limit after /props reconciliation.
+        # Total KV context over all slots; _effective_context_length becomes the per-slot limit after /props.
         self._kv_cache_context_total: Optional[int] = None
         # True once a probe has completed; cleared on transient failure.
         self._is_audio: bool = False
@@ -444,18 +367,16 @@ class LlamaCppBackend(
         self._codec_failure = threading.local()
         # Audio INPUT capability (distinct from _is_audio, which is TTS output).
         self._has_audio_input: bool = False
-        # Video INPUT capability, from llama-server's /props modalities. True
-        # only when the mmproj, the build and ffmpeg all line up, none of which
-        # the GGUF alone can tell us.
+        # Needs mmproj, build and ffmpeg to align; the GGUF alone cannot tell.
         self._has_video_input: bool = False
+        self._video_needs_ffmpeg: bool = False
+        self._video_ffmpeg_dir: Optional[str] = None
         self._mmproj_has_audio: bool = False  # clip.has_audio_encoder, set at load
-        # clip.projector_type, set at load: the family whose image-token ceiling KV
-        # admission sizes an image against.
+        # clip.projector_type set at load; the family whose image-token ceiling KV admission sizes images against.
         self._mmproj_projector_type: Optional[str] = None
         # clip.has_vision_encoder, set at load; True keeps an undeclared projector capable.
         self._mmproj_accepts_image: bool = True
-        # Monotonic timestamp set in _kill_process; read by load_model
-        # to decide whether to wait for the VRAM reclaim to finish.
+        # Set in _kill_process (monotonic); load_model reads it to decide whether to wait for VRAM reclaim.
         self._last_kill_monotonic: float = 0.0
         self._planned_vram_mib: dict[int, int] = {}
         self._pending_plan_mib: dict[int, int] = {}
@@ -463,7 +384,6 @@ class LlamaCppBackend(
         if manages_processes:
             _reaped = self._kill_orphaned_servers()
             if _reaped:
-                # Reaped VRAM frees lazily; arm the settle wait so the first load
-                # waits before ranking GPUs by free memory.
+                # Reaped VRAM frees lazily, so the first load waits before ranking GPUs.
                 self._last_kill_monotonic = time.monotonic()
             atexit.register(self._cleanup)

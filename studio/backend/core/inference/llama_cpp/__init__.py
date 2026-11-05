@@ -873,7 +873,164 @@ from .launch_support import (
     _SIGKILL_REAP_TIMEOUT_S,
     _QUIT_SIGNAL_EXIT_GRACE_S,
 )
+from .batch_args import (
+    _capped_draft_n_ubatch,
+    _pass_through_reprices_cache,
+)
+from .binary_runtime import (
+    _LLAMA_SHARED_LIB_RE,
+    _VULKAN_INVENTORY_TTL_S,
+    _info_once_per_load,
+    _vulkan_inventory_cache,
+    _vulkan_inventory_lock,
+)
+from .compaction import (
+    _archive_write_failed,
+    _compaction_reporter,
+    _once,
+)
+from .core_types import (
+    _AUTO_RECOVERY_LOAD,
+    _DRAFT_CONTEXT_FAILURE_MARKERS,
+    _METAL_BACKEND_POISONED_MARKERS,
+    _TERMINAL_RETIREMENT_HOOKS,
+    _apple_budget_beside_media_mib,
+    _apple_wired_headroom_bytes,
+    _automatic_recovery_load,
+    _net_of_other_models_vram,
+    _net_of_unallocated_vram,
+)
+from .draft_args import (
+    _DRAFT_CPU_MOE_FLAGS,
+    _DRAFT_N_CPU_MOE_FLAGS,
+    _DRAFT_OVERRIDE_TENSOR_FLAGS,
+    _METAL_FIT_PROBE_TIMEOUT_S,
+    _NO_DRAFT_BACKEND_SAMPLING_FLAG,
+    _VULKAN_ALIGNED_VOCAB_MULTIPLE,
+    _draft_backend_sampling_off,
+    _draft_card_share_unknown,
+    _draft_n_ubatch,
+    _drop_sidecar_margins,
+    _fit_margins_by_device,
+    _fit_target_values,
+    _margin_mib_for,
+    _sidecar_child_ctx,
+    _sidecar_reserve_margin_flags,
+    _single_device_fit_margin,
+    _spawn_draft_on_target,
+)
+from .gguf_cache import (
+    _gguf_set_bytes,
+    _mmproj_picker,
+)
+from .hf_offline import (
+    _GGUF_MARKUP_FIRST_BYTES,
+)
+from .launch_flags import (
+    _CUDA_LIKE_DEVICE_RE,
+    _FIT_MEASURES_BORROWED_DRAFT_MARKER,
+    _LINKED_LIB_NAMES_CACHE,
+    _LLAMA_COMMON_LIB_NAMES,
+    _LLAMA_SERVER_IMPL_LIB_NAMES,
+    _distinct_device_count,
+    _draft_pin_device_index,
+    _fit_measures_borrowed_drafts,
+    _linked_llama_libs,
+    _reasoning_preserve_from_args_or_env,
+    _sidecar_borrows_output,
+    _sidecar_borrows_target_tensors,
+    _template_preserves_thinking_by_default,
+)
+from .launch_support import (
+    _COUNT_TIMEOUT_CHARS_PER_S,
+    _COUNT_TIMEOUT_FLOOR_S,
+    _count_timeout,
+)
+from .memory_policy import (
+    _APPLE_AUTO_CTX,
+    _WINDOWS_GPU_COMMIT_HEADROOM_WARN_MIB,
+    _WINDOWS_GPU_UNTOUCHED_COMMIT_MIN_MIB,
+    _explicit_device_ordinals_needed,
+    _windows_private_memory,
+)
+from .moe_cache import (
+    _GPU_MEMORY_SKIP_TORCH,
+    _HOST_INPUT_HEAD_NAMES,
+    _LAZY_RESIDENT_MARGIN_FRAC,
+    _gpu_device_node_present,
+    _host_forced_in_files,
+    _host_pinned_input_bytes,
+    _is_host_input_or_head_tensor,
+    _lazy_read_names,
+    _override_places_tensor_on_device,
+    _without_torch_gpu_probe,
+)
+from .placement_args import (
+    _LLAMA_SERVER_DEFAULT_VIDEO_FPS,
+    _VIDEO_FFMPEG_DIR_ENV_VAR,
+    _VIDEO_TIMESTAMP_ENV_VAR,
+    _video_ffmpeg_dir_flags,
+    _video_tools_reachable,
+    _video_tools_search,
+)
+from .reasoning import (
+    _REASONING_EFFORT_ALLOWLIST_RE,
+    _fit_reasoning_effort_to_template,
+    _reasoning_effort_allowlist,
+    _rendered_chat_template,
+)
+from .server_log import (
+    _FIT_DENSE_ONLY_MARK,
+    _FIT_DEVICE_RE,
+    _FIT_EXTRA_LAYER_RE,
+    _FIT_FULL_LAYERS_MARK,
+    _FIT_MOE_CACHE_RE,
+    _LOOPBACK_REACHABLE_BIND_IPS,
+    _MODEL_BUFFER_RE,
+    _PORT_OWNER_REFUSED_MARKER,
+    _extra_weight_file_bytes,
+    _host_buffer,
+    _socket_owner_is_always_named,
+    parse_weight_placement,
+)
+from .timings import (
+    _structured_calls_complete,
+)
+from .tool_loop_text import (
+    _FIXED_IMAGE_TOKENS,
+    _GPU_OOM_HEADROOM_MAX_STRIKES,
+    _GPU_OOM_HEADROOM_STEP_MIB,
+    _IMAGE_WRAPPER_TOKENS,
+    _MERGED_PATCH_PX,
+    _image_token_price,
+    _with_template_extras,
+)
 from .backend import LlamaCppBackend
+from core.inference.context_window import estimate_message_tokens_with_priced_images
+from core.inference.context_window import image_dimensions
+from core.inference.context_window import messages_with_priced_images
+from core.inference.inference_gate import holds_inference
+from core.inference.llama_server_args import extra_args_image_min_tokens
+from core.inference.llama_server_args import keep_resident_lock_applicable
+from core.inference.llama_server_args import keep_resident_lock_flags
+from core.inference.llama_server_args import load_mode_support
+from core.inference.llama_server_args import translate_ngram_mod_args
+from core.inference.llama_video_input import video_tools
+from core.inference.lookup_tables import HOST_FORCED_TABLE_ARCHS as _HOST_FORCED_TABLE_ARCHS
+from core.inference.lookup_tables import HOST_FORCED_TABLE_MARKER as _HOST_FORCED_TABLE_MARKER
+from core.inference.lookup_tables import LAZY_READ_AUTO_MIN_BYTES as _LOOKUP_LAZY_READ_AUTO_MIN_BYTES
+from core.inference.lookup_tables import LAZY_READ_TENSORS as _LOOKUP_LAZY_READ_TENSORS
+from core.inference.lookup_tables import is_per_layer_embedding as _is_per_layer_embedding
+from core.inference.lookup_tables import lazy_read_bytes as _lookup_lazy_read_bytes
+from core.inference.stream_errors import is_tool_parse_rejection
+from core.inference.tool_loop_controller import REPEATABLE_TOOL_NAMES
+from core.inference.tool_loop_controller import TRUNCATED_TOOL_TURN_MESSAGE
+from state.tool_approvals import note_host_access
+from utils import gguf_archs as _gguf_archs
+from utils import gguf_names as _gguf_names
+from utils.gguf_archs import is_foreign_asr_gguf_architecture
+import contextvars
+import itertools
 
 _SUBMODULES = (
     _compaction,
@@ -939,6 +1096,7 @@ for _module in (
     _backend_shutdown,
     _backend_start_failures,
     _backend_tokens,
+    _draft_args,
     _load_markers,
 ):
     _module.LlamaCppBackend = LlamaCppBackend

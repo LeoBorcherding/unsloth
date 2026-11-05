@@ -17,9 +17,14 @@ from typing import (
     NamedTuple,
     Optional,
 )
+import contextlib
+import subprocess
+from .memory_policy import (
+    _APPLE_UNIFIED_MEMORY_FRACTION,
+    _APPLE_WIRED_CEILING_FRACTION,
+)
 
-# Floor for a GGUF TTS read, scaled by requested tokens at the call site. This backend
-# decodes in seconds; the subprocess one needs minutes, so they do not share a base.
+# Floor for a GGUF TTS read; the subprocess backend needs a much larger base.
 _GGUF_AUDIO_READ_TIMEOUT = 300.0
 
 
@@ -40,17 +45,29 @@ def _gpu_short_message(
     )
     if capped_only:
         return message + f"It fits with a {fitting_ctx} context."
+    try:
+        from utils.multi_model_settings import get_multi_model_mode
+        always = get_multi_model_mode() == "always"
+    except Exception:  # noqa: BLE001 - the copy must never fail the load
+        always = False
+    if always:
+        return message + (
+            "Unload one of them or lower the context length. Keep multiple models loaded "
+            "is set to Always, so nothing is unloaded to make room."
+        )
     return message + (
-        "Unload one of them, lower the context length, or turn off "
-        '"Keep other models loaded" to replace the current model.'
+        "Unload one of them, lower the context length, or set Keep multiple models loaded "
+        "to Off to replace the current model."
     )
 
 
 class GpuMemoryShortError(RuntimeError):
     """A load that must fit next to the loaded models does not. ``capped``: it would, at a
-    smaller context than asked for. ``gpu_indices``: the GPUs ``short_mib`` was measured on."""
+    smaller context than asked for. ``gpu_indices``: the GPUs ``short_mib`` was measured on.
+    ``discrete``: none of them shares host RAM, so a server off them or on the CPU frees nothing there.
+    ``host``: short on free VRAM and RAM together."""
 
-    __slots__ = ("capped", "short_mib", "gpu_indices")
+    __slots__ = ("capped", "short_mib", "gpu_indices", "discrete", "host")
 
     def __init__(
         self,
@@ -58,11 +75,61 @@ class GpuMemoryShortError(RuntimeError):
         capped: bool = False,
         short_mib: int = 0,
         gpu_indices = None,
+        discrete: bool = False,
+        host: bool = False,
     ):
         super().__init__(message)
         self.capped = capped
         self.short_mib = short_mib
         self.gpu_indices = gpu_indices
+        self.discrete = discrete
+        self.host = host
+
+
+def _apple_budget_beside_media_mib(held_mib: int, unallocated_mib: int) -> int:
+    """Unified-memory budget beside resident media: price off the working set, unallocated part off available RAM."""
+    from utils.hardware.hardware import _metal_recommended_working_set_bytes
+    import psutil
+
+    mib = 1024 * 1024
+    working_set = _metal_recommended_working_set_bytes() or int(psutil.virtual_memory().total)
+    available = int(psutil.virtual_memory().available)
+    left = working_set // mib - held_mib
+    if available > 0:
+        left = min(left, available // mib - unallocated_mib)
+    return max(0, int(left * _APPLE_UNIFIED_MEMORY_FRACTION))
+
+
+def _apple_wired_headroom_bytes() -> Optional[int]:
+    """Wired GPU memory a Metal load may still take, system-wide; None if unknown."""
+    from utils.hardware import is_apple_silicon
+
+    if not is_apple_silicon():
+        return None
+    try:
+        probe = subprocess.run(
+            ["sysctl", "-n", "iogpu.wired_limit_mb"],
+            capture_output = True,
+            text = True,
+            timeout = 5,
+            encoding = "utf-8",
+            errors = "replace",
+        )
+        cap_bytes = int(probe.stdout.strip()) * 1024 * 1024
+    except Exception:
+        return None
+    # 0 means the kernel default, Metal's recommended working set.
+    if cap_bytes <= 0:
+        from utils.hardware.hardware import _metal_recommended_working_set_bytes
+        cap_bytes = _metal_recommended_working_set_bytes()
+    if cap_bytes <= 0:
+        return None
+    from utils.hardware.hardware import _read_apple_gpu_stats
+
+    in_use = _read_apple_gpu_stats().get("vram_used_bytes")
+    if in_use is None:
+        return None
+    return max(0, int((cap_bytes - in_use) * _APPLE_WIRED_CEILING_FRACTION))
 
 
 def _gpu_plan_mib(total_bytes: int, on: list[int], gpus) -> dict[int, int]:
@@ -80,6 +147,23 @@ def _net_of_held_vram(gpu_mem, held: dict[int, int]):
         return gpu_mem
     return [
         (idx, min(free, max(0, total - held.get(idx, 0))) if total > 0 else free, total)
+        for idx, free, total in gpu_mem
+    ]
+
+
+def _net_of_other_models_vram(gpu_mem, held: dict[int, int], unallocated: dict[int, int]):
+    """Live free less unallocated media VRAM, then capped at total less ``held``. The other order charges the
+    headroom twice whenever the total cap binds (nothing else on the card)."""
+    return _net_of_held_vram(_net_of_unallocated_vram(gpu_mem, unallocated), held)
+
+
+def _net_of_unallocated_vram(gpu_mem, unallocated: dict[int, int]):
+    """Take from each GPU's live free MiB what a resident image or video model has not allocated yet (its generation
+    headroom): the total cap misses it once another process uses the card. Totals of 0 are left as is."""
+    if not unallocated:
+        return gpu_mem
+    return [
+        (idx, max(0, free - unallocated.get(idx, 0)) if total > 0 else free, total)
         for idx, free, total in gpu_mem
     ]
 
@@ -118,7 +202,40 @@ class _LlamaStreamCancelled(Exception):
 
 # vulkan-hpp formats DeviceLostError as "vk::Queue::submit: ErrorDeviceLost".
 _GPU_DEVICE_LOST_MARKERS = ("ErrorDeviceLost", "VK_ERROR_DEVICE_LOST")
+
+
+_DRAFT_CONTEXT_FAILURE_MARKERS = (
+    "llama_process(ctx_dft) failed",
+    "failed to process speculative batch",
+)
+
+
+# ggml-metal latches a failed command buffer ("recreate the backend to recover"); the child then
+# answers "Compute error.".
+_METAL_BACKEND_POISONED_MARKERS = (
+    "backend is in error state from a previous command buffer failure",
+    "kIOGPUCommandBufferCallbackErrorOutOfMemory",
+)
 _DEVICE_LOST_LOG_GRACE_S = 2.0
+
+
+@contextlib.contextmanager
+def _automatic_recovery_load():
+    prev = getattr(_AUTO_RECOVERY_LOAD, "active", False)
+    _AUTO_RECOVERY_LOAD.active = True
+    try:
+        yield
+    finally:
+        _AUTO_RECOVERY_LOAD.active = prev
+
+
+# Set during automatic recovery loads: only those inherit a Metal OOM strike.
+_AUTO_RECOVERY_LOAD = threading.local()
+
+
+# Run after a terminal Metal OOM unload, outside every backend lock (routes/inference.py registers
+# them).
+_TERMINAL_RETIREMENT_HOOKS: list = []
 
 
 def _is_gpu_device_lost(exc: BaseException) -> bool:
@@ -150,8 +267,7 @@ class _CombinedCancelEvent:
                 return True
 
 
-# Deliberately NOT ``slots=True``: it drops ``__dict__``, so ``vars(intent)`` raises and
-# every GGUF load breaks. Reflection over this dataclass is part of how it is used.
+# Not slots=True: vars(intent) must work or every GGUF load breaks.
 @dataclass(frozen = True)
 class GgufLoadIntent:
     """Immutable caller intent replayed by retries and recovery."""
@@ -169,9 +285,7 @@ class GgufLoadIntent:
     hf_token: Optional[str] = None
     audio_codec_path: Optional[str] = None
     is_vision: bool = False
-    # Load a vision GGUF as text-only: no projector on the GPU and none on the CPU
-    # either. The projector's VRAM is left for the model, and image input is off
-    # for the session.
+    # Text-only load: no projector on GPU or CPU, freeing its VRAM; image input is off for the session.
     disable_vision: bool = False
     n_ctx: int = 4096
     max_seq_length_auto_derived: bool = False
@@ -199,14 +313,11 @@ class GgufLoadIntent:
     spec_draft_cache_type: Optional[str] = None
     ctx_checkpoints: Optional[int] = None
     cache_ram: Optional[int] = None
-    # llama.cpp thinking budget (--reasoning-budget / --reasoning-budget-message);
-    # -1 and "" follow the llama.cpp defaults.
+    # Sets --reasoning-budget and --reasoning-budget-message; -1 and empty use llama.cpp defaults.
     reasoning_budget: int = -1
     reasoning_budget_message: str = ""
     extra_args: Optional[tuple[str, ...]] = None
-    # The route materialises inherited extras from the live server, so the list alone
-    # cannot say whether the caller named it. Duplicate-load checks need the difference:
-    # a launch-time rewrite makes the launched and requested lists diverge.
+    # Inherited extras look like named ones; duplicate-load checks need the difference.
     extra_args_inherited: bool = False
     preserve_multi_gpu_on_layer: bool = False
     refuse_partial_gpu_fit: bool = False
@@ -228,8 +339,7 @@ class _CpuFallbackRuntime(NamedTuple):
     tempdir: tempfile.TemporaryDirectory
     source_binary: Path
     staged_binary: Path
-    # An update swaps the install dir in place, so the path alone cannot tell a
-    # refreshed build from the staged copy of the old one.
+    # An update swaps the install dir in place, so the path alone is not enough.
     source_stamp: tuple
 
 
@@ -241,10 +351,7 @@ LLAMA_SERVER_NOT_FOUND_DETAIL = (
     "permission first (for example, `chmod +x llama-server` on Unix)."
 )
 
-# Shared by the pre-teardown and post-metadata rejections (#7205).
-# Every env var that can put a drafter or spec type into the child. Pre-b8955
-# spellings included: the new names arrived 2026-04-28 and the launchable floor is
-# 2025-08-30, so a build in that window reads the old ones and would keep the drafter.
+# Every env var that can put a drafter or spec type into the child. Pre-b8955 spellings too: older builds still read them and keep the drafter.
 _SPEC_ENV_VARS = (
     "LLAMA_ARG_SPEC_DRAFT_MODEL",
     "LLAMA_ARG_SPEC_DRAFT_HF_REPO",
@@ -262,8 +369,7 @@ _PERMANENT_HUB_ERRORS = (
     "OfflineModeIsEnabled",
 )
 
-# Settled failures of this machine, not the Hub. By errno, not exception type: the Hub
-# client raises OSError subclasses for network trouble too, and those are retryable.
+# By errno, not type: the Hub client raises OSError subclasses for retryable network errors.
 _UNRECOVERABLE_LOCAL_ERRNOS = frozenset(
     {
         errno.EACCES,  # cache dir not writable
@@ -273,8 +379,7 @@ _UNRECOVERABLE_LOCAL_ERRNOS = frozenset(
     }
 )
 
-# Every kind records the same "binary_no_mtp", so the reason alone cannot say which
-# capability to recheck.
+# Every kind records binary_no_mtp, so the reason alone cannot say which capability to recheck.
 _SPEC_KIND_CAPABILITY: dict[str, str] = {
     "dspark": "supports_dspark",
     "dflash": "supports_dflash",
@@ -315,10 +420,8 @@ try:
 except ValueError:
     _SLOT_SAVE_MAX_BYTES = 10 << 30
 
-# The idle loop holds the lifecycle gate across a slot save, so a newly arriving
-# request waits on the in-flight save's HTTP call. Bound it (was 120s) so a slow
-# or stuck save can't stall the next request for minutes; best-effort save just
-# falls back to a plain unload. Override with UNSLOTH_SLOT_SAVE_TIMEOUT (seconds).
+# The idle loop holds the lifecycle gate across a slot save, so bound it.
+# Override with UNSLOTH_SLOT_SAVE_TIMEOUT (seconds).
 try:
     _SLOT_SAVE_HTTP_TIMEOUT = float(os.environ.get("UNSLOTH_SLOT_SAVE_TIMEOUT") or 30.0)
 except ValueError:

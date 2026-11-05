@@ -16,12 +16,28 @@ from typing import (
     Mapping,
     Optional,
 )
+import json
 
 
 class CountAborted(Exception):
     """A token count stood down mid-flight because its answer stopped mattering."""
 
     __slots__ = ()
+
+
+def _count_timeout(messages, system_text, tools) -> float:
+    try:
+        chars = len(json.dumps([system_text, messages, tools], ensure_ascii = False, default = str))
+    except Exception:  # noqa: BLE001 -- an unmeasurable prompt keeps the floor
+        chars = 0
+    return _COUNT_TIMEOUT_FLOOR_S + chars / _COUNT_TIMEOUT_CHARS_PER_S
+
+
+_COUNT_TIMEOUT_CHARS_PER_S = 100_000
+
+
+# Single-threaded render + tokenize ran ~600K chars/s on the #15800 reporter's CPU; a sixth of that still catches a hang.
+_COUNT_TIMEOUT_FLOOR_S = 10.0
 
 
 # Module level so tests can point the orphan sweep at a fixture tree.
@@ -38,10 +54,7 @@ def _metal_capable_host() -> bool:
         return sys.platform == "darwin"
 
 
-# Shared with the settings reader so the search, the settings UI and the process
-# allowlist expand one value the same way, and none of them raises on a named user
-# the password database cannot answer for. Path.expanduser() does raise, which is
-# what took runtime discovery down on a stale ~deleted-user pin.
+# Path.expanduser() raises for a deleted user; this never does.
 def _expanded_user_path(value) -> Path:
     try:
         from utils.llama_cpp_path_settings import expanded_user_path
@@ -87,11 +100,7 @@ def _write_direct_stream_key(key: str, previous: "Optional[Path]" = None) -> "Pa
 
 
 def _llama_server_key_via_env() -> bool:
-    """True where llama-server cannot open a key file under Studio's auth directory.
-
-    On Windows llama-server re-encodes argv to UTF-8 and opens --api-key-file with a narrow std::ifstream,
-    which reads the path in the ANSI code page (common/arg.cpp), so a non-ASCII profile path never opens (#13123).
-    """
+    """Windows with a non-ASCII profile path: llama-server cannot open --api-key-file, so pass it by env."""
     from utils.paths.storage_roots import auth_root
     return sys.platform == "win32" and not str(auth_root()).isascii()
 
@@ -110,14 +119,7 @@ def _llama_server_key_launch(
 def _extra_args_have_tensor_split(
     extra_args: Optional[Iterable[str]], env: Optional[Mapping[str, str]]
 ) -> bool:
-    """PRESENCE of a pass-through split, parseable or not, in argv or the CHILD env.
-
-    _extra_args_tensor_split returns None for a value it cannot parse, and the repointer
-    does no numeric validation and takes the LAST occurrence, so a parse-check veto lets
-    the repointer permute a user share it exists to protect. Reads the child env rather
-    than os.environ because LLAMA_ARG_TENSOR_SPLIT is scrubbed before this point, and a
-    value the child never receives must not suppress the reorder.
-    """
+    """Presence counts even if unparseable; reads the child env, as the variable is scrubbed earlier."""
     for token in extra_args or ():
         if str(token).split("=", 1)[0] in ("--tensor-split", "-ts", "--tensor_split"):
             return True

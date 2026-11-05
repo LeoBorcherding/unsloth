@@ -23,23 +23,15 @@ class _BinaryDiscoveryMixin:
 
     @staticmethod
     def _resolved_studio_root_and_is_legacy() -> "tuple[Optional[Path], bool]":
-        """Resolve the directory llama.cpp hangs off and classify it as the
-        legacy ~/.unsloth/studio root vs. a custom (env/venv-inferred) root.
-
-        Returns (resolved_root, is_legacy). On any import/resolution failure the
-        root is treated as legacy and resolved_root is None -- callers must read
-        resolved_root only when is_legacy is False. Shared by
-        _find_llama_server_binary (discovery) and _kill_orphaned_servers
-        (cleanup) so the two never disagree on which root is legacy.
-        """
+        """On failure the root counts as legacy, and resolved_root is None, so read it only when not
+        legacy."""
         try:
             from utils.paths.storage_roots import (  # noqa: WPS433
                 studio_root as _sr,
                 unsloth_home as _uh,
             )
 
-            # llama.cpp is a sibling of studio/ under the master root, the path run.py and
-            # main.py export, so a portable install is never the legacy layout.
+            # llama.cpp sits beside studio/ under the master root that run.py and main.py export; not legacy.
             master = _uh()
             if master is not None:
                 return master, False
@@ -55,29 +47,11 @@ class _BinaryDiscoveryMixin:
 
     @staticmethod
     def _find_llama_server_binary(*, include_denied: bool = False) -> Optional[str]:
-        """
-        Locate the llama-server binary.
-
-        Search order:
-        1.  LLAMA_SERVER_PATH environment variable (direct path to binary)
-        1b. UNSLOTH_LLAMA_CPP_PATH env var (custom llama.cpp install dir)
-        2.  Unsloth's custom llama.cpp folder setting
-        3.  ~/.unsloth/llama.cpp/llama-server        (make build, root dir)
-        4.  ~/.unsloth/llama.cpp/build/bin/llama-server  (cmake build, Linux)
-        5.  ~/.unsloth/llama.cpp/build/bin/Release/llama-server.exe  (cmake build, Windows)
-        6.  ./llama.cpp/llama-server                 (legacy: make build, root dir)
-        7.  ./llama.cpp/build/bin/llama-server        (legacy: cmake in-tree build)
-        8.  llama-server on PATH                     (system install)
-        9.  ./bin/llama-server                       (legacy: extracted binary)
-        """
+        """Env LLAMA_SERVER_PATH, UNSLOTH_LLAMA_CPP_PATH, Unsloth folder setting, ~/.unsloth/llama.cpp, legacy ./llama.cpp, PATH, then legacy ./bin."""
         binary_name = "llama-server.exe" if sys.platform == "win32" else "llama-server"
 
         def _file_status(p: Path) -> str:
-            # "file", "absent", "non_executable", or "denied". A denied
-            # file stays access-denied across a short retry (Windows AV/ACL or
-            # an install replace in flight). is_file() raises PermissionError
-            # (WinError 5) instead of returning False for the locked case, so
-            # never treat it as missing.
+            # is_file() raises PermissionError when locked (Windows AV/ACL); never treat as missing.
             for _ in range(5):
                 try:
                     if not p.is_file():
@@ -95,14 +69,12 @@ class _BinaryDiscoveryMixin:
             return _file_status(p) == "file"
 
         def _layout_candidates(d: Path) -> list:
-            # Keep Settings validation and runtime discovery on one layout
-            # contract so a folder accepted by the UI is always launchable.
+            # Settings validation and discovery share one layout contract, so any folder the UI accepts launches.
             from utils.llama_cpp_path_settings import llama_server_candidates
             return list(llama_server_candidates(d))
 
         def _unavailable(p: object) -> None:
-            # a pinned or managed binary that exists but is access-denied: report
-            # it instead of silently downgrading to a lower-priority llama-server
+            # Report an access-denied pinned binary instead of silently downgrading.
             logger.warning(
                 f"llama-server at {p} is not executable or is access-denied "
                 "(permissions, antivirus, or an in-flight install); not falling "
@@ -111,17 +83,13 @@ class _BinaryDiscoveryMixin:
             return None
 
         def _scan_pinned(paths: list):
-            # First executable candidate wins. A genuinely access-denied one
-            # stops immediately; a known non-executable candidate is remembered
-            # while sibling build layouts are checked. include_denied returns an
-            # unavailable path instead: diffusion asset lookup only needs its dir.
+            # First executable wins; access-denied stops, non-executable keeps looking; include_denied returns the unavailable path (diffusion only needs its dir).
             non_executable = None
             from utils.llama_cpp_path_settings import prefer_gpu_capable
 
             statuses = {p: _file_status(p) for p in paths}
             first = next((p for p in paths if statuses[p] == "file"), None)
-            # A first hit proven CPU-only yields to a GPU-capable sibling build (#5941), unless
-            # a denied candidate precedes it: that denial stops discovery, it is not skipped over.
+            # A CPU-only first hit yields to a GPU-capable sibling, unless a denied one precedes it.
             if first is not None and not any(
                 statuses[p] == "denied" for p in paths[: paths.index(first)]
             ):
@@ -133,14 +101,10 @@ class _BinaryDiscoveryMixin:
                 if st == "denied":
                     return (str(p), None) if include_denied else (None, p)
                 if st == "non_executable" and non_executable is None:
-                    # A source checkout may leave a stale root entrypoint beside a
-                    # valid CMake build. Keep looking within this pinned layout,
-                    # but do not fall through to a different runtime if none works.
+                    # A source checkout may leave a stale root entrypoint beside a valid CMake build; keep looking in this pinned layout, never fall through to another runtime.
                     non_executable = p
             if non_executable is not None:
-                # include_denied is used only to preserve genuinely transient
-                # access-denied paths. A missing execute bit needs repair, not a
-                # retry, and must not pass the download preflight as available.
+                # A missing execute bit needs repair, not retry, so it must not pass preflight.
                 return (None, None) if include_denied else (None, non_executable)
             return None, None
 
@@ -157,27 +121,14 @@ class _BinaryDiscoveryMixin:
         custom_llama_cpp = os.environ.get("UNSLOTH_LLAMA_CPP_PATH")
         managed_path_marker = os.environ.get("UNSLOTH_STUDIO_MANAGED_LLAMA_CPP_PATH") == "1"
         if custom_llama_cpp and not managed_path_marker:
-            # expanduser, like every other reader of this variable:
-            # default_managed_llama_dir, get_stored_custom_llama_cpp_path and the
-            # desktop's own pinning all expand it, and the literal lookup here was
-            # the only one that did not. A "~/llama.cpp" written into a service
-            # unit, a .env or the Windows environment dialog reaches the process
-            # unexpanded, and the literal form made this search a folder named ~
-            # beside the working directory, walk past it, and load a different
-            # runtime than every other component was reporting on.
-            # Not Path.expanduser: it raises RuntimeError on a name it cannot
-            # resolve, so a stale ~deleted-user pin made discovery itself throw
-            # instead of falling through to the rest of the order below.
+            # Expand ~ like every other reader; not Path.expanduser, which raises on unknown users.
             hit, locked = _scan_pinned(_layout_candidates(_expanded_user_path(custom_llama_cpp)))
             if locked is not None:
                 return _unavailable(locked)
             if hit:
                 return hit
 
-        # 2. Unsloth setting: a deliberate pin, so a missing or inaccessible
-        # selected build must not silently fall through to the bundled runtime.
-        # The user would otherwise see their custom path selected while another
-        # llama-server actually ran.
+        # 2. Unsloth setting: a deliberate pin, so never silently fall through to the bundle.
         try:
             from utils.llama_cpp_path_settings import get_stored_custom_llama_cpp_path
             studio_custom_llama_cpp = get_stored_custom_llama_cpp_path()
@@ -196,17 +147,13 @@ class _BinaryDiscoveryMixin:
             )
             return None
 
-        # 3-5. Match installer layout: env-mode -> $STUDIO_HOME/llama.cpp;
-        # default/HOME-redirect -> ~/.unsloth/llama.cpp (sibling of studio).
+        # 3-5. Env mode uses $STUDIO_HOME/llama.cpp; default or HOME-redirect uses ~/.unsloth/llama.cpp, the sibling of studio.
         legacy_llama = Path.home() / ".unsloth" / "llama.cpp"
         _resolved_sr, _is_legacy = LlamaCppBackend._resolved_studio_root_and_is_legacy()
         if _is_legacy:
             search_roots = [legacy_llama]
         else:
-            # _kill_orphaned_servers excludes the legacy root in custom mode;
-            # discovery must match so we never spawn a server we then refuse to
-            # clean up. UNSLOTH_LLAMA_CPP_PATH (handled earlier) is the explicit
-            # way to share a build across roots.
+            # Must match _kill_orphaned_servers (excludes legacy root in custom mode), so we never spawn a server we then refuse to clean up.
             search_roots = [_resolved_sr / "llama.cpp"]
         for unsloth_home in search_roots:
             hit, locked = _scan_pinned(_layout_candidates(unsloth_home))
@@ -215,8 +162,7 @@ class _BinaryDiscoveryMixin:
             if hit:
                 return hit
 
-        # 5-6. Legacy: in-tree build (older setup.sh / setup.ps1). A fallback,
-        # so a denied candidate here just continues (no no-fallback halt).
+        # 5-6. Legacy in-tree build; a fallback, so a denied candidate just continues.
         project_root = Path(__file__).resolve().parents[5]
         from utils.llama_cpp_path_settings import prefer_gpu_capable
 

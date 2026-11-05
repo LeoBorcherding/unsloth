@@ -24,16 +24,15 @@ from .gguf_cache import _SHARD_FULL_RE
 from .launch_flags import _LLAMA_ARG_FALSE_VALUES
 from .log import logger
 from .memory_policy import _kv_bytes_per_elem
+from .launch_support import (
+    _local_ssl_context,
+)
 
 
 class _SlotsMixin:
     def _probe_mtp_decode(self, timeout: float = 60.0) -> bool:
-        """One tiny /completion to confirm MTP survives the first decode.
-
-        MTP-draft can pass /health yet crash the flash-attn kernel only once
-        tokens generate (e.g. under --split-mode tensor). False on any error so
-        the caller can drop MTP and retry.
-        """
+        """/health can pass while MTP crashes on first decode, so probe a real completion; False on
+        any error."""
         url = f"{self.base_url}/completion"
         payload = {"prompt": "Hi", "n_predict": 4, "temperature": 0.0, "stream": False}
         try:
@@ -43,6 +42,7 @@ class _SlotsMixin:
                 timeout = timeout,
                 headers = self._auth_headers,
                 trust_env = False,
+                verify = _local_ssl_context(),
             )
         except Exception as e:
             logger.debug(f"MTP decode probe failed: {e}")
@@ -204,9 +204,7 @@ class _SlotsMixin:
             or self._prompt_cache_off()
         ):
             return None
-        # Same predicate as the estimator's SWA path: a window alone is not enough.
-        # phi3 GGUFs carry attention.sliding_window but no key/value length, and
-        # llama.cpp forces them back to a non-SWA cache, so their slots do restore.
+        # phi3 GGUFs have a window but no key/value length; llama.cpp uses a non-SWA cache.
         if (
             (self._sliding_window or 0) > 0
             and self._kv_key_length is not None
@@ -220,9 +218,7 @@ class _SlotsMixin:
         if gguf_stat is None:
             return None
         launch = self._slot_launch_fingerprint()
-        # If the GGUF or a sidecar was swapped on disk while the original weights
-        # stayed mapped, the live KV belongs to the old weights but a reload would
-        # load the new file. Persisting it would let restore misapply stale KV.
+        # GGUF or sidecar swapped on disk: live KV belongs to old weights, don't persist.
         if self._slot_loaded_identity is not None and self._slot_loaded_identity != (
             gguf_stat,
             launch,
@@ -251,9 +247,7 @@ class _SlotsMixin:
                     _SLOT_SAVE_MAX_BYTES,
                 )
                 return None
-            # A 0 estimate means metadata was insufficient, not a zero-byte cache:
-            # a slot can still be many GiB, so demand room for the whole cap before
-            # trusting the post-write check.
+            # A 0 estimate means unknown, so require room for the whole cap.
             required = (estimate if estimate > 0 else _SLOT_SAVE_MAX_BYTES) + (1 << 30)
             if shutil.disk_usage(save_dir).free < required:
                 logger.debug("Skipping slot save: insufficient free disk")
@@ -277,6 +271,7 @@ class _SlotsMixin:
                     headers = self._auth_headers,
                     timeout = _SLOT_SAVE_HTTP_TIMEOUT,
                     trust_env = False,
+                    verify = _local_ssl_context(),
                 )
             except Exception as e:
                 logger.debug(f"slot {slot} save failed: {e}")
@@ -294,9 +289,7 @@ class _SlotsMixin:
                     raise ValueError("slot save response was not a JSON object")
                 n_saved = int(body.get("n_saved") or 0)
             except Exception as e:
-                # A 200 that still wrote a file but returns a malformed body must
-                # clean up like the transport/HTTP error paths above, or the file
-                # (which holds chat KV) is orphaned until the next startup sweep.
+                # Clean up the written file (chat KV) on a malformed 200 too.
                 logger.debug(f"slot {slot} save returned an invalid response: {e}")
                 with contextlib.suppress(OSError):
                     path.unlink()
@@ -305,8 +298,7 @@ class _SlotsMixin:
                 with contextlib.suppress(OSError):
                     path.unlink()
                 continue
-            # Account by the bytes actually on disk, not the server-reported
-            # count, so the cap holds even if a custom binary under-reports.
+            # Count bytes on disk, not the server's count, in case a binary under-reports.
             try:
                 n_written = path.stat().st_size
             except OSError:
@@ -348,6 +340,7 @@ class _SlotsMixin:
                     headers = self._auth_headers,
                     timeout = _SLOT_SAVE_HTTP_TIMEOUT,
                     trust_env = False,
+                    verify = _local_ssl_context(),
                 )
             except Exception as e:
                 logger.debug(f"slot restore failed: {e}")

@@ -47,6 +47,42 @@ from .reasoning import (
 )
 from .server_log import _GPU_MODEL_BUFFER_RE
 from .spec_args import _canonicalize_spec_mode
+from core.inference.context_window import estimate_message_tokens_with_priced_images
+from core.inference.context_window import messages_with_priced_images
+from typing import Iterable
+from typing import Mapping
+import os
+import sys
+from .batch_args import (
+    _extra_args_n_parallel,
+    _extra_args_split_mode,
+)
+from .draft_args import (
+    _extra_args_device,
+    _extra_args_main_device,
+    _sidecar_adapter_paths,
+)
+from .gguf_cache import (
+    _gguf_set_bytes,
+)
+from .launch_flags import (
+    _args_place_tensors_on_cpu,
+    _env_places_tensors_on_cpu,
+    _kv_offload_from_args,
+)
+from .launch_support import (
+    _extra_args_have_tensor_split,
+)
+from .reasoning import (
+    _fit_reasoning_effort_to_template,
+    _rendered_chat_template,
+)
+from .server_log import (
+    _extra_weight_file_bytes,
+)
+from .tool_loop_text import (
+    _image_token_price,
+)
 
 # `LlamaCppBackend` is bound here by the package __init__ once the class exists, so the
 # `LlamaCppBackend.<name>` references below resolve exactly as they did in one module.
@@ -62,34 +98,62 @@ class _PropertiesMixin:
     @property
     def is_active(self) -> bool:
         """True if a llama-server process exists (loading or loaded)."""
-        return self._process is not None
+        proc = self._process
+        if proc is None:
+            return False
+        return not (
+            not self._healthy
+            and proc is getattr(self, "_retired_process", None)
+            and getattr(self, "_metal_oom_terminal_key", None) is not None
+        )
+
+    def resident_memory_mib(self) -> Optional[int]:
+        """Best-effort MiB the loaded model holds: its GPU model buffers when known, else the
+        child's RSS (CPU, and Apple unified memory where RSS covers the Metal buffers). Never raises."""
+        process = self._process
+        if process is None or process.poll() is not None:
+            return None
+        try:
+            gpu = self.reclaimable_gpu_memory_gb()
+            if gpu:
+                return int(round(sum(gpu.values()) * 1024))
+            import psutil
+
+            return int(psutil.Process(process.pid).memory_info().rss // (1024 * 1024)) or None
+        except Exception:  # noqa: BLE001 - a size is decoration, never a failed status read
+            return None
 
     def reclaimable_gpu_memory_gb(self) -> Optional[dict[int, float]]:
-        """Stable GPU model buffers the disposable llama-server will release.
-
-        The startup log sizes only resident model buffers, so this is a
-        conservative lower bound: KV/compute buffers remain charged.  Unlike a
-        live process-memory sample, the value cannot race a short generation
-        that grows or clears its cache between the free-memory and owner reads.
-        """
+        """A conservative lower bound from the startup log's model buffers; a live memory sample
+        could race."""
         process = self._process
         if process is None or process.poll() is not None:
             return None
         physical_ids = list(getattr(self, "_child_gpu_physical_ids", None) or ())
         if not physical_ids:
             return None
-        reported: dict[int, float] = {}
+        # The buffer lines are startup output, so once healthy the answer is fixed per process; the status poll
+        # would otherwise rescan up to _STDOUT_TRIM_AT lines on the event loop every few seconds.
+        ids = tuple(physical_ids)
+        cached = getattr(self, "_reclaimable_gpu_cache", None)
+        if cached is not None and cached[0] is process and cached[1] == ids:
+            return dict(cached[2]) if cached[2] else None
+        healthy = bool(getattr(self, "_healthy", False))
+        reported: Optional[dict[int, float]] = {}
         for line in list(self._stdout_lines):
             match = _GPU_MODEL_BUFFER_RE.search(line)
             if match is None:
                 continue
             ordinal = int(match.group(1))
             if ordinal >= len(physical_ids):
-                return None
+                reported = None
+                break
             physical = int(physical_ids[ordinal])
             reported[physical] = reported.get(physical, 0.0) + float(match.group(2)) / 1024.0
         if self._process is not process or process.poll() is not None:
             return None
+        if healthy:
+            self._reclaimable_gpu_cache = (process, ids, dict(reported) if reported else None)
         return reported or None
 
     @property
@@ -104,6 +168,23 @@ class _PropertiesMixin:
     @property
     def model_identifier(self) -> Optional[str]:
         return self._model_identifier
+
+    def _estimate_countable_message(self, message: dict) -> int:
+        return estimate_message_tokens_with_priced_images(message, self._price_image)
+
+    def _countable_messages(self, messages: list[dict]) -> list[dict]:
+        """The counting copy every fit and size probe uses: images charged, audio and video dropped."""
+        from core.inference.mcp_images import prepare_image_turn_boundaries
+
+        # Before pricing: a stand-in hides an image turn from Ministral's alternation fix-up.
+        messages = prepare_image_turn_boundaries(
+            messages,
+            getattr(self, "_chat_template_override", None) or getattr(self, "_chat_template", None),
+        )
+        return messages_with_priced_images(messages, self._price_image)
+
+    def _price_image(self, part: dict) -> int:
+        return _image_token_price(self, part)
 
     @property
     def is_vision(self) -> bool:
@@ -159,15 +240,11 @@ class _PropertiesMixin:
         """Whether a different llama-server is installed than the live one was launched
         from. False when either side is unreadable, so an install still in flight is not
         read as a finished one; the next Apply asks again."""
-        # Same path space as the launch recorded: _binary_revision keys on the
-        # path string, and on macOS the launch resolves a managed entrypoint to
-        # its target, so comparing an unresolved discovery path against it would
-        # differ for the same unchanged file and reload the model on every Apply.
+        # Same path space as the launch (macOS resolves managed entrypoints), else every Apply reloads.
         return self._binary_changed_since_revision(self._launch_binary_revision)
 
     def _binary_changed_since_revision(self, revision: tuple) -> bool:
-        """Whether the current selection differs from a captured binary."""
-        # No captured revision is no baseline, and discovery cannot recover one.
+        """No captured revision means no baseline, and discovery cannot recover one, so answer False."""
         if not revision:
             return False
         current = self._binary_revision(
@@ -178,24 +255,13 @@ class _PropertiesMixin:
         return current != revision
 
     def spec_binary_fallback_can_retry(self) -> bool:
-        """Whether the binary has since gained what the last load stood down for.
-
-        The UI tells the user to run `unsloth studio update`, which leaves the request
-        identical, so the duplicate-load comparators would otherwise dedup the very
-        reload that update was meant to enable.
-
-        Ask about the capability the drafter kind needs, not the reason: every kind
-        records "binary_no_mtp", so asking about MTP after a DSpark stand-down says yes
-        on a build that never gained draft-dspark. "binary_outdated" is an unknown
-        architecture, which no flag advertises, so that one compares the file.
-        """
+        """Checks the drafter's capability, not the stand-down reason; binary_outdated compares the file."""
         if self._spec_fallback_reason == "binary_outdated":
             return self._binary_changed_since_launch()
         if self._spec_fallback_reason != "binary_no_mtp":
             return False
         if self._launch_binary_revision and not self._binary_changed_since_launch():
-            # An untouched file advertises nothing new, and this runs on every
-            # duplicate-load check where the probe below is a subprocess.
+            # Skip the probe for an untouched file: it advertises nothing new, and this runs on every load check.
             return False
         capability = _SPEC_KIND_CAPABILITY.get(self._spec_drafter_kind or "")
         if capability is None:
@@ -215,10 +281,8 @@ class _PropertiesMixin:
 
     @property
     def requested_extra_args(self) -> Optional[List[str]]:
-        """Extras the last load was INVOKED with (a copy), before any launch-time
-        rewrite; falls back to the launched list when nothing was rewritten. Keeps a
-        rewrite the caller cannot see (the virtualised-Metal drafter drop) from reading
-        as a settings change in the duplicate-load comparators."""
+        """Extras as invoked, before launch-time rewrites, so a rewrite does not look like a
+        settings change."""
         stored = (
             self._requested_extra_args
             if self._requested_extra_args is not None
@@ -271,6 +335,29 @@ class _PropertiesMixin:
         return self._gpu_offload_layers[1] if self._gpu_offload_layers else None
 
     @property
+    def expert_cache_mib(self) -> Optional[float]:
+        return self._placement_value("expert_cache_mib")
+
+    @property
+    def overflow_layers(self) -> Optional[int]:
+        """Under --moe-cache-mib auto every routed expert is in RAM, so this is every MoE layer."""
+        if self._placement_value("all_experts_in_ram"):
+            return self.n_moe_layers or None
+        return self._placement_value("overflow_layers")
+
+    @property
+    def host_weights_mib(self) -> Optional[float]:
+        return self._placement_value("host_mib")
+
+    @property
+    def gpu_weights_mib(self) -> Optional[float]:
+        return self._placement_value("gpu_mib")
+
+    def _placement_value(self, key: str):
+        placement = getattr(self, "_weight_placement", None)
+        return placement.get(key) if placement else None
+
+    @property
     def gpu_backend_unavailable(self) -> bool:
         """Studio found a GPU for this load but llama.cpp reported none."""
         return self._gpu_backend_unavailable
@@ -303,10 +390,8 @@ class _PropertiesMixin:
 
     @property
     def requested_load_mode(self) -> Optional[str]:
-        """--load-mode the last load asked for; None means llama.cpp's own auto.
-        The Model Memory settings may have replaced it, which the settings route
-        reports; this stays the caller's intent so the dedupe compares like with
-        like."""
+        """The caller's --load-mode intent, not any Model Memory override, so dedupe compares like
+        with like."""
         return self._requested_load_mode
 
     @property
@@ -326,24 +411,12 @@ class _PropertiesMixin:
 
     @property
     def idle_slot_clearing_active(self) -> bool:
-        """Whether an idle slot's KV cells actually come back on this server.
-
-        Under ``--kv-unified`` an idle slot keeps its cells until ``prompt_clear()``,
-        which llama-server runs only under ``--cache-idle-slots``. False means releasing
-        a slot frees nothing, so nothing may be handed to another caller on the strength
-        of it. False until a load has spawned, which is the safe answer.
-        """
+        """Idle KV cells come back only if True; False means nothing may be handed to another caller."""
         return self._idle_slot_clearing_active
 
     @property
     def max_context_length(self) -> Optional[int]:
-        """Return the largest context that fits on this hardware at load time.
-
-        The UI's "safe zone" warning threshold: the ``_fit_context_to_vram``
-        binary-search cap for the best GPU subset, or the 4096 fallback if the
-        weights exceed 90% of every subset. The slider ceiling is
-        ``native_context_length``; dragging above this triggers the warning.
-        """
+        """UI safe-zone threshold: the VRAM-fit cap, or 4096 when weights exceed 90% of every subset."""
         return self._max_context_length or self._context_length
 
     @property
@@ -386,38 +459,104 @@ class _PropertiesMixin:
 
     @staticmethod
     def _read_rss_bytes(pid: int) -> Optional[int]:
-        """Resident set size of ``pid`` in bytes, from /proc/<pid>/status (Linux).
-        0 when the status has no VmRSS line (zombie / kernel thread); None where
-        /proc is unavailable (macOS/Windows) or the value is unreadable."""
+        """``RssFile`` of ``pid`` (Linux), ``VmRSS`` before kernel 4.5; 0 when neither, None without /proc.
+        Not ``RssAnon``: CUDA pins the host weight buffer (``CUDA_Host``) before a byte of it is read."""
+        vm_rss = None
         try:
             with open(f"/proc/{pid}/status", "r", encoding = "utf-8") as f:
                 for line in f:
-                    if line.startswith("VmRSS:"):
-                        # IndexError guards a "VmRSS:" line with no value column.
+                    # IndexError guards a line with no value column.
+                    if line.startswith("RssFile:"):
                         return int(line.split()[1]) * 1024  # kB -> bytes
+                    if line.startswith("VmRSS:"):
+                        vm_rss = int(line.split()[1]) * 1024
         except (FileNotFoundError, PermissionError, ValueError, IndexError, OSError):
             return None
-        return 0  # readable but no VmRSS line
+        return 0 if vm_rss is None else vm_rss
+
+    @staticmethod
+    def _darwin_rusage(pid: int) -> Optional[tuple]:
+        """``(ri_diskio_bytesread, ri_phys_footprint)`` of ``pid`` from proc_pid_rusage, or None."""
+        import ctypes
+
+        class _RusageInfoV2(ctypes.Structure):
+            _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [
+                (name, ctypes.c_uint64)
+                for name in (
+                    "ri_user_time",
+                    "ri_system_time",
+                    "ri_pkg_idle_wkups",
+                    "ri_interrupt_wkups",
+                    "ri_pageins",
+                    "ri_wired_size",
+                    "ri_resident_size",
+                    "ri_phys_footprint",
+                    "ri_proc_start_abstime",
+                    "ri_proc_exit_abstime",
+                    "ri_child_user_time",
+                    "ri_child_system_time",
+                    "ri_child_pkg_idle_wkups",
+                    "ri_child_interrupt_wkups",
+                    "ri_child_pageins",
+                    "ri_child_elapsed_abstime",
+                    "ri_diskio_bytesread",
+                    "ri_diskio_byteswritten",
+                )
+            ]
+
+        try:
+            info = _RusageInfoV2()
+            # RUSAGE_INFO_V2 = 2
+            if (
+                ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage(pid, 2, ctypes.byref(info))
+                != 0
+            ):
+                return None
+            return int(info.ri_diskio_bytesread), int(info.ri_phys_footprint)
+        except (OSError, AttributeError, ValueError):
+            return None
+
+    @staticmethod
+    def _read_load_bytes(pid: int) -> Optional[int]:
+        """Bytes ``pid`` has taken in, for a load that streams weights to VRAM and keeps little RSS.
+
+        Linux: ``rchar`` (page cache hits included). Windows: psutil read_bytes. macOS: the larger of
+        disk bytes read (a cold mmap Metal load) and physical footprint (a copy into Metal or CPU
+        buffers)."""
+        if os.path.isdir("/proc"):
+            try:
+                with open(f"/proc/{pid}/io", "r", encoding = "utf-8") as f:
+                    for line in f:
+                        if line.startswith("rchar:"):
+                            return int(line.split()[1])
+            except (FileNotFoundError, PermissionError, ValueError, IndexError, OSError):
+                return None
+            return None
+        if sys.platform == "darwin":
+            usage = LlamaCppBackend._darwin_rusage(pid)
+            return max(usage) if usage else None
+        if sys.platform != "win32":
+            return None
+        try:
+            import psutil
+            return int(psutil.Process(pid).io_counters().read_bytes)
+        except Exception:
+            return None
 
     def load_progress(self) -> Optional[dict]:
         """Return live model-load progress, or None if not loading.
 
-        During warm-up llama-server mmaps weight shards into page cache before
-        pushing layers to VRAM, a window where status only reports ``loading``
-        and the UI spinner looks stuck for minutes on large MoEs. Samples
-        ``/proc/<pid>/status VmRSS`` against the sum of GGUF shard sizes for a
-        real progress bar. Returns ``None`` when no load is in flight.
+        ``bytes_loaded`` is the larger of the bytes read and Linux file-backed RSS; never a working set,
+        which counts buffers allocated before any read. The total includes projector, drafter and adapters.
 
         Shape::
 
             {
                 "phase": "mmap" | "ready",
-                "bytes_loaded": int,   # VmRSS of the llama-server
-                "bytes_total":  int,   # sum of shard file sizes
+                "bytes_loaded": int,   # as above, never decreasing
+                "bytes_total":  int,   # weight files the server loads
                 "fraction": float,     # bytes_loaded / bytes_total, 0..1
             }
-
-        Linux-only; returns ``None`` where ``/proc/<pid>/status`` is unavailable.
         """
         proc = self._process
         if proc is None:
@@ -426,46 +565,21 @@ class _PropertiesMixin:
         if pid is None:
             return None
 
-        # Sum shard sizes (primary + any extras alongside).
-        bytes_total = 0
         gguf_path = self._gguf_path
-        if gguf_path:
-            primary = Path(gguf_path)
-            try:
-                if primary.is_file():
-                    bytes_total += primary.stat().st_size
-            except OSError:
-                pass
-            # Extra shards share the primary's prefix before the shard index.
-            try:
-                parent = primary.parent
-                stem = primary.name
-                m = _SHARD_RE.match(stem)
-                prefix = m.group(1) if m else None
-                if prefix and parent.is_dir():
-                    prefix_lower = prefix.lower()
-                    for sibling in parent.iterdir():
-                        if (
-                            sibling.is_file()
-                            and sibling.name.lower().startswith(prefix_lower)
-                            and sibling.name != stem
-                            and sibling.suffix.lower() == ".gguf"
-                        ):
-                            try:
-                                bytes_total += sibling.stat().st_size
-                            except OSError:
-                                pass
-            except OSError:
-                pass
+        bytes_total = _gguf_set_bytes(Path(gguf_path)) if gguf_path else 0
+        launched = getattr(self, "_process_env", None)
+        bytes_total += _extra_weight_file_bytes(
+            getattr(proc, "args", None),
+            launched[1] if launched is not None and launched[0] is proc else None,
+        )
 
-        # VmRSS of the llama-server; None where /proc is unavailable.
-        bytes_loaded = LlamaCppBackend._read_rss_bytes(pid)
-        if bytes_loaded is None:
+        rss = LlamaCppBackend._read_rss_bytes(pid)
+        read = LlamaCppBackend._read_load_bytes(pid)
+        if rss is None and read is None:
             return None
+        bytes_loaded = max(rss or 0, read or 0)
 
-        # RSS climbs as weights page in, then drops once -ngl offloads them to
-        # VRAM and the mmap pages are freed. Hold a per-process high-water mark
-        # so the bar never regresses to ~8% mid-load (#5740).
+        # RSS drops once -ngl offloads to VRAM; keep a high-water mark so progress never regresses.
         hwm_pid, hwm = getattr(self, "_load_rss_hwm", (None, 0))
         hwm = bytes_loaded if hwm_pid != pid else max(hwm, bytes_loaded)
         self._load_rss_hwm = (pid, hwm)
@@ -474,12 +588,10 @@ class _PropertiesMixin:
         phase = "ready" if self._healthy else "mmap"
         fraction = 0.0
         if bytes_total > 0:
+            # Reads past the weights (headers, a second pass) must not push the figure past the total.
+            bytes_loaded = min(bytes_loaded, bytes_total)
             fraction = min(1.0, bytes_loaded / bytes_total)
-        # Once llama-server is healthy the load is complete by definition. With
-        # layers offloaded to VRAM (-ngl) the process releases the mmap'd weight
-        # pages, so VmRSS sinks back well below the shard total; the raw RSS
-        # fraction would then report a partial (~8%) load indefinitely and freeze
-        # a fraction-driven progress bar even though the model is ready (#5740).
+        # Healthy means loaded: offloaded mmap pages leave RSS far below the shard total.
         if self._healthy:
             if bytes_total > 0:
                 bytes_loaded = bytes_total
@@ -497,12 +609,7 @@ class _PropertiesMixin:
 
     @property
     def markup_profile(self):
-        """This model's own structural markers, from its GGUF template and vocabulary.
-
-        None when neither could be read, which falls back to the curated patterns: a model
-        we cannot profile stays fully swept rather than unprotected (#7066)."""
-        # getattr, not attribute access: a lightweight backend double in a test never runs
-        # __init__, and an unprofiled model must fall back rather than raise.
+        """None if template and vocab are unreadable; curated patterns then apply so the model stays swept, not unprotected (getattr: test doubles skip __init__)."""
         cached = getattr(self, "_markup_profile", None)
         if cached is None:
             from core.inference.chat_template_helpers import model_markup
@@ -524,13 +631,7 @@ class _PropertiesMixin:
         return self._chat_template_override
 
     def _effective_chat_template(self, chat_template_override: Optional[str]) -> Optional[str]:
-        """The template to launch with: the caller's override, else a repaired copy of the
-        GGUF's own when llama-server's Jinja cannot parse it.
-
-        The repair stays out of ``_chat_template_override``, which the reload check
-        compares against the request's intent -- a value no request sends would reload the
-        model on every Apply.
-        """
+        """Caller override, else a repaired GGUF template when llama-server Jinja cannot parse it; repair stays out of _chat_template_override or every Apply reloads."""
         if chat_template_override:
             return chat_template_override
         from core.inference.chat_template_helpers import repair_numeric_member_access
@@ -578,13 +679,16 @@ class _PropertiesMixin:
         effort: Optional[str] = None,
     ) -> dict:
         if self._reasoning_style == "enable_thinking_effort":
-            # GLM-5.2-style: enable_thinking is the on/off gate; when on, leave
-            # the template's default effort (max) in place.
+            # GLM-5.2 style: enable_thinking is the on/off gate; when on, keep the template's default effort.
             return {"enable_thinking": enable_thinking}
         if self._reasoning_style == "reasoning_effort":
+            effort = _fit_reasoning_effort_to_template(
+                _rendered_chat_template(self),
+                effort or ("high" if enable_thinking else "low"),
+                thinking_off = not effort and not enable_thinking,
+            )
             return _coerce_reasoning_effort(
-                getattr(self, "_architecture", None),
-                {"reasoning_effort": effort or ("high" if enable_thinking else "low")},
+                getattr(self, "_architecture", None), {"reasoning_effort": effort}
             )
         return {"enable_thinking": enable_thinking}
 
@@ -701,24 +805,13 @@ class _PropertiesMixin:
         reasoning_effort: Optional[str] = None,
         preserve_thinking: Optional[bool] = None,
     ) -> Optional[dict]:
-        """Build chat_template_kwargs from per-request reasoning fields.
-
-        Merges the active model's reasoning style (``enable_thinking`` or
-        ``reasoning_effort``) plus the independent ``preserve_thinking``
-        kwarg when the template supports it.
-        """
+        """preserve_thinking is merged only when the template supports it, independent of reasoning
+        style."""
         kwargs: dict = {}
-        # Always-on reasoning models hardcode <think> tags and don't consume
-        # enable_thinking / reasoning_effort -- skip.
+        # Always-on models hardcode <think> tags and ignore enable_thinking / reasoning_effort; skip them.
         if self._supports_reasoning and not self._reasoning_always_on:
             if self._reasoning_style == "enable_thinking_effort":
-                # GLM-5.2-style: enable_thinking gates thinking on/off, and the
-                # reasoning_effort level (e.g. 'high' | 'max') is only meaningful
-                # while thinking is on. Disabling is enable_thinking=false; a raw
-                # API caller can also disable via the OpenAI-style
-                # reasoning_effort="none" sentinel. We never coerce off into a
-                # 'low' effort the way gpt-oss does (those models genuinely
-                # cannot disable).
+                # GLM-5.2 style: effort only matters while thinking is on; never coerce off into 'low'.
                 thinking_off = enable_thinking is False or reasoning_effort == "none"
                 # Clamp unsupported levels to avoid template defaults or errors.
                 effort = (
@@ -736,15 +829,15 @@ class _PropertiesMixin:
                             f"reasoning_effort '{reasoning_effort}' is not offered by this "
                             f"template {list(self._reasoning_effort_levels)}; using '{effort}'"
                         )
-                # A named effort level implies thinking on, so emit enable_thinking
-                # even if the caller sent only reasoning_effort (else the template
-                # defaults it off and the requested level never renders).
+                # A named effort implies thinking on, else the template defaults it off.
                 if enable_thinking is not None or reasoning_effort == "none" or effort is not None:
                     kwargs["enable_thinking"] = not thinking_off
                 if effort is not None:
                     kwargs["reasoning_effort"] = effort
             elif self._reasoning_style == "reasoning_effort":
                 _levels = getattr(self, "_reasoning_effort_levels", None) or ()
+                _template = _rendered_chat_template(self)
+                reasoning_effort = _fit_reasoning_effort_to_template(_template, reasoning_effort)
                 if reasoning_effort in ("none", "low", "medium", "high") or (
                     reasoning_effort in _levels
                 ):
@@ -752,7 +845,11 @@ class _PropertiesMixin:
                 elif reasoning_effort == "minimal":
                     kwargs["reasoning_effort"] = "low"
                 elif enable_thinking is not None:
-                    kwargs["reasoning_effort"] = "high" if enable_thinking else "low"
+                    kwargs["reasoning_effort"] = _fit_reasoning_effort_to_template(
+                        _template,
+                        "high" if enable_thinking else "low",
+                        thinking_off = not enable_thinking,
+                    )
             else:
                 if enable_thinking is not None:
                     kwargs["enable_thinking"] = enable_thinking
@@ -763,17 +860,14 @@ class _PropertiesMixin:
 
     @property
     def supports_tools(self) -> bool:
-        # DiffusionGemma serves via the visual runner, whose live per-step canvas
-        # frames are dropped by the agentic tool loop; never route it through tools.
+        # Visual runner frames are dropped by the tool loop, so never route through tools.
         if self._is_diffusion:
             return False
         return self._supports_tools
 
     @property
     def supports_tool_passthrough(self) -> bool:
-        # supports_tools is forced off for DiffusionGemma (its agentic loop drops the
-        # per-step canvas frames), but client passthrough skips that loop, so it uses
-        # the real _supports_tools.
+        # Passthrough skips the tool loop, so diffusion keeps the real _supports_tools.
         return self._supports_tools
 
     @property
@@ -797,16 +891,7 @@ class _PropertiesMixin:
 
     @property
     def holds_no_vram(self) -> bool:
-        """Whether the resident server is a confirmed zero-VRAM launch, so the GPU
-        arbiter can leave an image/video pipeline alone when re-asserting ownership.
-
-        True for a manual zero-offload load whose argv carried no GPU companion, pin
-        or tensor mode (``_gpu_offload_active`` None or True keeps the normal path),
-        and for an arch-gated launch masked onto the CPU by the "-1" sentinel
-        (#7624). The latter arrives through an AUTOMATIC request, so demanding manual
-        mode would answer False for the case routes/inference.py:8206 documents and
-        leave a VRAM-less server holding the CHAT claim, unloadable by an owner it
-        never competed with."""
+        """True for manual zero-offload loads and arch-gated launches masked to CPU by the -1 sentinel, even automatic ones; else a VRAM-less server holds CHAT."""
         if self._arch_gate_forced_cpu:
             return True
         # A diffusion runner reports offload False only when its GPU token was masked: a
@@ -821,10 +906,8 @@ class _PropertiesMixin:
 
     @property
     def diffusion_requested_ngl(self) -> Optional[int]:
-        """The diffusion split the live runner was ASKED for, or None for the default.
-
-        Differs from ``gpu_layers`` only when the shim could not take the split: that
-        reports what is running, this keeps the ask so a repeat still dedupes."""
+        """The ask, not what runs, so repeats still dedupe; differs from gpu_layers only if the shim
+        refused."""
         return getattr(self, "_diffusion_requested_ngl", None)
 
     @property
@@ -834,11 +917,8 @@ class _PropertiesMixin:
 
     @property
     def tensor_split(self) -> Optional[List[float]]:
-        """Relative model share per GPU (--tensor-split) for the active load.
-
-        Manual mode returns the requested ratio; auto tensor-parallel mode
-        returns the normalized ratio that was actually emitted, or None when
-        the planner left the split to llama.cpp's default."""
+        """Manual returns the requested ratio; auto returns the normalized ratio actually emitted,
+        or None."""
         if self._tensor_split is not None:
             return self._tensor_split
         if self._auto_tensor_split_emitted is not None:
@@ -878,21 +958,12 @@ class _PropertiesMixin:
         return requested == raw or requested == effective
 
     def _adopt_widened_pin(self, pin_ids: List[int]) -> None:
-        """Record a companion-widened explicit pin as the effective one (#12467).
-
-        Else /status and dedupe keep the pre-widen pin and a reload drops the companion
-        card. A launch that recorded none (forced CPU) stays None.
-        """
+        """Adopt the companion-widened pin as effective; else /status and dedupe keep the pre-widen pin and a reload drops the companion card; forced CPU stays None."""
         if self._gpu_ids is not None:
             self._gpu_ids = [int(i) for i in pin_ids]
 
     def _record_matching_gpu_request(self, gpu_ids: Optional[List[int]]) -> None:
-        """Adopt the caller's explicit pool after a full already-loaded match.
-
-        Matching an effective subset avoids a reload, but the incoming request
-        is still the user's latest placement intent. Record it so status and a
-        later reload do not restore GPUs the user just removed.
-        """
+        """Recorded even on a match so a reload does not restore GPUs the user just removed."""
         if self._is_diffusion:
             full = sorted(int(x) for x in gpu_ids) if gpu_ids else None
             # Keep the whole pick when the fit moved off its lowest GPU (a split, or one
@@ -933,10 +1004,7 @@ class _PropertiesMixin:
             self._requested_n_batch != intent.n_batch or self._requested_n_ubatch != intent.n_ubatch
         ):
             return False
-        # Same rule for the tuning group: requested against requested, so a server
-        # launched with a different value is a reload. A blank value is the llama.cpp
-        # default, so two loads that asked for nothing still match, while clearing a
-        # knob relaunches.
+        # Requested against requested; a blank value is the llama.cpp default.
         if not self._is_diffusion and (
             _normalized_load_mode(self._requested_load_mode)
             != _normalized_load_mode(intent.load_mode)
@@ -946,21 +1014,12 @@ class _PropertiesMixin:
         ):
             return False
 
-        # The KV cache comparison waits for _invoked_extras below: the scalar
-        # self._cache_type_kv alone cannot describe this launch.
-
-        # Toggling vision changes which files the child opens, so it cannot be
-        # satisfied by a live server that was launched the other way. Not on the
-        # diffusion path: _start_diffusion_server ignores the switch and records it
-        # False, so comparing it there makes every identical repeat request a
-        # mismatch and tears down a runtime that was already the one asked for.
+        # Vision toggles change which files the child opens, so a server launched the other way cannot match; not on diffusion, which records False.
         if not self._is_diffusion and bool(self._disable_vision) != bool(intent.disable_vision):
             return False
 
         extra_args = list(effective_extra_args) if effective_extra_args is not None else None
-        # Request against request. The live EFFECTIVE value can carry an inherited
-        # LLAMA_ARG_THINK_BUDGET* that no request can express, so comparing against it would
-        # tear down a healthy server on every load and never converge.
+        # Compare requests: an inherited LLAMA_ARG_THINK_BUDGET* would never converge.
         if not self._is_diffusion and (
             self._requested_reasoning_budget
             != resolve_reasoning_budget(extra_args, intent.reasoning_budget)
@@ -968,37 +1027,21 @@ class _PropertiesMixin:
             != resolve_reasoning_budget_message(extra_args, intent.reasoning_budget_message)
         ):
             return False
-        # A request omitting the extras field inherits the LAUNCHED list; anything else is
-        # the caller's own. A launch-time rewrite (drafter drop, MTP crash replay) makes
-        # the two differ, and the equality below wants what the load was INVOKED with.
-        # Judged on the flag, not on value equality: a caller that deliberately sends the
-        # stripped list is clearing the failed drafter and must not read as inheriting it.
+        # Omitted extras inherit the LAUNCHED list; judge on the flag, not value equality, since a deliberate stripped list must not read as inheriting.
         _invoked_extras = self.requested_extra_args if intent.extra_args_inherited else extra_args
-        # Requested against requested, per axis, the same rule the tuning group above
-        # uses. The scalar self._cache_type_kv holds only what Unsloth emitted as a
-        # managed flag, so a cache set through extras or the env records None on one
-        # side and a type on the other, and an identical repeat /load tears down a
-        # healthy server. _requested_cache_types is what the live server was ASKED for,
-        # so two equal requests match even when the launch rewrote the cache underneath
-        # them. Before ggml-org/llama.cpp#23792 the tensor gate hid this by rewriting
-        # the cache away; a layer load has always had it.
+        # Requested against requested per axis; the scalar _cache_type_kv misses extras/env.
         if self._requested_cache_types != _planned_main_cache_types(
             intent.cache_type_kv, _invoked_extras
         ):
             return False
-        # A virtualised Metal device never launches a tensor split (CPU-pinned, and
-        # --split-mode is overridden with the default layer split), so judge the
-        # normalized request there: an extras `-sm tensor`, which the pin deliberately
-        # leaves in place, would otherwise never match.
+        # Virtualised Metal never launches a tensor split, so judge the normalized request, else an extras -sm tensor the pin leaves in place would never match.
         if _metal_device_is_paravirtual():
             if self._tensor_parallel:
                 return False
         elif not _tensor_parallel_matches_loaded(
             extra_args, intent.tensor_parallel, self._tensor_parallel
         ):
-            # A mode the gate normalised away is this request normalized, not a
-            # different one. Guarded on a RECORDED drop, so a launch that dropped
-            # nothing cannot excuse a live tensor server against a layer request.
+            # Only a RECORDED drop excuses a live layer server against a tensor request.
             if not (self._arch_gate_dropped_tensor_parallel and not self._tensor_parallel):
                 return False
         if (
@@ -1012,8 +1055,7 @@ class _PropertiesMixin:
             requested_ngl = _diffusion_manual_ngl(intent.gpu_memory_mode, intent.gpu_layers)
             if requested_ngl != self.diffusion_requested_ngl:
                 return False
-            # A split dropped by an older shim still matches until the shim gains
-            # --ngl support, at which point the same request should apply it.
+            # An older shim's dropped split matches until it gains --ngl; then the same request applies it.
             if (
                 requested_ngl is not None
                 and self._gpu_layers != requested_ngl
@@ -1034,9 +1076,7 @@ class _PropertiesMixin:
                         or (
                             (tuple(self._tensor_split) if self._tensor_split else None)
                             != (intent.tensor_split or None)
-                            # Same rule as the mode above: a dropped ratio is this
-                            # request normalized. Guarded on a RECORDED drop, never
-                            # None == None. Any other ratio reloads.
+                            # A recorded drop (never None == None) means this request, so only other ratios reload.
                             and not (
                                 self._arch_gate_dropped_tensor_split is not None
                                 and self._arch_gate_dropped_tensor_split
@@ -1047,10 +1087,7 @@ class _PropertiesMixin:
                 )
             ):
                 return False
-            # Auto tensor-parallel mode can still carry a user ratio, which the
-            # planner's own split does not describe. Two otherwise identical auto
-            # requests with different ratios must not reuse the same server --
-            # and two with the SAME ratio, or with none at all, must.
+            # Auto mode can carry a user ratio the planner does not describe, so reuse needs an identical ratio.
             if (
                 intent.gpu_memory_mode != "manual"
                 and self._tensor_parallel
@@ -1073,10 +1110,7 @@ class _PropertiesMixin:
                 return False
         elif speculative_type != (backend_spec or "auto"):
             return False
-        # Reload so the next Apply retries the drafter fetch. Worth it when the
-        # repo publishes a drafter and the fetch failed; not when it publishes
-        # none, which for DSpark is the permanent state of every repo but one and
-        # would relaunch an identical server forever.
+        # Retry only when the repo publishes a drafter, else it relaunches forever.
         if (
             intent.gguf_path is None
             and self._spec_fallback_reason == "drafter_not_found"
@@ -1084,32 +1118,21 @@ class _PropertiesMixin:
             and self._mtp_draft_suppressed_path is None
             and speculative_type in ("auto", "mtp", "mtp+ngram", "dspark", "dflash")
             and not (self._spec_drafter_kind == "dspark" and self._dspark_sidecar_absent)
-            # DFlash asks through _dflash_retry_needed below, which is set only for
-            # retryable failures. A permanent listing error records no answer, so
-            # _dflash_sidecar_absent stays False and this arm relaunched forever.
+            # DFlash uses _dflash_retry_needed; this arm would relaunch forever on permanent errors.
             and self._spec_drafter_kind != "dflash"
             and not spec_owned_by_extra_args
         ):
             return False
-        # The stand-down the UI asks the user to fix by updating llama.cpp. That leaves
-        # the request identical, so without this the repaired load never happens.
+        # Stand-down asks the user to update llama.cpp; the identical request must reload once repaired.
         if (
             speculative_type in ("auto", "mtp", "mtp+ngram", "dspark", "dflash", "ngram")
             and self.spec_binary_fallback_can_retry()
         ):
             return False
-        # Under Auto a failed fetch records no fallback reason, so the branch above
-        # cannot see it. A repo with no sidecar is _dflash_sidecar_absent's business.
+        # Under Auto a failed fetch records no fallback reason, so the branch above cannot see it.
         if self._dflash_retry_needed and speculative_type in ("auto", "dflash"):
             return False
-        # Retry a runtime the probe degraded, once the probe starts answering (#8317).
-        # The retry window is worth nothing if Apply keeps deduping against the degraded
-        # runtime, since nothing would re-probe. The slot clamp is the trap:
-        # _requested_n_parallel stores the ASK, so a clamped runtime compares equal and
-        # would never be revisited. One reload, not a loop -- it records the conclusive
-        # probe and clears this flag, so a build that really lacks the capability
-        # re-derives the same runtime and dedupes after. The probe is cached, so it is
-        # free on the only path that reaches it.
+        # Reload once after a degraded probe starts answering, else Apply dedupes forever.
         if (
             self._capability_probe_inconclusive
             and not self._is_diffusion
@@ -1119,8 +1142,7 @@ class _PropertiesMixin:
 
         compared_draft_n_max = self._spec_draft_n_max
         if self._spec_fallback_reason == "runtime_error" and self._last_load_intent is not None:
-            # The MTP-free recovery clears the runtime value but retains the
-            # user's prior value in its intent. Only a changed value should retry MTP.
+            # MTP-free recovery keeps the user's prior value in intent; only a changed value should retry MTP.
             compared_draft_n_max = self._last_load_intent.spec_draft_n_max
         draft_depth_matters = (
             self._speculative_type in ("draft-mtp", "draft-dspark", "draft-dflash")
@@ -1148,15 +1170,7 @@ class _PropertiesMixin:
             "dflash",
         ):
             try:
-                # Auto counts as dspark/dflash once it resolved that way: the launch
-                # stored that sidecar, so comparing the MTP field (None for these
-                # repos) against it would reload a healthy server on every Apply.
-                # _speculative_type is reset to "default" when a drafter fails to
-                # start and the drafterless retry succeeds, but the launch still
-                # recorded the sidecar it resolved. Keying the comparison off it
-                # would then compare the intent's (empty) MTP path against that
-                # recorded sidecar and reload a healthy server on every Apply.
-                # _spec_drafter_kind survives the fallback, so it decides here.
+                # Auto dspark or dflash counts as such; key off _spec_drafter_kind (survives fallback), not _speculative_type, or every Apply reloads a healthy server.
                 _compare_dspark = speculative_type == "dspark" or (
                     speculative_type == "auto"
                     and (
@@ -1178,19 +1192,14 @@ class _PropertiesMixin:
                 else:
                     intent_draft = intent.mtp_draft_path
                 requested_draft = Path(intent_draft).resolve() if intent_draft else None
-                # A drafter the last load dropped on purpose counts as launched here:
-                # the file is still there, so comparing it against the stored None
-                # would reload the same drafter-free server forever.
+                # A drafter dropped on purpose counts as launched, else this reloads forever.
                 _loaded = self._mtp_draft_path or self._mtp_draft_suppressed_path
                 loaded_draft = Path(_loaded).resolve() if _loaded else None
             except OSError:
                 return False
             if requested_draft != loaded_draft:
                 return False
-            # Repair a rejected sidecar in place and a path-only comparison would keep the
-            # drafter-free server. Only the unloadable drop is re-asked: the paravirtual
-            # one is a property of the build, so the same bytes drop again. Cached on
-            # (path, mtime, size), so only a repaired file is reparsed.
+            # Only the unloadable drop is re-asked, since a paravirtual drop repeats for the same bytes; cache on (path, mtime, size) so only repaired files reparse.
             if (
                 self._mtp_draft_suppressed_reason == "unloadable"
                 and self._mtp_draft_suppressed_path
@@ -1206,11 +1215,8 @@ class _PropertiesMixin:
 
     @property
     def n_moe_layers(self) -> int:
-        """Number of MoE expert layers (the --n-cpu-moe ceiling), 0 if not MoE.
-
-        block_count minus the leading dense layers (which carry no experts):
-        --n-cpu-moe counts from layer 0, so those dense layers are no-ops.
-        """
+        """Excludes leading dense layers, since --n-cpu-moe counts from layer 0 and those carry no
+        experts."""
         if not self._n_experts or not self._n_layers:
             return 0
         return max(0, self._n_layers - (self._leading_dense_block_count or 0))
@@ -1219,17 +1225,7 @@ class _PropertiesMixin:
 
     @property
     def is_embedding_gguf(self) -> bool:
-        """Whether the loaded GGUF is an embedding model, from its pooling type.
-
-        Only MEAN, CLS and LAST pool into the one vector per sequence that
-        `/v1/embeddings` returns. NONE (0) pools nothing, and RANK (4) is a reranker
-        head: llama_context sizes its pooled buffer to n_cls_out while llama-server's
-        send_embedding reads n_embd_out floats out of it.
-
-        When the header omits pooling_type (common on dedicated encoder arches such as
-        nomic-bert), fall back to architecture and model-name hints so llama-server still
-        launches with --embedding (#9128).
-        """
+        """Only MEAN, CLS, LAST pool to one vector; NONE and RANK do not. Without pooling_type, fall back to arch and name hints so --embedding still launches."""
         pooling = getattr(self, "_pooling_type", None)
         if pooling is not None:
             return pooling in self._EMBEDDING_POOLING_TYPES
@@ -1248,26 +1244,15 @@ class _PropertiesMixin:
     def _resolve_cpu_moe_flag(
         n_cpu_moe: int, n_moe_layers: int, leading_dense: int
     ) -> Optional[int]:
-        """The --n-cpu-moe value (absolute first-N layers), or None to omit it.
-
-        Clamps the requested count to the model's MoE layers, then offsets past
-        the leading dense layers (--n-cpu-moe counts from layer 0). Returns None
-        for nothing-to-offload (0 requested) or a non-MoE model.
-        """
+        """Offset past leading dense layers (--n-cpu-moe counts from layer 0); None when nothing to
+        offload."""
         if n_cpu_moe <= 0 or n_moe_layers <= 0:
             return None
         return leading_dense + min(n_cpu_moe, n_moe_layers)
 
     @staticmethod
     def _sanitize_tensor_split(tensor_split: Optional[List[float]]) -> List[float]:
-        """Per-GPU shares with negative and non-finite entries clamped to 0.
-
-        A direct caller's negative entry would launch a placement different
-        from the ratio the UI showed, and inf would pass a plain ``> 0`` total
-        gate and emit ``--tensor-split inf,...``. Returns [] for input that
-        can't be read as floats (the length gate at the call site then drops
-        the split).
-        """
+        """Negative and non-finite shares become 0, since inf would pass a > 0 gate; unreadable input returns [] and the call site drops the split."""
         try:
             return [
                 x if math.isfinite(x) and x > 0.0 else 0.0 for x in (float(v) for v in tensor_split)
@@ -1277,19 +1262,7 @@ class _PropertiesMixin:
 
     @staticmethod
     def _format_tensor_split(values: List[float]) -> str:
-        """``--tensor-split`` text for a sanitized ratio, in plain decimal.
-
-        Fixed point rather than ``%g``, which renders a perfectly legal
-        ``1000000,1`` as ``1e+06,1``. ``std::stof`` reads that, but the argv a
-        user is asked to paste into a bug report should say what they asked
-        for, and a whole-number ratio should come back out as the ``3,1`` they
-        typed.
-
-        A ratio of very small numbers would round to ``0,0``, which llama.cpp
-        normalizes by dividing by a zero total. Only that case is rescaled, by
-        the largest weight -- free, because llama.cpp normalizes the list
-        anyway, so ``3,1`` and ``75,25`` are already the same instruction.
-        """
+        """Fixed-point, not %g (which prints 1000000,1 as 1e+06,1 in a pasted bug-report argv); a ratio that rounds to 0,0 is rescaled by its largest weight."""
 
         def _render(items):
             return [f"{x:.6f}".rstrip("0").rstrip(".") or "0" for x in items]
@@ -1301,22 +1274,192 @@ class _PropertiesMixin:
                 rendered = _render(v / peak for v in values)
         return ",".join(rendered)
 
+    def _mixed_pin_split(
+        self,
+        gpu_indices: List[int],
+        spill_inputs: Optional[dict],
+        shared_gpu_ids: Iterable[int],
+        extra_args: Optional[Iterable[str]],
+        env: Mapping[str, str],
+        *,
+        layer_min_gpus: int,
+        tensor_parallel: bool,
+        pin_owns_devices: bool = False,
+    ) -> Optional[List[float]]:
+        """The discrete-first split for a full-offload mixed Vulkan pin, or None to
+        leave llama.cpp's own split (the pre-existing behaviour) wherever its inputs
+        cannot be priced or someone else owns the placement."""
+        if (
+            not shared_gpu_ids
+            or spill_inputs is None
+            or tensor_parallel
+            # A downgraded tensor request keeps every device in use.
+            or layer_min_gpus > 1
+            # A GPU-resident separate drafter spreads over every device.
+            or spill_inputs["separate_draft_on_gpu"]
+            or spill_inputs.get("env_mmproj_unsized")
+            # A host-resident cache or projector draws on the pool the iGPU reports.
+            or spill_inputs.get("host_mmproj_bytes")
+            or not _kv_offload_from_args(extra_args, env)
+            or _extra_args_have_tensor_split(extra_args, env)
+            # argv only: a non-layer inherited LLAMA_ARG_SPLIT_MODE is popped before launch.
+            or _extra_args_split_mode(extra_args, {}) not in (None, "layer")
+            # Extras follow the generated --fit off; the fitter rejects a multi-device split.
+            or any(
+                str(a) in ("-fit", "--fit") or str(a).startswith(("-fit=", "--fit="))
+                for a in (extra_args or ())
+            )
+            # RPC devices go ahead of the local ones, so the shares would land on them.
+            or (_extra_args_device(extra_args, {"--rpc"}) or "").strip()
+            or str(env.get("LLAMA_ARG_RPC", "")).strip()
+            # Tensor overrides move bytes after the split is priced.
+            or _args_place_tensors_on_cpu(extra_args)
+            or _env_places_tensors_on_cpu(env)
+            # A projector pinned to another device is charged to device 0 below.
+            or (_extra_args_device(extra_args, {"--mmproj-device", "-mmdev"}) or "").strip()
+            or str(env.get("MTMD_BACKEND_DEVICE", "")).strip()
+            # A surviving device list owns the share order; a gpu_ids pin strips it.
+            or (
+                not pin_owns_devices
+                and (
+                    _extra_args_main_device(extra_args) is not None
+                    or str(env.get("LLAMA_ARG_DEVICE", "")).strip()
+                )
+            )
+        ):
+            return None
+        # Adapters may target only some layers, which a total cannot place.
+        if _sidecar_adapter_paths(extra_args):
+            return None
+        # A larger pass-through --parallel (last-wins) grows the cache priced here.
+        _np_override = _extra_args_n_parallel(extra_args, env)
+        if _np_override is not None and _np_override > int(spill_inputs.get("n_parallel") or 1):
+            return None
+        layout = self._tensor_spill_layout(spill_inputs.get("model_path"))
+        if layout is None or not layout.complete or not layout.blocks:
+            return None
+        n_blocks = len(layout.blocks)
+        kv_total = int(spill_inputs["kv_cache_bytes"] or 0)
+        kv_weights = list(spill_inputs.get("kv_layer_weights") or ())
+        if len(kv_weights) != n_blocks or sum(kv_weights) <= 0:
+            # MLA, hybrid recurrent and an unpriced sliding window are uneven (_kv_layer_weights).
+            if kv_total and (
+                self._kv_lora_rank is not None
+                or self._ssm_inner_size is not None
+                or self._sliding_window_pattern
+                or self._effective_sliding_window()
+            ):
+                return None
+            kv_weights = [1] * n_blocks
+        kv_scale = kv_total / sum(kv_weights)
+        layer_bytes = [
+            blk.spillable_bytes + blk.resident_bytes + w * kv_scale
+            for blk, w in zip(layout.blocks, kv_weights)
+        ]
+        # Trailing nextn rows count in llama.cpp's n_layer_all + 1; resident only with a draft.
+        n_mtp = int(self._nextn_predict_layers or 0) if layout.has_excluded_blocks else 0
+        if layout.has_excluded_blocks and n_mtp <= 0:
+            return None
+        mtp_row = (
+            layout.excluded_block_bytes / n_mtp
+            if n_mtp and spill_inputs.get("mtp_will_engage")
+            else 0.0
+        ) + max(kv_weights) * kv_scale  # archs walking n_layer_all cache these rows too
+        layer_bytes.extend([mtp_row] * n_mtp)
+        # The output layer rides the last row (the last device's run).
+        layer_bytes.append(layout.lm_head_bytes + layout.other_resident_bytes)
+        reserve = (
+            spill_inputs["compute_buffer_flat"]
+            + spill_inputs["extra_gpu_bytes"]
+            + int(spill_inputs.get("env_mmproj_bytes") or 0)
+        )
+        # As _planned_tensor_spill; a hybrid run may hold one attention layer over its share.
+        per_device = spill_inputs["ctx_compute_per_device"] + spill_inputs["soft_overhead"]
+        if 0 < layout.n_attention_layers < n_blocks and len(kv_weights) == n_blocks:
+            per_device += kv_total / layout.n_attention_layers
+        mib = 1024 * 1024
+        return self._discrete_first_split(
+            list(gpu_indices),
+            spill_inputs["gpu_usable_mib"],
+            shared_gpu_ids,
+            [x / mib for x in layer_bytes],
+            per_device / mib,
+            reserve / mib,
+            self._PIPELINE_PER_DEVICE_OVERHEAD_MIB,
+        )
+
+    @staticmethod
+    def _discrete_first_split(
+        gpu_indices: List[int],
+        usable_mib: dict[int, float],
+        shared_gpu_ids: Iterable[int],
+        layer_mib: List[float],
+        per_device_mib: float = 0.0,
+        main_reserve_mib: float = 0.0,
+        pipeline_mib: float = 0.0,
+    ) -> Optional[List[float]]:
+        """Layer-count ``--tensor-split`` shares over ``gpu_indices``: discrete cards first,
+        iGPUs (whose "free" is the host pool) take the overflow. llama.cpp cuts contiguous runs
+        by COUNT (get_layer_buft_list). None unless the pin mixes both kinds and every run fits."""
+        shared = set(shared_gpu_ids)
+        discrete = [i for i in gpu_indices if i not in shared]
+        igpus = [i for i in gpu_indices if i in shared]
+        n = len(layer_mib)
+        if not discrete or not igpus or n == 0:
+            return None
+        room = {
+            i: usable_mib.get(i, 0.0)
+            - per_device_mib
+            - (main_reserve_mib if k == 0 else pipeline_mib)
+            for k, i in enumerate(gpu_indices)
+        }
+        prefix = [0.0]
+        for mib in layer_mib:
+            prefix.append(prefix[-1] + mib)
+
+        def most_layers(cap: float) -> int:
+            k = 0
+            while k < n and max(prefix[j + k + 1] - prefix[j] for j in range(n - k)) <= cap:
+                k += 1
+            return k
+
+        counts: dict[int, float] = {}
+        left = n
+        for i in sorted(discrete, key = lambda d: room[d], reverse = True):
+            counts[i] = min(most_layers(room[i]), left)
+            left -= counts[i]
+        if left == n:
+            return None
+        igpu_room = {i: max(0.0, room[i]) for i in igpus}
+        igpu_total = sum(igpu_room.values())
+        exact = {
+            i: (left * igpu_room[i] / igpu_total if igpu_total > 0 else left / len(igpus))
+            for i in igpus
+        }
+        for i in igpus:
+            counts[i] = int(exact[i])
+        for i in sorted(igpus, key = lambda d: exact[d] - counts[d], reverse = True)[
+            : left - sum(counts[i] for i in igpus)
+        ]:
+            counts[i] += 1
+        # The runs llama.cpp will really cut, in device order: each must fit its room.
+        start = 0
+        for i in gpu_indices:
+            end = start + int(counts[i])
+            if prefix[end] - prefix[start] > max(0.0, room[i]):
+                return None
+            start = end
+        shares = [float(counts[i]) for i in gpu_indices]
+        # Boundaries half a layer early: float rounding in upper_bound cannot add a layer.
+        first = next(k for k, v in enumerate(shares) if v > 0)
+        if first != len(shares) - 1:
+            shares[first] -= 0.5
+            shares[-1] += 0.5
+        return shares
+
     @staticmethod
     def _auto_split_fingerprint(tensor_split: Optional[List[float]]) -> Optional[tuple[float, ...]]:
-        """What an auto-mode load ASKED for, as a comparable ratio.
-
-        Requested against requested, the same rule the tuning group in
-        ``_runtime_matches_intent`` uses, and it has to be: what auto mode
-        EMITS is not in the caller's units. The planner's own split is a list
-        of per-device MiB budgets, and a user ratio the budget check declined
-        is emitted as nothing at all -- so comparing either against the
-        caller's ``tensor_split`` mismatches on every repeat of a request that
-        has not changed, and reloads a multi-gigabyte model forever.
-
-        Normalized because llama.cpp normalizes: ``-ts 3,1`` and ``-ts 75,25``
-        are the same instruction, so they are the same intent here. A ratio
-        that sanitizes to nothing is None, which is what an absent ratio is.
-        """
+        """Requested vs requested, normalized; auto emits MiB budgets, not the caller ratio, or every repeat reloads the model; an empty ratio is None."""
         if not tensor_split:
             return None
         values = LlamaCppBackend._sanitize_tensor_split(tensor_split)
@@ -1336,13 +1479,7 @@ class _PropertiesMixin:
 
     @property
     def spec_drafter_kind(self) -> Optional[str]:
-        """Which drafter the resolution was about: ``mtp``, ``dspark`` or ``dflash``.
-
-        Distinct from ``requested_spec_mode``, which stays ``auto`` when Auto
-        resolves the kind itself, and from ``speculative_type``, which reads
-        ``default`` once a fallback fires. The UI needs the kind to name the
-        right recovery in a fallback notice.
-        """
+        """Resolved drafter kind (mtp, dspark, dflash), even when Auto chose it; unlike requested_spec_mode (stays auto) or speculative_type (default after fallback)."""
         return self._spec_drafter_kind
 
     @property
