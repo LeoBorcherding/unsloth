@@ -1974,3 +1974,72 @@ def test_cursor_survives_batch_start_during_pagination(batch_queue, monkeypatch)
 
     assert len(jobs) == 2
     assert [job.id for job in second.data] == ["ftjob_20261001_000000_old_member"]
+
+
+def test_a_batch_that_starts_during_a_list_is_listed_as_its_runs(batch_queue, monkeypatch):
+    import threading
+
+    client, _calls, live, gpu, _backend = batch_queue
+    old_batch_id = "job_20261001_000000_old_batch"
+    old_run_id = "job_20261001_000000_old_member"
+    studio_db.create_run(
+        id = old_run_id,
+        model_name = "unsloth/Qwen3-0.6B",
+        dataset_name = "chats.jsonl",
+        config_json = json.dumps({"model_name": "unsloth/Qwen3-0.6B"}),
+        started_at = "2026-10-01T00:00:00+00:00",
+        total_steps = 4,
+    )
+    openai_fine_tuning._BATCHES[old_batch_id] = [old_run_id]
+    openai_fine_tuning._BATCH_OF[old_run_id] = old_batch_id
+    live["status"] = _Status(old_batch_id, "training")
+
+    entered, release = threading.Event(), threading.Event()
+    should_block = {"value": False}
+    real_get_run = openai_fine_tuning.get_run
+
+    def blocked_get_run(run_id):
+        if run_id == old_run_id and should_block["value"]:
+            entered.set()
+            if not release.wait(timeout = 10):
+                raise TimeoutError("Timed out waiting to release get_run")
+        return real_get_run(run_id)
+
+    monkeypatch.setattr(openai_fine_tuning, "get_run", blocked_get_run)
+
+    async def flow():
+        uploaded = await client.files.create(file = ("chats.jsonl", CHATS), purpose = "fine-tune")
+        jobs = [
+            await _create(client, uploaded.id, suffix = "a"),
+            await _create(client, uploaded.id, suffix = "b"),
+        ]
+        should_block["value"] = True
+        async def listing():
+            return await client.fine_tuning.jobs.list(limit = 10)
+
+        request = asyncio.create_task(listing())
+        assert await asyncio.to_thread(entered.wait, 10)
+        gpu["busy"] = False
+        await openai_fine_tuning._drain_once()
+        # The batch's history rows land before the paused request reads history.
+        for i in range(2):
+            studio_db.create_run(
+                id = f"job_20261021_101500_member0{i}",
+                model_name = "unsloth/Qwen3-0.6B",
+                dataset_name = "chats.jsonl",
+                config_json = json.dumps({"model_name": "unsloth/Qwen3-0.6B"}),
+                started_at = "2026-10-21T10:15:00+00:00",
+                total_steps = 4,
+            )
+        release.set()
+        return jobs, await request
+
+    try:
+        jobs, listed = _run(flow())
+    finally:
+        release.set()
+
+    rows = {job.id: job.status for job in listed.data}
+    assert len(listed.data) == len(rows) == 3
+    assert {job.id for job in jobs} <= set(rows)
+    assert all(rows[job.id] != "queued" for job in jobs), rows
