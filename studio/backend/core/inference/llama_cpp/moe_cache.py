@@ -28,7 +28,9 @@ from .memory_policy import (
 from core.inference.llama_server_args import _flag_name
 from core.inference.lookup_tables import HOST_FORCED_TABLE_ARCHS as _HOST_FORCED_TABLE_ARCHS
 from core.inference.lookup_tables import HOST_FORCED_TABLE_MARKER as _HOST_FORCED_TABLE_MARKER
-from core.inference.lookup_tables import LAZY_READ_AUTO_MIN_BYTES as _LOOKUP_LAZY_READ_AUTO_MIN_BYTES
+from core.inference.lookup_tables import (
+    LAZY_READ_AUTO_MIN_BYTES as _LOOKUP_LAZY_READ_AUTO_MIN_BYTES,
+)
 from core.inference.lookup_tables import LAZY_READ_TENSORS as _LOOKUP_LAZY_READ_TENSORS
 from core.inference.lookup_tables import is_per_layer_embedding as _is_per_layer_embedding
 from core.inference.lookup_tables import lazy_read_bytes as _lookup_lazy_read_bytes

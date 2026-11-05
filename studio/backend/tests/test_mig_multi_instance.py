@@ -705,7 +705,6 @@ def test_diffusion_gemma_pins_the_instance_uuid_not_a_numeric_id():
 
 def test_diffusion_gemma_launch_uses_the_pinned_token():
     from llama_cpp_source import package_source
-
     assert "gpu = self._mig_pinned_gpu_token(gpu)" in package_source()
 
 
