@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""_CUDA_TORCH_PKG_SPEC caps torch at 2.11.x so companion wheels do not ABI-mismatch on 2.12."""
+"""_CUDA_TORCH_PKG_SPEC caps torch at 2.11.x so companion wheels do not ABI-mismatch on 2.12.
+
+The generic rocm7.2 spec is deliberately wider (#9932).
+"""
 
 from __future__ import annotations
 
@@ -45,11 +48,11 @@ def test_cuda_spec_bounds(monkeypatch, index, allowed, rejected):
         assert not spec.contains(v, prereleases = True), f"{v} should not satisfy {spec}"
 
 
-def test_cuda_spec_matches_rocm72_upper_bound(monkeypatch):
-    """CUDA and rocm7.2 target the same torch 2.11.x family, so their upper
-    bounds must stay in lockstep (bump both together at 2.12.x)."""
+def test_cuda_spec_matches_rocm_211_upper_bound(monkeypatch):
+    """CUDA and the AMD per-arch spec target the same torch 2.11.x family, so their
+    upper bounds must stay in lockstep (bump both together at 2.12.x)."""
     mod = _load_module(monkeypatch)
-    rocm72 = mod._ROCM_TORCH_PKG_SPECS["rocm7.2"]
+    rocm211 = mod._ROCM_TORCH211_PKG_SPEC
 
     def _upper(pkg_spec: str) -> str:
         for clause in _spec_of(pkg_spec):
@@ -57,7 +60,7 @@ def test_cuda_spec_matches_rocm72_upper_bound(monkeypatch):
                 return clause.version
         raise AssertionError(f"no upper bound in {pkg_spec!r}")
 
-    for cuda_pkg, rocm_pkg in zip(mod._CUDA_TORCH_PKG_SPEC, rocm72, strict = True):
+    for cuda_pkg, rocm_pkg in zip(mod._CUDA_TORCH_PKG_SPEC, rocm211, strict = True):
         assert _upper(cuda_pkg) == _upper(
             rocm_pkg
-        ), f"CUDA {cuda_pkg!r} upper bound must match rocm7.2 {rocm_pkg!r}"
+        ), f"CUDA {cuda_pkg!r} upper bound must match ROCm 2.11 {rocm_pkg!r}"
