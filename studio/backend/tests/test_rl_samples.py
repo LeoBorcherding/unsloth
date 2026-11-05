@@ -178,3 +178,27 @@ def test_the_route_returns_only_newer_groups(client):
 def test_the_route_refuses_a_stale_job(client):
     response = client.get("/api/train/rl-samples", params = {"expected_job_id": "old"})
     assert response.status_code == 409
+
+
+def test_a_group_split_across_processes_is_gathered_before_it_is_shown(monkeypatch):
+    # per_device_train_batch_size 2, num_generations 4, two processes: each rank's rewards see
+    # half of the first prompt's completions. Rank 0 shows the whole group; rank 1 shows nothing.
+    from core.training import rl_samples
+
+    contributed = {}
+    sent = {0: [], 1: []}
+
+    def run(rank, completions):
+        def gather(out, value):
+            contributed[rank] = value
+            out[:] = [contributed.get(0), contributed.get(1)]
+
+        monkeypatch.setattr(rl_samples, "_process_group", lambda: (rank, 2))
+        monkeypatch.setattr(rl_samples, "_all_gather", gather)
+        for f in record_samples(_funcs(), SPECS, sent[rank].append, group_size = 4):
+            f(prompts = ["p", "p"], completions = completions, answer = ["x", "x"])
+
+    run(1, ["c", "d"])  # in a real run both wait in the gather; here rank 1 just goes first
+    run(0, ["a", "b"])
+    assert sent[1] == []
+    assert [i["completion"] for i in sent[0][0]["items"]] == ["a", "b", "c", "d"]

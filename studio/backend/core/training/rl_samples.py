@@ -100,20 +100,12 @@ class SampleRecorder:
         recorded.__name__ = getattr(func, "__name__", name)
         return recorded
 
-    def _emit(self, prompts, completions, kwargs) -> None:
-        scores, self._scores = self._scores, {}
-        now = self.clock()
-        if self._last_emit is not None and now - self._last_emit < self.min_interval:
-            return
-        completions = list(completions or [])
-        if not completions:
-            return
-        self._last_emit = now
-        n = min(self.group_size, len(completions))
-        answers = kwargs.get("answer")
-        state = kwargs.get("trainer_state")
+    def _local_items(self, scores, completions, rank: int) -> list[dict]:
+        # TRL splits the global batch into contiguous per-process slices, so the first group is
+        # global rows [0, group_size): this process holds rows [rank*L, (rank+1)*L).
+        start = rank * len(completions)
         items = []
-        for i in range(n):
+        for i in range(min(len(completions), max(0, self.group_size - start))):
             rewards = {
                 name: _score(scores[name][i]) if i < len(scores.get(name, ())) else None
                 for name in self.names
@@ -128,6 +120,32 @@ class SampleRecorder:
                     "total": total,
                 }
             )
+        return items
+
+    def _emit(self, prompts, completions, kwargs) -> None:
+        scores, self._scores = self._scores, {}
+        completions = list(completions or [])
+        rank, world = _process_group()
+        try:
+            items = self._local_items(scores, completions, rank)
+        except Exception:  # noqa: BLE001 - still reach the gather, or the other processes wait on it
+            items = []
+        if world > 1:
+            # A group's completions span processes when per-device batch < num_generations.
+            # Every process calls the last reward each step, so this collective stays in step.
+            gathered = [None] * world
+            _all_gather(gathered, items)
+            if rank != 0:
+                return
+            items = [item for part in gathered for item in (part or [])][: self.group_size]
+        now = self.clock()
+        if self._last_emit is not None and now - self._last_emit < self.min_interval:
+            return
+        if not items:
+            return
+        self._last_emit = now
+        answers = kwargs.get("answer")
+        state = kwargs.get("trainer_state")
         self.sink(
             {
                 "step": getattr(state, "global_step", None),
@@ -142,6 +160,23 @@ class SampleRecorder:
                 "items": items,
             }
         )
+
+
+def _process_group() -> tuple[int, int]:
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            return dist.get_rank(), dist.get_world_size()
+    except Exception:  # noqa: BLE001 - no torch: one process
+        pass
+    return 0, 1
+
+
+def _all_gather(out: list, value) -> None:
+    import torch.distributed as dist
+
+    dist.all_gather_object(out, value)
 
 
 def record_samples(
