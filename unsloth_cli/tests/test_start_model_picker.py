@@ -119,6 +119,17 @@ def test_enter_picks_the_first_model_and_bad_input_asks_again(fake_studio, picke
     assert _loads(fake_studio) == [{"require_idle": True, "model_path": "/outputs/my-lora"}]
 
 
+@pytest.mark.parametrize("answer", ["\u00b2", "\u2460", "\u0663", "\uff13"])
+def test_non_ascii_digit_answer_asks_again(monkeypatch, answer):
+    answers = [answer, "2"]
+    monkeypatch.setattr("builtins.input", lambda prompt = "": answers.pop(0))
+    printed = []
+    console = SimpleNamespace(print = lambda *args, **kwargs: printed.append(args[0] if args else ""))
+
+    assert model_picker.pick_model_entry(console, entries = list(ENTRIES)) == ENTRIES[1]
+    assert "Pick a number between 1 and 3." in printed
+
+
 def test_claude_lists_only_gguf_models(fake_studio, picker, monkeypatch):
     _empty_server(fake_studio, monkeypatch)
     picker["answers"] = ["1"]

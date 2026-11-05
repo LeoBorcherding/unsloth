@@ -92,7 +92,8 @@ def pick_model_entry(
             raise typer.Exit(code = 1)
         if not raw:
             return entries[0]
-        if raw.isdecimal():
+        # isdecimal() alone accepts other scripts' digits, which int() reads as a row number.
+        if raw.isascii() and raw.isdecimal():
             try:
                 index = int(raw)
             except ValueError:
