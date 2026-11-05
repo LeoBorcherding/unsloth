@@ -360,3 +360,20 @@ def test_loose_shard_filename_yields_the_loadable_first_shard(tmp_path, monkeypa
     [entry] = catalog.local_folder_entries(gguf_variant = second.name)
     assert entry.model == str(first)
     assert _direct_gguf_for_variant(entry.model, entry.file_variant) == str(first)
+
+
+def test_requested_quant_offers_only_gguf_rows(cached_gguf_pick, picker, fake_studio, monkeypatch):
+    monkeypatch.setattr(
+        catalog,
+        "trained_entries",
+        lambda **kwargs: [catalog.ModelEntry("Fine-tunes", "my-lora", "lora", "/outputs/my-lora")],
+    )
+    _empty_server(fake_studio, monkeypatch)
+    picker["answers"] = [""]
+
+    start._connect(None, None, start.LoadOptions(gguf_variant = "Q8_0"), gguf_only = False)
+
+    wanted = str(Path(cached_gguf_pick).with_name("tiny-Q8_0.gguf"))
+    assert _loads(fake_studio) == [
+        {"require_idle": True, "model_path": wanted, "gguf_variant": "Q8_0"}
+    ]

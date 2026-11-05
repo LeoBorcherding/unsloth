@@ -5039,7 +5039,10 @@ def _ask_for_local_model(
     if gguf_variant:
         hint = f"No {kind} found for --gguf-variant {gguf_variant}. Pass --model explicitly to select one."
     typer.echo(reason)
-    picker = functools.partial(pick_model_entry, keep = _is_gguf_entry if gguf_only else None)
+    # A requested quant only means something for a GGUF, so a trained or non-GGUF row is never offered with it.
+    picker = functools.partial(
+        pick_model_entry, keep = _is_gguf_entry if gguf_only or gguf_variant else None
+    )
 
     def choose(check_access: bool):
         from unsloth_cli._model_catalog import list_chat_models
