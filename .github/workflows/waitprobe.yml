@@ -1,0 +1,21 @@
+name: wait probe
+on: push
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: lane
+        id: lane
+        background: true
+        run: |
+          sleep 20
+          echo "lane finished at $(date -u +%T)"
+      - name: foreground fails
+        run: |
+          echo "failing at $(date -u +%T)"
+          exit 1
+      - name: wait for lane
+        wait: lane
+      - name: like uninstall (if !cancelled)
+        if: ${{ !cancelled() }}
+        run: echo "uninstall-like step at $(date -u +%T)"
