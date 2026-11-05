@@ -589,7 +589,7 @@ class _GpuFitMixin:
         try:
             if not LlamaCppBackend._installed_ggml_backends(binary) & {"cuda", "hip", "vulkan"}:
                 return None
-            from ..diffusion_memory import _windows_commit_headroom_mib
+            from core.inference.diffusion_memory import _windows_commit_headroom_mib
 
             counters = _windows_private_memory(pid)
             if counters is None:
