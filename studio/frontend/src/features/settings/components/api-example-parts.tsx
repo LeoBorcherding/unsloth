@@ -16,7 +16,7 @@ import type { TranslationKey } from "@/i18n";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { Tick02Icon } from "@/lib/tick-icon";
 import { cn } from "@/lib/utils";
-import { Copy01Icon } from "@hugeicons/core-free-icons";
+import { Copy01Icon } from "@/lib/copy-icon";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   type CSSProperties,
@@ -41,6 +41,9 @@ const OS_OPTIONS: { id: ExampleOs; labelKey: TranslationKey }[] = [
 // The btn-fill grey (index.css), so a selected pill matches a standard filled button.
 const LIGHT_FILL_PILL =
   "[html:not(.dark)_&]:bg-[color-mix(in_srgb,var(--foreground)_calc(5%*var(--contrast-wash-gain,1)),transparent)] [html:not(.dark)_&]:shadow-none";
+// Dark: the --accent pill nearly matches the example box's 5% white.
+const DARK_FILL_PILL =
+  "[html.dark_&]:!bg-[rgb(255_255_255_/_calc(0.12*var(--contrast-wash-gain,1)))]";
 
 // Lines that fit the example box's starting height (h-46); longer ones start there and scroll.
 const START_LINES = 8;
@@ -151,7 +154,9 @@ export function ExampleToggle<T extends string>({
                 group={pillId}
                 // With no track behind them, the pills take a filled button's grey in light mode, not a
                 // white lifted pill.
-                className={toggle ? undefined : LIGHT_FILL_PILL}
+                className={
+                  toggle ? undefined : cn(LIGHT_FILL_PILL, DARK_FILL_PILL)
+                }
               />
             )}
             <span className="relative truncate">{option.label}</span>
@@ -202,13 +207,13 @@ export function HighlightedCode({
     [code, language],
   );
   return (
-    // Intrinsic code width keeps scrolling on the focusable section.
+    // Intrinsic code width keeps scrolling on the focusable section, unless Word wrap is on.
     <section
       // Safari never focuses a scroller on its own, so long examples need a tab stop.
       // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard-scrollable region
       tabIndex={0}
       aria-label={label}
-      className="max-h-96 max-w-full hover-scrollbar overflow-auto [mask-image:linear-gradient(to_bottom,transparent,#000_0.75rem)] p-3 pr-16 outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset text-ui-11 leading-relaxed [&_pre]:!m-0 [&_pre]:!whitespace-pre [&_pre]:!break-normal [&_pre]:!border-0 [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!text-ui-11 [&_pre]:!leading-relaxed [&_code]:!text-ui-11 [&_[data-streamdown=code-block]]:!min-w-max [&_[data-streamdown=code-block]]:!my-0 [&_[data-streamdown=code-block]]:!border-0 [&_[data-streamdown=code-block]]:!bg-transparent [&_[data-streamdown=code-block]]:!p-0 [&_[data-streamdown=code-block]]:!text-ui-11"
+      className="max-h-96 max-w-full hover-scrollbar overflow-auto [mask-image:linear-gradient(to_bottom,transparent,#000_0.75rem)] p-3 pr-16 outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset text-ui-11 leading-relaxed [&_pre]:!m-0 [html:not([data-code-wrap])_&_pre]:!whitespace-pre [html:not([data-code-wrap])_&_pre]:!break-normal [&_pre]:!border-0 [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!text-ui-11 [&_pre]:!leading-relaxed [&_code]:!text-ui-11 [html:not([data-code-wrap])_&_[data-streamdown=code-block]]:!min-w-max [&_[data-streamdown=code-block]]:!my-0 [&_[data-streamdown=code-block]]:!border-0 [&_[data-streamdown=code-block]]:!bg-transparent [&_[data-streamdown=code-block]]:!p-0 [&_[data-streamdown=code-block]]:!text-ui-11"
       data-reload-snapshot-sensitive={redactFromReload ? "" : undefined}
     >
       <Streamdown

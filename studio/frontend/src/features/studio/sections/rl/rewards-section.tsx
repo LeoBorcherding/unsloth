@@ -89,7 +89,7 @@ import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import { strToU8, zipSync } from "fflate";
 import { useShallow } from "zustand/react/shallow";
-import { SectionBox } from "../section-box";
+import { SectionBox } from "@/components/section-box";
 import { RewardEditorDialog } from "./reward-editor-dialog";
 import {
   RewardScoreBadge,

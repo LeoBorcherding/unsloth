@@ -4,6 +4,7 @@
 import { NewBadge } from "@/components/new-badge";
 import { Button } from "@/components/ui/button";
 import { PICKER_TRIGGER_CLASS } from "@/components/resource-picker/picker-focus";
+import { SectionBox, SectionField } from "@/components/section-box";
 import { SegmentedTabsList } from "@/components/segmented-tabs";
 import {
   Select,
@@ -17,7 +18,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { usePlatformStore } from "@/config/env";
 import { HfTokenIndicator } from "@/features/hub";
 import {
   DECISION_MODEL_LABELS,
@@ -28,25 +28,22 @@ import {
   type DecisionCheckpoint,
   TRAINING_METHOD_META,
   TRAINING_METHOD_ORDER,
-  isTrainingMethodSupportedOnDevice,
   useTrainingConfigStore,
   effectiveTrainingObjective,
 } from "@/features/training";
 import { type TranslationKey, useT } from "@/i18n";
+import { ChipIcon, Settings01Icon } from "@/lib/hugeicons-derived";
 import { cn } from "@/lib/utils";
 import type { TrainingMethod } from "@/types/training";
 import {
-  AiBrain01Icon,
   BubbleChatEditIcon,
   Database02Icon,
-  Settings05Icon,
 } from "@hugeicons/core-free-icons";
 import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { DatasetPanel } from "../sections/dataset-section";
 import { DatasetSourceToggleAction } from "../sections/dataset-source-toggle";
 import { FieldHint } from "../sections/field-hint";
-import { SectionBox } from "../sections/section-box";
 import { ParamsSection } from "../sections/params-section";
 import { ObjectiveSelect } from "../sections/rl/objective-select";
 import { PromptFormatSection } from "../sections/rl/prompt-format-section";
@@ -105,14 +102,19 @@ function SetupField({
   children: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <span className="flex items-center gap-1.5 text-ui-11 font-medium uppercase tracking-[0.05em] text-muted-foreground/70">
-        {label}
-        {hint ? <FieldHint text={hint} label={label} /> : null}
-        {badge}
-      </span>
-      <div className="min-w-0">{children}</div>
-    </div>
+    <SectionField
+      label={label}
+      hint={
+        hint || badge ? (
+          <>
+            {hint ? <FieldHint text={hint} label={label} /> : null}
+            {badge}
+          </>
+        ) : null
+      }
+    >
+      {children}
+    </SectionField>
   );
 }
 
@@ -127,7 +129,6 @@ function TrainingMethodSelect() {
       s.modelType === "decision" &&
       (s.decisionLayout === "clef" || s.decisionLayout === "llm"),
   );
-  const deviceType = usePlatformStore((state) => state.deviceType);
   const activeMeta = TRAINING_METHOD_META[trainingMethod];
   const activeLabel = activeMeta ? t(activeMeta.labelKey) : trainingMethod;
   return (
@@ -171,14 +172,10 @@ function TrainingMethodSelect() {
             (decisionTakesQlora && method === "qlora"),
         ).map((method) => {
           const meta = TRAINING_METHOD_META[method];
-          const unsupportedOnMlx = !isTrainingMethodSupportedOnDevice(
-            method,
-            deviceType,
-          );
           return (
             <Tooltip key={method} delayDuration={300}>
               <TooltipTrigger asChild={true} disableClickToggle={true}>
-                <SelectItem value={method} disabled={unsupportedOnMlx}>
+                <SelectItem value={method}>
                   <span className="flex items-center gap-2">
                     <span
                       aria-hidden="true"
@@ -188,11 +185,6 @@ function TrainingMethodSelect() {
                       )}
                     />
                     {t(meta.labelKey)}
-                    {unsupportedOnMlx && (
-                      <span className="text-ui-10 text-muted-foreground">
-                        · {t("studio.params.notSupportedAppleSilicon")}
-                      </span>
-                    )}
                   </span>
                 </SelectItem>
               </TooltipTrigger>
@@ -201,9 +193,7 @@ function TrainingMethodSelect() {
                 sideOffset={10}
                 className="max-w-[calc(220px*var(--ui-space-scale,1))] text-ui-11p5 leading-snug"
               >
-                {unsupportedOnMlx
-                  ? t("studio.params.notSupportedAppleSilicon")
-                  : t(meta.hintKey)}
+                {t(meta.hintKey)}
               </TooltipContent>
             </Tooltip>
           );
@@ -426,7 +416,7 @@ export function TrainingWizard({
       <SectionBox
         title={t("studio.wizard.modelTitle")}
         description={t("studio.wizard.modelDescription")}
-        icon={AiBrain01Icon}
+        icon={ChipIcon}
         chipTint="var(--chart-1)"
       >
         <ModelPanel />
@@ -465,7 +455,7 @@ export function TrainingWizard({
       <SectionBox
         title={t("studio.wizard.paramsTitle")}
         description={t("studio.wizard.paramsDescription")}
-        icon={Settings05Icon}
+        icon={Settings01Icon}
         chipTint="var(--chart-1)"
         dataTour="studio-params"
         titleAction={

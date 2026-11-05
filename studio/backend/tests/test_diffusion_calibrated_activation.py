@@ -228,7 +228,8 @@ def test_only_measured_families_are_calibrated():
     assert calibrated_image_activation("hidream-i1") is None
     assert calibrated_image_activation("qwen-image-edit") is None
     assert calibrated_image_activation("qwen-image") is None
-    assert calibrated_image_activation("sdxl") is None
+    assert calibrated_image_activation("sdxl").resident_only
+    assert not calibrated_image_activation("flux.1").resident_only
     for family, tiers in dm._MEASURED_IMAGE_ACTIVATION_MIB.items():
         for max_speed, raw in zip((False, True), tiers):
             act = calibrated_image_activation(family, max_speed = max_speed)
@@ -580,3 +581,82 @@ def test_generate_passes_the_calibrated_placement_and_controlnet_to_the_guard():
     src = inspect.getsource(d)
     assert 'calibrated_placement = bool(getattr(state, "calibrated_placement", False)),' in src
     assert 'controlnet = workflow == "controlnet" and control_pil is not None,' in src
+
+
+# Real Tesla T4 load of stabilityai/stable-diffusion-xl-base-1.0 at fp16: the planner inputs it logged.
+SDXL_FP16 = dict(model_dense_mib = 6_775, companion_dense_mib = 6_775, text_encoder_dense_mib = 1_559)
+
+
+def _t4_plan(act, mode = None):
+    return plan_diffusion_memory(
+        target = _target(),
+        device_memory = DeviceMemory("cuda", "cuda", "discrete_vram", 14_807, 14_912),
+        runtime_headroom_mib = 8192,
+        requested_mode = mode,
+        calibrated_activation = act,
+        **SDXL_FP16,
+    )
+
+
+def test_sdxl_measured_activation_keeps_a_t4_resident():
+    """The flat 8 GiB guess offloaded (and demoted explicit fast) SDXL on a 15 GB card; the measured peak fits."""
+    act = calibrated_image_activation("sdxl")
+    assert _t4_plan(None).offload_policy == OFFLOAD_MODEL
+    assert _t4_plan(None, MEMORY_MODE_FAST).offload_policy == OFFLOAD_MODEL
+    for mode in (None, MEMORY_MODE_FAST):
+        plan = _t4_plan(act, mode)
+        assert plan.offload_policy == OFFLOAD_NONE, mode
+        assert not plan.vae_tiling and not plan.vae_slicing
+    assert _t4_plan(act, MEMORY_MODE_LOW_VRAM).offload_policy == OFFLOAD_MODEL
+    assert _t4_plan(act, MEMORY_MODE_BALANCED).offload_policy == OFFLOAD_GROUP
+
+
+def test_sdxl_measured_activation_only_ever_adds_the_resident_tier():
+    """Only whole-module offload may become resident (never a group tier); more VRAM never picks a slower tier."""
+    act = calibrated_image_activation("sdxl")
+    resident_from = None
+    for gib in (6, 8, 10, 12, 14, 15, 16, 20, 24, 48):
+        flat, plan = _plan(gib, SDXL_FP16, None), _plan(gib, SDXL_FP16, act)
+        if plan.offload_policy != flat.offload_policy:
+            assert plan.offload_policy == OFFLOAD_NONE, gib
+        if plan.offload_policy == OFFLOAD_NONE and resident_from is None:
+            resident_from = gib
+        if resident_from is not None:
+            assert plan.offload_policy == OFFLOAD_NONE, gib
+    assert resident_from == 15
+    assert _plan(12, SDXL_FP16, act).offload_policy == OFFLOAD_MODEL
+
+
+@pytest.mark.parametrize("width, height", [(1024, 1024), (1152, 896), (768, 768)])
+def test_sdxl_controlnet_still_runs_after_the_t4_resident_promotion(monkeypatch, width, height):
+    """Resident SDXL on a T4 must not refuse ControlNet requests that whole-module offload ran."""
+    monkeypatch.setattr(dm, "_vram_budget_fraction", lambda: 0.97)
+    hint = "sdxl stabilityai/stable-diffusion-xl-base-1.0"
+    flat, plan = _t4_plan(None), _t4_plan(calibrated_image_activation("sdxl"))
+    assert flat.offload_policy == OFFLOAD_MODEL and plan.offload_policy == OFFLOAD_NONE
+    resident_free = 14_807 - SDXL_FP16["model_dense_mib"]
+    kw = dict(width = width, height = height, family = hint, tile_side = dm.DEFAULT_VAE_TILE_SIDE)
+    before = _guard(14_807, 14_912, calibrated = False, controlnet = True, **kw)
+    after = _guard(
+        resident_free,
+        14_912,
+        calibrated = "calibrated_headroom_mib" in plan.estimates,
+        controlnet = True,
+        **kw,
+    )
+    assert before.action != dm.ACTIVATION_REFUSE
+    assert after.action != dm.ACTIVATION_REFUSE, after
+    plain = _guard(resident_free, 14_912, calibrated = True, **kw)
+    assert after == plain
+
+
+def test_controlnet_surcharge_still_applies_to_transformer_families_named_like_sdxl():
+    assert dm._resident_only_hint("sdxl stabilityai/stable-diffusion-xl-base-1.0")
+    assert not dm._resident_only_hint("flux.1 someone/flux-sdxl-style")
+    assert not dm._resident_only_hint("")
+    assert not dm._resident_only_hint(None)
+    kw = dict(width = 1024, height = 1024, family = "flux.1 someone/flux-sdxl-style")
+    assert (
+        _guard(6 * GIB, 24 * GIB, calibrated = True, controlnet = True, **kw).action
+        == dm.ACTIVATION_REFUSE
+    )

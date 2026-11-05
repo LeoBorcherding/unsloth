@@ -8,12 +8,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useTrainingConfigStore } from "@/features/training";
+// eslint-disable-next-line no-restricted-imports -- through the barrel, js-yaml would load at startup.
 import {
   parseYamlConfig,
   parseYamlRlSettings,
   serializeConfigToYaml,
-  useTrainingConfigStore,
-} from "@/features/training";
+} from "@/features/training/lib/yaml-config";
 import { useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
 import {
@@ -23,9 +24,9 @@ import {
 } from "@/lib/native-files";
 import { toast } from "@/lib/toast";
 import {
-  Archive04Icon,
-  CleanIcon,
-  CloudUploadIcon,
+  FloppyDiskIcon,
+  UndoIcon,
+  Upload01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { type ChangeEvent, useRef } from "react";
@@ -154,7 +155,7 @@ export function ConfigActions() {
             className="cursor-pointer"
             onClick={() => void handleLoadConfig()}
           >
-            <HugeiconsIcon icon={CloudUploadIcon} className="size-3.5" />
+            <HugeiconsIcon icon={Upload01Icon} className="size-3.5" />
           </Button>
         </TooltipTrigger>
         <TooltipContent>
@@ -170,7 +171,7 @@ export function ConfigActions() {
             className="cursor-pointer"
             onClick={handleSaveConfig}
           >
-            <HugeiconsIcon icon={Archive04Icon} className="size-3.5" />
+            <HugeiconsIcon icon={FloppyDiskIcon} className="size-3.5" />
           </Button>
         </TooltipTrigger>
         <TooltipContent>
@@ -187,7 +188,7 @@ export function ConfigActions() {
             onClick={handleResetConfig}
             disabled={!selectedModel}
           >
-            <HugeiconsIcon icon={CleanIcon} className="size-3.5" />
+            <HugeiconsIcon icon={UndoIcon} className="size-3.5" />
           </Button>
         </TooltipTrigger>
         <TooltipContent>
