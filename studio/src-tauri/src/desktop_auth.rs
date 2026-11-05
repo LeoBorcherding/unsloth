@@ -408,6 +408,13 @@ async fn desktop_auth_inner(
     diagnostics: &DiagnosticsState,
 ) -> Result<DesktopAuthResponse, String> {
     let _auth_guard = DESKTOP_AUTH_LOCK.lock().await;
+    desktop_auth_locked(state, diagnostics).await
+}
+
+async fn desktop_auth_locked(
+    state: &tauri::State<'_, BackendState>,
+    diagnostics: &DiagnosticsState,
+) -> Result<DesktopAuthResponse, String> {
     if let Some(signed_out) = signed_out_response(&signed_out_marker_path()?) {
         return Ok(signed_out);
     }
@@ -470,13 +477,15 @@ impl From<DesktopAuthResponse> for WindowSession {
     }
 }
 
-/// Backend port plus the session an extra window starts with.
+/// Backend port plus the session an extra window starts with. Hold the guard until the window
+/// exists, so a sign-out cannot land between minting the session and handing it over.
 pub(crate) async fn window_session(
     state: &tauri::State<'_, BackendState>,
     diagnostics: &DiagnosticsState,
-) -> Result<(u16, WindowSession), String> {
-    let session = desktop_auth_inner(state, diagnostics).await?.into();
-    Ok((current_backend_port(state).await?.port, session))
+) -> Result<(u16, WindowSession, tokio::sync::MutexGuard<'static, ()>), String> {
+    let guard = DESKTOP_AUTH_LOCK.lock().await;
+    let session = desktop_auth_locked(state, diagnostics).await?.into();
+    Ok((current_backend_port(state).await?.port, session, guard))
 }
 
 #[cfg(test)]

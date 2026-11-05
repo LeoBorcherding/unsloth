@@ -67,7 +67,8 @@ fn open_outside(app: &AppHandle, url: &tauri::Url) {
 pub async fn open(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<BackendState>();
     let diagnostics = app.state::<DiagnosticsState>();
-    let (port, session) = crate::desktop_auth::window_session(&state, diagnostics.inner()).await?;
+    let (port, session, _signing_out_waits) =
+        crate::desktop_auth::window_session(&state, diagnostics.inner()).await?;
     let origin = origin(port);
     let url: tauri::Url = format!("{origin}/chat")
         .parse()
