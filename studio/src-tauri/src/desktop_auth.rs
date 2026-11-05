@@ -446,19 +446,37 @@ async fn desktop_auth_inner(
     )
 }
 
-/// Backend port plus a fresh owner session for an extra window; no session when sign-in is needed.
+/// What an extra window does with the sign-in stored for the backend's origin.
+#[derive(Debug, PartialEq)]
+pub(crate) enum WindowSession {
+    /// A fresh owner session.
+    Tokens(String, String),
+    /// Signed out in the app: drop what an earlier window stored.
+    SignedOut,
+    /// A managed account signs in in the document; keep what it stored.
+    LoginRequired,
+}
+
+impl From<DesktopAuthResponse> for WindowSession {
+    fn from(response: DesktopAuthResponse) -> Self {
+        match response {
+            DesktopAuthResponse::Tokens {
+                access_token,
+                refresh_token,
+            } => Self::Tokens(access_token, refresh_token),
+            DesktopAuthResponse::SignedOut { .. } => Self::SignedOut,
+            DesktopAuthResponse::LoginRequired { .. } => Self::LoginRequired,
+        }
+    }
+}
+
+/// Backend port plus the session an extra window starts with.
 pub(crate) async fn window_session(
     state: &tauri::State<'_, BackendState>,
     diagnostics: &DiagnosticsState,
-) -> Result<(u16, Option<(String, String)>), String> {
-    let tokens = match desktop_auth_inner(state, diagnostics).await? {
-        DesktopAuthResponse::Tokens {
-            access_token,
-            refresh_token,
-        } => Some((access_token, refresh_token)),
-        _ => None,
-    };
-    Ok((current_backend_port(state).await?.port, tokens))
+) -> Result<(u16, WindowSession), String> {
+    let session = desktop_auth_inner(state, diagnostics).await?.into();
+    Ok((current_backend_port(state).await?.port, session))
 }
 
 #[cfg(test)]

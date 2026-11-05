@@ -8,6 +8,7 @@ use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::desktop_auth::WindowSession;
 use crate::diagnostics::DiagnosticsState;
 use crate::process::BackendState;
 
@@ -19,24 +20,31 @@ pub fn origin(port: u16) -> String {
 }
 
 /// Runs before the page's scripts: marks the document as a web window (or the frontend would see
-/// Tauri's injected globals and wait for desktop IPC), and seeds the session once per window.
-pub fn init_script(origin: &str, tokens: Option<&(String, String)>) -> String {
+/// Tauri's injected globals and wait for desktop IPC), and once per window stores the session, or
+/// after a sign-out in the app drops the one an earlier window stored.
+pub fn init_script(origin: &str, session: &WindowSession) -> String {
     let origin = serde_json::to_string(origin).unwrap_or_else(|_| "\"\"".into());
-    let tokens = match tokens {
-        Some((access, refresh)) => {
+    let seed = match session {
+        WindowSession::Tokens(access, refresh) => {
             serde_json::to_string(&[access, refresh]).unwrap_or_else(|_| "null".into())
         }
-        None => "null".into(),
+        WindowSession::SignedOut => "\"clear\"".into(),
+        WindowSession::LoginRequired => "null".into(),
     };
     format!(
         r#"(() => {{
   if (window.location.origin !== {origin}) return;
   Object.defineProperty(window, "__UNSLOTH_WEB_WINDOW__", {{ value: true }});
-  const tokens = {tokens};
-  if (!tokens || sessionStorage.getItem("unsloth_window_seeded")) return;
+  const seed = {seed};
+  if (!seed || sessionStorage.getItem("unsloth_window_seeded")) return;
   sessionStorage.setItem("unsloth_window_seeded", "1");
-  localStorage.setItem("unsloth_auth_token", tokens[0]);
-  localStorage.setItem("unsloth_auth_refresh_token", tokens[1]);
+  if (seed === "clear") {{
+    for (const key of ["unsloth_auth_token", "unsloth_auth_refresh_token", "unsloth_auth_must_change_password", "unsloth_auth_session_mark"])
+      localStorage.removeItem(key);
+    return;
+  }}
+  localStorage.setItem("unsloth_auth_token", seed[0]);
+  localStorage.setItem("unsloth_auth_refresh_token", seed[1]);
   if (!localStorage.getItem("unsloth_auth_session_mark"))
     localStorage.setItem("unsloth_auth_session_mark", `${{Date.now()}}.${{Math.random()}}`);
 }})();"#
@@ -59,7 +67,7 @@ fn open_outside(app: &AppHandle, url: &tauri::Url) {
 pub async fn open(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<BackendState>();
     let diagnostics = app.state::<DiagnosticsState>();
-    let (port, tokens) = crate::desktop_auth::window_session(&state, diagnostics.inner()).await?;
+    let (port, session) = crate::desktop_auth::window_session(&state, diagnostics.inner()).await?;
     let origin = origin(port);
     let url: tauri::Url = format!("{origin}/chat")
         .parse()
@@ -74,7 +82,7 @@ pub async fn open(app: &AppHandle) -> Result<(), String> {
         .title("Unsloth")
         .inner_size(1200.0, 800.0)
         .min_inner_size(480.0, 360.0)
-        .initialization_script(init_script(&origin, tokens.as_ref()))
+        .initialization_script(init_script(&origin, &session))
         // Other sites, and every window.open, go to the default browser as a link from the app does.
         .on_navigation(move |url| {
             if same_origin(url, &allowed) {
@@ -101,14 +109,35 @@ pub async fn open_app_window(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_auth::DesktopAuthResponse;
 
     #[test]
     fn script_only_runs_on_the_backend_origin_and_escapes_tokens() {
-        let script = init_script(&origin(8888), Some(&("a\"b".into(), "c</script>".into())));
+        let session = WindowSession::Tokens("a\"b".into(), "c</script>".into());
+        let script = init_script(&origin(8888), &session);
         assert!(script.contains(r#"window.location.origin !== "http://127.0.0.1:8888""#));
-        assert!(script.contains(r#"["a\"b","c</script>"]"#));
+        assert!(script.contains(r#"const seed = ["a\"b","c</script>"];"#));
         assert!(script.contains("__UNSLOTH_WEB_WINDOW__"));
-        assert!(init_script(&origin(1), None).contains("const tokens = null;"));
+        assert!(
+            init_script(&origin(1), &WindowSession::LoginRequired).contains("const seed = null;")
+        );
+    }
+
+    #[test]
+    fn a_sign_out_in_the_app_drops_what_an_earlier_window_stored() {
+        let script = init_script(&origin(8888), &WindowSession::SignedOut);
+        assert!(script.contains(r#"const seed = "clear";"#));
+        for key in [
+            "unsloth_auth_token",
+            "unsloth_auth_refresh_token",
+            "unsloth_auth_session_mark",
+        ] {
+            assert!(script.contains(&format!(r#""{key}""#)), "{key}");
+        }
+        let signed_out = DesktopAuthResponse::SignedOut {
+            signed_out: crate::desktop_auth::LoginRequired,
+        };
+        assert_eq!(WindowSession::from(signed_out), WindowSession::SignedOut);
     }
 
     #[test]
