@@ -2014,6 +2014,7 @@ def test_a_batch_that_starts_during_a_list_is_listed_as_its_runs(batch_queue, mo
             await _create(client, uploaded.id, suffix = "b"),
         ]
         should_block["value"] = True
+
         async def listing():
             return await client.fine_tuning.jobs.list(limit = 10)
 
