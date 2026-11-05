@@ -5362,6 +5362,7 @@ export const zhCN = {
     maximize: "最大化窗口",
     restore: "还原窗口",
     close: "关闭窗口",
+    newWindowFailed: "无法打开新窗口：{error}",
   },
   runtimeUpdate: {
     installAudio: "安装音频运行时",

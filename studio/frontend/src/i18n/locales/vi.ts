@@ -5868,6 +5868,7 @@ export const vi = {
     maximize: "Phóng to cửa sổ",
     restore: "Khôi phục cửa sổ",
     close: "Đóng cửa sổ",
+    newWindowFailed: "Không thể mở cửa sổ mới: {error}",
   },
   runtimeUpdate: {
     installAudio: "Cài đặt runtime âm thanh",

@@ -5867,6 +5867,7 @@ export const id = {
     maximize: "Maksimalkan jendela",
     restore: "Pulihkan jendela",
     close: "Tutup jendela",
+    newWindowFailed: "Tidak dapat membuka jendela baru: {error}",
   },
   runtimeUpdate: {
     installAudio: "Instal runtime audio",

@@ -5534,6 +5534,7 @@ export const de = {
     maximize: "Fenster maximieren",
     restore: "Fenster wiederherstellen",
     close: "Fenster schließen",
+    newWindowFailed: "Neues Fenster konnte nicht geöffnet werden: {error}",
   },
   runtimeUpdate: {
     installAudio: "Audio-Laufzeit installieren",

@@ -5544,6 +5544,7 @@ export const fr = {
     maximize: "Agrandir la fenêtre",
     restore: "Restaurer la fenêtre",
     close: "Fermer la fenêtre",
+    newWindowFailed: "Impossible d’ouvrir une nouvelle fenêtre : {error}",
   },
   runtimeUpdate: {
     installAudio: "Installer le runtime audio",

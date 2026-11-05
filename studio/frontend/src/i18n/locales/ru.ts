@@ -5488,6 +5488,7 @@ export const ru = {
     maximize: "Развернуть окно",
     restore: "Восстановить окно",
     close: "Закрыть окно",
+    newWindowFailed: "Не удалось открыть новое окно: {error}",
   },
   runtimeUpdate: {
     installAudio: "Установить среду выполнения для аудио",

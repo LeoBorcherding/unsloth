@@ -5541,6 +5541,7 @@ export const zhTW = {
     maximize: "最大化視窗",
     restore: "還原視窗",
     close: "關閉視窗",
+    newWindowFailed: "無法開啟新視窗：{error}",
   },
   runtimeUpdate: {
     installAudio: "安裝音訊執行環境",
