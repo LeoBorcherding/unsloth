@@ -33,7 +33,9 @@ def _fake_targets(monkeypatch, hip, warp_sizes):
     def get_current_target():
         return types.SimpleNamespace(arch = "gfx906", warp_size = warp_sizes[current[0]])
 
-    driver = types.SimpleNamespace(active = types.SimpleNamespace(get_current_target = get_current_target))
+    driver = types.SimpleNamespace(
+        active = types.SimpleNamespace(get_current_target = get_current_target)
+    )
     monkeypatch.setattr(utils_mod, "is_hip", lambda: hip)
     monkeypatch.setattr(
         utils_mod, "triton", types.SimpleNamespace(runtime = types.SimpleNamespace(driver = driver))
