@@ -20,6 +20,18 @@ SAFETY_CHECKER_ENV = "UNSLOTH_COSMOS3_SAFETY_CHECKER"
 # Passed as None to from_pretrained: Studio renders video only.
 NONE_COMPONENTS = ("sound_tokenizer",)
 GUARDRAIL_PACKAGE = "cosmos_guardrail"
+# cosmos_guardrail downloads its weights from this gated repo when the pipeline is built.
+GUARDRAIL_REPO = "nvidia/Cosmos-1.0-Guardrail"
+# That download sends only the ambient Hub login (HF_TOKEN or `hf auth login`), never the Unsloth settings token.
+_GUARDRAIL_ACCESS = (
+    f"Accept its licence at https://huggingface.co/{GUARDRAIL_REPO}, sign in with that Hugging Face account where "
+    f"Unsloth Studio runs (hf auth login, or set HF_TOKEN; this download does not use the token in Unsloth settings), "
+    f"then restart Unsloth Studio and load again."
+)
+_GUARDRAIL_OPT_OUT = (
+    f"To run without the guardrail, set {SAFETY_CHECKER_ENV}=0; the model card's terms and safe use stay your "
+    f"responsibility."
+)
 # Fallback when the index is not on disk yet (validation is network-free).
 _BASE_SAFETY_CHECKER = {
     "nvidia/cosmos3-nano": True,
@@ -106,10 +118,23 @@ def guardrail_refusal(repo_id: str, index: Optional[dict] = None) -> Optional[st
     if not checkpoint_enables_safety_checker(repo_id, index):
         return None
     return (
-        f"'{repo_id}' runs NVIDIA's Cosmos guardrail (its model_index.json does not turn enable_safety_checker off, and "
-        f"the pipeline's default is on), which needs the cosmos_guardrail package: pip install cosmos-guardrail into "
-        f"Studio's Python environment, restart Studio, and retry. To run without it, set {SAFETY_CHECKER_ENV}=0; the "
-        f"model card's terms and safe use stay your responsibility."
+        f"'{repo_id}' needs NVIDIA's Cosmos guardrail: pip install cosmos-guardrail in Unsloth Studio's Python "
+        f"environment. Its weights are in the gated Hugging Face repo {GUARDRAIL_REPO}. {_GUARDRAIL_ACCESS} "
+        f"{_GUARDRAIL_OPT_OUT}"
+    )
+
+
+def guardrail_access_refusal(repo_id: str, exc: BaseException) -> Optional[str]:
+    """The load error for a gated-repo refusal of the guardrail's own weights, else None."""
+    from .diffusion import _HUB_REPO_RE, _gated_in_chain
+
+    gated = _gated_in_chain(exc)
+    found = _HUB_REPO_RE.search(str(gated)) if gated is not None else None
+    if found is None or found.group(1).rstrip(".").lower() != GUARDRAIL_REPO.lower():
+        return None
+    return (
+        f"'{repo_id}' could not start NVIDIA's Cosmos guardrail: Hugging Face refused access to the gated repo "
+        f"{GUARDRAIL_REPO}. {_GUARDRAIL_ACCESS} {_GUARDRAIL_OPT_OUT}"
     )
 
 
