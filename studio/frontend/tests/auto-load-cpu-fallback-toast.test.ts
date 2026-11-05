@@ -25,7 +25,7 @@ const FORWARDS_REASON = /cpu_fallback_reason/;
 const CALL_SITES = /\n\s*showAutoLoadSuccess\([\s\S]*?\);/g;
 const PARTIAL_SPLIT = /38 of 60 layers are on the GPU/;
 const TEXT_ONLY = /text-only mode/;
-const OFFLOAD_WARNING_CALL = /offloadWarning\(offloadCounts/;
+const OFFLOAD_WARNING_CALL = /offloadWarning\(\s*offloadCounts/;
 const FORWARDS_COUNTS = /offloadCountsFrom\(loadResp\)/;
 
 const source = readSrc("features/chat/api/chat-adapter.ts");

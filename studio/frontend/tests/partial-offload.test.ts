@@ -8,7 +8,7 @@ import { registerBundlerResolver } from "./helpers/kit.ts";
 
 registerBundlerResolver();
 
-const { offloadCountsFrom, offloadWarning } = await import(
+const { offloadCountsFrom, offloadPool, offloadWarning } = await import(
   "../src/features/chat/lib/partial-offload.ts"
 );
 
@@ -257,4 +257,21 @@ test("the advice does not promise that a smaller quantization fits", () => {
     assert.match(text, /smaller quantization or a shorter context may/);
     assert.doesNotMatch(text, /would fit entirely|would leave room/);
   }
+});
+
+test("on Apple Silicon the notice names one unified pool, as the placement row does", () => {
+  const counts = {
+    offloaded: 54,
+    total: 66,
+    gpuWeightsMib: 19276.2,
+    hostWeightsMib: 4840.4,
+  };
+  const unified = offloadWarning(counts, offloadPool(true))?.description ?? "";
+  assert.match(unified, /^54 of 66 layers are on the GPU \(24 GiB in unified memory\)\./);
+  assert.doesNotMatch(unified, /VRAM|in RAM/);
+  assert.match(
+    offloadWarning(counts, offloadPool(false))?.description ?? "",
+    /^54 of 66 layers are on the GPU \(19 GiB in VRAM, 4\.7 GiB in RAM\)\./,
+  );
+  assert.equal(offloadPool(false), null);
 });

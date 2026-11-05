@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePlatformStore } from "@/config/env";
 import { isAccountOwner } from "@/features/auth";
 import {
   cancelPreStreamRunReservations,
@@ -10,6 +11,7 @@ import {
   listLoras,
   loadModel,
   offloadCountsFrom,
+  offloadPool,
   offloadWarning,
   requestLocalPromptQueueStop,
   syncKeepModelsLoaded,
@@ -420,7 +422,10 @@ export function useAudioModelSlot({
         );
         if (!isCurrent()) return;
         if (res.is_audio && isTtsAudioType(res.audio_type)) {
-          const offloadNotice = offloadWarning(offloadCountsFrom(res));
+          const offloadNotice = offloadWarning(
+            offloadCountsFrom(res),
+            offloadPool(usePlatformStore.getState().appleSilicon),
+          );
           const showToast = offloadNotice ? toast.warning : toast.success;
           const evicted = evictedSlotsFrom(res);
           showToast(

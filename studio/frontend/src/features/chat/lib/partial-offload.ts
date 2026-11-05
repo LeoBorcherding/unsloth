@@ -55,7 +55,10 @@ export interface OffloadWarning {
 /** Why a loaded model is not fully on the GPU, or `null`. A known cpu_fallback_reason
  * wins over the counts: a Vulkan CPU fallback also logs 0/M, and is not a size problem.
  * Manual pins only count with gpuLayers >= 0 (Manual + Auto layers is llama.cpp's fit). */
-export function offloadWarning(counts: OffloadCounts): OffloadWarning | null {
+export function offloadWarning(
+  counts: OffloadCounts,
+  pool: string | null = null,
+): OffloadWarning | null {
   const {
     offloaded,
     total,
@@ -93,7 +96,7 @@ export function offloadWarning(counts: OffloadCounts): OffloadWarning | null {
     typeof gpuLayers === "number" &&
     gpuLayers >= 0;
   if (manualPin || offloadOverridden) return null;
-  const weights = weightsClause(gpuWeightsMib, hostWeightsMib);
+  const weights = weightsClause(gpuWeightsMib, hostWeightsMib, pool);
   if (offloaded <= 0) {
     return {
       titleSuffix: ", on CPU",
@@ -124,14 +127,20 @@ function weightAmount(mib: number): string {
 function weightsClause(
   gpuWeightsMib: number | null | undefined,
   hostWeightsMib: number | null | undefined,
+  pool: string | null,
 ): string {
   const memory = describeWeights(
     count(gpuWeightsMib),
     count(hostWeightsMib),
-    null,
+    pool,
     ", ",
   );
   return memory === null ? "" : ` (${memory})`;
+}
+
+/** The placement row's label on Apple Silicon; the load sites have no device list for other shared pools. */
+export function offloadPool(appleSilicon: boolean): string | null {
+  return appleSilicon ? "unified memory" : null;
 }
 
 function layerCount(n: number): string {
