@@ -102,6 +102,36 @@ def test_smi_fallback_does_not_restore_the_hidden_cards_memory(two_boards, monke
     assert hardware.get_gpu_utilization()["vram_total_gb"] == 8.0
 
 
+def test_a_poll_counts_the_cards_with_amd_smi_once(two_boards, monkeypatch):
+    from utils.hardware import gpu_query
+
+    monkeypatch.setattr(hardware, "get_device", lambda: hardware.DeviceType.CUDA)
+    monkeypatch.setattr(hardware, "IS_ROCM", True)
+    monkeypatch.setattr(
+        hardware, "_get_parent_visible_gpu_spec", lambda: {"numeric_ids": [0], "raw": None}
+    )
+    monkeypatch.setattr(hardware, "_amd_smi_ids_for_hip_ids", lambda ids: None)
+    monkeypatch.setattr(hardware, "_torch_get_physical_gpu_count", lambda: 1)
+    monkeypatch.setattr(hardware, "_linux_amd_pci_topology", lambda: (("0000:03:00.0", "0x744c"),))
+    monkeypatch.setattr(hardware, "_rocm_linux_sysfs_vram_gb", lambda: (10.0, 32.0))
+    runtime = [{"index": 0, "visible_ordinal": 0, "used_gb": 6.0, "total_gb": 8.0}]
+    monkeypatch.setattr(hardware, "_torch_get_per_device_info", lambda ids: runtime)
+    monkeypatch.setattr(hardware, "_torch_get_device_inventory", lambda ids: runtime)
+    monkeypatch.setattr(hardware, "_smi_query", lambda *args, **kwargs: None)
+    counts = []
+    monkeypatch.setattr(amd, "get_physical_gpu_count", lambda: counts.append(1) or 2)
+
+    assert hardware.get_gpu_utilization()["vram_total_gb"] == 8.0
+    assert hardware.get_gpu_utilization()["vram_total_gb"] == 8.0
+    assert len(counts) == 1
+    gpu_query.invalidate_static("card swapped")
+    hardware.get_gpu_utilization()
+    assert len(counts) == 2
+    monkeypatch.setattr(hardware, "_linux_amd_pci_topology", lambda: ())
+    hardware.get_gpu_utilization()
+    assert len(counts) == 3
+
+
 @pytest.mark.parametrize(
     "rocm,ids,mapping",
     [(True, [0], [1]), (True, [0], [0]), (True, [], None), (True, None, None), (False, [0], None)],

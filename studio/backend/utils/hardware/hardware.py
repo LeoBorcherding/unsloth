@@ -2571,13 +2571,42 @@ def _amd_smi_ids_for_hip_ids(hip_ids: Optional[list[int]]) -> Optional[list[int]
     return [hip_to_smi[hip_id] for hip_id in hip_ids]
 
 
+_rocm_amd_smi_count_lock = threading.Lock()
+_rocm_amd_smi_count_cache: Optional[tuple[float, Optional[int], Optional[int], Optional[tuple]]] = (
+    None
+)
+
+
+def _rocm_amd_smi_physical_count() -> Optional[int]:
+    """``amd.get_physical_gpu_count`` held until re-detection or a card change: it spawns amd-smi (10 s timeout) and the
+    utilization poll asks twice per pass. A failed count is retried after the HIP id map's TTL."""
+    global _rocm_amd_smi_count_cache
+    from . import amd
+
+    static_gen = amd._static_generation()
+    topology = _linux_amd_pci_topology()
+    with _rocm_amd_smi_count_lock:
+        cached = _rocm_amd_smi_count_cache
+        if (
+            cached is None
+            or cached[2] != static_gen
+            or (topology is not None and cached[3] != topology)
+            or (cached[1] is None and time.monotonic() - cached[0] >= amd._HIP_ID_MAP_NONE_TTL_S)
+        ):
+            cached = _rocm_amd_smi_count_cache = (
+                time.monotonic(),
+                amd.get_physical_gpu_count(),
+                static_gen,
+                topology,
+            )
+    return cached[1]
+
+
 def _rocm_unmasked_inventory_mismatch() -> bool:
     if not IS_ROCM or _rocm_visibility_mask_active():
         return False
-    from . import amd
-
     runtime_count = _torch_get_physical_gpu_count()
-    physical_count = amd.get_physical_gpu_count()
+    physical_count = _rocm_amd_smi_physical_count()
     if physical_count is None and platform.system() == "Linux":
         pci_ids = _rocm_kfd_gpu_pci_ids()
         if pci_ids:
