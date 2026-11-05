@@ -3960,14 +3960,19 @@ export const vi = {
     cpuTrainingNotice:
       "Không tìm thấy GPU, nên quá trình huấn luyện chạy trên CPU. Việc này chậm hơn nhiều so với huấn luyện trên GPU và chỉ hỗ trợ mô hình văn bản (LoRA hoặc tinh chỉnh toàn bộ).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Cài đặt",
+      review: "Xem lại",
+      back: "Quay lại",
+      continue: "Tiếp tục",
+      stepProgress: "Bước {current}/{total}",
+      setupNavigation: "Thiết lập huấn luyện",
       modelTitle: "Mô hình",
       modelDescription: "Chọn mô hình và phương pháp huấn luyện",
       datasetTitle: "Tập dữ liệu",
       datasetDescription: "Chọn hoặc tải lên dữ liệu huấn luyện",
       paramsTitle: "Tham số",
       paramsDescription: "Cấu hình tham số huấn luyện",
-      configTitle: "Cấu hình",
-      configDescription: "Lưu và tải cấu hình",
       modelLabel: "Mô hình",
       modelTooltip: "Mô hình gốc mà bạn muốn tinh chỉnh.",
       methodLabel: "Phương pháp",
@@ -4240,6 +4245,7 @@ export const vi = {
             "Tập dữ liệu này có vẻ là hình ảnh, loại không thể truyền trực tuyến.",
           audioDataset:
             "Tập dữ liệu này có vẻ là âm thanh, loại không thể truyền trực tuyến.",
+          rlObjective: "Chưa hỗ trợ truyền trực tuyến cho DPO, ORPO hoặc GRPO.",
         },
         options: {
           trainOnCompletions: "chỉ phần trả lời của trợ lý",

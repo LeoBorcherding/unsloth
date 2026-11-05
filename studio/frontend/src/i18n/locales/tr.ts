@@ -3957,14 +3957,19 @@ export const tr = {
     cpuTrainingNotice:
       "GPU bulunamadı, bu nedenle eğitim CPU üzerinde çalışır. GPU eğitiminden çok daha yavaştır ve yalnızca metin modellerini destekler (LoRA veya tam ince ayar).",
     wizard: {
+      promptStep: "İstem",
+      settingsStep: "Ayarlar",
+      review: "İncele",
+      back: "Geri",
+      continue: "Devam",
+      stepProgress: "Adım {current} / {total}",
+      setupNavigation: "Eğitim kurulumu",
       modelTitle: "Model",
       modelDescription: "Model ve eğitim yöntemini seçin",
       datasetTitle: "Veri kümesi",
       datasetDescription: "Eğitim verilerini seçin veya yükleyin",
       paramsTitle: "Parametreler",
       paramsDescription: "Eğitim parametrelerini yapılandırın",
-      configTitle: "Yapılandırma",
-      configDescription: "Yapılandırmaları kaydedin ve yükleyin",
       modelLabel: "Model",
       modelTooltip: "İnce ayar yapmak istediğiniz temel model.",
       methodLabel: "Yöntem",
@@ -4238,6 +4243,7 @@ export const tr = {
             "Bu veri kümesi görüntülerden oluşuyor gibi görünüyor; görüntüler akış olarak alınamaz.",
           audioDataset:
             "Bu veri kümesi seslerden oluşuyor gibi görünüyor; sesler akış olarak alınamaz.",
+          rlObjective: "Akış henüz DPO, ORPO veya GRPO için desteklenmiyor.",
         },
         options: {
           trainOnCompletions: "yalnızca asistan yanıtları",

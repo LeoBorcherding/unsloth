@@ -4023,14 +4023,19 @@ export const es419 = {
     cpuTrainingNotice:
       "No se encontró ninguna GPU, así que el entrenamiento se ejecuta en la CPU. Es mucho más lento que en una GPU y solo admite modelos de texto (LoRA o ajuste fino completo).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Configuración",
+      review: "Revisar",
+      back: "Atrás",
+      continue: "Continuar",
+      stepProgress: "Paso {current} de {total}",
+      setupNavigation: "Configuración del entrenamiento",
       modelTitle: "Modelo",
       modelDescription: "Selecciona el modelo y el método de entrenamiento",
       datasetTitle: "Conjunto de datos",
       datasetDescription: "Selecciona o sube datos de entrenamiento",
       paramsTitle: "Parámetros",
       paramsDescription: "Configura los parámetros de entrenamiento",
-      configTitle: "Configuración",
-      configDescription: "Guarda y carga configuraciones",
       modelLabel: "Modelo",
       modelTooltip: "El modelo base que quieres ajustar.",
       methodLabel: "Método",
@@ -4310,6 +4315,7 @@ export const es419 = {
             "Este conjunto de datos parece contener imágenes, que no se pueden transmitir.",
           audioDataset:
             "Este conjunto de datos parece contener audio, que no se puede transmitir.",
+          rlObjective: "El streaming aún no es compatible con DPO, ORPO ni GRPO.",
         },
         options: {
           trainOnCompletions: "solo respuestas del asistente",

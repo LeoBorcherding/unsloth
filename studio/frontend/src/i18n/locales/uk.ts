@@ -3992,14 +3992,19 @@ export const uk = {
     cpuTrainingNotice:
       "GPU не знайдено, тому навчання виконується на CPU. Воно набагато повільніше, ніж на GPU, і підтримує лише текстові моделі (LoRA або повне донавчання).",
     wizard: {
+      promptStep: "Промпт",
+      settingsStep: "Налаштування",
+      review: "Перегляд",
+      back: "Назад",
+      continue: "Продовжити",
+      stepProgress: "Крок {current} з {total}",
+      setupNavigation: "Налаштування тренування",
       modelTitle: "Модель",
       modelDescription: "Виберіть модель і метод навчання",
       datasetTitle: "Набір даних",
       datasetDescription: "Виберіть або вивантажте дані для навчання",
       paramsTitle: "Параметри",
       paramsDescription: "Налаштуйте параметри навчання",
-      configTitle: "Конфігурація",
-      configDescription: "Зберігайте й завантажуйте конфігурації",
       modelLabel: "Модель",
       modelTooltip: "Базова модель, яку потрібно донавчити.",
       methodLabel: "Метод",
@@ -4279,6 +4284,7 @@ export const uk = {
             "Схоже, цей набір даних містить зображення, які не можна передавати потоком.",
           audioDataset:
             "Схоже, цей набір даних містить аудіо, яке не можна передавати потоком.",
+          rlObjective: "Потокове передавання поки не підтримується для DPO, ORPO і GRPO.",
         },
         options: {
           trainOnCompletions: "лише відповіді асистента",

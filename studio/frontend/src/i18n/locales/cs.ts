@@ -3978,14 +3978,19 @@ export const cs = {
     cpuTrainingNotice:
       "Nebyla nalezena žádná GPU, takže trénování běží na CPU. Je mnohem pomalejší než trénování na GPU a podporuje pouze textové modely (LoRA nebo úplné doladění).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Nastavení",
+      review: "Kontrola",
+      back: "Zpět",
+      continue: "Pokračovat",
+      stepProgress: "Krok {current} z {total}",
+      setupNavigation: "Nastavení tréninku",
       modelTitle: "Model",
       modelDescription: "Vyberte model a metodu trénování",
       datasetTitle: "Datová sada",
       datasetDescription: "Vyberte nebo nahrajte trénovací data",
       paramsTitle: "Parametry",
       paramsDescription: "Nastavte parametry trénování",
-      configTitle: "Konfigurace",
-      configDescription: "Ukládejte a načítejte konfigurace",
       modelLabel: "Model",
       modelTooltip: "Základní model, který chcete doladit.",
       methodLabel: "Metoda",
@@ -4261,6 +4266,7 @@ export const cs = {
             "Tato datová sada vypadá jako obrázky, které nelze streamovat.",
           audioDataset:
             "Tato datová sada vypadá jako zvuk, který nelze streamovat.",
+          rlObjective: "Streamování zatím není podporováno pro DPO, ORPO ani GRPO.",
         },
         options: {
           trainOnCompletions: "pouze odpovědi asistenta",
