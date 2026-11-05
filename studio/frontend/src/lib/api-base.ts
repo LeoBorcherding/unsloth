@@ -4,6 +4,10 @@ function detectTauri(): boolean {
   if (typeof window === 'undefined') {
     return false
   }
+  // An extra desktop window runs the web UI; Tauri still injects its globals there.
+  if ('__UNSLOTH_WEB_WINDOW__' in window) {
+    return false
+  }
   return (
     '__TAURI__' in window ||
     '__TAURI_INTERNALS__' in window ||

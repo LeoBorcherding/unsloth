@@ -5590,6 +5590,7 @@ export const th = {
     maximize: "ขยายหน้าต่างใหญ่สุด",
     restore: "คืนขนาดหน้าต่าง",
     close: "ปิดหน้าต่าง",
+    newWindowFailed: "เปิดหน้าต่างใหม่ไม่ได้: {error}",
   },
   runtimeUpdate: {
     installAudio: "ติดตั้งรันไทม์เสียง",

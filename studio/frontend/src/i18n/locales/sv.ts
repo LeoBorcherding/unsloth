@@ -5704,6 +5704,7 @@ export const sv = {
     maximize: "Maximera fönstret",
     restore: "Återställ fönstret",
     close: "Stäng fönstret",
+    newWindowFailed: "Det gick inte att öppna ett nytt fönster: {error}",
   },
   runtimeUpdate: {
     installAudio: "Installera ljudkörmiljön",

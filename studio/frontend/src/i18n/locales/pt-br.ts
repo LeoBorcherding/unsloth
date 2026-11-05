@@ -5489,6 +5489,7 @@ export const ptBR = {
     maximize: "Maximizar janela",
     restore: "Restaurar janela",
     close: "Fechar janela",
+    newWindowFailed: "Não foi possível abrir uma nova janela: {error}",
   },
   runtimeUpdate: {
     installAudio: "Instalar o runtime de áudio",

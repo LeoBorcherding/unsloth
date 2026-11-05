@@ -5411,6 +5411,7 @@ export const ja = {
     maximize: "ウィンドウを最大化",
     restore: "ウィンドウを元のサイズに戻す",
     close: "ウィンドウを閉じる",
+    newWindowFailed: "新しいウィンドウを開けませんでした: {error}",
   },
   runtimeUpdate: {
     installAudio: "オーディオランタイムをインストール",

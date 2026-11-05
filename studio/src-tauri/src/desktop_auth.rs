@@ -408,6 +408,13 @@ async fn desktop_auth_inner(
     diagnostics: &DiagnosticsState,
 ) -> Result<DesktopAuthResponse, String> {
     let _auth_guard = DESKTOP_AUTH_LOCK.lock().await;
+    desktop_auth_locked(state, diagnostics).await
+}
+
+async fn desktop_auth_locked(
+    state: &tauri::State<'_, BackendState>,
+    diagnostics: &DiagnosticsState,
+) -> Result<DesktopAuthResponse, String> {
     if let Some(signed_out) = signed_out_response(&signed_out_marker_path()?) {
         return Ok(signed_out);
     }
@@ -444,6 +451,41 @@ async fn desktop_auth_inner(
         "Desktop auth failed. Update or repair the managed Unsloth install, then restart Unsloth."
             .to_string(),
     )
+}
+
+/// What an extra window does with the sign-in stored for the backend's origin.
+#[derive(Debug, PartialEq)]
+pub(crate) enum WindowSession {
+    /// A fresh owner session.
+    Tokens(String, String),
+    /// Signed out in the app: drop what an earlier window stored.
+    SignedOut,
+    /// A managed account signs in in the document; keep what it stored.
+    LoginRequired,
+}
+
+impl From<DesktopAuthResponse> for WindowSession {
+    fn from(response: DesktopAuthResponse) -> Self {
+        match response {
+            DesktopAuthResponse::Tokens {
+                access_token,
+                refresh_token,
+            } => Self::Tokens(access_token, refresh_token),
+            DesktopAuthResponse::SignedOut { .. } => Self::SignedOut,
+            DesktopAuthResponse::LoginRequired { .. } => Self::LoginRequired,
+        }
+    }
+}
+
+/// Backend port plus the session an extra window starts with. Hold the guard until the window
+/// exists, so a sign-out cannot land between minting the session and handing it over.
+pub(crate) async fn window_session(
+    state: &tauri::State<'_, BackendState>,
+    diagnostics: &DiagnosticsState,
+) -> Result<(u16, WindowSession, tokio::sync::MutexGuard<'static, ()>), String> {
+    let guard = DESKTOP_AUTH_LOCK.lock().await;
+    let session = desktop_auth_locked(state, diagnostics).await?.into();
+    Ok((current_backend_port(state).await?.port, session, guard))
 }
 
 #[cfg(test)]

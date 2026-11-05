@@ -5884,6 +5884,7 @@ export const cs = {
     maximize: "Maximalizovat okno",
     restore: "Obnovit okno",
     close: "Zavřít okno",
+    newWindowFailed: "Nepodařilo se otevřít nové okno: {error}",
   },
   runtimeUpdate: {
     installAudio: "Nainstalovat zvukové běhové prostředí",

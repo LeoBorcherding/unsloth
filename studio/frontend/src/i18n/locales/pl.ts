@@ -5919,6 +5919,7 @@ export const pl = {
     maximize: "Maksymalizuj okno",
     restore: "Przywróć okno",
     close: "Zamknij okno",
+    newWindowFailed: "Nie udało się otworzyć nowego okna: {error}",
   },
   runtimeUpdate: {
     installAudio: "Zainstaluj środowisko uruchomieniowe audio",

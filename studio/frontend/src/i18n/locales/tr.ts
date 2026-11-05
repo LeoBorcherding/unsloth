@@ -5862,6 +5862,7 @@ export const tr = {
     maximize: "Pencereyi ekranı kaplayacak şekilde büyüt",
     restore: "Pencereyi geri yükle",
     close: "Pencereyi kapat",
+    newWindowFailed: "Yeni pencere açılamadı: {error}",
   },
   runtimeUpdate: {
     installAudio: "Ses çalışma zamanını kur",

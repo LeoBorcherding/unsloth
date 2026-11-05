@@ -17,6 +17,7 @@ enum Row {
 
 #[cfg(target_os = "macos")]
 const FILE_ROWS: &[Row] = &[
+    Row::Action("new-window", "New Window", "CmdOrCtrl+Alt+N"),
     Row::Action("new-chat", "New Chat", "CmdOrCtrl+N"),
     Row::Action(
         "new-temporary-chat",

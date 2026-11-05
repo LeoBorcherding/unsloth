@@ -5559,6 +5559,7 @@ export const he = {
     maximize: "הגדל חלון",
     restore: "שחזר גודל חלון",
     close: "סגור חלון",
+    newWindowFailed: "לא ניתן לפתוח חלון חדש: {error}",
   },
   runtimeUpdate: {
     installAudio: "התקן את סביבת זמן הריצה לשמע",

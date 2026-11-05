@@ -5460,6 +5460,7 @@ export const ar = {
     maximize: "تكبير النافذة",
     restore: "استعادة حجم النافذة",
     close: "إغلاق النافذة",
+    newWindowFailed: "تعذّر فتح نافذة جديدة: {error}",
   },
   runtimeUpdate: {
     installAudio: "تثبيت بيئة تشغيل الصوت",

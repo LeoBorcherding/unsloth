@@ -5910,6 +5910,7 @@ export const uk = {
     maximize: "Розгорнути вікно",
     restore: "Відновити вікно",
     close: "Закрити вікно",
+    newWindowFailed: "Не вдалося відкрити нове вікно: {error}",
   },
   runtimeUpdate: {
     installAudio: "Інсталювати аудіосередовище виконання",

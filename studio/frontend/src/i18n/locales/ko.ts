@@ -5451,6 +5451,7 @@ export const ko = {
     maximize: "창 최대화",
     restore: "창 복원",
     close: "창 닫기",
+    newWindowFailed: "새 창을 열 수 없습니다: {error}",
   },
   runtimeUpdate: {
     installAudio: "오디오 런타임 설치",

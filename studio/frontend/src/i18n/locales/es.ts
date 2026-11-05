@@ -5533,6 +5533,7 @@ export const es = {
     maximize: "Maximizar ventana",
     restore: "Restaurar ventana",
     close: "Cerrar ventana",
+    newWindowFailed: "No se pudo abrir una ventana nueva: {error}",
   },
   runtimeUpdate: {
     installAudio: "Instalar el runtime de audio",

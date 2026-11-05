@@ -5835,6 +5835,7 @@ export const fa = {
     maximize: "بزرگ کردن پنجره",
     restore: "بازگرداندن اندازهٔ پنجره",
     close: "بستن پنجره",
+    newWindowFailed: "باز کردن پنجرهٔ جدید ممکن نشد: {error}",
   },
   runtimeUpdate: {
     installAudio: "نصب محیط اجرای صدا",

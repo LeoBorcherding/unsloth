@@ -20,6 +20,7 @@ export type SettingsMenuAction = `settings-${SettingsTab}`;
 export type AppMenuAction =
   | HelpAction
   | SettingsMenuAction
+  | "new-window"
   | "new-chat"
   | "new-temporary-chat"
   | "open-folder"
@@ -49,6 +50,8 @@ export type AppMenuAction =
 export const MENU_CHORDS: Partial<
   Record<AppMenuAction, { shortcut?: ShortcutId; chord?: string }>
 > = {
+  // Reserved for the browsers' own use on macOS, so no web shortcut takes it.
+  "new-window": { chord: "Mod+Alt+KeyN" },
   "new-chat": { shortcut: "newChat", chord: "Mod+KeyN" },
   "new-temporary-chat": { shortcut: "newTemporaryChat", chord: "Mod+Shift+KeyN" },
   "open-folder": { chord: "Mod+KeyO" },

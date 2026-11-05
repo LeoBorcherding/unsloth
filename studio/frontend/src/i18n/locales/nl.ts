@@ -5924,6 +5924,7 @@ export const nl = {
     maximize: "Venster maximaliseren",
     restore: "Venster herstellen",
     close: "Venster sluiten",
+    newWindowFailed: "Kan geen nieuw venster openen: {error}",
   },
   runtimeUpdate: {
     installAudio: "De audioruntime installeren",

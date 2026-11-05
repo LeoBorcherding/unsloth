@@ -5471,6 +5471,7 @@ export const hi = {
     maximize: "विंडो बड़ी करें",
     restore: "विंडो पहले जैसी करें",
     close: "विंडो बंद करें",
+    newWindowFailed: "नई विंडो नहीं खुल सकी: {error}",
   },
   runtimeUpdate: {
     installAudio: "ऑडियो रनटाइम इंस्टॉल करें",
