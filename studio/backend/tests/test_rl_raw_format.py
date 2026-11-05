@@ -123,3 +123,32 @@ def test_grpo_runs_without_loss_based_early_stopping(trainer):
     trainer._attach_early_stopping({"early_stopping_patience": 2})
     assert trainer._early_stopping is None
     assert any("Early stopping is off for GRPO" in w for w in trainer.training_progress.warnings)
+
+
+@pytest.mark.parametrize("audio_type", ["whisper", "csm", "snac", "bicodec", "dac"])
+@pytest.mark.parametrize("objective", ["dpo", "orpo", "grpo"])
+def test_rl_is_refused_for_an_audio_model(trainer, tmp_path, audio_type, objective):
+    # The audio preprocessors return before the RL formatter, so RL rows would never be built.
+    path = tmp_path / "rl.jsonl"
+    path.write_text(
+        json.dumps({"prompt": "q", "answer": "a", "chosen": "a", "rejected": "b"}) + "\n",
+        encoding = "utf-8",
+    )
+    trainer._audio_type = audio_type
+    trainer.is_audio = True
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = objective)
+        is None
+    )
+    assert "audio" in (trainer.training_progress.error or "")
+
+
+def test_rl_is_refused_for_an_audio_vlm(trainer, tmp_path):
+    path = tmp_path / "rl.jsonl"
+    path.write_text(json.dumps({"prompt": "q", "answer": "a"}) + "\n", encoding = "utf-8")
+    trainer.is_audio_vlm = True
+    assert (
+        trainer.load_and_format_dataset(None, local_datasets = [str(path)], objective = "grpo")
+        is None
+    )
+    assert "audio" in (trainer.training_progress.error or "")

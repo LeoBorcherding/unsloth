@@ -3687,6 +3687,11 @@ class UnslothTrainer:
                     "Re-download the model or provide a token, then retry."
                 )
             # Every audio branch below, and the VLM path, casts an Audio column and reads its array.
+            if objective != "sft" and (self._audio_type or self.is_audio_vlm):
+                # The audio preprocessors below return before the RL formatter is reached.
+                raise ValueError(
+                    f"{objective.upper()} is not available for audio models yet; use SFT."
+                )
             if self._audio_type or self.is_audio_vlm:
                 if not ensure_audio_decoding():
                     raise RuntimeError(
