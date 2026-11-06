@@ -163,6 +163,7 @@ def load_lm_as_decision_model(
         CLEF_MAX_LEN,
         ClefDecisionModel,
         _attach_clef_saving,
+        _decoder_device,
         _mark_full_finetuning,
     )
 
@@ -207,7 +208,7 @@ def load_lm_as_decision_model(
         with torch.random.fork_rng(devices = []):
             torch.manual_seed(random_state)
             head = JointSchemaHead(**config)
-    device = next(backbone.parameters()).device
+    device = _decoder_device(backbone)
     model = ClefDecisionModel(backbone, head.to(device = device, dtype = torch.float32))
     model.decision_config = {
         "layout": "clef",

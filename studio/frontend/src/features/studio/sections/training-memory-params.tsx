@@ -132,6 +132,7 @@ export function TrainingMemoryParams(): ReactElement {
       isAudioModel: state.isAudioModel,
       isDecision: state.modelType === "decision",
       modelType: state.modelType,
+      decisionLayout: state.decisionLayout,
       isDatasetImage: state.isDatasetImage,
       visionImageSize: state.visionImageSize,
       setVisionImageSize: state.setVisionImageSize,

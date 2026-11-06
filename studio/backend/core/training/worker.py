@@ -4932,12 +4932,12 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
     # Offload layers sizes "auto" to what the allocator may use, so a budget makes the run fit in it,
     # and two runs on one card can each take their share.
     # ── 2b. Training VRAM budget ──
-    # Only "auto" sizes to a budget, and only LoRA runs outside decision / embedding offload.
+    # Only "auto" sizes to a budget, and only LoRA runs that offload: not embedding or Laya decision models.
     _wants_budget = bool(
         (config.get("offload_vram_gb") or config.get("offload_vram_gb_per_device"))
         and config.get("offload_layers") == "auto"
         and config.get("training_type", "LoRA/QLoRA") in ("LoRA/QLoRA", "Continued Pretraining")
-        and not config.get("is_decision")
+        and (not config.get("is_decision") or config.get("decision_layout") in ("clef", "llm"))
         and not config.get("is_embedding")
     )
     # Vision / audio loads on several GPUs cannot offload at load, and LoRA setup allocates adapters before it swaps:

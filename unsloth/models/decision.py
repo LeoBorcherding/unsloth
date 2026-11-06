@@ -92,6 +92,15 @@ def _pin_device_map(kwargs) -> None:
     kwargs["device_map"] = device_map
 
 
+def _decoder_device(backbone):
+    # lm_head, which the head reads, stays on the decoder's card; offload_embedding and Block Swap can leave embed_tokens in host RAM.
+    return backbone.get_output_embeddings().weight.device
+
+
+def _clef_device(model):
+    return next(model.head.parameters()).device
+
+
 def _amp_dtype(device):
     if device.type in ("cuda", "xpu"):
         return torch.bfloat16 if is_bfloat16_supported() else torch.float16
@@ -475,7 +484,7 @@ def _clef_logits(
     # Per question logits plus one Laya-shaped item per question for the shared metrics.
     from .clef import QUESTION_TYPES as CLEF_TYPES
 
-    device = next(model.parameters()).device
+    device = _clef_device(model)
     amp_dtype = _clef_amp_dtype(model, device)
     if not hasattr(processor, "tokenizer"):
         processor = getattr(model, "_saved_temp_tokenizer", None)
@@ -542,7 +551,7 @@ def _clef_decide(
         max_length = max_length,
         processor = processor,
     )
-    device = next(model.parameters()).device
+    device = _clef_device(model)
     amp_dtype = _clef_amp_dtype(model, device)
     batch = collate_records([encoded], tokenizer.pad_token_id, device)
     was_training = model.training
@@ -794,7 +803,7 @@ def _load_clef(
     head_config = json.loads((folder / _CLEF_HEAD_FILES[1]).read_text(encoding = "utf-8"))
     head = JointSchemaHead(**head_config)
     head.load_state_dict(load_file(str(folder / _CLEF_HEAD_FILES[0])), strict = True)
-    device = next(backbone.parameters()).device
+    device = _decoder_device(backbone)
     # The head trains in fp32 over the 16-bit backbone, as the Laya head does.
     model = ClefDecisionModel(backbone, head.to(device = device, dtype = torch.float32))
     config["load_in_4bit"] = bool(load_in_4bit)
@@ -1143,7 +1152,7 @@ def _clef_loss_scaler(model, args):
     (#14439); not fp16 = True, which also means autocast, Apex and DeepSpeed / FSDP fp16 engines."""
     from .loader_utils import deepspeed_zero_stage, fsdp_version_requested
 
-    device = next(model.parameters()).device
+    device = _clef_device(model)
     if (
         not _clef_forced_float32(model)
         or device.type not in ("cuda", "xpu")
@@ -1173,7 +1182,7 @@ def _clef_mixed_precision(model, args) -> None:
         args.fp16, args.bf16 = False, True
     elif not args.fp16 and not args.bf16:
         # float32 norms (UNSLOTH_HIGH_PRECISION_LAYERNORM) beside 16-bit projections only run under autocast.
-        amp = _clef_amp_dtype(model, next(model.parameters()).device)
+        amp = _clef_amp_dtype(model, _clef_device(model))
         args.bf16 = amp == torch.bfloat16
         args.fp16 = amp == torch.float16
     precision = "bf16" if args.bf16 else "fp16" if args.fp16 else "no"

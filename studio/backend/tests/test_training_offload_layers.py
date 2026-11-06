@@ -515,3 +515,47 @@ def test_every_worker_load_passes_the_plan_shape():
         encoding = "utf-8"
     )
     assert src.count("offload_plan_shape = _offload_plan_shape(config),") == 2
+
+
+def test_clef_and_llm_decision_runs_get_the_offload_kwargs():
+    from core.training.decision_trainer import _offload_kwargs
+
+    config = {"offload_layers": "auto", "prefetch_depth": "auto", "batch_size": 4, "lora_r": 32}
+    assert _offload_kwargs(config, use_lora = True, clef = True) == (
+        {
+            "offload_layers": "auto",
+            "device_map_planner_kwargs": {
+                "prefetch_depth": "auto",
+                "batch_size": 4,
+                "lora_rank": 32,
+            },
+        },
+        {"offload_layers": "auto", "prefetch_depth": "auto"},
+    )
+    load, peft = _offload_kwargs({"offload_layers": 6}, use_lora = True, clef = True)
+    assert load == {"offload_layers": 6, "device_map_planner_kwargs": {"prefetch_depth": 2}}
+    assert peft == {"offload_layers": 6, "prefetch_depth": 2}
+    # Laya's ModernBERT encoder has no swap path, and a full finetune trains every weight.
+    for use_lora, clef in ((True, False), (False, True)):
+        assert _offload_kwargs(config, use_lora = use_lora, clef = clef) == ({}, {})
+    assert _offload_kwargs({"offload_layers": 0}, use_lora = True, clef = True) == ({}, {})
+
+
+def test_every_decision_load_and_lora_call_passes_the_offload_kwargs():
+    import inspect
+
+    from core.training import decision_trainer
+
+    src = inspect.getsource(decision_trainer._run)
+    assert src.count("**offload_load,") == 2
+    assert src.count("**offload_peft,") == 1
+
+
+def test_clef_and_llm_decision_runs_take_the_vram_budget():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "core" / "training" / "worker.py").read_text(
+        encoding = "utf-8"
+    )
+    gate = src[src.index("_wants_budget = bool(") : src.index("_budget_unsupported = ")]
+    assert 'config.get("decision_layout") in ("clef", "llm")' in gate

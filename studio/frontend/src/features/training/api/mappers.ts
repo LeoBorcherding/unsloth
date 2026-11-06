@@ -54,10 +54,10 @@ export function trainingLoadsIn4Bit(
   return (adapterMethod && isQloraMethod) || (isCpt && isFourBitModel);
 }
 
-/** Whether a run can offload layers: LoRA on the main trainer (embedding and decision models
- * train elsewhere, and the Whisper / codec audio paths have no decoder stack to stream; an
- * audio-input vision model such as Gemma 3n/4 does) with gradient checkpointing on, which
- * swapped layers need. */
+/** Whether a run can offload layers: LoRA with gradient checkpointing on, which swapped layers
+ * need. Embedding models train elsewhere, a Laya decision model is a ModernBERT encoder with no
+ * decoder stack to stream (Clef and LLM decision models load through FastModel), and so are the
+ * Whisper / codec audio paths; an audio-input vision model such as Gemma 3n/4 has one. */
 export function offloadSupported(
   config: Pick<
     TrainingConfigState,
@@ -66,6 +66,7 @@ export function offloadSupported(
     | "isAudioModel"
     | "isVisionModel"
     | "modelType"
+    | "decisionLayout"
     | "gradientCheckpointing"
   >,
 ): boolean {
@@ -74,7 +75,9 @@ export function offloadSupported(
     !config.isEmbeddingModel &&
     (!config.isAudioModel || config.isVisionModel) &&
     config.modelType !== "embeddings" &&
-    config.modelType !== "decision" &&
+    (config.modelType !== "decision" ||
+      config.decisionLayout === "clef" ||
+      config.decisionLayout === "llm") &&
     config.gradientCheckpointing !== "none"
   );
 }
@@ -101,6 +104,7 @@ export function offloadPayload(
     | "isAudioModel"
     | "isVisionModel"
     | "modelType"
+    | "decisionLayout"
     | "gradientCheckpointing"
     | "offloadLayers"
     | "offloadVramGb"

@@ -705,3 +705,71 @@ def test_a_plain_lm_in_a_subfolder_loads_from_it(tmp_path, monkeypatch):
     with pytest.raises(Captured):
         FastDecisionModel.from_pretrained(str(tmp_path), subfolder = "lm", decision_head = "clef")
     assert seen == [str(tmp_path / "lm")]
+
+
+def test_block_swap_kwargs_reach_fastmodel(monkeypatch):
+    from unsloth.models import decision, decision_from_lm, loader
+
+    seen = []
+
+    class Captured(Exception):
+        pass
+
+    def capture(*args, **kwargs):
+        seen.append(
+            {
+                k: kwargs.get(k)
+                for k in ("offload_layers", "prefetch_depth", "device_map_planner_kwargs")
+            }
+        )
+        raise Captured
+
+    monkeypatch.setattr(decision, "_device", lambda: torch.device("cuda"))
+    monkeypatch.setattr(loader.FastModel, "from_pretrained", capture)
+    monkeypatch.setattr(loader.FastModel, "get_peft_model", capture)
+    planner = {"prefetch_depth": 2, "batch_size": 4}
+    with pytest.raises(Captured):
+        decision_from_lm._load_backbone(
+            TINY_QWEN3,
+            64,
+            None,
+            False,
+            False,
+            None,
+            "unsloth",
+            {"offload_layers": "auto", "device_map_planner_kwargs": planner},
+        )
+    model = decision.ClefDecisionModel(torch.nn.Linear(2, 2), torch.nn.Linear(2, 2))
+    model._unsloth_fast_backbone = True
+    with pytest.raises(Captured):
+        decision._clef_peft_model(
+            model, "all-linear", "unsloth", 3407, offload_layers = 6, prefetch_depth = 3
+        )
+    assert seen == [
+        {"offload_layers": "auto", "prefetch_depth": None, "device_map_planner_kwargs": planner},
+        {"offload_layers": 6, "prefetch_depth": 3, "device_map_planner_kwargs": None},
+    ]
+
+
+def test_the_head_follows_lm_head_when_the_embedding_leaves_the_card(monkeypatch):
+    # offload_embedding (Block Swap "auto" asks for it) moves embed_tokens, the first parameter, off the card.
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from unsloth.models import decision, decision_from_lm
+
+    backbone = AutoModelForCausalLM.from_pretrained(TINY_QWEN3, dtype = torch.float32)
+    embed = backbone.get_input_embeddings()
+    backbone.set_input_embeddings(
+        torch.nn.Embedding(embed.num_embeddings, embed.embedding_dim, device = "meta")
+    )
+    backbone.requires_grad_(False)
+    tokenizer = AutoTokenizer.from_pretrained(TINY_QWEN3)
+    monkeypatch.setattr(
+        decision_from_lm, "_load_backbone", lambda *args, **kwargs: (backbone, tokenizer, True)
+    )
+    model, _ = decision_from_lm.load_lm_as_decision_model(
+        TINY_QWEN3, head_width = 32, max_seq_length = 64
+    )
+    assert next(model.parameters()).device.type == "meta"
+    assert next(model.head.parameters()).device.type == "cpu"
+    assert decision._clef_device(model).type == "cpu"

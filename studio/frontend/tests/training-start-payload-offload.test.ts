@@ -115,7 +115,7 @@ test("offload goes out off wherever the run cannot offload", () => {
     { gradientCheckpointing: "none" as const },
     { isEmbeddingModel: true },
     { isAudioModel: true },
-    { modelType: "decision" as const },
+    { modelType: "decision" as const, decisionLayout: "laya" as const },
     { modelType: "embeddings" as const },
   ]) {
     assert.equal(offloadSupported({ ...on, ...blocked }), false);
@@ -125,6 +125,24 @@ test("offload goes out off wherever the run cannot offload", () => {
   assert.equal(offloadSupported(on), true);
   // Gemma 3n/4 take audio input on a decoder that streams like any other.
   assert.equal(offloadSupported({ ...on, isAudioModel: true, isVisionModel: true }), true);
+});
+
+test("Clef and LLM decision models offload; Laya has no decoder stack to stream", () => {
+  const on = { ...base, offloadLayers: "auto" as const, offloadVramGb: 8, modelType: "decision" as const };
+  for (const decisionLayout of ["clef", "llm"] as const) {
+    assert.equal(offloadSupported({ ...on, decisionLayout }), true);
+    assert.deepEqual(offloadPayload({ ...on, decisionLayout }), {
+      offload_layers: "auto",
+      offload_vram_gb: 8,
+      offload_vram_gb_per_device: null,
+      prefetch_depth: 2,
+    });
+    assert.equal(offloadPayload({ ...on, decisionLayout, trainingMethod: "full" }).offload_layers, 0);
+  }
+  for (const decisionLayout of ["laya", null] as const) {
+    assert.equal(offloadSupported({ ...on, decisionLayout }), false);
+    assert.equal(offloadPayload({ ...on, decisionLayout }).offload_layers, 0);
+  }
 });
 
 test("a count above the backend limit is clamped instead of failing the start", () => {

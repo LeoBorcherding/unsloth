@@ -510,6 +510,27 @@ def _mlx_tracking_callback(report_to: list):
     return Tracking()
 
 
+def _offload_kwargs(config: dict, use_lora: bool, clef: bool) -> tuple[dict, dict]:
+    """Block Swap kwargs for from_pretrained and get_peft_model, as the main trainer passes them.
+    Clef and LLM backbones load through FastModel; Laya's ModernBERT encoder has no swap path."""
+    layers = config.get("offload_layers") or 0
+    if not (layers and use_lora and clef):
+        return {}, {}
+    depth = config.get("prefetch_depth") or 2
+    # worker._offload_plan_shape: the batch and rank an Auto plan sizes its reserve for.
+    shape = {"batch_size": config.get("batch_size"), "lora_rank": config.get("lora_r")}
+    return (
+        {
+            "offload_layers": layers,
+            "device_map_planner_kwargs": {
+                "prefetch_depth": depth,
+                **{k: v for k, v in shape.items() if v},
+            },
+        },
+        {"offload_layers": layers, "prefetch_depth": depth},
+    )
+
+
 def run_decision_training(event_queue: Any, stop_queue: Any, config: dict) -> None:
     import torch
 
@@ -620,6 +641,7 @@ def _run(event_queue: Any, stop_queue: Any, config: dict, output_dir: str) -> No
     seed = config["random_seed"]
     use_lora = config["training_type"] == "LoRA/QLoRA"
     gradient_checkpointing = normalize_gradient_checkpointing(config["gradient_checkpointing"])
+    offload_load, offload_peft = _offload_kwargs(config, use_lora, clef)
 
     def check_rows(rows: list) -> None:
         problem = FastDecisionModel.rows_problem(rows, clef, validate)
@@ -646,6 +668,7 @@ def _run(event_queue: Any, stop_queue: Any, config: dict, output_dir: str) -> No
                 token = hf_token or None,
                 use_gradient_checkpointing = gradient_checkpointing,
                 random_state = seed,
+                **offload_load,
             )
         else:
             try:
@@ -669,6 +692,7 @@ def _run(event_queue: Any, stop_queue: Any, config: dict, output_dir: str) -> No
                     {
                         "load_in_4bit": use_lora and bool(config.get("load_in_4bit")),
                         "max_seq_length": config.get("max_seq_length") or None,
+                        **offload_load,
                     }
                     if clef
                     else {}
@@ -683,6 +707,7 @@ def _run(event_queue: Any, stop_queue: Any, config: dict, output_dir: str) -> No
                 use_gradient_checkpointing = gradient_checkpointing,
                 random_state = seed,
                 use_rslora = config["use_rslora"],
+                **offload_peft,
             )
         check_stop()
 
