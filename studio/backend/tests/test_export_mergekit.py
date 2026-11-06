@@ -518,7 +518,9 @@ def test_route_refuses_a_share_path_before_touching_it(monkeypatch):
     monkeypatch.setattr(Path, "is_dir", lambda self: probed.append(str(self)) or False)
     monkeypatch.setattr(export_routes.account_access, "require_model_allowed", lambda name: None)
     monkeypatch.setattr(export_routes.account_access, "authorize_download", lambda *args: None)
-    monkeypatch.setattr(export_routes, "_resolve_export_hf_token", lambda token, allow_ambient: None)
+    monkeypatch.setattr(
+        export_routes, "_resolve_export_hf_token", lambda token, allow_ambient: None
+    )
     request = MergeModelsRequest(
         method = "ties",
         base_model = "org/base",
@@ -548,8 +550,16 @@ def test_tokenizer_source_is_written_when_vocabularies_differ():
 @pytest.mark.parametrize(
     "fields",
     [
-        {"method": "linear", "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}], "tokenizer_source": "base"},
-        {"method": "linear", "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}], "tokenizer_source": "c"},
+        {
+            "method": "linear",
+            "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}],
+            "tokenizer_source": "base",
+        },
+        {
+            "method": "linear",
+            "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}],
+            "tokenizer_source": "c",
+        },
     ],
 )
 def test_tokenizer_source_must_name_a_base_union_or_merged_model(fields):
