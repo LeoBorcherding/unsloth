@@ -4543,6 +4543,13 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         except Exception:
             pass
 
+    if config.get("objective") == "grpo":
+        from core.training.rl import install_fsdp_import_stub
+        if install_fsdp_import_stub():
+            logger.info(
+                "torch has no distributed backend; stubbed torch.distributed.fsdp so TRL's GRPOTrainer imports"
+            )
+
     # Windows ROCm <= 7.12: _grouped_mm null HIP kernel on gfx1200 crashes; JitDecomp bypasses
     # TORCHDYNAMO_DISABLE, so override the CUDA dispatch key. Fixed in rocm7.13.
     global _WINDOWS_ROCM_GROUPED_MM_LIB
@@ -5017,6 +5024,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
     trainer = UnslothTrainer()
 
     trainer.add_progress_callback(_create_trainer_progress_callback(event_queue))
+    trainer.add_sample_callback(
+        lambda samples: event_queue.put({"type": "samples", **samples, "ts": time.time()})
+    )
 
     def _apply_stop(save: bool) -> None:
         trainer.should_stop = True
@@ -5043,6 +5053,8 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
         max_train_rows_seed = config.get("random_seed", 3407)
 
         def _load_training_dataset():
+            from core.training.rl import reward_keep_columns
+
             result = trainer.load_and_format_dataset(
                 dataset_source = hf_dataset if hf_dataset and hf_dataset.strip() else None,
                 format_type = config.get("format_type", ""),
@@ -5057,6 +5069,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                 dataset_slice_start = config.get("dataset_slice_start"),
                 dataset_slice_end = config.get("dataset_slice_end"),
                 is_cpt = is_cpt_for_dataset,
+                objective = config.get("objective", "sft"),
+                rl_keep_columns = reward_keep_columns(config.get("reward_specs")),
+                rl_system_prompt = (config.get("rl_settings") or {}).get("system_prompt"),
                 s3_config = config.get("s3_config"),
                 dataset_local_files_only = dataset_local_only,
                 dataset_local_path = config.get("dataset_snapshot_path"),
@@ -5536,6 +5551,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
             max_steps = max_steps if max_steps and max_steps > 0 else 0,
             save_steps = save_steps if save_steps and save_steps > 0 else 0,
             weight_decay = config.get("weight_decay", 0.001),
+            max_grad_norm = config.get("max_grad_norm"),
+            adam_beta1 = config.get("adam_beta1"),
+            adam_beta2 = config.get("adam_beta2"),
             random_seed = config.get("random_seed", 3407),
             packing = config.get("packing", False),
             train_on_completions = False if is_cpt else config.get("train_on_completions", False),
@@ -5552,6 +5570,9 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
             optim = config.get("optim", "adamw_8bit"),
             lr_scheduler_type = config.get("lr_scheduler_type", "linear"),
             is_cpt = is_cpt,
+            objective = config.get("objective", "sft"),
+            rl_settings = config.get("rl_settings") or {},
+            reward_specs = config.get("reward_specs") or [],
             resume_from_checkpoint = resume_from_checkpoint,
         )
 
@@ -5778,6 +5799,7 @@ def _create_trainer_progress_callback(event_queue: Any) -> Callable[[TrainingPro
                     "grad_norm": progress.grad_norm,
                     "num_tokens": progress.num_tokens,
                     "eval_loss": progress.eval_loss,
+                    "rl_metrics": progress.rl_metrics,
                     "status_message": progress.status_message,
                     "offload": getattr(progress, "offload", None),
                     "ts": time.time(),
