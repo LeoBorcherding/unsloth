@@ -261,6 +261,7 @@ def _install_pydantic_stub(monkeypatch):
     pydantic.Field = lambda default = None, **_kwargs: default
     pydantic.field_validator = _identity_decorator
     pydantic.model_validator = _identity_decorator
+    pydantic.ConfigDict = dict
     monkeypatch.setitem(sys.modules, "pydantic", pydantic)
 
 
