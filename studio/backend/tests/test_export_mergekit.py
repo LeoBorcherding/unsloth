@@ -565,3 +565,21 @@ def test_tokenizer_source_is_written_when_vocabularies_differ():
 def test_tokenizer_source_must_name_a_base_union_or_merged_model(fields):
     with pytest.raises(ValueError, match = "tokenizer_source"):
         MergeModelsRequest(**fields, output_name = "m")
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_weights_and_t_are_refused(bad):
+    with pytest.raises(ValueError):
+        MergeModelsRequest(
+            method = "linear",
+            models = [{"model": "a", "weight": bad}, {"model": "b", "weight": 1}],
+            output_name = "m",
+        )
+    with pytest.raises(ValueError):
+        MergeModelsRequest(
+            method = "slerp",
+            base_model = "a",
+            models = [{"model": "a"}, {"model": "b"}],
+            t = bad,
+            output_name = "m",
+        )

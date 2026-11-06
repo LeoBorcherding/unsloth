@@ -5,7 +5,7 @@
 
 from pathlib import Path, PureWindowsPath
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Annotated, List, Optional, Literal, Dict, Any, Tuple, Union
 
 
@@ -445,6 +445,8 @@ class LlmCompressorExportProbeResponse(BaseModel):
 class MergeModelSpec(BaseModel):
     """One model in a merge: a Hub repo id or a local model folder."""
 
+    model_config = ConfigDict(allow_inf_nan = False)
+
     model: str = Field(..., min_length = 1, description = "Hub repo id or local model folder")
     weight: Optional[float] = Field(
         None, description = "Share of this model (linear, TIES, DARE, task arithmetic)"
@@ -460,12 +462,16 @@ class MergeModelSpec(BaseModel):
 class MergeGradientStep(BaseModel):
     """A SLERP t for the tensors matching ``filter`` (all others when unset), or a gradient over layers."""
 
+    model_config = ConfigDict(allow_inf_nan = False)
+
     filter: Optional[str] = None
     value: Union[float, List[float]]
 
 
 class MergeModelsRequest(BaseModel):
     """Merge two or more models with MergeKit into a new model folder under outputs."""
+
+    model_config = ConfigDict(allow_inf_nan = False)
 
     method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic"]
     models: List[MergeModelSpec] = Field(..., min_length = 1)
