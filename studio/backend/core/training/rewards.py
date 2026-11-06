@@ -143,7 +143,6 @@ def _validate_extract(extract: Any) -> Optional[dict]:
     return {"regex": extract["regex"]}
 
 
-# Names GRPOTrainer passes to reward functions itself (or never passes); a column cannot use them.
 # Names TRL passes to rewards itself, plus dataset schema keys it reinterprets (chosen next to a
 # conversational prompt raises "Invalid keys in the example").
 _TRL_REWARD_ARGS = frozenset(
@@ -698,7 +697,7 @@ def make_reward_func(spec: dict) -> Callable[..., list[float]]:
     return reward
 
 
-# Try it's sample when there is no dataset row yet.
+# The "Try it" panel's sample when there is no dataset row yet.
 _SAMPLE_ROW = {"prompt": "", "answer": "72"}
 
 

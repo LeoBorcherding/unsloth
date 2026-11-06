@@ -38,7 +38,6 @@ const PALETTE = [
   "#eab308",
 ];
 
-const PER_REWARD_KEY = REWARD_LOG_KEY;
 const PREFERENCE_REWARD_KEYS = new Set([
   "rewards/chosen",
   "rewards/rejected",
@@ -68,7 +67,7 @@ function buildCards(
   const perReward = [...keys]
     .filter(
       (k) =>
-        PER_REWARD_KEY.test(k) &&
+        REWARD_LOG_KEY.test(k) &&
         !k.endsWith("/std") &&
         !PREFERENCE_REWARD_KEYS.has(k),
     )
