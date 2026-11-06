@@ -5160,6 +5160,8 @@ export const ja = {
       tagsMissing: "報酬は {tags} を読みますが、プロンプトで求めていません。",
       thinkingHint: "オフにすると、Qwen3 系のモデルが隠れた思考ブロックに回答の予算を使いません。",
       reasoningFormat: "推論フォーマット",
+      formatModel: "モデルのテンプレート",
+      formatReasoning: "推論テンプレート",
       reasoningFormatHint: "ベースモデル向け: GRPO ノートブックのチャットテンプレート。考え方を <start_working_out> タグで囲み、答えを <SOLUTION> に入れます。プロンプトと報酬もこれに合わせて切り替わります。",
       warmupSteps: "フォーマットのウォームアップステップ",
       warmupStepsHint: "GRPO の前に整形済みの数学例で短く SFT を行い、モデルが最初からタグを書けるようにします。0 でスキップ。ノートブックでは約 100。",

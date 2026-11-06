@@ -5593,6 +5593,8 @@ export const tr = {
       tagsMissing: "Ödülleriniz {tags} okuyor, ama istem bunları istemiyor.",
       thinkingHint: "Kapalıyken Qwen3 tarzı modeller cevap bütçesini gizli bir düşünme bloğuna harcamaz.",
       reasoningFormat: "Akıl yürütme biçimi",
+      formatModel: "Model şablonu",
+      formatReasoning: "Akıl yürütme şablonu",
       reasoningFormatHint: "Temel modeller için: GRPO not defterlerinin sohbet şablonu, çalışma <start_working_out> etiketleri arasında, cevap <SOLUTION> içinde. İstemi ve ödülleri buna göre değiştirir.",
       warmupSteps: "Biçim ısınma adımları",
       warmupStepsHint: "GRPO'dan önce biçimlendirilmiş matematik örnekleri üzerinde kısa bir SFT geçişi, böylece model etiketleri zaten yazar. 0 bunu atlar; not defterleri yaklaşık 100 kullanır.",

@@ -5596,6 +5596,8 @@ export const id = {
       tagsMissing: "Reward Anda membaca {tags}, tetapi prompt tidak memintanya.",
       thinkingHint: "Mati membuat model bertipe Qwen3 tidak menghabiskan budget jawaban untuk blok thinking yang tersembunyi.",
       reasoningFormat: "Format reasoning",
+      formatModel: "Template model",
+      formatReasoning: "Template reasoning",
       reasoningFormatHint: "Untuk model dasar: chat template dari notebook GRPO, dengan proses berpikir di antara tag <start_working_out> dan jawaban di <SOLUTION>. Mengubah prompt dan reward agar sesuai.",
       warmupSteps: "Langkah pemanasan format",
       warmupStepsHint: "Tahap SFT singkat pada contoh matematika yang sudah diformat sebelum GRPO, agar model sudah bisa menulis tag tersebut. 0 melewatinya; notebook memakai sekitar 100.",

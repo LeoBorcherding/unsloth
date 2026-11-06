@@ -228,7 +228,7 @@ def run_format_warmup(
         dataset_text_field = "text",
         max_steps = steps,
         learning_rate = WARMUP_LEARNING_RATE,
-        warmup_steps = min(5, max(steps // 10, 0)),
+        warmup_steps = min(5, steps // 10),
         optim = _warmup_optimizer(),
         weight_decay = 0.001,
         lr_scheduler_type = "linear",

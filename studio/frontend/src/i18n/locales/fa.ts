@@ -5568,6 +5568,8 @@ export const fa = {
       tagsMissing: "reward‌های شما {tags} را می‌خوانند، اما پرامپت آن‌ها را نمی‌خواهد.",
       thinkingHint: "خاموش باعث می‌شود مدل‌هایی شبیه Qwen3 بودجهٔ پاسخ را روی یک بلوک پنهان تفکر خرج نکنند.",
       reasoningFormat: "قالب reasoning",
+      formatModel: "قالب مدل",
+      formatReasoning: "قالب reasoning",
       reasoningFormatHint: "برای مدل‌های پایه: قالب چت نوت‌بوک‌های GRPO، با روند حل بین تگ‌های <start_working_out> و پاسخ در <SOLUTION>. پرامپت و reward‌ها را با آن هماهنگ می‌کند.",
       warmupSteps: "گام‌های گرم‌کردن قالب",
       warmupStepsHint: "یک مرحلهٔ کوتاه SFT روی مثال‌های ریاضی قالب‌بندی‌شده پیش از GRPO، تا مدل از قبل تگ‌ها را بنویسد. ۰ آن را رد می‌کند؛ نوت‌بوک‌ها حدود ۱۰۰ استفاده می‌کنند.",

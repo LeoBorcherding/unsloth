@@ -125,11 +125,21 @@ export function PromptFormatSection(): ReactElement {
           label={t("rl.prompt.reasoningFormat")}
           tooltip={t("rl.prompt.reasoningFormatHint")}
         >
-          <Switch
-            checked={s.reasoning}
-            onCheckedChange={s.setReasoning}
-            aria-label={t("rl.prompt.reasoningFormat")}
-          />
+          <Tabs
+            value={s.reasoning ? "reasoning" : "model"}
+            onValueChange={(v) => s.setReasoning(v === "reasoning")}
+            className="contents"
+          >
+            <SegmentedTabsList
+              value={s.reasoning ? "reasoning" : "model"}
+              ariaLabel={t("rl.prompt.reasoningFormat")}
+              size="compact"
+              options={[
+                { value: "model", label: t("rl.prompt.formatModel") },
+                { value: "reasoning", label: t("rl.prompt.formatReasoning") },
+              ]}
+            />
+          </Tabs>
         </ParamsRow>
         {s.reasoning && (
           <ParamsRow

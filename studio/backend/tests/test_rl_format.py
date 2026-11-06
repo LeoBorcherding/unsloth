@@ -130,7 +130,7 @@ def test_the_reasoning_format_defaults_to_the_notebooks_warmup(kw, steps):
 @pytest.mark.parametrize(
     "kw, completion",
     [
-        # The Colab A/B setup: prompt 256, cap 512 at a 2048 context left no warm-up answer.
+        # Prompt 256 and cap 512 at a 2048 context leave no warm-up answer that fits.
         (dict(rl_max_prompt_length = 256, grpo_max_completion_length = 512), 1024),
         (dict(grpo_max_completion_length = 1500), 1500),
         (dict(), None),

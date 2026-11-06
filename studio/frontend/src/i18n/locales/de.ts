@@ -5283,6 +5283,8 @@ export const de = {
       tagsMissing: "Deine Belohnungen lesen {tags}, aber der Prompt fordert sie nicht an.",
       thinkingHint: "Aus verhindert, dass Modelle im Qwen3-Stil das Antwortbudget für einen versteckten Denkblock verbrauchen.",
       reasoningFormat: "Reasoning-Format",
+      formatModel: "Modell-Template",
+      formatReasoning: "Reasoning-Template",
       reasoningFormatHint: "Für Basismodelle: die Chat-Vorlage der GRPO-Notebooks, mit dem Lösungsweg zwischen <start_working_out>-Tags und der Antwort in <SOLUTION>. Prompt und Belohnungen werden passend umgestellt.",
       warmupSteps: "Format-Aufwärmschritte",
       warmupStepsHint: "Kurzer SFT-Durchlauf mit formatierten Mathe-Beispielen vor GRPO, damit das Modell die Tags schon schreibt. 0 überspringt ihn; die Notebooks nutzen etwa 100.",

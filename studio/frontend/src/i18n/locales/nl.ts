@@ -5652,6 +5652,8 @@ export const nl = {
       tagsMissing: "Je rewards lezen {tags}, maar de prompt vraagt er niet om.",
       thinkingHint: "Uit houdt Qwen3-achtige modellen ervan af het antwoordbudget aan een verborgen denkblok te besteden.",
       reasoningFormat: "Reasoning-formaat",
+      formatModel: "Modeltemplate",
+      formatReasoning: "Reasoning-template",
       reasoningFormatHint: "Voor basismodellen: de chattemplate van de GRPO-notebooks, met de uitwerking tussen <start_working_out>-tags en het antwoord in <SOLUTION>. Past prompt en rewards hierop aan.",
       warmupSteps: "Format-warm-up-stappen",
       warmupStepsHint: "Korte SFT-pass op geformatteerde wiskundevoorbeelden vóór GRPO, zodat het model de tags al schrijft. 0 slaat dit over; de notebooks gebruiken ongeveer 100.",

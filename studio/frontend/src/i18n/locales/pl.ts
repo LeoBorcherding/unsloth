@@ -5649,6 +5649,8 @@ export const pl = {
       tagsMissing: "Twoje nagrody odczytują {tags}, ale polecenie nie prosi o nie.",
       thinkingHint: "Wyłączone powstrzymuje modele w stylu Qwen3 od wydawania budżetu odpowiedzi na ukryty blok myślenia.",
       reasoningFormat: "Format rozumowania",
+      formatModel: "Szablon modelu",
+      formatReasoning: "Szablon rozumowania",
       reasoningFormatHint: "Dla modeli bazowych: szablon czatu z notatników GRPO, z pracą między tagami <start_working_out> i odpowiedzią w <SOLUTION>. Przełącza polecenie i nagrody, by się do tego dopasować.",
       warmupSteps: "Kroki rozgrzewki formatu",
       warmupStepsHint: "Krótki przebieg SFT na sformatowanych przykładach matematycznych przed GRPO, aby model już pisał tagi. 0 pomija to; notatniki używają około 100.",

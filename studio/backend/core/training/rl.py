@@ -1068,10 +1068,6 @@ def build_rl_trainer(
 
         if not reward_specs:
             raise ValueError("GRPO needs at least one reward selected.")
-        if settings.get("reasoning_format"):
-            refusal = reasoning_format_refusal(train_dataset)
-            if refusal:
-                raise ValueError(refusal)
         if tokenizer is not None:
             thinking = settings.get("enable_thinking")
             train_dataset, _ = render_grpo_prompts(

@@ -5282,6 +5282,8 @@ export const es = {
       tagsMissing: "Tus recompensas leen {tags}, pero el prompt no las pide.",
       thinkingHint: "Desactivado evita que los modelos tipo Qwen3 gasten el presupuesto de respuesta en un bloque de pensamiento oculto.",
       reasoningFormat: "Formato de razonamiento",
+      formatModel: "Plantilla del modelo",
+      formatReasoning: "Plantilla de razonamiento",
       reasoningFormatHint: "Para modelos base: la plantilla de chat de los notebooks de GRPO, con el razonamiento entre etiquetas <start_working_out> y la respuesta en <SOLUTION>. Cambia el prompt y las recompensas para que coincidan.",
       warmupSteps: "Pasos de calentamiento de formato",
       warmupStepsHint: "Una pasada corta de SFT con ejemplos de matemáticas formateados antes de GRPO, para que el modelo ya escriba las etiquetas. 0 la omite; los notebooks usan unos 100.",

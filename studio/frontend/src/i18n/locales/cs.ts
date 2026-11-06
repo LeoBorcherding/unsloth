@@ -5616,6 +5616,8 @@ export const cs = {
       tagsMissing: "Vaše rewards čtou {tags}, ale prompt si je nevyžaduje.",
       thinkingHint: "Vypnuto zabrání modelům typu Qwen3 utrácet rozpočet odpovědi na skrytý blok přemýšlení.",
       reasoningFormat: "Formát reasoning",
+      formatModel: "Šablona modelu",
+      formatReasoning: "Šablona reasoning",
       reasoningFormatHint: "Pro základní modely: chat šablona z GRPO notebooků, s postupem mezi tagy <start_working_out> a odpovědí v <SOLUTION>. Přepne prompt a rewards, aby odpovídaly.",
       warmupSteps: "Kroky zahřívání formátu",
       warmupStepsHint: "Krátký SFT průchod na formátovaných matematických příkladech před GRPO, aby model tagy už psal. 0 ho vynechá; notebooky používají asi 100.",

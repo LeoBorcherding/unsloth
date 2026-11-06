@@ -5596,6 +5596,8 @@ export const vi = {
       tagsMissing: "Reward của bạn đọc {tags}, nhưng prompt không yêu cầu chúng.",
       thinkingHint: "Tắt giúp các model kiểu Qwen3 không dùng giới hạn câu trả lời cho một khối thinking ẩn.",
       reasoningFormat: "Định dạng reasoning",
+      formatModel: "Template của mô hình",
+      formatReasoning: "Template reasoning",
       reasoningFormatHint: "Dành cho model nền: chat template của các notebook GRPO, với phần suy luận nằm giữa các tag <start_working_out> và câu trả lời trong <SOLUTION>. Sẽ đổi cả prompt và reward để khớp theo.",
       warmupSteps: "Số bước làm nóng định dạng",
       warmupStepsHint: "Một lượt SFT ngắn trên các ví dụ toán đã được định dạng trước khi chạy GRPO, để model đã biết viết các tag từ đầu. 0 sẽ bỏ qua bước này; các notebook dùng khoảng 100.",
