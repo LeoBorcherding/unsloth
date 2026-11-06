@@ -1,0 +1,56 @@
+{
+  "name": "beyonder_4x7b_moe",
+  "method": "moe",
+  "merge_seconds": 371,
+  "output_gb": 48.3,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/beyonder_4x7b_moe-1793978462",
+      "ppl": 3.4925380602294407,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are used to create all other colors. When you mix these primary colors together, you can create secondary colors",
+      "eval": "bf16 offload",
+      "eval_s": 451.9
+    },
+    {
+      "name": "mlabonne/Marcoro14-7B-slerp",
+      "ppl": 3.6033202151238575,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors in the color spectrum. By mixing these primary colors in different combinations,",
+      "eval": "bf16",
+      "eval_s": 50.7
+    },
+    {
+      "name": "openchat/openchat-3.5-1210",
+      "ppl": 3.475736696747585,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors in the color spectrum. By mixing these primary colors together, you can",
+      "eval": "bf16",
+      "eval_s": 50.2
+    },
+    {
+      "name": "beowolx/CodeNinja-1.0-OpenChat-7B",
+      "ppl": 4.3849601048504185,
+      "finite": true,
+      "text": " red, blue, and yellow. These colors are the foundation of all other colors. By mixing these primary colors, you can create a wide range of",
+      "eval": "bf16",
+      "eval_s": 51.7
+    },
+    {
+      "name": "maywell/PiVoT-0.1-Starling-LM-RP",
+      "ppl": 4.777988681502738,
+      "finite": true,
+      "text": " red, blue, and yellow. These colors can be combined in various ways to create other colors. For example, mixing red and blue creates purple,",
+      "eval": "bf16",
+      "eval_s": 55.2
+    },
+    {
+      "name": "WizardLM/WizardMath-7B-V1.1",
+      "ppl": 3.9938554475244046,
+      "finite": true,
+      "text": "red, yellow, and blue. These colors are used to create all other colors. When you mix these colors together, you get black. This is",
+      "eval": "bf16",
+      "eval_s": 54.1
+    }
+  ]
+}

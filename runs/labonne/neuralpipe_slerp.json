@@ -1,0 +1,30 @@
+
+
+{
+  "name": "neuralpipe_slerp",
+  "method": "slerp",
+  "merge_seconds": 145.2,
+  "peak_host_mb": 5737,
+  "peak_gpu_mb": 994,
+  "output_gb": 14.49,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/neuralpipe_slerp-1793965012",
+      "ppl": 3.343554520019989,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors in the color spectrum. By mixing these colors in different combinations, you"
+    },
+    {
+      "name": "OpenPipe/mistral-ft-optimized-1218",
+      "ppl": 3.472334145008815,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors in the color spectrum. By mixing these colors in different combinations, you"
+    },
+    {
+      "name": "mlabonne/NeuralHermes-2.5-Mistral-7B",
+      "ppl": 3.141281723927909,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are used to create all other colors in the color spectrum. When mixed together, they create black.\n"
+    }
+  ]
+}

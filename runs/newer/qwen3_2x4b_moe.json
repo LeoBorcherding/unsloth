@@ -1,0 +1,30 @@
+
+
+{
+  "name": "qwen3_2x4b_moe",
+  "method": "moe",
+  "merge_seconds": 84.8,
+  "peak_host_mb": 6252,
+  "peak_gpu_mb": 7954,
+  "output_gb": 13.44,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/qwen3_2x4b_moe-1793977604",
+      "ppl": 4.414976528351852,
+      "finite": true,
+      "text": " red, green, and blue. When these colors are combined in different proportions, they can create a wide range of colors. For example, combining red"
+    },
+    {
+      "name": "Qwen/Qwen3-4B-Instruct-2507",
+      "ppl": 4.331902729928273,
+      "finite": true,
+      "text": " red, green, and blue. When these colors are combined in different proportions, they can create a wide range of colors. This is known as additive"
+    },
+    {
+      "name": "Qwen/Qwen3-4B-Thinking-2507",
+      "ppl": 5.055265986137392,
+      "finite": true,
+      "text": " red, yellow, and blue. When you mix red and yellow, you get orange. When you mix red and blue, you get purple. When"
+    }
+  ]
+}

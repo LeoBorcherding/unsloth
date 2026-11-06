@@ -1,0 +1,42 @@
+
+
+{
+  "name": "qwen3_4b_dare_ties",
+  "method": "dare_ties",
+  "merge_seconds": 128.1,
+  "peak_host_mb": 6632,
+  "peak_gpu_mb": 13566,
+  "output_gb": 8.06,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/qwen3_4b_dare_ties-1793977187",
+      "ppl": 5.719392021113945,
+      "finite": true,
+      "text": " red, green, and blue. When these colors are combined in different intensities, they can produce a wide range of colors. This is the principle"
+    },
+    {
+      "name": "Qwen/Qwen3-4B-Base",
+      "ppl": 4.350697075907742,
+      "finite": true,
+      "text": " red, green, and blue. The primary colors are the colors that cannot be created by mixing other colors. The secondary colors are the colors that can"
+    },
+    {
+      "name": "Qwen/Qwen3-4B-Instruct-2507",
+      "ppl": 4.331902729928273,
+      "finite": true,
+      "text": " red, green, and blue. When these colors are combined in different proportions, they can create a wide range of colors. This is known as additive"
+    },
+    {
+      "name": "Qwen/Qwen3-4B-Thinking-2507",
+      "ppl": 5.055265986137392,
+      "finite": true,
+      "text": " red, yellow, and blue. When you mix red and yellow, you get orange. When you mix red and blue, you get purple. When"
+    },
+    {
+      "name": "Qwen/Qwen3-4B",
+      "ppl": 7.124558973717357,
+      "finite": true,
+      "text": " red, green, and blue. The three secondary colors are yellow, orange, and purple. The three tertiary colors are red-orange, orange-yellow,"
+    }
+  ]
+}

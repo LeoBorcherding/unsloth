@@ -1,0 +1,42 @@
+
+
+{
+  "name": "daredevil_dare_ties",
+  "method": "dare_ties",
+  "merge_seconds": 461.2,
+  "peak_host_mb": 6680,
+  "peak_gpu_mb": 4723,
+  "output_gb": 14.49,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/daredevil_dare_ties-1793965764",
+      "ppl": 3.616249161740882,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors. By mixing these colors in different combinations, you can create a wide"
+    },
+    {
+      "name": "mistralai/Mistral-7B-v0.1",
+      "ppl": 3.751307977807547,
+      "finite": true,
+      "text": "red, yellow, and blue. These colors are the foundation of all other colors. When you mix these colors together, you can create a wide range"
+    },
+    {
+      "name": "samir-fama/SamirGPT-v1",
+      "ppl": 3.6622534555866584,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors. By mixing these colors in different combinations, you can create a wide"
+    },
+    {
+      "name": "abacusai/Slerp-CM-mist-dpo",
+      "ppl": 3.620407262837968,
+      "finite": true,
+      "text": "red, yellow, and blue. These colors are the foundation of the color wheel and are used to create all other colors.\n\nThe color wheel"
+    },
+    {
+      "name": "EmbeddedLLM/Mistral-7B-Merge-14-v0.2",
+      "ppl": 3.6041854311586206,
+      "finite": true,
+      "text": "red, blue, and yellow. These colors are the foundation of all other colors in the color spectrum. By mixing these primary colors in different combinations,"
+    }
+  ]
+}

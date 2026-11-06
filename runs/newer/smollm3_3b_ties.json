@@ -1,0 +1,30 @@
+
+
+{
+  "name": "smollm3_3b_ties",
+  "method": "ties",
+  "merge_seconds": 130.1,
+  "peak_host_mb": 5982,
+  "peak_gpu_mb": 10254,
+  "output_gb": 6.17,
+  "rows": [
+    {
+      "name": "/root/.unsloth/studio/outputs/smollm3_3b_ties-1793977407",
+      "ppl": 4.866559449790823,
+      "finite": true,
+      "text": " red, blue, and yellow. These colors cannot be created by mixing other colors together; they are the base colors from which all other colors are made"
+    },
+    {
+      "name": "HuggingFaceTB/SmolLM3-3B-Base",
+      "ppl": 4.480422521320495,
+      "finite": true,
+      "text": " red, yellow, and blue. These colors are the foundation of all other colors and are used to create a wide range of hues. When mixed together"
+    },
+    {
+      "name": "HuggingFaceTB/SmolLM3-3B",
+      "ppl": 9.563257114867655,
+      "finite": true,
+      "text": " red, blue, and yellow. These colors are the foundation of all other colors. When combined, they produce secondary colors: green, orange, and"
+    }
+  ]
+}
