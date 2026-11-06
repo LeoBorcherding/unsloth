@@ -7474,6 +7474,13 @@ class VideoGenerateRequest(BaseModel):
         description = "Which end of continuation_video to keep: last (default) continues the "
         "clip from its final frames; first keeps its opening frames and generates on from there.",
     )
+    bridge_video: Optional[str] = Field(
+        None,
+        max_length = 96 * 1024 * 1024,
+        description = "Base64/data-URL clip the continuation must land on (Cosmos3-Nano): the output starts "
+        "on continuation_video's last 5 frames and ends on this clip's first 8, generating the frames in "
+        "between. Needs continuation_video with continuation_keep last; same limits as continuation_video.",
+    )
 
     # Separate lists preserve the model's image, video, then audio packing order.
     reference_images: Optional[list[str]] = Field(
@@ -7550,6 +7557,12 @@ class VideoGenerateRequest(BaseModel):
             )
         if self.continuation_keep is not None and not self.continuation_video:
             raise ValueError("continuation_keep needs a continuation_video.")
+        if self.bridge_video and not self.continuation_video:
+            raise ValueError("bridge_video needs a continuation_video to bridge from.")
+        if self.bridge_video and self.continuation_keep == "first":
+            raise ValueError(
+                "A bridge continues from the last frames of a clip, so continuation_keep must be 'last'."
+            )
         if (images or videos or audios) and (self.first_frame or self.last_frame):
             raise ValueError(
                 "keyframes and references cannot be combined: MiniMax-H3 runs them against "

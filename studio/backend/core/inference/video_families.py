@@ -1696,6 +1696,8 @@ VIDEO_CONTINUATION_KEEP = ("last", "first")
 DEFAULT_VIDEO_CONTINUATION_KEEP = "last"
 # Pixel frames the pipeline keeps clean: latent indexes (0, 1) under the Wan2.2 VAE's 4x temporal compression.
 COSMOS3_CONTINUATION_FRAMES = 5
+# Pixel frames a bridge keeps from the start of its target clip: the last two latent frames (4 pixel frames each).
+COSMOS3_BRIDGE_FRAMES = 8
 
 
 def validate_video_continuation(
@@ -1706,12 +1708,15 @@ def validate_video_continuation(
     has_keyframes: bool = False,
     has_references: bool = False,
     num_frames: Optional[int] = None,
+    has_bridge: bool = False,
 ) -> None:
     """Raise ``ValueError`` for a continuation the family cannot serve. Pure, like the keyframe check, so the route
     can judge an auto-switch target before evicting anything."""
     if not has_video:
         if keep is not None:
             raise ValueError("continuation_keep needs a continuation_video.")
+        if has_bridge:
+            raise ValueError("bridge_video needs a continuation_video to bridge from.")
         return
     if not fam.supports_video_continuation:
         raise ValueError(f"{fam.name} takes no input video, so it cannot continue a clip.")
@@ -1725,6 +1730,18 @@ def validate_video_continuation(
         raise VideoShapeError(
             f"Continuing a clip keeps its {COSMOS3_CONTINUATION_FRAMES} frames, so the length must be more than "
             f"{COSMOS3_CONTINUATION_FRAMES} frames to generate anything; got {num_frames}."
+        )
+    if not has_bridge:
+        return
+    if keep == "first":
+        raise ValueError(
+            "A bridge continues from the last frames of a clip, so continuation_keep must be 'last'."
+        )
+    kept = COSMOS3_CONTINUATION_FRAMES + COSMOS3_BRIDGE_FRAMES
+    if num_frames is not None and num_frames <= kept:
+        raise VideoShapeError(
+            f"A bridge keeps {COSMOS3_CONTINUATION_FRAMES} frames of the clip before it and {COSMOS3_BRIDGE_FRAMES} of "
+            f"the clip after it, so the length must be more than {kept} frames; got {num_frames}."
         )
 
 

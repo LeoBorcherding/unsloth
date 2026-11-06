@@ -119,6 +119,7 @@ import {
   Download01Icon,
   Edit03Icon,
   FlimSlateIcon,
+  VideoReplayIcon,
   HelpCircleIcon,
   ImageIcon,
   InformationCircleIcon,
@@ -3440,6 +3441,19 @@ export function AppSidebar() {
       },
       onIntent: () => {
         preloadSilently(router.preloadRoute({ to: "/video" }));
+      },
+    },
+    editing: {
+      icon: VideoReplayIcon,
+      label: t("shell.navigation.videoEditing"),
+      // Not gated like Video: trimming and joining clips needs no GPU; the page says what Cosmos needs.
+      active: pathname === "/video-editing",
+      onClick: () => {
+        navigateFromRow({ to: "/video-editing" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/video-editing" }));
       },
     },
     audio: {

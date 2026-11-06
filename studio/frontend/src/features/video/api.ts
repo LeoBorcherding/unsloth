@@ -221,6 +221,8 @@ export interface VideoGenerateRequest {
   // Clip to continue (status supports_video_continuation) and which end of it to keep.
   continuation_video?: string;
   continuation_keep?: VideoContinuationKeep;
+  // Clip the continuation must land on: the output ends on its first 8 frames (needs continuation_keep "last").
+  bridge_video?: string;
 }
 
 export type VideoContinuationKeep = "last" | "first";
@@ -539,4 +541,31 @@ export async function fetchVideoRestyleClip(
   );
   if (!response.ok) throw new Error(await readFastApiError(response));
   return response.blob();
+}
+
+/** The rendered clip of a gallery video, as bytes (the timeline sends it back as the next part's input). */
+export async function fetchGalleryVideoBlob(id: string): Promise<Blob> {
+  const res = await authFetch(`/v1/videos/${encodeURIComponent(id)}/content`);
+  if (!res.ok) throw new Error(await readFastApiError(res));
+  return res.blob();
+}
+
+/** Trim and join clips on one canvas and frame clock (no model runs). ``spec.segments[i].clip`` indexes ``clips``;
+ *  ``frames`` is what each segment contributed. */
+export async function composeVideoTimeline(
+  clips: Blob[],
+  spec: object,
+): Promise<{ video: Blob; frames: number[] }> {
+  const form = new FormData();
+  clips.forEach((clip, i) => form.append("clips", clip, `clip-${i}.mp4`));
+  form.append("spec", JSON.stringify(spec));
+  const res = await authFetch("/api/inference/video/timeline/compose", { method: "POST", body: form });
+  if (!res.ok) throw new Error(await readFastApiError(res));
+  let frames: number[] = [];
+  try {
+    frames = JSON.parse(res.headers.get("X-Segment-Frames") ?? "[]") as number[];
+  } catch {
+    // Older backends send no counts; the bar falls back to equal shares.
+  }
+  return { video: await res.blob(), frames };
 }
