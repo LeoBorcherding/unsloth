@@ -987,14 +987,37 @@ class Payload:
             timeout = 600,
         )
         listed = run(
-            ["git", "-C", str(self.repo_root), "ls-tree", "--name-only", ref, "--", *self._TP_PATHS],
+            [
+                "git",
+                "-C",
+                str(self.repo_root),
+                "ls-tree",
+                "--name-only",
+                ref,
+                "--",
+                *self._TP_PATHS,
+            ],
             timeout = 120,
         )
         present = [p for p in (listed.stdout or "").split() if p in self._TP_PATHS]
         if listed.returncode != 0 or not present:
-            return False, f"ls-tree rc={listed.returncode} fetch rc={fetch.returncode}: no backend at {ref}"
+            return (
+                False,
+                f"ls-tree rc={listed.returncode} fetch rc={fetch.returncode}: no backend at {ref}",
+            )
         run(
-            ["git", "-C", str(self.repo_root), "rm", "-r", "-q", "-f", "--ignore-unmatch", "--", *self._TP_PATHS],
+            [
+                "git",
+                "-C",
+                str(self.repo_root),
+                "rm",
+                "-r",
+                "-q",
+                "-f",
+                "--ignore-unmatch",
+                "--",
+                *self._TP_PATHS,
+            ],
             timeout = 120,
         )
         for rel in self._TP_PATHS:  # leftover __pycache__, or a file git rm refused
