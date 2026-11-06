@@ -2282,7 +2282,11 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
         )
         if decoder_pad_token_id is not None:
             config_pad_token_id = decoder_pad_token_id
-    if (is_dia or _is_text_seq2seq_config(self.config)) and config_pad_token_id is not None:
+    # Their pad is model-specific, so it beats a pad on the caller's generation_config, as it did before.
+    force_model_pad = (
+        is_dia or _is_text_seq2seq_config(self.config)
+    ) and config_pad_token_id is not None
+    if force_model_pad:
         default_pad_token_id = config_pad_token_id
 
     # TRL reuses one generation_config for every rollout, so edit a per-call copy.
@@ -2292,7 +2296,7 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
         kwargs,
         "pad_token_id",
         kwargs.get("pad_token_id", default_pad_token_id),
-        keep_config_value = True,
+        keep_config_value = not force_model_pad,
     )
 
     try:

@@ -105,3 +105,17 @@ def test_dia_explicit_pad_token_id_wins():
 def test_other_models_still_default_to_eos():
     config = SimpleNamespace(model_type = "csm", eos_token_id = [2, 3], pad_token_id = 0)
     assert _captured_generate_kwargs(config)["pad_token_id"] == 2
+
+
+def test_dia_pad_beats_a_pad_on_the_callers_generation_config():
+    generation_config = SimpleNamespace(pad_token_id = 7)
+    captured = _captured_generate_kwargs(_dia_config(), generation_config = generation_config)
+    assert "pad_token_id" not in captured
+    assert captured["generation_config"].pad_token_id == 1025
+    assert generation_config.pad_token_id == 7
+
+
+def test_other_models_keep_a_pad_on_the_callers_generation_config():
+    config = SimpleNamespace(model_type = "csm", eos_token_id = [2, 3], pad_token_id = 0)
+    captured = _captured_generate_kwargs(config, generation_config = SimpleNamespace(pad_token_id = 7))
+    assert captured["generation_config"].pad_token_id == 7
