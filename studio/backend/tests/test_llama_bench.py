@@ -309,6 +309,18 @@ def test_llama_bench_is_tracked_as_a_child_until_it_exits(bench):
     assert client.tracked[0][1] == client.tracked[1][1]
 
 
+def test_a_quit_that_latches_during_the_spawn_kills_the_child(bench, monkeypatch):
+    client, _, _ = bench
+    answers = iter([False, True])
+    monkeypatch.setattr(
+        "utils.process_lifetime.is_process_shutting_down", lambda: next(answers, True)
+    )
+    assert client.post("/api/benchmarks/llama-bench/run", json = {}).status_code == 200
+    job = _wait(client)
+    assert job["status"] == "error" and "shutting down" in job["error"]
+    assert [kind for kind, _ in client.tracked] == ["adopt", "forget"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason = "SIGTERM can't be ignored there")
 def test_a_stop_that_terminate_does_not_end_is_killed(bench, tmp_path, monkeypatch):
     client, _, _ = bench
