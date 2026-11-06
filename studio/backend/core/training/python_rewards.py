@@ -62,7 +62,11 @@ _TOOL_WORDING = (
 )
 
 
-def sandbox_refusal(reason: str, remediation: str = "", mode: str = "required") -> str:
+def sandbox_refusal(
+    reason: str,
+    remediation: str = "",
+    mode: str = "required",
+) -> str:
     """The one refusal Try it, Start and training show when Python rewards need an OS sandbox
     this host cannot start: the fix in plain words, no internal error codes."""
     from core.inference.os_sandbox import _FALLBACK_NOTE
