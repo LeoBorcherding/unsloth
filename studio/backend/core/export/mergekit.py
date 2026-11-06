@@ -179,7 +179,9 @@ def merge_command(
 ) -> list[str]:
     """mergekit-yaml (or mergekit-moe), through the venv's interpreter so a cancel stops the
     merge itself. mergekit-moe's --i-understand-this-is-not-useful-without-training only
-    waives its all-experts-identical check, which request validation already refuses."""
+    waives its all-experts-identical check, which request validation already refuses.
+    No --lazy-unpickle: its loader returns raw TypedStorage on torch 2.11 and fails on any
+    .bin-only parent (WizardMath-7B, in Beyonder-4x7B). It only ever applied to .bin files."""
     argv = [
         str(python or venv_python()),
         "-I",
@@ -187,7 +189,6 @@ def merge_command(
         "mergekit.scripts.moe" if moe else "mergekit.scripts.run_yaml",
         str(config_path),
         str(out_dir),
-        "--lazy-unpickle",
         "--out-shard-size",
         "5B",
         "--copy-tokenizer",

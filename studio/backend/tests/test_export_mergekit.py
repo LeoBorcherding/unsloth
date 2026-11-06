@@ -244,7 +244,7 @@ def test_merge_command_runs_mergekit_yaml_from_the_venv(tmp_path):
         str(tmp_path / "c.yml"),
         str(tmp_path / "out"),
     ]
-    assert "--lazy-unpickle" in argv and "--cuda" not in argv
+    assert "--lazy-unpickle" not in argv and "--cuda" not in argv
     assert argv[argv.index("--out-shard-size") + 1] == "5B"
     seeded = mergekit.merge_command(tmp_path / "c.yml", tmp_path / "out", cuda = True, random_seed = 7)
     assert "--cuda" in seeded and seeded[seeded.index("--random-seed") + 1] == "7"
@@ -864,7 +864,7 @@ def test_moe_command_runs_mergekit_moe_from_the_venv(tmp_path):
         str(tmp_path / "c.yml"),
         str(tmp_path / "out"),
     ]
-    assert "--lazy-unpickle" in argv and "--copy-tokenizer" in argv and "--cuda" in argv
+    assert "--lazy-unpickle" not in argv and "--copy-tokenizer" in argv and "--cuda" in argv
     assert not any(arg.startswith("--i-understand") for arg in argv)
 
 
