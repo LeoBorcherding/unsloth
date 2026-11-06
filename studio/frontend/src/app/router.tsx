@@ -13,6 +13,7 @@ import { Route as chatRoute } from "./routes/chat";
 import { Route as exportRoute } from "./routes/export";
 import { Route as imagesRoute } from "./routes/images";
 import { Route as videoRoute } from "./routes/video";
+import { Route as videoEditingRoute } from "./routes/video-editing";
 import { Route as audioRoute } from "./routes/audio";
 import { Route as indexRoute } from "./routes/index";
 import { Route as loginRoute } from "./routes/login";
@@ -38,6 +39,7 @@ const routeTree = rootRoute.addChildren([
   exportRoute,
   imagesRoute,
   videoRoute,
+  videoEditingRoute,
   audioRoute,
   dataRecipesRoute,
   dataRecipeRoute,

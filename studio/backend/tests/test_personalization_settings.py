@@ -197,6 +197,7 @@ FRONTEND_SHIPPED_SIDEBAR_NAV = [
     ("library", True),
     ("images", True),
     ("video", False),
+    ("editing", False),
     ("audio", False),
     ("train", True),
     ("recipes", False),
@@ -236,6 +237,7 @@ def test_customization_sidebar_nav_preserves_order_and_normalizes():
         ("projects", True),
         ("library", True),
         ("images", True),
+        ("editing", False),
         ("audio", False),
         ("train", True),
         ("recipes", False),
@@ -526,6 +528,7 @@ def test_personalization_route_roundtrip_real_shape(monkeypatch):
                 "sidebarNav": [
                     {"id": "images", "pinned": True},
                     {"id": "video", "pinned": True},
+                    {"id": "editing", "pinned": True},
                     {"id": "audio", "pinned": False},
                     {"id": "hub", "pinned": True},
                     {"id": "train", "pinned": True},
