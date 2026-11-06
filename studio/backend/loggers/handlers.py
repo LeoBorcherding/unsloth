@@ -1,9 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Structured logging handlers and middleware: LoggingMiddleware (request/response logging with timing),
-filter_sensitive_data (structlog processor for sanitization), and get_logger (factory for structured loggers).
-"""
+"""Logging middleware and get_logger; filter_sensitive_data is a structlog sanitizing processor."""
 
 from __future__ import annotations
 
@@ -118,6 +116,8 @@ _QUIET_SUCCESS_PATHS = {
     "/api/engines",
     "/api/export/logs",
     "/api/export/status",
+    # Evals phase poll, every 5s from the app root; runs log their own lifecycle.
+    "/api/benchmarks/evals/status",
     # The Settings > Logs viewer polls are suppressed in _SELF_READ_PATHS below.
     "/api/hub/download-status",
     "/api/hub/download-progress",
