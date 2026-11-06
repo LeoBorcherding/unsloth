@@ -944,3 +944,51 @@ def test_route_refuses_an_expert_on_a_share_path_before_touching_it(monkeypatch)
     with pytest.raises(HTTPException):
         asyncio.run(export_routes.merge_models(request, "subject", allow_ambient = True))
     assert not any("share" in path for path in probed)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"models": [{"model": "ws/m+/Users/bob/adapter", "weight": 1.0}, {"model": "b", "weight": 1.0}]},
+        {"models": [{"model": "org/a@refs/pr/1", "weight": 1.0}, {"model": "b", "weight": 1.0}]},
+        {"models": [{"model": "a", "weight": 1.0}, {"model": "b", "weight": 1.0}], "base_model": "base+lora"},
+    ],
+)
+def test_lora_and_revision_syntax_is_refused(field):
+    # MergeKit would load the part after + or @ as a LoRA or revision the path check never saw.
+    with pytest.raises(ValidationError, match = r"'\+' or '@'"):
+        _request(method = "ties", base_model = field.pop("base_model", "base"), **field)
+
+
+def test_request_size_is_bounded():
+    many = [{"model": f"m{i}", "weight": 1.0} for i in range(17)]
+    with pytest.raises(ValidationError):
+        _request(method = "linear", models = many)
+    experts = [
+        {"model": "a", "positive_prompts": ["x"] * 65},
+        {"model": "b", "positive_prompts": ["y"]},
+    ]
+    with pytest.raises(ValidationError):
+        _request(method = "moe", base_model = "a", models = experts)
+    experts[0]["positive_prompts"] = ["x" * 2001]
+    with pytest.raises(ValidationError):
+        _request(method = "moe", base_model = "a", models = experts)
+    two = [{"model": "a", "weight": 1.0}, {"model": "b", "weight": 1.0}]
+    with pytest.raises(ValidationError):
+        _request(method = "linear", models = two, random_seed = 2**32)
+
+
+def test_stale_staging_is_swept_and_a_fresh_one_kept(tmp_path):
+    import os, time
+
+    stale, fresh = tmp_path / ".mergekit-old", tmp_path / ".mergekit-new"
+    for d in (stale, fresh):
+        (d / "model").mkdir(parents = True)
+    old = time.time() - mergekit.STALE_STAGING_SECONDS - 60
+    for p in (stale, stale / "model"):
+        os.utime(p, (old, old))
+    keep = tmp_path / "merged-model"
+    keep.mkdir()
+    os.utime(keep, (old, old))
+    mergekit._sweep_stale_staging(tmp_path)
+    assert not stale.exists() and fresh.exists() and keep.exists()

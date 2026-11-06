@@ -89,6 +89,11 @@ test("the merge is blocked where the backend would refuse it", () => {
     block({ rows: [TWO[0], { ...TWO[1], model: " " }] }) ?? "",
     /every model/,
   );
+  assert.match(
+    block({ rows: [TWO[0], { ...TWO[1], model: "org/b+lora" }] }) ?? "",
+    /'\+' or '@'/,
+  );
+  assert.match(block({ baseModel: "org/base@rev" }) ?? "", /'\+' or '@'/);
   assert.match(block({ outputName: "../x" }) ?? "", /plain folder name/);
   assert.match(block({ outputName: ".hidden" }) ?? "", /plain folder name/);
 });

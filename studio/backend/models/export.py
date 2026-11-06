@@ -448,27 +448,42 @@ class LlmCompressorExportProbeResponse(BaseModel):
     has_uv: bool
 
 
+def _plain_model_name(v: str) -> str:
+    # MergeKit reads "a+b" as model a plus LoRA b and "a@r" as revision r, which would load a
+    # path the workspace check never saw. Hub repo ids can't contain either.
+    if "+" in v or "@" in v:
+        raise ValueError("Model names and folders can't contain '+' or '@'")
+    return v
+
+
 class MergeModelSpec(BaseModel):
     """One model in a merge: a Hub repo id or a local model folder."""
 
     model_config = ConfigDict(allow_inf_nan = False)
 
-    model: str = Field(..., min_length = 1, description = "Hub repo id or local model folder")
+    model: str = Field(
+        ..., min_length = 1, max_length = 1024, description = "Hub repo id or local model folder"
+    )
     weight: Optional[float] = Field(
         None, description = "Share of this model (linear, TIES, DARE, task arithmetic)"
     )
     density: Optional[float] = Field(
         None, gt = 0, le = 1, description = "Fraction of its delta kept (TIES, DARE TIES)"
     )
-    layer_range: Optional[Tuple[int, int]] = Field(
+    layer_range: Optional[Tuple[Annotated[int, Field(ge = 0)], Annotated[int, Field(ge = 0)]]] = Field(
         None, description = "SLERP only: the [start, end) layers taken from this model"
     )
-    positive_prompts: Optional[List[str]] = Field(
-        None, description = "MoE only: prompts the router should send to this expert"
+    positive_prompts: Optional[List[Annotated[str, Field(max_length = 2000)]]] = Field(
+        None, max_length = 64, description = "MoE only: prompts the router should send to this expert"
     )
-    negative_prompts: Optional[List[str]] = Field(
-        None, description = "MoE only: prompts the router should keep away from this expert"
+    negative_prompts: Optional[List[Annotated[str, Field(max_length = 2000)]]] = Field(
+        None, max_length = 64, description = "MoE only: prompts the router should keep away from this expert"
     )
+
+    @field_validator("model")
+    @classmethod
+    def _check_model(cls, v: str) -> str:
+        return _plain_model_name(v)
 
     @field_validator("positive_prompts", "negative_prompts")
     @classmethod
@@ -494,7 +509,7 @@ class MergeModelsRequest(BaseModel):
 
     method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic", "moe"]
     models: List[MergeModelSpec] = Field(
-        ..., min_length = 1, description = "The models to merge; for MoE, the experts"
+        ..., min_length = 1, max_length = 16, description = "The models to merge; for MoE, the experts"
     )
     base_model: Optional[str] = Field(
         None,
@@ -513,7 +528,7 @@ class MergeModelsRequest(BaseModel):
         "Needed when the models' vocabularies differ",
     )
     random_seed: Optional[int] = Field(
-        None, description = "Seeds DARE's random pruning and MoE's random gates"
+        None, ge = 0, lt = 2**32, description = "Seeds DARE's random pruning and MoE's random gates"
     )
     gate_mode: Optional[Literal["hidden", "cheap_embed", "random", "uniform_random"]] = Field(
         None, description = "MoE only: how router weights are initialized (default hidden)"
@@ -532,6 +547,11 @@ class MergeModelsRequest(BaseModel):
         False, description = "The user agreed to install MergeKit into its own environment"
     )
     op_id: Optional[str] = Field(None, max_length = 128)
+
+    @field_validator("base_model")
+    @classmethod
+    def _check_base_model(cls, v: Optional[str]) -> Optional[str]:
+        return None if v is None else _plain_model_name(v)
 
     @field_validator("output_name")
     @classmethod

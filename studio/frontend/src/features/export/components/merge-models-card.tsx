@@ -16,7 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { hfApiToken, useHfTokenStore } from "@/features/hub";
 import { GitMergeIcon } from "@hugeicons/core-free-icons";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type ExportLogEntry,
   type MergeMethod,
@@ -75,6 +75,13 @@ export function MergeModelsCard({
   );
   const runningRef = useRef(false);
   const opIdRef = useRef<string | null>(null);
+  // Leaving the page stops the log poll; the merge itself keeps running server-side.
+  useEffect(
+    () => () => {
+      runningRef.current = false;
+    },
+    [],
+  );
 
   const info = mergeMethodInfo(s.method);
   const moe = s.method === "moe";

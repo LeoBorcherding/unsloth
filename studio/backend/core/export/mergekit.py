@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -297,6 +298,24 @@ def install(
         raise
 
 
+STALE_STAGING_SECONDS = 6 * 3600
+
+
+def _sweep_stale_staging(outputs: Path) -> None:
+    # A killed server leaves its half-written merge behind; merges run one at a time, so a
+    # staging folder untouched for hours is not a live one.
+    now = time.time()
+    for d in outputs.glob(".mergekit-*"):
+        try:
+            if d.is_symlink() or not d.is_dir():
+                continue
+            touched = max(p.stat().st_mtime for p in (d, *d.iterdir()))
+            if now - touched > STALE_STAGING_SECONDS:
+                shutil.rmtree(d, ignore_errors = True)
+        except OSError:
+            pass
+
+
 def merge(
     spec: dict,
     out_dir: Path,
@@ -316,6 +335,7 @@ def merge(
     if out_dir.exists() or out_dir.is_symlink():
         raise RuntimeError(f"{out_dir} already exists; choose another output name.")
     out_dir.parent.mkdir(parents = True, exist_ok = True)
+    _sweep_stale_staging(out_dir.parent)
     # Inside outputs so the final rename never crosses drives; the scan skips it (no config.json).
     staging = Path(tempfile.mkdtemp(prefix = ".mergekit-", dir = out_dir.parent))
     try:

@@ -182,6 +182,9 @@ export function mergeBlockReason(s: MergeSettings): string | null {
   const info = mergeMethodInfo(s.method);
   const names = s.rows.map((r) => r.model.trim());
   if (names.some((n) => !n)) return "Fill in every model.";
+  if ([...names, s.baseModel].some((n) => /[+@]/.test(n))) {
+    return "Model names and folders can't contain '+' or '@'.";
+  }
   if (new Set(names).size !== names.length) {
     return "Each model may appear only once.";
   }
