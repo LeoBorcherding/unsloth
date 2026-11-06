@@ -447,7 +447,7 @@ def test_clipboard_file_paste_is_bounded_and_wired_to_both_composers():
         'types.includes("files")',
         'type.includes("uri-list")',
         '"read_native_clipboard_files"',
-        "globalThis.atob(file.base64)",
+        "decodeBase64Bytes(file.base64)",
         "new File([bytes], file.name",
         "MAX_CLIPBOARD_BYTES",
         'import("@tauri-apps/plugin-clipboard-manager")',
@@ -1042,6 +1042,11 @@ RAIL_WIDTH_SCALED = (
     "@[50rem]:w-[min(var(--media-rail-width,calc(408px*var(--ui-space-scale,1))),calc(100%-13rem))]"
 )
 HEADER_COLUMNS = "grid-cols-[minmax(0,var(--media-rail-width,408px))_minmax(13rem,1fr)]"
+# Images and Video reserve a UI-scaled minimum (index.css `.media-header-layout`); Audio keeps 13rem.
+MEDIA_MIN = "var(--media-header-min-width)"
+IMAGE_RAIL_WIDTH = RAIL_WIDTH.replace("13rem", MEDIA_MIN)
+IMAGE_RAIL_WIDTH_SCALED = RAIL_WIDTH_SCALED.replace("13rem", MEDIA_MIN)
+IMAGE_HEADER_COLUMNS = HEADER_COLUMNS.replace("13rem", MEDIA_MIN)
 MEDIA_HEADER_ACTIONS = FRONTEND / "components/media-header-actions.tsx"
 # Since #15919 the preview column is pill | links, the links' column never narrower than the links.
 MEDIA_HEADER_ROW = "grid h-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)]"
@@ -1709,8 +1714,25 @@ def test_chat_sidebar_row_actions_visible_on_coarse_pointers():
         "pin's fixed rem offset and padding into the pr-N units the row's gutters are in, and "
         "the two sides of every comparison below would be in different scales"
     )
+    # The open-menu / focused-action gutters key on the row's own later sibling,
+    # `[&:has(~.sidebar-row-action...)]:pr-N`, instead of a `group-has-*/<variant>` class (a style
+    # after a :has() restyles the whole thread). They carry no variant name, so read the variant
+    # from the branch that renders them, `variant === "project"`, and name it the way the
+    # group-scoped classes did, so every check below still knows which row it is reading.
+    sibling_gutter = re.compile(r"\[&:has\(~\.sidebar-row-action[^\s]*\)\]:(pr-\d+(?:\.\d+)?)")
+
+    def _named_variant(constraints: dict[str, bool], cls: str) -> str:
+        match = sibling_gutter.fullmatch(cls)
+        project = constraints.get('variant === "project"')
+        if not match or project is None:
+            return cls
+        return f"has-sibling/{'project-chat-item' if project else 'recent-item'}:{match.group(1)}"
+
     rendered = [
-        (constraints, [_as_spacing_units(cls, spacing) for cls in rendering])
+        (
+            constraints,
+            [_as_spacing_units(_named_variant(constraints, cls), spacing) for cls in rendering],
+        )
         for constraints, rendering in _rendered_with_conditions(_cn_arguments(row_classes))
     ]
     renderings = [classes for _, classes in rendered]
@@ -2024,9 +2046,11 @@ def test_image_page_structural_panes_share_the_container_breakpoint():
 
     assert "@container" in shell
     assert "@[50rem]:flex-row @[50rem]:overflow-hidden" in section
-    # Clamped so the canvas keeps the 13rem its header column reserves.
-    assert RAIL_WIDTH in section
-    assert RAIL_WIDTH_SCALED in IMAGES_PAGE.read_text(encoding = "utf-8"), "the rail stopped scaling"
+    # Clamped so the canvas keeps the minimum its header column reserves.
+    assert IMAGE_RAIL_WIDTH in section
+    assert IMAGE_RAIL_WIDTH_SCALED in IMAGES_PAGE.read_text(
+        encoding = "utf-8"
+    ), "the rail stopped scaling"
     assert "md:flex-row" not in section
     # pb-6 is only correct while the -action fade dissolves the last control into the footer.
     assert "panel-scroll-fade-action" in section
@@ -2094,7 +2118,7 @@ def test_image_train_rail_matches_create_and_header():
     step = r"(?:0|[1-9]\d*)(?:\.(?:25|5|75))?"
     rail = re.search(
         r"(?<=[\s\"])pl-10 max-sm:pl-5 @\[50rem\]:w-\[min\(var\(--media-rail-width,408px\),"
-        rf"calc\(100%-13rem\+--spacing\(({step})\)\)\)\](?=[\s\"])",
+        rf"calc\(100%-var\(--media-header-min-width,13rem\)\+--spacing\(({step})\)\)\)\](?=[\s\"])",
         layout,
     )
     assert rail, "the Train rail no longer uses the Create rail's width variable and clamp"
@@ -2201,7 +2225,7 @@ def test_images_header_tracks_preview_and_preserves_titlebar_controls():
     )
 
     assert "const { isMobile, pinned } = useSidebar();" in source
-    assert HEADER_COLUMNS in opening
+    assert IMAGE_HEADER_COLUMNS in opening
     assert "@[50rem]:border-r" in header
     assert "isMobile" in header and "pl-12" in header
     assert "!pinned && isTauri" in header
