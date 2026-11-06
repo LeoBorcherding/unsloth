@@ -206,6 +206,5 @@ def test_a_group_split_across_processes_is_gathered_before_it_is_shown(monkeypat
 
 def test_a_turn_with_no_content_reads_as_empty_not_none():
     from core.training.rl_samples import _text
-
     turns = [{"role": "assistant", "content": None}, {"role": "assistant", "content": "ok"}]
     assert _text(turns, 100) == "ok"
