@@ -1580,6 +1580,8 @@ def test_an_expired_llama_cpp_gpu_answer_is_served_while_it_refreshes(monkeypatc
     systemone_settings._LLAMA_GPU_REFRESH.release()
     assert len(calls) == 1
     assert systemone_settings._llama_cpp_has_gpu() is False
+
+
 def _crowded_clef(
     monkeypatch,
     tmp_path,

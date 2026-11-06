@@ -800,6 +800,11 @@ export const en = {
     },
     builtinClassifiers: "Built-in classifiers",
     modelsOwnVoice: "Model's own voice",
+    chatModelVoice: "Chat model's voice",
+    chatModelVoiceHint: "Hears you and answers in its own voice",
+    chatModelCannotSpeak: "The chat model can't answer in speech. Load LFM3-Audio-2B or LFM3-Omni-2B, or pick another voice.",
+    speakerFemale: "Female",
+    speakerMale: "Male",
     randomEachSentence: "Random voice each sentence",
     builtinSpeakers: "Built-in",
     savedVoices: "Saved voices",
@@ -1743,6 +1748,16 @@ export const en = {
         audioUploadCancel: "Cancel transcription",
         audioUploadTranscribing: "Transcribing audio…",
         sectionTitle: "Dictation",
+        micTargetLabel: "Mic button",
+        micTargetAsr: "Transcribe with ASR",
+        micTargetModel: "Send audio to the model",
+        micTargetAsrDescription:
+          "The mic button types what you say into the message box.",
+        micTargetModelDescription:
+          "With an audio-input model loaded, the mic records a clip and attaches it to your message, and voice mode sends each turn's speech along with its transcript. Other models still get dictation.",
+        micTargetModelUnavailable:
+          "Load a model that accepts audio input (for example LFM3-Omni) to send it your voice.",
+        micRecordForModel: "Record audio for the model",
         engineLabel: "Dictation engine",
         engineBrowser: "Browser",
         engineBrowserDescription:

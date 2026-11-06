@@ -11,7 +11,12 @@ import { useAudioVoicesStore } from "@/features/audio/stores/audio-voices-store"
 import { authFetch } from "@/features/auth";
 import { useChatRuntimeStore } from "@/features/chat";
 import {
+  CHAT_MODEL_VOICE_SPEAKERS,
+  VOICE_CHAT_MODEL_VOICE,
   VOICE_TTS_MODELS,
+  chatModelSpeaks,
+  isChatModelVoice,
+  speakerCarriesOver,
   voiceTtsCanClone,
 } from "@/features/chat/voice/voice-models";
 import { ModelSelector } from "@/features/model-picker";
@@ -29,6 +34,9 @@ interface VoiceModelSelectorProps {
   /** Called once a pick is made or the picker closes. */
   onClose?: () => void;
 }
+
+// The family the chat model's own voice reports for its two speakers.
+const CHAT_MODEL_FAMILY = "chat_model";
 
 const VOICE_TTS_RANK = new Map(
   VOICE_TTS_MODELS.map((id, i) => [id.toLowerCase(), i]),
@@ -60,7 +68,14 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
         ),
     [isMac],
   );
-  return (
+  const speaks = useChatRuntimeStore(chatModelSpeaks);
+  const pick = (id: string) => {
+    if (!speakerCarriesOver(value, id)) {
+      useChatRuntimeStore.getState().setSelectedVoiceSpeaker("");
+    }
+    onValueChange(id);
+  };
+  const picker = (
     <ModelSelector
       models={models}
       rowFilter={speakRow}
@@ -72,7 +87,7 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
           toast.info(t("voicePanel.ggufVoicesOnly"));
           return;
         }
-        onValueChange(id);
+        pick(id);
       }}
       variant="ghost"
       className="!h-8.5"
@@ -84,6 +99,30 @@ export const VoiceModelSelector: FC<VoiceModelSelectorProps> = ({
         if (!next) onClose?.();
       }}
     />
+  );
+  // Opt-in only, and only offered while the chat model can speak.
+  if (!speaks && !isChatModelVoice(value)) return picker;
+  return (
+    <div className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        disabled={!speaks}
+        onClick={() => {
+          pick(VOICE_CHAT_MODEL_VOICE);
+          onClose?.();
+        }}
+        className={cn(
+          "mx-3 mt-2 flex flex-col items-start rounded-xl px-2.5 py-1.5 text-left transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:outline-none disabled:opacity-50",
+          isChatModelVoice(value) && "bg-muted",
+        )}
+      >
+        <span className="text-sm">{t("voicePanel.chatModelVoice")}</span>
+        <span className="text-ui-11 text-muted-foreground">
+          {speaks ? t("voicePanel.chatModelVoiceHint") : t("voicePanel.chatModelCannotSpeak")}
+        </span>
+      </button>
+      {picker}
+    </div>
   );
 };
 
@@ -98,6 +137,10 @@ function useBuiltinSpeakers(loadedId: string): BuiltinSpeakers | null {
   useEffect(() => {
     setSpeakers(null);
     if (!loadedId) return;
+    if (isChatModelVoice(loadedId)) {
+      setSpeakers({ family: CHAT_MODEL_FAMILY, values: [...CHAT_MODEL_VOICE_SPEAKERS] });
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
@@ -125,6 +168,15 @@ function useBuiltinSpeakers(loadedId: string): BuiltinSpeakers | null {
   return speakers;
 }
 
+function speakerLabel(
+  speaker: string,
+  family: string | null,
+  t: ReturnType<typeof useT>,
+): string {
+  if (family !== CHAT_MODEL_FAMILY) return audioVoiceLabel(speaker, family);
+  return t(speaker === "male" ? "voicePanel.speakerMale" : "voicePanel.speakerFemale");
+}
+
 export interface VoicePreset {
   /** The saved voice, the built-in speaker, or null for the model's own. */
   label: string | null;
@@ -138,6 +190,7 @@ export interface VoicePreset {
 
 /** What the voice panel's Voice row shows for the loaded speaking model. */
 export function useVoicePreset(modelId: string, loaded: boolean): VoicePreset {
+  const t = useT();
   const savedVoiceId = useChatRuntimeStore((s) => s.selectedVoiceId);
   const savedVoices = useAudioVoicesStore((s) => s.voices);
   const speaker = useChatRuntimeStore((s) => s.selectedVoiceSpeaker);
@@ -146,7 +199,7 @@ export function useVoicePreset(modelId: string, loaded: boolean): VoicePreset {
   const savedName = savedVoices.find((v) => v.id === savedVoiceId)?.name;
   const builtin =
     speakers && speakers.values.includes(speaker)
-      ? audioVoiceLabel(speaker, speakers.family)
+      ? speakerLabel(speaker, speakers.family, t)
       : null;
   return {
     label: savedName ?? builtin,
@@ -163,6 +216,7 @@ export const VoicePresetPanel: FC<{
   labels: { modelsOwn: string; builtin: string; saved: string };
   onClose: () => void;
 }> = ({ preset, labels, onClose }) => {
+  const t = useT();
   const savedVoiceId = useChatRuntimeStore((s) => s.selectedVoiceId);
   const setSavedVoiceId = useChatRuntimeStore((s) => s.setSelectedVoiceId);
   const speaker = useChatRuntimeStore((s) => s.selectedVoiceSpeaker);
@@ -193,7 +247,7 @@ export const VoicePresetPanel: FC<{
               }}
               className={cn(row, !savedVoiceId && speaker === choice && "bg-muted")}
             >
-              {audioVoiceLabel(choice, speakers.family)}
+              {speakerLabel(choice, speakers.family, t)}
             </button>
           ))}
         </>

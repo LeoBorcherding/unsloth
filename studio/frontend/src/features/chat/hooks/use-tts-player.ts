@@ -12,7 +12,7 @@ import { planTtsChunk } from "../voice/tts-chunk-plan";
 import { getVoicePlayContext } from "../voice/voice-loop-bridge";
 import { outputSpectrumNode } from "../voice/voice-spectrum";
 import { voiceTrace } from "../voice/voice-trace";
-import { voiceTtsCanClone } from "../voice/voice-models";
+import { isChatModelVoice, voiceTtsCanClone } from "../voice/voice-models";
 import { asideBlocked, createClipLedger, type ClipLedger } from "../voice/tts-clip-ledger";
 
 export { splitStreaming };
@@ -59,6 +59,10 @@ interface Stream {
   final: boolean;
   /** Sentences spoken that are not part of the reply text (thinking fillers). */
   extra: number;
+  /** Spoken-reply chunks (feedClip) still decoding; the stream ends only once they are scheduled. */
+  decoding: number;
+  /** Chunks fed through feedClip, in order. */
+  clips: Promise<void>;
 }
 
 /** The voice a clip is synthesized in now: model, saved (cloned) voice and built-in speaker. */
@@ -83,6 +87,10 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
   beginStream(): void;
   feedText(text: string): void;
   endStream(finalText: string): void;
+  /** Play a WAV chunk of a reply the chat model speaks itself, after the ones before it. */
+  feedClip(wavBase64: string): void;
+  /** No more chunks: the stream ends once the fed ones have played. */
+  endClips(): void;
   /** Queue a sentence that is not in the reply text, e.g. a thinking filler. */
   /**
    * Speak a short aside now. `standIns`: cached phrases to say instead when this one
@@ -196,7 +204,8 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
         const { selectedVoiceModelId, selectedVoiceId, selectedVoiceSpeaker } =
           useChatRuntimeStore.getState();
         return generateStudioTtsAudio(sentence, abortRef.current?.signal, {
-          model: selectedVoiceModelId,
+          // The chat model's own voice is the unnamed request: /audio/generate reads with the loaded model.
+          model: isChatModelVoice(selectedVoiceModelId) ? "" : selectedVoiceModelId,
           voiceId: voiceTtsCanClone(selectedVoiceModelId) ? selectedVoiceId : "",
           speaker: selectedVoiceSpeaker,
         });
@@ -250,6 +259,10 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
       source.buffer = buffer;
       source.connect(outputSpectrumNode(ctx));
       const start = Math.max(ctx.currentTime + 0.02, playHeadRef.current);
+      voiceTrace("tts.scheduled", {
+        inMs: Math.round((start - ctx.currentTime) * 1000),
+        seconds: Math.round(buffer.duration * 1000) / 1000,
+      });
       clipsRef.current.add({ source, start, duration: buffer.duration, text, env: envelopeOf(buffer) });
       playHeadRef.current = start + buffer.duration;
       if (rafRef.current === null) rafRef.current = requestAnimationFrame(meter);
@@ -318,7 +331,7 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
               });
             }
           }
-        } else if (st.final) {
+        } else if (st.final && st.decoding === 0) {
           break;
         } else {
           await sleep(40);
@@ -352,7 +365,15 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
     stop();
     const reqId = reqRef.current;
     abortRef.current = new AbortController();
-    streamRef.current = { reqId, sentences: [], next: 0, final: false, extra: 0 };
+    streamRef.current = {
+      reqId,
+      sentences: [],
+      next: 0,
+      final: false,
+      extra: 0,
+      decoding: 0,
+      clips: Promise.resolve(),
+    };
     setIsSpeaking(true);
     void run(reqId);
   }, [stop, run]);
@@ -476,6 +497,42 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
     voiceTrace("tts.streamEnd", { sentences: st.sentences.length, tail: finalText.slice(-60) });
   }, []);
 
+  const feedClip = useCallback(
+    (wavBase64: string) => {
+      const st = streamRef.current;
+      const ctx = getPlayCtx();
+      if (!st || st.reqId !== reqRef.current || st.final || !ctx) return;
+      const reqId = st.reqId;
+      st.decoding += 1;
+      // Decoded off the chain, scheduled on it, so a chunk never jumps the one before.
+      const decoded = ctx
+        .decodeAudioData(wavBytesFromDataUrl(`data:audio/wav;base64,${wavBase64}`))
+        .catch((error: unknown) => {
+          voiceTrace("tts.spokenDecodeFailed", { message: error instanceof Error ? error.message : String(error) });
+          return null;
+        });
+      st.clips = st.clips.then(async () => {
+        try {
+          const buffer = await decoded;
+          if (buffer && reqRef.current === reqId) {
+            voiceTrace("tts.spokenClip", { seconds: Math.round(buffer.duration * 100) / 100 });
+            schedule(buffer, "");
+          }
+        } finally {
+          st.decoding -= 1;
+        }
+      });
+    },
+    [schedule],
+  );
+
+  const endClips = useCallback(() => {
+    const st = streamRef.current;
+    if (!st || st.reqId !== reqRef.current) return;
+    st.final = true;
+    voiceTrace("tts.spokenEnd", { decoding: st.decoding });
+  }, []);
+
   const speak = useCallback(
     (text: string) => {
       beginStream();
@@ -534,6 +591,8 @@ export function useTtsPlayer(onPlaybackEnd?: () => void): {
     beginStream,
     feedText,
     endStream,
+    feedClip,
+    endClips,
     sayAside,
     warmAsides,
     stop,

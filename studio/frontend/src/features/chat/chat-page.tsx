@@ -37,8 +37,10 @@ import {
   holdForServing,
   settleVoiceLoad,
   type VoiceHold,
+  voiceReplacedByServing,
   voiceToUnload,
 } from "@/features/chat/voice/voice-ownership";
+import { isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { usePlatformStore } from "@/config/env";
 import { CopyableErrorChip } from "@/components/ui/copyable-error-chip";
 import {
@@ -2983,13 +2985,17 @@ export function ChatPage({
         const { loadVoice, servedVoice, unloadVoice, voiceServing } = await loadVoiceMode();
         if (await voiceServing(id)) {
           if (epoch !== voiceEpochRef.current) return false;
+          const replaced = voiceReplacedByServing(loadedVoiceRef.current, id);
+          if (replaced) await unloadVoice(replaced).catch(() => {});
           loadedVoiceRef.current = holdForServing(loadedVoiceRef.current, id);
           store.setVoiceSlotLoaded(true);
           return true;
         }
         // Nothing loaded by this page yet (a restored pick): a voice already serving becomes
         // the Speak pick instead of a second voice loading beside it. A later pick replaces it.
-        const served = loadedVoiceRef.current === null ? await servedVoice() : null;
+        // Never for the chat model's own voice: that pick is the user's opt-in, kept as made.
+        const served =
+          loadedVoiceRef.current === null && !isChatModelVoice(id) ? await servedVoice() : null;
         if (served) {
           if (epoch !== voiceEpochRef.current) return false;
           loadedVoiceRef.current = holdForServing(null, served);
