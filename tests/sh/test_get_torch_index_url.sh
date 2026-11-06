@@ -286,6 +286,20 @@ _result=$(run_func "$_dir")
 assert_eq "CUDA 10.2 -> cpu" "https://download.pytorch.org/whl/cpu" "$_result"
 rm -rf "$_dir"
 
+# aarch64: download.pytorch.org has CUDA torch from cu126 up (cu124 is CPU builds, cu118 none).
+run_func_aarch64() {
+    PATH="$1:$_TOOLS_DIR" bash -c "unset CUDA_VISIBLE_DEVICES; _ARCH=aarch64; . '$_FUNC_FILE'; get_torch_index_url" 2>"$2"
+}
+_err_file=$(mktemp)
+for _case in "12.2 cu126" "12.5 cu126" "12.6 cu126" "12.8 cu128" "13.0 cu130" "11.8 cpu"; do
+    _dir=$(make_mock_smi "${_case% *}")
+    _result=$(run_func_aarch64 "$_dir" "$_err_file")
+    assert_eq "aarch64 CUDA ${_case% *} -> ${_case#* }" "https://download.pytorch.org/whl/${_case#* }" "$_result"
+    rm -rf "$_dir"
+done
+assert_contains "aarch64 CUDA 11.8 names the driver upgrade" "$(cat "$_err_file")" "Upgrade the driver to R525"
+rm -f "$_err_file"
+
 _dir=$(mktemp -d)
 cat > "$_dir/nvidia-smi" <<'MOCK'
 #!/bin/sh

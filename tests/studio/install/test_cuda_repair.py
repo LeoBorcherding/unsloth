@@ -413,6 +413,32 @@ class TestCudaIndexResolution:
     def test_cuda_118_selects_cu118(self):
         assert "cu118" in _index_url(_run_cuda_repair(cuda_version = "11.8"))
 
+    # download.pytorch.org publishes aarch64 CUDA torch from cu126 up: cu124 is CPU builds, cu118 none.
+    @pytest.mark.parametrize(
+        "machine,cuda,family",
+        [
+            ("aarch64", (12, 2), "cu126"),
+            ("aarch64", (12, 5), "cu126"),
+            ("arm64", (12, 0), "cu126"),
+            ("aarch64", (12, 6), "cu126"),
+            ("aarch64", (12, 8), "cu128"),
+            ("aarch64", (13, 0), "cu130"),
+            ("aarch64", (11, 8), "cpu"),
+            ("x86_64", (12, 4), "cu124"),
+            ("x86_64", (11, 8), "cu118"),
+        ],
+    )
+    def test_the_ladder_only_offers_aarch64_families_with_cuda_wheels(
+        self, monkeypatch, machine, cuda, family
+    ):
+        monkeypatch.setattr(stack_mod.sys, "platform", "linux")
+        monkeypatch.setattr(stack_mod.platform, "machine", lambda: machine)
+        assert stack_mod._torch_family_for_cuda_version(*cuda) == family
+
+    def test_aarch64_repair_on_a_cuda_124_driver_selects_cu126(self, monkeypatch):
+        monkeypatch.setattr(stack_mod.sys, "platform", "linux")
+        assert "cu126" in _index_url(_run_cuda_repair(cuda_version = "12.4", machine = "aarch64"))
+
     def test_unreadable_version_defaults_cu126(self):
         mock_pip = _run_cuda_repair(cuda_version = "", smi_rc = 1)
         assert "cu126" in _index_url(mock_pip)
