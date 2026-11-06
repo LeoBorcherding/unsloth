@@ -3,6 +3,11 @@
 
 """Pydantic schemas for Training API"""
 
+from core.training.rl_format import (
+    WARMUP_DEFAULT_STEPS,
+    WARMUP_MIN_SEQ_LENGTH,
+    warmup_completion_floor,
+)
 import math
 import re
 from pathlib import Path, PureWindowsPath
@@ -152,6 +157,8 @@ _STORED_RL_SETTINGS = (
     ("mask_truncated_completions", "grpo_mask_truncated_completions"),
     ("epsilon_high", "grpo_epsilon_high"),
     ("python_reward_isolation", "grpo_python_reward_isolation"),
+    ("reasoning_format", "grpo_reasoning_format"),
+    ("format_warmup_steps", "grpo_format_warmup_steps"),
 )
 
 
@@ -730,7 +737,10 @@ class TrainingStartRequest(BaseModel):
     )
     grpo_num_generations: int = Field(4, ge = 2, le = 16, description = "Completions sampled per prompt")
     grpo_max_completion_length: Optional[int] = Field(
-        None, ge = 16, description = "Completion token budget. Null uses what the prompt leaves."
+        None,
+        ge = 16,
+        description = "Completion token budget. Null uses what the prompt leaves. With the format "
+        "warm-up on it is raised to at least half of max_seq_length, the length of its answers.",
     )
     grpo_temperature: float = Field(1.0, gt = 0, le = 2.0, allow_inf_nan = False)
     grpo_variant: Literal["dapo", "dr_grpo", "bnpo", "grpo", "gspo"] = Field(
@@ -755,6 +765,17 @@ class TrainingStartRequest(BaseModel):
         le = 1,
         allow_inf_nan = False,
         description = "Upper clip bound (DAPO clip-higher). Null uses epsilon.",
+    )
+    grpo_reasoning_format: bool = Field(
+        False,
+        description = "Use the GRPO notebooks' reasoning chat template and answer format (for base models)",
+    )
+    grpo_format_warmup_steps: Optional[int] = Field(
+        None,
+        ge = 0,
+        le = 1000,
+        description = "SFT steps on formatted examples before GRPO, so the model already writes the tags. "
+        "0 skips it; null runs the notebooks' 100 when the reasoning format is on and the context fits.",
     )
     grpo_python_reward_isolation: Literal["required", "auto"] = Field(
         "required",
@@ -864,6 +885,14 @@ class TrainingStartRequest(BaseModel):
     @model_validator(mode = "after")
     def _validate_objective(self) -> "TrainingStartRequest":
         objective = getattr(self, "objective", "sft")
+        if self.grpo_format_warmup_steps is None:
+            self.grpo_format_warmup_steps = (
+                WARMUP_DEFAULT_STEPS
+                if objective == "grpo"
+                and self.grpo_reasoning_format
+                and self.max_seq_length >= WARMUP_MIN_SEQ_LENGTH
+                else 0
+            )
         if objective == "sft":
             return self
         if getattr(self, "training_type", None) == "Continued Pretraining":
@@ -890,7 +919,31 @@ class TrainingStartRequest(BaseModel):
             {_normalized_reward_name(r.name) for r in self.grpo_rewards}
         ) != len(self.grpo_rewards):
             raise ValueError("Each GRPO reward can only be selected once.")
+        if self.grpo_format_warmup_steps and not (
+            objective == "grpo" and self.grpo_reasoning_format
+        ):
+            raise ValueError("The format warm-up needs GRPO with the reasoning format on.")
+        if self.grpo_format_warmup_steps and self.max_seq_length < WARMUP_MIN_SEQ_LENGTH:
+            raise ValueError(
+                f"The format warm-up needs a max sequence length of {WARMUP_MIN_SEQ_LENGTH} or more; "
+                "its examples are 800+ tokens and only those under half the context are used."
+            )
+        if self.grpo_format_warmup_steps:
+            self._fit_completion_to_warmup()
         return self
+
+    def _fit_completion_to_warmup(self) -> None:
+        # A cap under the warm-up's answers would leave it nothing to train on, so raise it.
+        floor = warmup_completion_floor(self.max_seq_length)
+        prompt = self.rl_max_prompt_length or self.max_seq_length // 4
+        if prompt + floor > self.max_seq_length:
+            raise ValueError(
+                f"The format warm-up needs completions of up to {floor} tokens, which leaves "
+                f"{self.max_seq_length - floor} for the prompt; lower the max prompt length "
+                f"from {prompt} or raise the max sequence length."
+            )
+        if self.grpo_max_completion_length is not None:
+            self.grpo_max_completion_length = max(self.grpo_max_completion_length, floor)
 
     @model_validator(mode = "after")
     def _check_preference_beta(self) -> "TrainingStartRequest":

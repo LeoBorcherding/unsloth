@@ -545,6 +545,44 @@ def render_grpo_prompts(
     return dataset.map(render, remove_columns = drop, **map_kwargs), True
 
 
+def reasoning_format_refusal(dataset) -> Optional[str]:
+    """The reasoning template renders only user and assistant text: no tool schemas or turns."""
+    columns = getattr(dataset, "column_names", None) or []
+    if "tools" in columns and any(_row_tools({"tools": t}) for t in dataset["tools"]):
+        has_tools = True
+    else:
+        has_tools = any(
+            isinstance(m, dict) and (m.get("role") == "tool" or m.get("tool_calls"))
+            for p in (dataset["prompt"] if "prompt" in columns else [])
+            if isinstance(p, list)
+            for m in p
+        )
+    if has_tools:
+        return (
+            "The reasoning format renders only user and assistant text, so this dataset's tool "
+            "schemas and tool turns would be lost. Turn the reasoning format off for it."
+        )
+    # The template renders a leading system turn, then user and assistant turns only.
+    dropped = sorted(
+        {
+            str(m.get("role"))
+            for p in (dataset["prompt"] if "prompt" in columns else [])
+            if isinstance(p, list)
+            for i, m in enumerate(p)
+            if isinstance(m, dict)
+            and m.get("role") not in ("user", "assistant")
+            and not (i == 0 and m.get("role") == "system")
+        }
+    )
+    if dropped:
+        return (
+            "The reasoning format renders a leading system turn and user and assistant text only, "
+            f"so this dataset's {', '.join(dropped)} turns would be lost. Turn the reasoning "
+            "format off for it."
+        )
+    return None
+
+
 def _row_tools(row: dict):
     # Only structured (Arrow) schemas carry other rows' keys as None; JSON text keeps its own nulls.
     def decode(value):

@@ -3,6 +3,13 @@
 
 import {
   DEFAULT_HYPERPARAMS,
+  GRPO_DEFAULT_REWARDS,
+  GRPO_DEFAULT_SYSTEM_PROMPT,
+  GRPO_FORMAT_WARMUP_MIN_CONTEXT,
+  GRPO_FORMAT_WARMUP_STEPS,
+  GRPO_REASONING_REWARDS,
+  GRPO_REASONING_SYSTEM_PROMPT,
+  grpoWarmupCompletionFloor,
   LR_DEFAULT_DECISION_FULL,
   LR_DEFAULT_FULL,
   LR_DEFAULT_LORA,
@@ -23,6 +30,7 @@ import {
   getModelConfig,
 } from "../api/models-api";
 import type { BackendModelConfig, DecisionCheckpoint } from "../api/models-api";
+import { isBaseModelName } from "../lib/base-model-name";
 import { cacheReferenceMatchesSelection } from "../lib/cache-reference";
 import { drafterStateFrom } from "../lib/drafter-config";
 import {
@@ -1161,6 +1169,14 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
         }
         if (selectionChanged) Object.assign(patch, resolveTrainingToggleDefaults({ ...currentState, ...patch }));
         setUserEdit(patch);
+        if (selectedModel && selectedModel !== previousModel) {
+          // As the notebooks do: the base-model GRPO notebook (Qwen3 4B Base) uses the reasoning
+          // format, the instruct ones do not. Still the user's switch after the pick.
+          const reasoning = isBaseModelName(selectedModel);
+          if (reasoning !== get().grpoReasoningFormat) {
+            get().setGrpoReasoningFormat(reasoning);
+          }
+        }
 
         if (!selectedModel) {
           _modelConfigController?.abort();
@@ -1762,6 +1778,44 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
           setUserEdit({ grpoPythonRewardIsolation }),
         setGrpoEpsilonHigh: (grpoEpsilonHigh) =>
           setUserEdit({ grpoEpsilonHigh }),
+        setGrpoReasoningFormat: (grpoReasoningFormat) => {
+          // Swap the prompt and rewards only while they are still the other format's defaults.
+          const state = get();
+          const [from, to] = grpoReasoningFormat
+            ? [GRPO_DEFAULT_SYSTEM_PROMPT, GRPO_REASONING_SYSTEM_PROMPT]
+            : [GRPO_REASONING_SYSTEM_PROMPT, GRPO_DEFAULT_SYSTEM_PROMPT];
+          const [oldRewards, newRewards] = grpoReasoningFormat
+            ? [GRPO_DEFAULT_REWARDS, GRPO_REASONING_REWARDS]
+            : [GRPO_REASONING_REWARDS, GRPO_DEFAULT_REWARDS];
+          const sameRewards =
+            JSON.stringify(state.grpoRewards) === JSON.stringify(oldRewards);
+          setUserEdit({
+            grpoReasoningFormat,
+            ...(state.grpoSystemPrompt === from
+              ? { grpoSystemPrompt: to }
+              : {}),
+            ...(sameRewards ? { grpoRewards: [...newRewards] } : {}),
+            ...(grpoReasoningFormat ? { grpoEnableThinking: false } : {}),
+          });
+          const steps = !grpoReasoningFormat
+            ? 0
+            : state.grpoFormatWarmupSteps === 0 &&
+                state.contextLength >= GRPO_FORMAT_WARMUP_MIN_CONTEXT
+              ? GRPO_FORMAT_WARMUP_STEPS
+              : state.grpoFormatWarmupSteps;
+          get().setGrpoFormatWarmupSteps(steps);
+        },
+        setGrpoFormatWarmupSteps: (grpoFormatWarmupSteps) => {
+          // The warm-up's answers run to half the context; a lower cap would leave none of them.
+          const { grpoMaxCompletionLength: cap, contextLength } = get();
+          const floor = grpoWarmupCompletionFloor(contextLength);
+          setUserEdit({
+            grpoFormatWarmupSteps,
+            ...(grpoFormatWarmupSteps > 0 && cap !== null && cap < floor
+              ? { grpoMaxCompletionLength: floor }
+              : {}),
+          });
+        },
         setGrpoRewards: (grpoRewards) => setUserEdit({ grpoRewards }),
         restoreRunConfig: (config) => {
           const selections = runConfigDraftSelections(config);

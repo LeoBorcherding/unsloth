@@ -4779,6 +4779,10 @@ class UnslothTrainer:
             self.tokenizer = get_training_chat_template(
                 self.tokenizer, self.model_name, dataset_final_format
             )
+            rl_settings = training_args.get("rl_settings") or {}
+            if training_args.get("objective") == "grpo" and rl_settings.get("reasoning_format"):
+                from core.training.rl_format import apply_reasoning_template
+                apply_reasoning_template(self.tokenizer)
 
             data_collator = None
             audio_response_masker = None
@@ -5189,15 +5193,67 @@ class UnslothTrainer:
                     and getattr(rl_tokenizer, "chat_template", None)
                 ):
                     self.tokenizer.chat_template = rl_tokenizer.chat_template
+                from core.training.rl import reasoning_format_refusal, rl_lengths
+                from core.training.rl_format import (
+                    load_warmup_source,
+                    run_format_warmup,
+                    warmup_offline_warning,
+                    warmup_steps_to_run,
+                )
+
+                rl_train = dataset["dataset"] if isinstance(dataset, dict) else dataset
+                if objective == "grpo" and (rl_settings or {}).get("reasoning_format"):
+                    # Before the warm-up, so a dataset the format can't render costs no SFT steps.
+                    refusal = reasoning_format_refusal(rl_train)
+                    if refusal:
+                        raise ValueError(refusal)
+                warmup_steps = warmup_steps_to_run(
+                    rl_settings, objective, bool(training_args.get("resume_from_checkpoint"))
+                )
+                warmup_source = None
+                if warmup_steps > 0:
+                    try:
+                        warmup_source = load_warmup_source()
+                    except Exception:
+                        # Not in the run's cache preflight: offline, skip it rather than fail the run.
+                        if not _env_offline():
+                            raise
+                        self._record_warning(warmup_offline_warning())
+                        warmup_steps = 0
+                if warmup_steps > 0:
+                    self._update_progress(
+                        status_message = f"Format warm-up: step 0 of {warmup_steps}..."
+                    )
+                    run_format_warmup(
+                        self.model,
+                        rl_tokenizer,
+                        config_args,
+                        warmup_steps,
+                        should_stop = lambda: self.should_stop,
+                        dataset = warmup_source,
+                        on_step = lambda step, steps: self._update_progress(
+                            status_message = f"Format warm-up: step {step} of {steps}..."
+                        ),
+                        max_completion_length = rl_lengths(
+                            "grpo",
+                            int(config_args.get("max_seq_length") or 2048),
+                            rl_settings or {},
+                        )[1],
+                    )
+                    if self.should_stop:
+                        self._update_progress(
+                            is_training = False, status_message = "Training cancelled."
+                        )
+                        return
                 logger.info(f"Configuring {objective.upper()} trainer\n")
                 self.trainer = build_rl_trainer(
                     objective,
                     model = self.model,
                     tokenizer = rl_tokenizer,
-                    train_dataset = dataset["dataset"] if isinstance(dataset, dict) else dataset,
+                    train_dataset = rl_train,
                     eval_dataset = eval_dataset,
                     config_args = config_args,
-                    settings = training_args.get("rl_settings") or {},
+                    settings = rl_settings,
                     reward_specs = training_args.get("reward_specs") or [],
                     sample_sink = self._emit_samples if self.sample_callbacks else None,
                     on_warning = self._record_warning,

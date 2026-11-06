@@ -86,6 +86,8 @@ export interface TrainingStartRequest {
   grpo_variant: GrpoVariant;
   grpo_mask_truncated_completions: boolean;
   grpo_epsilon_high: number | null;
+  grpo_reasoning_format: boolean;
+  grpo_format_warmup_steps: number;
   grpo_python_reward_isolation: GrpoPythonRewardIsolation;
   grpo_rewards: GrpoRewardSelection[];
   finetune_vision_layers: boolean;
