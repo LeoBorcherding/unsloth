@@ -16,7 +16,7 @@ import {
 import {
   type BackgroundRoute,
   type BackgroundScope,
-  DEFAULT_GLASS_STRENGTH,
+  DEFAULT_GLASS,
   type GlassStrengths,
   type LensMode,
   type WindowMaterial,
@@ -84,13 +84,13 @@ export const useMaterialStore = create<{
 }>()(
   persist(
     (set) => ({
-      material: "solid",
+      material: DEFAULT_GLASS.material,
       style: "liquid-3d",
       nativeFailed: false,
-      menus: true,
-      strength: DEFAULT_GLASS_STRENGTH,
-      lens: "off",
-      scope: "all",
+      menus: DEFAULT_GLASS.menus,
+      strength: DEFAULT_GLASS.strength,
+      lens: DEFAULT_GLASS.lens,
+      scope: DEFAULT_GLASS.scope,
       here: true,
       setMaterial: (material) => {
         const next = sanitizeMaterial(material);
