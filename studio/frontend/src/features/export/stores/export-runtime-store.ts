@@ -49,6 +49,9 @@ const RECOVERY_MAX_STATUS_FAILS = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The op this tab's run has in flight: Cancel stops only it, never a merge it is queued behind.
+let inFlightOpId: string | null = null;
+
 /** Settle a phase whose POST hit a tunnel timeout by polling status. A record is ours once
  *  the op is inactive and we saw it active or its seq passed `baseline`. With `opId` only that
  *  op's record counts; without one, merges (which run on the same lock) are waited out. Ops
@@ -83,6 +86,15 @@ export async function recoverViaStatus(
         throw new Error("Lost connection to the export server.");
       }
       continue;
+    }
+
+    // Our kept record settles it even while a later op (a queued merge) is already running.
+    if (opId && st.last_op_id === opId) {
+      if (st.last_op_status === "success") {
+        return { outputPath: st.last_op_output_path ?? null };
+      }
+      if (st.last_op_status === "cancelled") throw new ExportCanceledError();
+      throw new Error(st.last_op_error || "Export failed");
     }
 
     if (st.is_export_active) {
@@ -383,7 +395,8 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
     if (!get().isExporting) return;
     set({ cancelRequested: true });
     try {
-      await cancelExport();
+      // A run recovered from another tab has no id here and cancels whatever holds the op.
+      await cancelExport((get().ownsRun && inFlightOpId) || undefined);
     } catch {
       // The in-flight POST still rejects when the worker dies, giving the canceled phase.
     }
@@ -430,6 +443,7 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
     }> => {
       // Status recovery settles only this op's record, not one a merge left behind.
       const opId = newExportOpId();
+      inFlightOpId = opId;
       let baseline: number | null = null;
       try {
         baseline = (await getExportStatus()).last_op_seq ?? 0;

@@ -101,3 +101,46 @@ test("an export settles on its own record even after a merge finished over it", 
   assert.deepEqual(result, { outputPath: "/out/gguf" });
   assert.ok(stub.calls.every((c) => c.args[0] === "export-1"));
 });
+
+test("a kept record settles recovery while a queued merge already runs", async () => {
+  stub.resetStub();
+  stub.responses.set("getExportStatus", () => ({
+    ...active("merge", "merge-1"),
+    last_op_seq: 4,
+    last_op_kind: "export_gguf",
+    last_op_id: "export-1",
+    last_op_status: "success",
+    last_op_output_path: "/out/gguf",
+  }));
+  const result = await recoverViaStatus(3, () => true, "export-1");
+  assert.deepEqual(result, { outputPath: "/out/gguf" });
+});
+
+test("Cancel during an export stops only that export's op", async () => {
+  stub.resetStub();
+  const store = useExportRuntimeStore.getState();
+  store.reset();
+  stub.responses.set("loadCheckpoint", async () => {
+    await useExportRuntimeStore.getState().requestCancel();
+    return { success: true, message: "ok", details: null };
+  });
+  await store.runExport({
+    sourceMode: "model",
+    checkpointPath: null,
+    source: "unsloth/Qwen3-0.6B",
+    modelSource: "hf",
+    trustRemoteCode: false,
+    exportMethod: "gguf",
+    isAdapter: false,
+    quantLevels: ["q4_k_m"],
+    saveDirectory: "out",
+    destination: "local",
+    privateRepo: false,
+    summary: {},
+  } as unknown as Parameters<typeof store.runExport>[0]);
+  const load = stub.calls.find((c) => c.name === "loadCheckpoint");
+  const cancel = stub.calls.find((c) => c.name === "cancelExport");
+  assert.ok(load && cancel);
+  assert.equal(cancel.args[0], (load.args[0] as { op_id: string }).op_id);
+  useExportRuntimeStore.getState().reset();
+});
