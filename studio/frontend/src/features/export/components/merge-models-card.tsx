@@ -104,7 +104,10 @@ export function MergeModelsCard({
     setLogs([]);
     setResult(null);
     let poller: Promise<number> | null = null;
-    const opId = crypto.randomUUID();
+    // getRandomValues, not randomUUID: Unsloth on a LAN address is not a secure context.
+    const opId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join("");
     opIdRef.current = opId;
     try {
       // Lines after this cursor belong to this merge, not to an earlier export.
@@ -128,7 +131,7 @@ export function MergeModelsCard({
         ({ outputPath } = await recoverViaStatus(
           baseline,
           () => opIdRef.current === opId,
-          "merge",
+          opId,
         ));
       }
       const run = s.outputName.trim();

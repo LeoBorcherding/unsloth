@@ -49,13 +49,18 @@ const RECOVERY_MAX_STATUS_FAILS = 5;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Settle a phase whose POST hit a tunnel timeout by polling status. A record is ours once
- *  the op is inactive and we saw it active or its seq passed `baseline`. With `kind`, ops of
- *  another kind (an export a merge queued behind) are waited out, never taken as ours. */
+ *  the op is inactive and we saw it active or its seq passed `baseline`. With `opId` only that
+ *  op's record counts; without one, merges (which run on the same lock) are waited out. Ops
+ *  that are not ours restart the grace window, since ours may be queued behind them. */
 export async function recoverViaStatus(
   baseline: number | null,
   isCurrent: () => boolean,
-  kind?: string,
+  opId?: string,
 ): Promise<{ outputPath: string | null }> {
+  const othersActive = (st: ExportStatus) =>
+    opId ? st.active_op_id !== opId : st.active_op_kind === "merge";
+  const othersRecord = (st: ExportStatus) =>
+    opId ? st.last_op_id !== opId : st.last_op_kind === "merge";
   let start = Date.now();
   let statusFails = 0;
   let sawActive = false;
@@ -80,8 +85,8 @@ export async function recoverViaStatus(
     }
 
     if (st.is_export_active) {
-      if (kind && st.active_op_kind !== kind) {
-        start = Date.now(); // ours is still queued: restart the grace window
+      if (othersActive(st)) {
+        start = Date.now();
       } else {
         sawActive = true;
       }
@@ -89,16 +94,13 @@ export async function recoverViaStatus(
     }
 
     const seq = st.last_op_seq ?? 0;
-    if (kind && st.last_op_kind !== kind && !sawActive) {
-      if (baseline !== null && seq > baseline) {
-        // Another op just finished; ours may only now take the lock.
-        baseline = seq;
-        start = Date.now();
-      }
+    const others = othersRecord(st);
+    if (others && baseline !== null && seq > baseline) {
+      baseline = seq;
+      start = Date.now();
     }
     const isOurs =
-      (!kind || st.last_op_kind === kind) &&
-      (sawActive || (baseline !== null && seq > baseline));
+      !others && (sawActive || (baseline !== null && seq > baseline));
     if (isOurs) {
       if (st.last_op_status === "success") {
         return { outputPath: st.last_op_output_path ?? null };

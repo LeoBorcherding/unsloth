@@ -415,9 +415,11 @@ export interface ExportStatus {
   is_peft: boolean;
   is_export_active: boolean;
   active_op_kind?: string | null;
+  active_op_id?: string | null;
   /** Monotonic counter of finished ops; baseline to detect "my op finished". */
   last_op_seq?: number;
   last_op_kind?: string | null;
+  last_op_id?: string | null;
   last_op_status?: "success" | "error" | "cancelled" | null;
   last_op_output_path?: string | null;
   last_op_error?: string | null;

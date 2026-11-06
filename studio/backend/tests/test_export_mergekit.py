@@ -488,6 +488,8 @@ def test_a_cancel_aimed_at_another_op_leaves_the_merge_running(orchestrator, mon
     monkeypatch.setattr(mergekit, "_stream", fake_stream)
     ok, _message, _path = orchestrator.merge_models(dict(SPEC), op_id = "mine")
     assert ok and not proc.terminated
+    # Status recovery tells this merge's record from another tab's by this id.
+    assert orchestrator.get_last_op()["op_id"] == "mine"
 
 
 def test_a_cancel_before_mergekit_spawns_spares_the_worker_and_skips_the_merge(

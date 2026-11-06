@@ -103,6 +103,8 @@ class ExportStatusResponse(BaseModel):
         None,
         description = "Kind of the currently running op (load_checkpoint / export_* / cleanup)",
     )
+    active_op_id: Optional[str] = Field(None, description = "Client op_id of the running op, if it sent one")
+    last_op_id: Optional[str] = Field(None, description = "Client op_id of the last finished op, if it sent one")
     last_op_seq: int = Field(
         0,
         description = "Monotonic counter of finished ops; client baseline to detect 'my op finished'",

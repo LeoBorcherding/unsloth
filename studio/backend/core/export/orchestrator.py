@@ -168,6 +168,7 @@ class ExportOrchestrator:
             self._last_op = {
                 "seq": self._op_seq,
                 "kind": self._active_op_kind,
+                "op_id": self._active_op_id,
                 "status": status,
                 "output_path": output_path if success else None,
                 "error": None if success else (message or None),
@@ -181,6 +182,10 @@ class ExportOrchestrator:
     @job_read(lambda self: None)
     def get_active_op_kind(self) -> Optional[str]:
         return self._active_op_kind
+
+    @job_read(lambda self: None)
+    def get_active_op_id(self) -> Optional[str]:
+        return self._active_op_id
 
     def _begin_op(self, op_id: Optional[str]) -> bool:
         with self._op_lock:
