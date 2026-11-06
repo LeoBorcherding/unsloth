@@ -9,6 +9,7 @@ import {
 import { hfApiToken, ownerOf, useHfTokenStore } from "@/features/hub";
 import {
   TRAINING_METHOD_META,
+  effectiveTrainingObjective,
   isLocalTrainingModelSelection,
   useTrainingConfigStore,
   useTrainingReadiness,
@@ -340,6 +341,7 @@ export function RunPreviewCard({
     modelLocalPath,
     modelFormat,
     trainingMethod,
+    trainingObjective,
     datasetSource,
     dataset,
     uploadedFile,
@@ -359,6 +361,7 @@ export function RunPreviewCard({
       modelLocalPath: s.modelLocalPath,
       modelFormat: s.modelFormat,
       trainingMethod: s.trainingMethod,
+      trainingObjective: effectiveTrainingObjective(s),
       datasetSource: s.datasetSource,
       dataset: s.dataset,
       uploadedFile: s.uploadedFile,
@@ -477,6 +480,14 @@ export function RunPreviewCard({
             </>
           }
         />
+        {trainingObjective !== "sft" &&
+          trainingMethod !== "cpt" &&
+          !isDecision && (
+            <MetaRow
+              label={t("rl.objective.label")}
+              value={t(`rl.objective.${trainingObjective}`)}
+            />
+          )}
         <MetaRow label={t("studio.preview.length")} value={lengthLabel} />
         <MetaRow
           label={t("studio.preview.batch")}

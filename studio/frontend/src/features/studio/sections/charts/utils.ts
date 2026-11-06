@@ -60,12 +60,25 @@ export function formatMetric(value: number): string {
   return trimFormatted(value.toFixed(decimals));
 }
 
+// New TRL logs rewards/<fn>/mean; older TRL (and the notebook tables) log rewards/<fn>.
+export const REWARD_LOG_KEY = /^rewards\/(.+?)(\/mean)?$/;
+
+/** The reward's own id: its TRL function name swaps the id's hyphens for underscores. */
+export function rewardLogLabel(key: string): string {
+  return key.replace(REWARD_LOG_KEY, "$1").replace(/_/g, "-");
+}
+
 export function formatAxisMetric(value: number): string {
   if (!Number.isFinite(value)) {
     return "0";
   }
 
   const abs = Math.abs(value);
+  if (abs > 0 && abs < 0.001) {
+    // GRPO losses sit near 1e-5: fixed decimals would label every tick 0.
+    const [mantissa, exponent] = value.toExponential(2).split("e");
+    return `${trimFormatted(mantissa)}e${exponent}`;
+  }
   let decimals = 4;
 
   if (abs >= 1000) {

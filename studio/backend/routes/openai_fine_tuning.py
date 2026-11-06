@@ -663,6 +663,7 @@ def _batchable(request: TrainingStartRequest) -> bool:
     from core.training.training import should_use_mlx_training_backend
     return (
         not should_use_mlx_training_backend()
+        and request.objective == "sft"
         and request.training_type == "LoRA/QLoRA"
         and request.use_lora
         and bool(request.local_datasets)
@@ -685,6 +686,8 @@ def _batchable(request: TrainingStartRequest) -> bool:
         )
         and not (request.drafter is not None and request.drafter.enabled)
         and request.optim in _BATCH_OPTIMIZERS
+        # The batched optimizer builds AdamW with its default betas.
+        and (request.adam_beta1, request.adam_beta2) == (0.9, 0.999)
         and len(request.gpu_ids or []) <= 1
     )
 
