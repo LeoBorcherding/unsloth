@@ -52,3 +52,36 @@ def test_arch_probe_log_dropped_others_kept(path):
 
     assert not filters[0](record("get_rocm_gpu_arch"))
     assert filters[0](record("get_cuda_specs"))
+
+
+def _load_iter_hipinfo_paths():
+    src = (_BACKEND.parents[1] / "unsloth" / "import_fixes.py").read_text(encoding = "utf-8")
+    fn = next(
+        n
+        for n in ast.parse(src).body
+        if isinstance(n, ast.FunctionDef) and n.name == "_iter_hipinfo_paths"
+    )
+    import os, sys
+
+    ns = {"os": os, "sys": sys}
+    exec(compile(ast.Module([fn], []), "import_fixes.py", "exec"), ns)
+    return ns["_iter_hipinfo_paths"]
+
+
+def test_unsloth_fallback_skips_venv_hipinfo(tmp_path, monkeypatch):
+    import shutil, sys, sysconfig
+
+    scripts = tmp_path / "venv" / "Scripts"
+    sdk = tmp_path / "sdk"
+    (sdk / "bin").mkdir(parents = True)
+    scripts.mkdir(parents = True)
+    for d in (scripts, sdk / "bin"):
+        (d / "hipInfo.exe").write_bytes(b"")
+    monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+    monkeypatch.setattr(sysconfig, "get_path", lambda name: str(scripts))
+    monkeypatch.setattr(shutil, "which", lambda name: str(scripts / "hipInfo.exe"))
+    monkeypatch.setenv("HIP_PATH", str(sdk))
+    monkeypatch.delenv("ROCM_PATH", raising = False)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "nope"))
+
+    assert list(_load_iter_hipinfo_paths()()) == [str(sdk / "bin" / "hipInfo.exe")]

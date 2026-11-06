@@ -3854,12 +3854,8 @@ def _install_bnb_windows_rocm() -> bool:
         _persist_detected_version = True
     if _persist_detected_version:
         _persist_bnb_rocm_version(_ver)
-    # venv Scripts (hipInfo.exe from the AMD torch wheel) on PATH, else bnb logs a stray ERROR.
-    _scripts_dir = os.path.dirname(sys.executable)
-    if os.path.isfile(os.path.join(_scripts_dir, "hipInfo.exe")) and not shutil.which(
-        "hipinfo.exe"
-    ):
-        os.environ["PATH"] = _scripts_dir + os.pathsep + os.environ.get("PATH", "")
+    # Don't put venv Scripts on PATH for bnb's hipinfo probe: that hipInfo.exe is an unsigned
+    # uv launcher Smart App Control blocks, and children (the backend) would inherit it.
     return True
 
 
