@@ -550,12 +550,22 @@ export async function fetchGalleryVideoBlob(id: string): Promise<Blob> {
   return res.blob();
 }
 
-/** Trim and join clips on one canvas and frame clock (no model runs). ``spec.segments[i].clip`` indexes ``clips``. */
-export async function composeVideoTimeline(clips: Blob[], spec: object): Promise<Blob> {
+/** Trim and join clips on one canvas and frame clock (no model runs). ``spec.segments[i].clip`` indexes ``clips``;
+ *  ``frames`` is what each segment contributed. */
+export async function composeVideoTimeline(
+  clips: Blob[],
+  spec: object,
+): Promise<{ video: Blob; frames: number[] }> {
   const form = new FormData();
   clips.forEach((clip, i) => form.append("clips", clip, `clip-${i}.mp4`));
   form.append("spec", JSON.stringify(spec));
   const res = await authFetch("/api/inference/video/timeline/compose", { method: "POST", body: form });
   if (!res.ok) throw new Error(await readFastApiError(res));
-  return res.blob();
+  let frames: number[] = [];
+  try {
+    frames = JSON.parse(res.headers.get("X-Segment-Frames") ?? "[]") as number[];
+  } catch {
+    // Older backends send no counts; the bar falls back to equal shares.
+  }
+  return { video: await res.blob(), frames };
 }

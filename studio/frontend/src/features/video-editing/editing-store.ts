@@ -98,6 +98,8 @@ interface EditingState {
   error: string | null;
   movie: Blob | null;
   movieKinds: SegmentKind[];
+  // Frames each segment contributed to the movie.
+  movieFrames: number[];
   stage: { index: number; step: number; total: number } | null;
   // Changes that do not invalidate a render (a probed clip length).
   patch: (id: number, patch: Partial<Segment>) => void;
@@ -122,10 +124,9 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
   };
 
   const renderUpload = async (seg: Segment): Promise<Blob> => {
-    const trimmed = await composeVideoTimeline(
-      [seg.file as File],
-      trimSpec(Number(seg.inS || 0), parseSeconds(seg.outS)),
-    );
+    const trimmed = (
+      await composeVideoTimeline([seg.file as File], trimSpec(Number(seg.inS || 0), parseSeconds(seg.outS)))
+    ).video;
     if (seg.kind === "real") return trimmed;
     const seed = seg.seed.trim() === "" ? null : Number.parseInt(seg.seed, 10);
     const started = await startVideoRestyle({
@@ -188,6 +189,7 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
     error: null,
     movie: null,
     movieKinds: [],
+    movieFrames: [],
     stage: null,
     patch: update,
     edit: (id, patch) =>
@@ -243,7 +245,7 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
         }
         set({ stage: null });
         const joined = await composeVideoTimeline(outputs as Blob[], composeSpec(list.map((s) => s.kind)));
-        set({ movie: joined, movieKinds: list.map((s) => s.kind) });
+        set({ movie: joined.video, movieKinds: list.map((s) => s.kind), movieFrames: joined.frames });
       } catch (err) {
         set((s) => ({
           error: err instanceof Cancelled ? null : err instanceof Error ? err.message : String(err),

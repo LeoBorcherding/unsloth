@@ -90,7 +90,7 @@ function ClipPreview({ blob, label }: { blob: Blob | null; label: string }) {
 function SetupRow({ name, value, action }: { name: string; value: ReactNode; action?: ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <span className="text-ui-11 text-muted-foreground">{name}</span>
+      <span className="text-ui-12 text-muted-foreground">{name}</span>
       <div className="flex min-h-8 min-w-0 items-center gap-2 text-ui-13 text-foreground">{value}{action}</div>
     </div>
   );
@@ -104,6 +104,7 @@ export function VideoEditingPage() {
   const error = useVideoEditingStore((s) => s.error);
   const movie = useVideoEditingStore((s) => s.movie);
   const movieKinds = useVideoEditingStore((s) => s.movieKinds);
+  const movieFrames = useVideoEditingStore((s) => s.movieFrames);
   const stage = useVideoEditingStore((s) => s.stage);
   const { patch: update, edit, move, remove, add, setError, render, cancel } = useVideoEditingStore.getState();
   const [restyle, setRestyle] = useState<VideoRestyleStatus | null>(null);
@@ -363,7 +364,7 @@ export function VideoEditingPage() {
                         <span className="min-w-0 truncate text-ui-12 text-muted-foreground" title={seg.file?.name}>
                           {seg.file
                             ? `${seg.file.name}${seg.duration !== undefined ? `, ${seg.duration.toFixed(1)} s` : ""}`
-                            : "No clip chosen"}
+                            : null}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
@@ -422,7 +423,7 @@ export function VideoEditingPage() {
                             disabled={running}
                             onValueChange={(v) => edit(seg.id, { frames: Number(v) })}
                           >
-                            <SelectTrigger className="h-9 text-ui-13" aria-label={`Segment ${index + 1} length`}>
+                            <SelectTrigger className="h-9 w-full text-ui-13" aria-label={`Segment ${index + 1} length`}>
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -434,9 +435,7 @@ export function VideoEditingPage() {
                             </SelectContent>
                           </Select>
                         </div>
-                      ) : (
-                        <span />
-                      )}
+                      ) : null}
                       <div className="grid gap-1">
                         <Label htmlFor={`${fieldId}-seed`} className="text-ui-12">
                           Seed
@@ -505,11 +504,13 @@ export function VideoEditingPage() {
                 {movieKinds.map((kind, i) => (
                   <div
                     key={`${kind}-${i}`}
+                    // Each segment's share of the movie, by the frames it contributed.
+                    style={{ flexGrow: movieFrames[i] ?? 1, flexBasis: 0 }}
                     className={cn(
-                      "flex min-w-0 flex-1 items-center justify-center truncate px-1 text-ui-11 font-semibold",
+                      "flex min-w-0 items-center justify-center truncate px-1 text-ui-11 font-semibold",
                       KIND_STYLE[kind],
                     )}
-                    title={`Segment ${i + 1}: ${kindInfo(kind).label}`}
+                    title={`Segment ${i + 1}: ${kindInfo(kind).label}, ${((movieFrames[i] ?? 0) / EDIT_FPS).toFixed(1)} s`}
                   >
                     {i + 1} {kindInfo(kind).label}
                   </div>
