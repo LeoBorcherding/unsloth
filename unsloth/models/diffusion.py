@@ -17,11 +17,15 @@ from transformers import AutoConfig, AutoProcessor, AutoTokenizer, set_seed
 from unsloth_zoo.hf_utils import add_dtype_kwargs
 
 from ._utils import (
+    _ignore_block_swap_params_for_ddp,
     _mark_requested_float32,
     _requested_float32,
     check_mixed_gpu_placement,
+    install_block_swap,
     is_bfloat16_supported,
+    legacy_offload_layers,
     maybe_prefetch_hf_snapshot,
+    prefetch_depth_arg,
 )
 from ..device_type import DEVICE_TYPE, xpu_keeps_explicit_bf16
 from .diffusion_profiles import (
@@ -32,6 +36,7 @@ from .diffusion_profiles import (
 )
 from .llama import logger
 from .loader_utils import (
+    auto_offload_for_launch,
     is_automatic_device_map,
     planner_config_overrides,
     planner_hub_kwargs,
@@ -242,6 +247,11 @@ class FastDiffusionModel:
             dtype = torch.float16
         assert dtype in (torch.float16, torch.bfloat16, torch.float32)
 
+        if legacy_offload_layers(kwargs, kwargs.pop("offload_layers", None)):
+            logger.warning(
+                "Unsloth: from_pretrained(offload_layers = ...) is not supported for text-diffusion models, "
+                "so every layer loads onto the GPU. Pass offload_layers to get_peft_model to swap them after."
+            )
         # Honor an explicit local_files_only; else fall back to the offline env vars.
         local_files_only = kwargs.pop("local_files_only", None)
         if local_files_only is None:
@@ -523,6 +533,8 @@ class FastDiffusionModel:
         **kwargs,
     ):
         """Attach a PEFT LoRA to the diffusion backbone (attention + dense MLP). No fused kernels."""
+        offload_layers = legacy_offload_layers(kwargs, kwargs.pop("offload_layers", None))
+        prefetch_depth = prefetch_depth_arg(kwargs)
         if getattr(model, "_unsloth_full_finetuning", False):
             print("Unsloth: Full finetuning is enabled, so .get_peft_model has no effect")
             return model
@@ -550,6 +562,9 @@ class FastDiffusionModel:
                 _disable_gradient_checkpointing(model)
             model._unsloth_slow_diffusion = True
             model._unsloth_gradient_checkpointing = use_gradient_checkpointing
+            _install_diffusion_block_swap(
+                model, offload_layers, prefetch_depth, use_gradient_checkpointing
+            )
             return model
 
         profile = resolve_diffusion_profile(getattr(model, "config", None))
@@ -567,7 +582,6 @@ class FastDiffusionModel:
                 "finetune_last_n_layers",
                 "target_parameters",
                 "qat_scheme",
-                "offload_layers",
                 "checkpoint_skip_layers",
             )
             if kwargs.get(k) not in (None, 0, False, [], ())
@@ -617,6 +631,9 @@ class FastDiffusionModel:
         model = _refuse_tied_lora_merge(model)
         model._unsloth_slow_diffusion = True
         model._unsloth_gradient_checkpointing = use_gradient_checkpointing
+        _install_diffusion_block_swap(
+            model, offload_layers, prefetch_depth, use_gradient_checkpointing
+        )
         try:
             model.print_trainable_parameters()
         except Exception:
@@ -666,6 +683,28 @@ class FastDiffusionModel:
             stop_callback = stop_callback,
             **kwargs,
         )
+
+
+def _install_diffusion_block_swap(
+    model, offload_layers, prefetch_depth, use_gradient_checkpointing
+):
+    """get_peft_model(offload_layers = N | "auto"): stream frozen decoder layers from host RAM, as FastModel does.
+    Each training forward (and the self-conditioning pass) walks the layers in order and the recompute in reverse,
+    which is the order the prefetch follows."""
+    if not offload_layers:
+        return None
+    base = unwrap_diffusion_model(model)
+    # Decoder layers only: this loader has no offload_embedding option for "auto" to act on.
+    if not hasattr(base, "_unsloth_offload_embedding_mode"):
+        base._unsloth_offload_embedding_mode = False
+    swapper = install_block_swap(
+        model,
+        auto_offload_for_launch(offload_layers),
+        prefetch_depth = prefetch_depth,
+        use_gradient_checkpointing = use_gradient_checkpointing,
+    )
+    _ignore_block_swap_params_for_ddp(model)
+    return swapper
 
 
 def _disable_gradient_checkpointing(model):

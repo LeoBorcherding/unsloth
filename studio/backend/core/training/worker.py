@@ -4911,20 +4911,23 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
     finally:
         _uninstall_metadata_scan_cache(metadata_scan_cache)
 
-    if config.get("offload_layers"):
+    if config.get("offload_layers") == "auto" and (
+        config.get("offload_vram_gb") or config.get("offload_vram_gb_per_device")
+    ):
         from utils.models.diffusion_lm import diffusion_lm_profile_for_model
 
-        # The diffusion load has no block swapping; off before the budget below sizes itself to offloading.
+        # Text-diffusion loads every layer onto the GPU and swaps at LoRA setup, so a cap would OOM the load.
         _diffusion = diffusion_lm_profile_for_model(
             model_load_target, _worker_hf_token(config), revision = config.get("model_revision")
         )
         if _diffusion:
-            config["offload_layers"] = 0
+            config["offload_vram_gb"] = None
+            config["offload_vram_gb_per_device"] = None
             event_queue.put(
                 {
                     "type": "warning",
-                    "message": f"Layer offloading is not available for text-diffusion models ({_diffusion}); "
-                    "training without it.",
+                    "message": f"Text-diffusion models ({_diffusion}) load every layer onto the GPU before "
+                    "offloading, so the training VRAM budget is not applied.",
                     "ts": time.time(),
                 }
             )

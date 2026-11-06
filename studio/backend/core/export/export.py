@@ -1181,7 +1181,7 @@ class ExportBackend:
             elif self.diffusion_lm_profile:
                 from unsloth import FastModel
                 logger.info(f"Loading as text-diffusion model ({self.diffusion_lm_profile})...")
-                # Text-diffusion has no block swapping; skip offload like Training does.
+                # Text-diffusion cannot load layers into host RAM (it swaps only at LoRA setup); skip offload.
                 model, tokenizer = FastModel.from_pretrained(
                     model_name = checkpoint_path,
                     max_seq_length = max_seq_length,

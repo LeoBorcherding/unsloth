@@ -1733,6 +1733,8 @@ class UnslothTrainer:
             peft_kwargs["modules_to_save"] = modules_to_save
         if use_rslora:
             peft_kwargs["use_rslora"] = True
+        # The load put every layer on the GPU; get_peft_model swaps them out from there.
+        peft_kwargs.update(self._offload_peft_kwargs())
         self.model = FastModel.get_peft_model(self.model, **peft_kwargs)
         if self.should_stop:
             logger.info("Stopped during LoRA configuration\n")

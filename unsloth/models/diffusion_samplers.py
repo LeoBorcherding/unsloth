@@ -45,6 +45,15 @@ def diffusion_profile_name(model):
     return profile.name if profile is not None else None
 
 
+def _block_swapped(model, base):
+    # A graph replays the slot pointers it captured, not the layer a swap fetched into them.
+    return getattr(model, "_unsloth_block_swap", None) is not None or any(
+        getattr(module, "_unsloth_block_swap", None) is not None
+        for module in base.modules()
+        if isinstance(module, torch.nn.ModuleList)
+    )
+
+
 def _text_tokenizer(tokenizer):
     return getattr(tokenizer, "tokenizer", tokenizer)
 
@@ -716,7 +725,9 @@ def generate_text(
                 eos_ids = eos_ids,
                 progress = progress,
                 check_stop = progress.check,
-                compile_mode = resolve_compile(compile, device),
+                compile_mode = None
+                if _block_swapped(model, base)
+                else resolve_compile(compile, device),
                 **kwargs,
             )
     finally:

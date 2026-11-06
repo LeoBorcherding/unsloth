@@ -182,6 +182,7 @@ def _trainer(profile = "llada", model = None):
     t.warnings = []
     t._record_warning = t.warnings.append
     t._update_progress = lambda **_: None
+    t._offload_layers, t._prefetch_depth = 0, 2
     return t
 
 
@@ -263,6 +264,19 @@ def test_cpt_embedding_names_resolve_to_the_models_own_modules(captured_peft):
         None, ["embed_tokens", "lm_head"], 8, 16, 0.0, True, False, False, False
     )
     assert "modules_to_save" not in captured_peft[-1]
+
+
+@_needs_torch
+@pytest.mark.parametrize("layers", [0, 3, "auto"])
+def test_offload_layers_reach_get_peft_model(captured_peft, layers):
+    t = _trainer(model = _TinyLLaDA())
+    t._offload_layers, t._prefetch_depth = layers, "auto"
+    assert t._prepare_diffusion_lora(None, None, 8, 16, 0.0, True, False, False, False)
+    if layers:
+        assert captured_peft[-1]["offload_layers"] == layers
+        assert captured_peft[-1]["prefetch_depth"] == "auto"
+    else:
+        assert "offload_layers" not in captured_peft[-1]
 
 
 @_needs_torch
@@ -415,11 +429,13 @@ def test_mlx_refuses_text_diffusion_before_its_trainer_and_chat_backend(monkeypa
     assert chat.index("mlx_refusal(model_name") < chat.index("backend = MLXInferenceBackend()")
 
 
-def test_diffusion_turns_offload_off_before_the_vram_budget_reads_it():
+def test_diffusion_keeps_offload_but_drops_the_vram_budget_before_it_is_read():
     from core.training import worker
 
     src = inspect.getsource(worker.run_training_process)
-    off = src.index('config["offload_layers"] = 0')
+    # The load puts every layer on the GPU and get_peft_model swaps them out, so a cap would OOM the load.
+    assert 'config["offload_layers"] = 0' not in src
+    off = src.index('config["offload_vram_gb"] = None')
     assert (
         src.rindex("diffusion_lm_profile_for_model(", 0, off)
         < off
