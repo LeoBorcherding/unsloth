@@ -1,12 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Triton-fused GroupNorm / channel RMS norm for eagerly decoded image and video VAEs.
-
-CUDA GroupNorm has no channels-last kernel, so every norm copies NHWC <-> NCHW; these kernels read any layout,
-write channels-last with fp32 statistics. ``install(vae)`` patches instances (never classes), each falling back
-to stock on a new exception. NVIDIA CUDA + Triton >= 3.3 only; ``UNSLOTH_VAE_FUSED=0`` disables.
-"""
+"""Triton GroupNorm/RMS norm for eager VAE decode (NVIDIA CUDA, Triton>=3.3); patches instances
+never classes; falls back to stock on new exception; UNSLOTH_VAE_FUSED=0 off"""
 
 from __future__ import annotations
 
@@ -53,13 +49,17 @@ def _toolchain_ok() -> bool:
         return True
 
 
-# Loop-bound-only args are not specialized (else ~70 JIT variants on a tiled Wan decode); strides and C stay
-# specialized so channel-contiguous loads vectorize.
+# Loop-bound args not specialized (avoids ~70 JIT variants); strides and C stay specialized so channel-contiguous loads vectorize.
 _SHAPE_ARGS = {
     "_rms_act": ("T", "H", "W", "Ho", "Wo", "ph", "pw", "To", "front", "n_cache"),
     "_bias_residual": ("P", "T", "HW", "W"),
     "_dup_up_add": ("T_o", "H_o", "W_o", "t_off"),
     "_up_nearest2x": ("T_o", "H", "W"),
+    "_gn_partials": ("T", "HW", "W", "n_chunks"),
+    "_gn_combine": ("n_chunks",),
+    "_gn_apply": ("T", "HW", "W"),
+    "_softmax_rows": ("S",),
+    "_dcae_up_add": ("F", "H", "W", "Fo"),
 }
 
 
@@ -72,11 +72,11 @@ def _kernels() -> Optional[types.SimpleNamespace]:
         return None
     globals().update(triton = triton, tl = tl)
 
-    @triton.jit
+    @triton.jit(do_not_specialize = _SHAPE_ARGS["_gn_partials"])
     def _gn_partials(
         x_ptr, bias_ptr, pn_ptr, pmean_ptr, pm2_ptr,
         T, HW, W, n_chunks, sb, sc, st, sh, sw,
-        C: tl.constexpr, G: tl.constexpr, CPG: tl.constexpr, BLOCK_P: tl.constexpr, HAS_BIAS: tl.constexpr
+        C: tl.constexpr, G: tl.constexpr, CPG: tl.constexpr, BLOCK_P: tl.constexpr, HAS_BIAS: tl.constexpr  # C channels, G groupnorm groups, CPG channels per group, BLOCK_P pixels per program, HAS_BIAS bias present
     ):  # fmt: skip
         chunk = tl.program_id(0)
         bt = tl.program_id(1)
@@ -109,9 +109,17 @@ def _kernels() -> Optional[types.SimpleNamespace]:
         tl.store(pm2_ptr + slot * G + g, m2)
         tl.store(pn_ptr + slot, n_pix * CPG)
 
-    @triton.jit
+    @triton.jit(do_not_specialize = _SHAPE_ARGS["_gn_combine"])
     def _gn_combine(
-        pn_ptr, pmean_ptr, pm2_ptr, mean_ptr, rstd_ptr, n_chunks, G, eps, BLOCK: tl.constexpr
+        pn_ptr,
+        pmean_ptr,
+        pm2_ptr,
+        mean_ptr,
+        rstd_ptr,
+        n_chunks,
+        G,
+        eps,
+        BLOCK: tl.constexpr,  # block size
     ):
         row = tl.program_id(0)
         g = row % G
@@ -139,11 +147,11 @@ def _kernels() -> Optional[types.SimpleNamespace]:
         tl.store(mean_ptr + row, mean)
         tl.store(rstd_ptr + row, 1.0 / tl.sqrt(acc_m2 / acc_n + eps))
 
-    @triton.jit
+    @triton.jit(do_not_specialize = _SHAPE_ARGS["_gn_apply"])
     def _gn_apply(
         x_ptr, out_ptr, mean_ptr, rstd_ptr, w_ptr, b_ptr, ib_ptr,
         C, T, HW, W, G, sb, sc, st, sh, sw,
-        CPG: tl.constexpr, ACT: tl.constexpr, HAS_IN_BIAS: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        CPG: tl.constexpr, ACT: tl.constexpr, HAS_IN_BIAS: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # CPG channels per group, ACT apply silu, HAS_IN_BIAS input bias present, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         pid_p = tl.program_id(0)
         bt = tl.program_id(1)
@@ -184,8 +192,8 @@ def _kernels() -> Optional[types.SimpleNamespace]:
         x_ptr, out_ptr, w_ptr, b_ptr, ib_ptr, cache_ptr,
         C, T, H, W, Ho, Wo, ph, pw, To, front, n_cache, scale, eps,
         sb, sc, st, sh, sw, cb, cc, ct, ch, cw,
-        NORM: tl.constexpr, ACT: tl.constexpr, HAS_BIAS: tl.constexpr, HAS_IN_BIAS: tl.constexpr,
-        REPLICATE: tl.constexpr, MEAN_SQ: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        NORM: tl.constexpr, ACT: tl.constexpr, HAS_BIAS: tl.constexpr, HAS_IN_BIAS: tl.constexpr,  # NORM apply rms norm, ACT apply silu, HAS_BIAS bias present, HAS_IN_BIAS input bias present
+        REPLICATE: tl.constexpr, MEAN_SQ: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # REPLICATE replicate temporal padding, MEAN_SQ mean-square rms form, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         pid_p = tl.program_id(0)
         bt = tl.program_id(1)
@@ -257,7 +265,7 @@ def _kernels() -> Optional[types.SimpleNamespace]:
     @triton.jit(do_not_specialize = _SHAPE_ARGS["_bias_residual"])
     def _bias_residual(
         o_ptr, ob_ptr, r_ptr, rb_ptr, P, C, T, HW, W, sb, sc, st, sh, sw, inv_scale,
-        HAS_OB: tl.constexpr, HAS_RB: tl.constexpr, SCALE: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        HAS_OB: tl.constexpr, HAS_RB: tl.constexpr, SCALE: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # HAS_OB output bias present, HAS_RB residual bias present, SCALE output scale != 1, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         p = tl.program_id(0) * BLOCK_P + tl.arange(0, BLOCK_P)
         c = tl.program_id(1) * BLOCK_C + tl.arange(0, BLOCK_C)
@@ -285,12 +293,12 @@ def _kernels() -> Optional[types.SimpleNamespace]:
             o = o * inv_scale
         tl.store(o_ptr + o_off, o.to(o_ptr.dtype.element_ty), mask = m)
 
-    @triton.jit
+    @triton.jit(do_not_specialize = _SHAPE_ARGS["_dcae_up_add"])
     def _dcae_up_add(
         h_ptr, hb_ptr, x_ptr, out_ptr,
         c, Cin, F, H, W, Fo, rep,
         hsb, hsc, hst, hsh, hsw, xsb, xsc, xst, xsh, xsw,
-        TEMPORAL: tl.constexpr, HAS_HB: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        TEMPORAL: tl.constexpr, HAS_HB: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # TEMPORAL temporal upsample, HAS_HB conv bias present, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         pid_p = tl.program_id(0)
         bf = tl.program_id(1)
@@ -342,8 +350,8 @@ def _kernels() -> Optional[types.SimpleNamespace]:
         o_off = (bf.to(tl.int64) * (4 * H * W) + p.to(tl.int64))[:, None] * c + ci[None, :]
         tl.store(out_ptr + o_off, (v + xv).to(out_ptr.dtype.element_ty), mask = m)
 
-    @triton.jit
-    def _softmax_rows(s_ptr, p_ptr, S, P_STRIDE, scale, BLOCK: tl.constexpr):
+    @triton.jit(do_not_specialize = _SHAPE_ARGS["_softmax_rows"])
+    def _softmax_rows(s_ptr, p_ptr, S, P_STRIDE, scale, BLOCK: tl.constexpr):  # block size
         row = tl.program_id(0).to(tl.int64)
         base = s_ptr + row * P_STRIDE
         m = tl.full([BLOCK], float("-inf"), tl.float32)
@@ -370,7 +378,7 @@ def _kernels() -> Optional[types.SimpleNamespace]:
     def _dup_up_add(
         o_ptr, x_ptr, C, T_o, H_o, W_o, t_off, repeats,
         osb, osc, ost, osh, osw, xsb, xsc, xst, xsh, xsw,
-        FT: tl.constexpr, FS: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        FT: tl.constexpr, FS: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # FT temporal upsample factor, FS spatial upsample factor, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         pid_p = tl.program_id(0)
         bt = tl.program_id(1)
@@ -404,7 +412,7 @@ def _kernels() -> Optional[types.SimpleNamespace]:
     @triton.jit(do_not_specialize = _SHAPE_ARGS["_up_nearest2x"])
     def _up_nearest2x(
         x_ptr, out_ptr, C, T_o, H, W, xsb, xsc, xst, xsh, xsw,
-        INTERLEAVE: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr
+        INTERLEAVE: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_C: tl.constexpr  # INTERLEAVE wan time_conv channel interleave, BLOCK_P pixels per program, BLOCK_C channels per program
     ):  # fmt: skip
         # INTERLEAVE: x is Wan time_conv output (B, 2C, T_o/2, H, W); frame 2t+j takes channels [jC, (j+1)C).
         pid_p = tl.program_id(0)
@@ -903,9 +911,7 @@ def _fast_wan_attention(block: Any) -> Any:
     def fast(x: Any) -> Any:
         identity = x
         b, c, t, h, w = x.shape
-        y = rms_norm_act(
-            x, block.norm, False
-        )  # (b, c, t, h, w) channels-last_3d: (b, t, h, w, c) in memory
+        y = rms_norm_act(x, block.norm, False)
         y = y.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)  # a channels-last view, no copy
         qkv = F.conv2d(y, block.to_qkv.weight, block.to_qkv.bias)
         qkv = qkv.permute(0, 2, 3, 1).reshape(b * t, h * w, 3 * c)
@@ -994,10 +1000,7 @@ def _guard(
     logger: Any,
     oom_stock: bool = False,
 ) -> None:
-    """``module.forward = fast`` until it raises something ``stock`` does not; then stock for good.
-
-    Causal-cache state is snapshotted and restored before the stock retry so a half-failed fast path cannot desync
-    the decode. ``oom_stock``: an OOM retries stock for that call only."""
+    """Falls back to stock for good once fast raises what stock does not; causal-cache state is restored before the stock retry; OOM retries stock once."""
 
     def forward(*args, **kwargs):
         if getattr(module, "_unsloth_vae_fused_failed", False):
@@ -1079,14 +1082,18 @@ def _fast_norm(norm: Any, act: bool) -> Any:
     return fast
 
 
-def install_group_norm_vae(vae: Any, logger: Any = None) -> int:
+def install_group_norm_vae(
+    vae: Any,
+    logger: Any = None,
+    encoder: bool = True,
+) -> int:
     """Patch every eligible ResnetBlock2D / GroupNorm of a 2-D (AutoencoderKL-family) VAE. Returns patch count."""
     torch = _torch()
     if vae is None or not runtime_ok():
         return 0
     n = 0
     fused_act_norms = set()
-    for part_name in ("encoder", "decoder"):
+    for part_name in ("encoder", "decoder") if encoder else ("decoder",):
         part = getattr(vae, part_name, None)
         if part is None:
             continue
@@ -1163,7 +1170,6 @@ def uninstall(vae: Any) -> None:
 
 
 _WAN_VAES = frozenset({"AutoencoderKLWan", "AutoencoderKLQwenImage", "AutoencoderKLQwenImage21"})
-_CACHE_T = 2
 
 
 def _is_rms(norm: Any) -> bool:
@@ -1377,13 +1383,17 @@ def _fast_wan_residual_up(block: Any) -> Any:
     return fast
 
 
-def install_wan_vae(vae: Any, logger: Any = None) -> int:
+def install_wan_vae(
+    vae: Any,
+    logger: Any = None,
+    encoder: bool = True,
+) -> int:
     """Patch the residual blocks, causal convs and output heads of a Wan-lineage VAE. Returns patch count."""
     torch = _torch()
     if vae is None or not runtime_ok():
         return 0
     n = 0
-    for part_name in ("encoder", "decoder"):
+    for part_name in ("encoder", "decoder") if encoder else ("decoder",):
         part = getattr(vae, part_name, None)
         if part is None:
             continue
@@ -1486,12 +1496,15 @@ _TILE_PEAK_FACTOR = 24
 
 
 def _tile_batch_cap(vae: Any, z: Any) -> int:
-    """Tiles per decoder call: env override, else what half the free VRAM holds, at most 4."""
+    """Tiles per decoder call."""
     raw = os.environ.get(TILE_BATCH_ENV, "").strip()
     if raw.isdigit() and int(raw) > 0:
         return int(raw)
     try:
-        free, _ = _torch().cuda.mem_get_info(z.device)
+        from .diffusion_memory import user_budget_reserve_bytes
+
+        free, total = _torch().cuda.mem_get_info(z.device)
+        free = max(0, int(free) - user_budget_reserve_bytes(z.device, total))
         norm_out = getattr(getattr(vae, "decoder", None), "norm_out", None)
         c_last = int(norm_out.gamma.numel()) if norm_out is not None else 128
         px = int(vae.tile_sample_min_height) * int(vae.tile_sample_min_width)
@@ -1619,9 +1632,7 @@ def _wan_batched_tiled_decode(
     if patch is not None:
         from diffusers.models.autoencoders.autoencoder_kl_wan import unpatchify
         dec = unpatchify(dec, patch_size = patch)
-    if (
-        clamp
-    ):  # as the class's stock tiled_decode: Wan and Qwen-Image-2.1 clamp, Qwen-Image does not
+    if clamp:  # as stock tiled_decode: Wan and Qwen-Image-2.1 clamp, Qwen-Image does not
         dec = torch.clamp(dec, min = -1.0, max = 1.0)
     if not return_dict:
         return (dec,)
@@ -1812,12 +1823,16 @@ def _hv_causal_mask(
     return mask
 
 
-def install_hv15_vae(vae: Any, logger: Any = None) -> int:
+def install_hv15_vae(
+    vae: Any,
+    logger: Any = None,
+    encoder: bool = True,
+) -> int:
     torch = _torch()
     if vae is None or not runtime_ok():
         return 0
     n = 0
-    for part_name in ("encoder", "decoder"):
+    for part_name in ("encoder", "decoder") if encoder else ("decoder",):
         part = getattr(vae, part_name, None)
         if part is None:
             continue
@@ -2116,16 +2131,20 @@ def install(
     vae: Any,
     logger: Any = None,
     level: str = "fused",
+    encoder: bool = True,
 ) -> int:
-    """Install every fused path that applies to ``vae``'s class. Returns the number of patched modules."""
+    """Install every fused path that applies to ``vae``'s class. Returns the number of patched modules.
+
+    ``encoder=False`` patches the decoder only, for a family whose denoising attends to the encoded conditioning clip at
+    every step, which amplifies the fused passes' rounding into a different sample (video_families.vae_fused_encoder)."""
     if vae is None or not will_install(vae):
         return 0
     done = getattr(vae, "_unsloth_vae_fused_installed", 0)
     if done:
         return done  # idempotent: a dual-DiT family runs the speed layer once per expert over the same VAE
-    n = _install(vae, logger)
+    n = _install(vae, logger, encoder)
     if not n and type(vae).__name__ not in SUPPORTED_VAES:
-        n = install_structural(vae, logger)
+        n = install_structural(vae, logger)  # decoder only, so it honours encoder=False as is
         if n:
             vae._unsloth_vae_fused_structural = True
     # Only where measured faster, and only when a fused pass feeds a conv (relaid weights alone slow LTX-2's decode).
@@ -2144,16 +2163,20 @@ def install(
     return n
 
 
-def _install(vae: Any, logger: Any = None) -> int:
+def _install(
+    vae: Any,
+    logger: Any = None,
+    encoder: bool = True,
+) -> int:
     name = type(vae).__name__
     if name in ("AutoencoderKL", "AutoencoderKLFlux2"):
-        n = install_group_norm_vae(vae, logger)
+        n = install_group_norm_vae(vae, logger, encoder)
         return n + (install_vectorised_blend(vae) if n else 0)
     if name in _WAN_VAES:
-        n = install_wan_vae(vae, logger)
+        n = install_wan_vae(vae, logger, encoder)
         return n + (install_vectorised_blend(vae) if n else 0)
     if name == "AutoencoderKLHunyuanVideo15":
-        n = install_hv15_vae(vae, logger)
+        n = install_hv15_vae(vae, logger, encoder)
         return n + (install_vectorised_blend(vae) if n else 0)
     if name == "AutoencoderKLLTX2Video":
         if not _ltx2_convs_fusable(vae):
