@@ -6,7 +6,6 @@ GenerationConfig attribute (pad_token_id, cache_implementation, compile_config),
 AST-extracted so no unsloth/CUDA import is needed."""
 
 import ast
-import copy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +22,7 @@ def _load_function(name, namespace):
     return namespace[name]
 
 
-set_generate_param = _load_function("_set_generate_param", {"copy": copy})
+set_generate_param = _load_function("_set_generate_param", {})
 
 
 def test_no_generation_config_sets_a_plain_kwarg():
@@ -32,31 +31,31 @@ def test_no_generation_config_sets_a_plain_kwarg():
     assert kwargs == {"pad_token_id": 99}
 
 
-def test_no_generation_config_overwrite_false_still_sets_the_kwarg():
-    # overwrite only governs behavior against an existing generation_config value;
-    # with no config at all there is nothing to preserve, so the kwarg is set either way.
+def test_no_generation_config_keep_config_value_still_sets_the_kwarg():
+    # keep_config_value only matters against an existing generation_config value;
+    # with no config at all there is nothing to keep, so the kwarg is set either way.
     kwargs = {"pad_token_id": 7}
-    set_generate_param(kwargs, "pad_token_id", 99, overwrite = False)
+    set_generate_param(kwargs, "pad_token_id", 99, keep_config_value = True)
     assert kwargs == {"pad_token_id": 99}
 
 
 def test_config_present_unset_field_gets_filled_in():
     generation_config = SimpleNamespace(pad_token_id = None)
     kwargs = {"generation_config": generation_config}
-    set_generate_param(kwargs, "pad_token_id", 99, overwrite = False)
+    set_generate_param(kwargs, "pad_token_id", 99, keep_config_value = True)
     assert "pad_token_id" not in kwargs
     assert kwargs["generation_config"].pad_token_id == 99
 
 
-def test_config_present_already_set_field_is_preserved_when_not_overwriting():
+def test_config_present_already_set_field_is_kept():
     generation_config = SimpleNamespace(pad_token_id = 7)
     kwargs = {"generation_config": generation_config}
-    set_generate_param(kwargs, "pad_token_id", 99, overwrite = False)
+    set_generate_param(kwargs, "pad_token_id", 99, keep_config_value = True)
     assert "pad_token_id" not in kwargs
     assert kwargs["generation_config"].pad_token_id == 7
 
 
-def test_config_present_default_overwrite_forces_the_value():
+def test_config_present_value_replaced_by_default():
     generation_config = SimpleNamespace(cache_implementation = "static")
     kwargs = {"generation_config": generation_config}
     set_generate_param(kwargs, "cache_implementation", "dynamic")
@@ -67,11 +66,13 @@ def test_config_present_default_overwrite_forces_the_value():
 def test_no_leftover_kwarg_is_ever_left_alongside_an_explicit_config():
     # This is the actual bug being fixed: transformers flags any GenerationConfig
     # field present both on an explicit generation_config and as a raw kwarg. Neither
-    # overwrite mode may ever leave one behind when a config was passed.
-    for overwrite in (True, False):
+    # mode may ever leave one behind when a config was passed.
+    for keep_config_value in (True, False):
         generation_config = SimpleNamespace(compile_config = None)
         kwargs = {"generation_config": generation_config, "compile_config": "stale"}
-        set_generate_param(kwargs, "compile_config", "computed", overwrite = overwrite)
+        set_generate_param(
+            kwargs, "compile_config", "computed", keep_config_value = keep_config_value
+        )
         assert "compile_config" not in kwargs
 
 
@@ -79,7 +80,9 @@ def test_a_raw_kwarg_next_to_a_config_still_wins_and_moves_onto_it():
     # transformers applies kwargs after the config merge, so the caller's value won before.
     generation_config = SimpleNamespace(pad_token_id = 7)
     kwargs = {"generation_config": generation_config, "pad_token_id": 99}
-    set_generate_param(kwargs, "pad_token_id", kwargs.get("pad_token_id", 0), overwrite = False)
+    set_generate_param(
+        kwargs, "pad_token_id", kwargs.get("pad_token_id", 0), keep_config_value = True
+    )
     assert "pad_token_id" not in kwargs
     assert kwargs["generation_config"].pad_token_id == 99
 
@@ -108,21 +111,22 @@ def test_an_explicit_none_next_to_a_config_still_wins():
 def test_a_forced_value_beats_a_raw_kwarg_next_to_a_config():
     generation_config = SimpleNamespace(cache_implementation = "static")
     kwargs = {"generation_config": generation_config, "cache_implementation": "static"}
-    set_generate_param(kwargs, "cache_implementation", "dynamic", force = True)
+    set_generate_param(kwargs, "cache_implementation", "dynamic", override_caller = True)
     assert "cache_implementation" not in kwargs
     assert kwargs["generation_config"].cache_implementation == "dynamic"
 
 
-def test_the_callers_config_is_never_mutated():
-    # TRL reuses one generation_config for every rollout; a value set for one call must not leak into the next.
+def test_the_config_in_kwargs_is_edited_in_place():
+    # The wrapper copies the caller's config once per call; the helper must not copy it again.
     generation_config = SimpleNamespace(pad_token_id = None, cache_implementation = "static")
     kwargs = {"generation_config": generation_config, "pad_token_id": 11}
-    set_generate_param(kwargs, "pad_token_id", kwargs.get("pad_token_id", 0), overwrite = False)
-    set_generate_param(kwargs, "cache_implementation", "dynamic", force = True)
-    assert kwargs["generation_config"] is not generation_config
-    assert kwargs["generation_config"].pad_token_id == 11
-    assert generation_config.pad_token_id is None
-    assert generation_config.cache_implementation == "static"
+    set_generate_param(
+        kwargs, "pad_token_id", kwargs.get("pad_token_id", 0), keep_config_value = True
+    )
+    set_generate_param(kwargs, "cache_implementation", "dynamic", override_caller = True)
+    assert kwargs["generation_config"] is generation_config
+    assert generation_config.pad_token_id == 11
+    assert generation_config.cache_implementation == "dynamic"
 
 
 if __name__ == "__main__":

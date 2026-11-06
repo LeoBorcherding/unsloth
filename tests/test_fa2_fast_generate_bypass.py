@@ -42,7 +42,7 @@ uses_flash_attention = _load_function(
     },
 )
 clear_generation_caches = _load_function("_clear_generation_caches", {})
-set_generate_param = _load_function("_set_generate_param", {"copy": copy})
+set_generate_param = _load_function("_set_generate_param", {})
 
 
 def test_top_level_flash_attention_is_detected():
@@ -218,6 +218,7 @@ def test_wrapper_dispatch_preserves_normalization_and_selects_expected_path():
         "transformers_version": TRANSFORMERS_VERSION,
         "_uses_flash_attention_for_generation": uses_flash_attention,
         "_clear_generation_caches": clear_generation_caches,
+        "copy": copy,
         "_set_generate_param": set_generate_param,
         "_is_text_seq2seq_config": lambda config: False,
     }
@@ -305,6 +306,7 @@ def test_flash_attention_fallback_pins_a_dynamic_cache():
         "transformers_version": TRANSFORMERS_VERSION,
         "_uses_flash_attention_for_generation": uses_flash_attention,
         "_clear_generation_caches": clear_generation_caches,
+        "copy": copy,
         "_set_generate_param": set_generate_param,
         "_is_text_seq2seq_config": lambda config: False,
     }
@@ -342,6 +344,16 @@ def test_flash_attention_fallback_pins_a_dynamic_cache():
     assert captured["generation_config"].cache_implementation == "dynamic"
     assert generation_config.cache_implementation == "static"
     assert "cache_implementation" not in captured
+
+    # TRL reuses one config across rollouts: pad and cache both land on a single per-call copy.
+    generation_config = SimpleNamespace(cache_implementation = "static", pad_token_id = None)
+    fast_generate(
+        Model(), input_ids = input_ids, generation_config = generation_config, pad_token_id = 11
+    )
+    assert captured["generation_config"] is not generation_config
+    assert captured["generation_config"].pad_token_id == 11
+    assert captured["generation_config"].cache_implementation == "dynamic"
+    assert vars(generation_config) == {"cache_implementation": "static", "pad_token_id": None}
 
     fast_generate(Model(), input_ids = input_ids, cache_implementation = "static")
     assert captured["cache_implementation"] == "dynamic"

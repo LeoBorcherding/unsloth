@@ -862,26 +862,23 @@ def _set_generate_param(
     kwargs,
     name,
     value,
-    overwrite = True,
-    force = False,
+    keep_config_value = False,
+    override_caller = False,
 ):
-    # A GenerationConfig field passed both as a raw kwarg and on an explicit
-    # generation_config (TRL rollouts) makes transformers warn, so set it on the config.
-    # overwrite=False keeps a value the caller's config already has.
-    caller_generation_config = kwargs.get("generation_config")
-    if caller_generation_config is not None:
-        # Edit a copy: TRL reuses one config for every rollout, so changes would leak into later calls.
-        caller_generation_config = copy.copy(caller_generation_config)
-        kwargs["generation_config"] = caller_generation_config
-        # The raw kwarg used to win the merge, so carry it onto the config unless this call forces its own.
-        if name in kwargs:
-            caller_value = kwargs.pop(name)
-            if not force:
-                value, overwrite = caller_value, True
-        if overwrite or getattr(caller_generation_config, name, None) is None:
-            setattr(caller_generation_config, name, value)
-    else:
+    # A GenerationConfig field passed both as a raw kwarg and on generation_config (TRL rollouts)
+    # makes transformers warn, so it goes on the config. Edits kwargs["generation_config"] in place:
+    # unsloth_base_fast_generate hands it a per-call copy.
+    generation_config = kwargs.get("generation_config")
+    if generation_config is None:
         kwargs[name] = value
+        return
+    if name in kwargs:
+        caller_value = kwargs.pop(name)
+        # The raw kwarg used to win the config merge, so it still does unless this call overrides it.
+        if not override_caller:
+            value, keep_config_value = caller_value, False
+    if not keep_config_value or getattr(generation_config, name, None) is None:
+        setattr(generation_config, name, value)
 
 
 def _unsloth_generate_accepts_kwarg(model, key):
@@ -2288,8 +2285,14 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
     if (is_dia or _is_text_seq2seq_config(self.config)) and config_pad_token_id is not None:
         default_pad_token_id = config_pad_token_id
 
+    # TRL reuses one generation_config for every rollout, so edit a per-call copy.
+    if kwargs.get("generation_config") is not None:
+        kwargs["generation_config"] = copy.copy(kwargs["generation_config"])
     _set_generate_param(
-        kwargs, "pad_token_id", kwargs.get("pad_token_id", default_pad_token_id), overwrite = False
+        kwargs,
+        "pad_token_id",
+        kwargs.get("pad_token_id", default_pad_token_id),
+        keep_config_value = True,
     )
 
     try:
@@ -2328,7 +2331,7 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
     if _uses_flash_attention_for_generation(self.config):
         # Pin the literal "dynamic": None is merged back to the model default, and a static cache still arrives via kwargs or the caller's generation_config (TRL); skip it when the caller passed a cache.
         if kwargs.get("past_key_values") is None and not rejects_cache_fields:
-            _set_generate_param(kwargs, "cache_implementation", "dynamic", force = True)
+            _set_generate_param(kwargs, "cache_implementation", "dynamic", override_caller = True)
         try:
             with _get_inference_mode_context_manager(self), autocaster:
                 return self._old_generate(*args, **kwargs)
@@ -2402,7 +2405,7 @@ def unsloth_base_fast_generate(self, *args, **kwargs):
         kwargs,
         "cache_implementation",
         dynamic_implementation if force_dynamic_cache else cache_implementation,
-        force = force_dynamic_cache,
+        override_caller = force_dynamic_cache,
     )
     if cache_implementation is not None:
         _set_generate_param(kwargs, "compile_config", compile_config)
