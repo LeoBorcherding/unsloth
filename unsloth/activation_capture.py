@@ -612,8 +612,9 @@ class ActivationCapture:
         sums = [self._act_sums[i] for i in ids]
         if len({s[1].shape for s in sums}) != 1:
             return None  # layers of different widths; the sampled path below still covers them
-        mean_abs = torch.stack([a / n for n, a, _ in sums])  # [L, H]
-        mean = torch.stack([t / n for n, _, t in sums])
+        dev = sums[0][1].device  # a sharded model keeps each layer's sums on its own GPU
+        mean_abs = torch.stack([(a / n).to(dev) for n, a, _ in sums])  # [L, H]
+        mean = torch.stack([(t / n).to(dev) for n, _, t in sums])
         h = mean_abs.shape[1]
         # A NaN or inf channel (unstable step) is missing for this capture, not a measurement.
         finite = torch.isfinite(mean_abs)

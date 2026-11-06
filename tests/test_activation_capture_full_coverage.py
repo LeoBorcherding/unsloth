@@ -169,3 +169,26 @@ def test_a_non_finite_channel_is_left_out_of_the_counts(tmp_path):
     assert layer0["dead"] == len(DEAD)
     assert layer0["outliers"] == len(OUTLIERS)
     assert {ch for ch, _ in layer0["top_outliers"]} == set(OUTLIERS)
+
+
+def _second_device():
+    if torch.cuda.device_count() > 1:
+        return "cuda:1"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
+
+
+@pytest.mark.skipif(_second_device() is None, reason = "needs a second device")
+def test_layers_on_different_devices(tmp_path):
+    model, cap = _capture(tmp_path, pinned_channels = 3)
+    model.model.layers[1].to(_second_device())  # a model split across devices
+    for step in range(2):
+        cap.mark_capture(step = step, loss = 1.0)
+        x = torch.full((1, 3, H), 1.0)
+        for layer in model.model.layers:
+            x = x.to(layer.scale.device)
+            x = layer(x)[0] / layer.scale.clamp_min(1)
+        cap.flush()
+    _, records = _read(tmp_path)
+    assert [r["coverage"]["1"]["dead"] for r in records] == [len(DEAD)] * 2
