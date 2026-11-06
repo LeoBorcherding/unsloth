@@ -515,6 +515,25 @@ def test_a_cancel_before_mergekit_spawns_spares_the_worker_and_skips_the_merge(
     worker.terminated = True  # so the fixture's cleanup does not talk to it
 
 
+def test_a_cancel_right_after_the_merge_claims_its_id_spares_the_worker(orchestrator, monkeypatch):
+    _mark_installed()
+    worker = _FakeWorker()
+    monkeypatch.setattr(orchestrator, "_proc", worker)
+    real_begin = orchestrator._begin_op
+
+    def begin_then_cancel(op_id, kind = None):
+        started = real_begin(op_id, kind)
+        assert orchestrator.cancel_export(expected_op_id = "mine") is True
+        return started
+
+    monkeypatch.setattr(orchestrator, "_begin_op", begin_then_cancel)
+    monkeypatch.setattr(mergekit, "_stream", lambda *args: 0)
+    ok, message, _path = orchestrator.merge_models(dict(SPEC), op_id = "mine")
+    assert (ok, message) == (False, "Export cancelled")
+    assert not worker.terminated
+    worker.terminated = True  # so the fixture's cleanup does not talk to it
+
+
 def test_route_authorizes_hub_models_and_reports_the_run(monkeypatch):
     from routes import export as export_routes
 

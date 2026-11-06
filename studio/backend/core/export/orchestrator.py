@@ -187,13 +187,16 @@ class ExportOrchestrator:
     def get_active_op_id(self) -> Optional[str]:
         return self._active_op_id
 
-    def _begin_op(self, op_id: Optional[str]) -> bool:
+    def _begin_op(self, op_id: Optional[str], kind: Optional[str] = None) -> bool:
         with self._op_lock:
             if op_id is not None and op_id in self._cancelled_op_ids:
                 self._cancelled_op_ids.discard(op_id)
                 return False
             # Reset here, before the id is cancellable, so a matching cancel that lands next is never erased.
             self._cancel_requested = False
+            if kind is not None:
+                # Published with the id, so a cancel that matches it already sees the kind.
+                self._active_op_kind = kind
             self._active_op_id = op_id
             return True
 
@@ -834,10 +837,9 @@ class ExportOrchestrator:
         """Merge models with MergeKit into outputs/<output_name>, where the export picker lists it."""
         from core.export import mergekit
         with self._lock:
-            if not self._begin_op(op_id):
+            if not self._begin_op(op_id, kind = "merge"):
                 return False, OP_CANCELLED, None
             self.clear_logs()
-            self._active_op_kind = "merge"
             self._export_active = True
             op_success, op_message, op_output_path = False, "", None
             try:
