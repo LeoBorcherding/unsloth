@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { useMonitorFrameStore } from "@/features/settings";
+import { useMonitorFrameStore } from "@/features/settings/stores/monitor-frame-store";
 import {
   type FrameBox,
   type PanelIntent,
@@ -42,7 +42,6 @@ interface DragSession {
   maxTop: number;
   constraintsWidth: number;
   constraintsHeight: number;
-  // Committed left/top the drag transform offsets from.
   baseLeft: number;
   baseTop: number;
 }
@@ -97,7 +96,7 @@ export function useFloatingPanelLayout(
   storageKey?: string,
   restingObstacle?: FrameBox | null,
 ) {
-  // Per-instance frame owner: a panel unmounting mid-exit clears only its own frame.
+  // Per instance: a panel unmounting mid-exit clears only its own frame.
   const publisher = useMemo(() => ({}), []);
   const monitorRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -114,7 +113,6 @@ export function useFloatingPanelLayout(
   const hiddenRef = useRef(hidden);
   const remeasureRef = useRef(0);
   const [layout, setLayout] = useState<MonitorLayout | null>(null);
-  // For transitions that fire no observer (suppressed to undocked).
   const reconcileRef = useRef<(() => void) | null>(null);
   const initialPlacementRef = useRef(initialPlacement);
   const initializedRef = useRef(false);
@@ -166,7 +164,6 @@ export function useFloatingPanelLayout(
       }
 
       const width = Math.min(desiredWidth, constraintsBox.width);
-      // A hand-resized panel keeps its height and scrolls instead of moving up.
       const height = Math.min(
         monitor.style.height ? monitorBox.height : desiredHeight,
         constraintsBox.height,
@@ -174,12 +171,12 @@ export function useFloatingPanelLayout(
       const maxLeft = Math.max(0, constraintsBox.width - width);
       const maxTop = Math.max(0, constraintsBox.height - height);
       const session = dragSessionRef.current;
-      // Mid-drag the measured box (transform included) is where the pointer has it.
+      // Mid-drag the pointer owns the spot: the measured box can be a frame behind it.
       let left = session
-        ? clamp(monitorBox.left - constraintsBox.left, 0, maxLeft)
+        ? clamp(session.left, 0, maxLeft)
         : placeAxis(intentRef.current.left, maxLeft);
       let top = session
-        ? clamp(monitorBox.top - constraintsBox.top, 0, maxTop)
+        ? clamp(session.top, 0, maxTop)
         : placeAxis(intentRef.current.top, maxTop);
       // Obstacle avoidance applies to the first placement only, and a remembered spot wins.
       if (
@@ -305,7 +302,7 @@ export function useFloatingPanelLayout(
     }
   }, [narrowed]);
 
-  // Position-only changes fire no ResizeObserver, so republish per committed layout (not per drag frame).
+  // Position-only changes fire no ResizeObserver, so republish per committed layout.
   useLayoutEffect(() => {
     void layout;
     const monitor = monitorRef.current;
@@ -333,7 +330,7 @@ export function useFloatingPanelLayout(
     const left = monitorBox.left - constraintsBox.left;
     const top = monitorBox.top - constraintsBox.top;
 
-    // Sync inline size to the rendered box where max-width/height clipped a native resize.
+    // Sync inline size where max-width/height clipped a native resize.
     const inlineWidth = Number.parseFloat(monitor.style.width);
     const inlineHeight = Number.parseFloat(monitor.style.height);
     if (
@@ -384,20 +381,18 @@ export function useFloatingPanelLayout(
       return;
     }
 
-    const left = clamp(
-      session.left + event.clientX - session.startX,
+    // From the grab point, not the last move: an edge clamp must not eat the overshoot, or the grip
+    // slides off the pointer when it comes back.
+    session.left = clamp(
+      session.baseLeft + event.clientX - session.startX,
       0,
       session.maxLeft,
     );
-    const top = clamp(
-      session.top + event.clientY - session.startY,
+    session.top = clamp(
+      session.baseTop + event.clientY - session.startY,
       0,
       session.maxTop,
     );
-    session.startX = event.clientX;
-    session.startY = event.clientY;
-    session.left = left;
-    session.top = top;
     if (!dragFrameRef.current) {
       dragFrameRef.current = requestAnimationFrame(paintDrag);
     }

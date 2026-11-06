@@ -9,8 +9,14 @@ import types
 
 import pytest
 import torch
+from torch.torch_version import TorchVersion  # noqa: E402
+
 
 import core.inference.diffusion_small_host as sh
+
+# A CUDA build's version tag: Studio reads ROCm from the "+rocm" tag too (AMD SDK / Radeon wheels leave
+# torch.version.hip unset), so a test that fakes NVIDIA clears both.
+_CUDA_TORCH_VERSION = TorchVersion(str(torch.__version__).split("+")[0] + "+cu130")
 
 
 @pytest.fixture(autouse = True)
@@ -49,10 +55,13 @@ def test_family_allowlist_and_kill_switch(monkeypatch):
     assert sh.int8_act_family(types.SimpleNamespace(name = "qwen-image"))
     assert sh.int8_act_family(types.SimpleNamespace(name = "Qwen-Image"))
     assert sh.int8_act_family("qwen-image")
-    for other in ("qwen-image-edit", "flux.1", "z-image", "hidream-i1", "qwen-image-2.1", None):
+    assert sh.int8_act_family(types.SimpleNamespace(name = "qwen-image-edit"))
+    assert sh.int8_act_family("Qwen-Image-Edit")
+    for other in ("qwen-image-layered", "flux.1", "z-image", "hidream-i1", "qwen-image-2.1", None):
         assert not sh.int8_act_family(types.SimpleNamespace(name = other))
     monkeypatch.setenv(sh.INT8_ACT_ENV, "0")
     assert not sh.int8_act_family(types.SimpleNamespace(name = "qwen-image"))
+    assert not sh.int8_act_family(types.SimpleNamespace(name = "qwen-image-edit"))
 
 
 def test_quantize_sets_the_flag_only_when_asked():
@@ -71,6 +80,8 @@ def _fake_cuda(
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda idx = None: cap)
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
     monkeypatch.setattr(torch.version, "hip", hip, raising = False)
+    if hip is None:
+        monkeypatch.setattr(torch, "__version__", _CUDA_TORCH_VERSION, raising = False)
     monkeypatch.setattr(torch, "_int_mm", int_mm, raising = False)
     real_to = torch.Tensor.to
 
