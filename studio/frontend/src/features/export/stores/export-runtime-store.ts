@@ -210,6 +210,8 @@ interface ExportRuntimeState {
   isExporting: boolean;
   /** True while this store's runExport drives the run (not a reload-recovered one). */
   ownsRun: boolean;
+  /** op_id of a run recovered from another tab, so its Cancel stops only it. */
+  recoveredOpId: string | null;
   method: ExportMethod | null;
   summary: ExportRunSummary | null;
   quantTotal: number;
@@ -252,6 +254,7 @@ const initialState: ExportRuntimeState = {
   phase: "idle",
   isExporting: false,
   ownsRun: false,
+  recoveredOpId: null,
   method: null,
   summary: null,
   quantTotal: 1,
@@ -341,7 +344,24 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           isExporting: true,
           phase: "exporting" as const,
           startedAt: state.startedAt ?? Date.now(),
+          recoveredOpId: status.active_op_id ?? null,
         };
+      }
+      if (status.is_export_active && state.isExporting && !state.ownsRun) {
+        // The recovered export ended and a queued merge took the lock: that run is not ours.
+        if (merging) {
+          return {
+            ...base,
+            isExporting: false,
+            phase: "idle" as const,
+            recoveredOpId: null,
+          };
+        }
+        // Its next phase runs under a new op_id: follow it so Cancel still reaches it.
+        const opId = status.active_op_id ?? null;
+        if (opId !== state.recoveredOpId) {
+          return { ...state, ...base, recoveredOpId: opId };
+        }
       }
       if (!status.is_export_active && state.isExporting && !state.ownsRun) {
         // A standalone load_checkpoint must never settle as a finished export.
@@ -395,8 +415,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
     if (!get().isExporting) return;
     set({ cancelRequested: true });
     try {
-      // A run recovered from another tab has no id here and cancels whatever holds the op.
-      await cancelExport((get().ownsRun && inFlightOpId) || undefined);
+      // A recovered run from a client that sent no op_id still cancels whatever holds the op.
+      const { ownsRun, recoveredOpId } = get();
+      await cancelExport((ownsRun ? inFlightOpId : recoveredOpId) ?? undefined);
     } catch {
       // The in-flight POST still rejects when the worker dies, giving the canceled phase.
     }

@@ -144,3 +144,21 @@ test("Cancel during an export stops only that export's op", async () => {
   assert.equal(cancel.args[0], (load.args[0] as { op_id: string }).op_id);
   useExportRuntimeStore.getState().reset();
 });
+
+test("a recovered export follows its op ids, and a merge taking over ends it", async () => {
+  stub.resetStub();
+  const store = useExportRuntimeStore.getState();
+  store.reset();
+  type Status = Parameters<typeof store.applyBackendStatus>[0];
+  const apply = (s: object) =>
+    useExportRuntimeStore.getState().applyBackendStatus(s as Status);
+  apply({ is_export_active: true, active_op_kind: "load_checkpoint", active_op_id: "load-1" });
+  assert.equal(useExportRuntimeStore.getState().recoveredOpId, "load-1");
+  apply({ is_export_active: true, active_op_kind: "export_gguf", active_op_id: "gguf-1" });
+  assert.equal(useExportRuntimeStore.getState().isExporting, true);
+  await useExportRuntimeStore.getState().requestCancel();
+  assert.equal(stub.calls.find((c) => c.name === "cancelExport")?.args[0], "gguf-1");
+  apply({ is_export_active: true, active_op_kind: "merge", active_op_id: "merge-1" });
+  assert.equal(useExportRuntimeStore.getState().isExporting, false);
+  useExportRuntimeStore.getState().reset();
+});
