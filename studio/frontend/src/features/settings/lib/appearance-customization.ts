@@ -198,6 +198,8 @@ export type AppearanceCustomization = {
   contrast: number;
   /** 0–100; null = the background image's own outline, or none without one. */
   composerOutline: number | null;
+  /** 0–100; null = each theme's own borders. */
+  elementOutline: number | null;
   pointerCursors: boolean;
   reduceMotion: ReduceMotionSetting;
   /** true = the app default (antialiased). */
@@ -230,6 +232,7 @@ export const DEFAULT_CUSTOMIZATION: AppearanceCustomization = {
   codeFontSize: null,
   contrast: 50,
   composerOutline: null,
+  elementOutline: null,
   pointerCursors: false,
   reduceMotion: "off",
   fontSmoothing: true,
@@ -569,6 +572,12 @@ export function sanitizeCustomizationWithIssues(value: unknown): {
       source.composerOutline,
       { min: 0, max: 100 },
       "composerOutline",
+      report,
+    ),
+    elementOutline: sanitizeSize(
+      source.elementOutline,
+      { min: 0, max: 100 },
+      "elementOutline",
       report,
     ),
     pointerCursors:
