@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from loggers import get_logger
 import multiprocessing as mp
 import queue
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -61,6 +62,8 @@ class ExportOrchestrator:
     def __init__(self):
         init_job_owner(self, self.is_export_active, self.cancel_export, self._clear_account_result)
         self._proc: Optional[mp.Process] = None
+        # A MergeKit run; it needs no checkpoint, so it runs beside the worker, not in it.
+        self._merge_proc: Optional[subprocess.Popen] = None
         self._cmd_queue: Any = None
         self._resp_queue: Any = None
         # Serializes export ops so concurrent HTTP requests can't interleave commands.
@@ -92,6 +95,9 @@ class ExportOrchestrator:
         self._active_op_id: Optional[str] = None
         self._cancelled_op_ids: set = set()
         self._last_op: Optional[Dict[str, Any]] = None
+        # Recent records by client op_id: a merge queued behind an export would otherwise overwrite
+        # the export's record before a client cut off by a tunnel timeout reads it.
+        self._ops_by_id: Dict[str, Dict[str, Any]] = {}
 
         atexit.register(self._cleanup)
         logger.info("ExportOrchestrator initialized (subprocess mode)")
@@ -105,6 +111,7 @@ class ExportOrchestrator:
         self.is_vision = self.is_peft = False
         self.decision = None
         self._last_op = None
+        self._ops_by_id = {}
         self.clear_logs()
 
     def _append_log(self, entry: Dict[str, Any]) -> None:
@@ -156,36 +163,67 @@ class ExportOrchestrator:
     def was_cancelled(self) -> bool:
         return self._cancel_requested
 
-    def _record_op_finished(self, success: bool, message: str, output_path: Optional[str]) -> None:
+    def _record_op_finished(
+        self,
+        success: bool,
+        message: str,
+        output_path: Optional[str],
+        published: bool = False,
+    ) -> None:
         """Called before ``_export_active`` clears, so any read that sees the op inactive sees its
         result."""
         with self._op_lock:
             self._op_seq += 1
-            status = "cancelled" if self._cancel_requested else ("success" if success else "error")
+            # A published output is a success even if a cancel landed after it.
+            if published:
+                status = "success"
+            else:
+                status = (
+                    "cancelled" if self._cancel_requested else ("success" if success else "error")
+                )
             self._last_op = {
                 "seq": self._op_seq,
                 "kind": self._active_op_kind,
+                "op_id": self._active_op_id,
                 "status": status,
                 "output_path": output_path if success else None,
                 "error": None if success else (message or None),
             }
+            if self._active_op_id is not None:
+                if len(self._ops_by_id) >= 64:
+                    self._ops_by_id.pop(next(iter(self._ops_by_id)))
+                self._ops_by_id[self._active_op_id] = self._last_op
 
-    @job_read(lambda self: None)
-    def get_last_op(self) -> Optional[Dict[str, Any]]:
+    @job_read(lambda self, op_id = None: None)
+    def get_last_op(self, op_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """The last finished op, or with ``op_id`` that op's record while it is still kept."""
         with self._op_lock:
-            return dict(self._last_op) if self._last_op is not None else None
+            record = self._ops_by_id.get(op_id) if op_id else None
+            record = record or self._last_op
+            return dict(record) if record is not None else None
 
     @job_read(lambda self: None)
     def get_active_op_kind(self) -> Optional[str]:
         return self._active_op_kind
 
-    def _begin_op(self, op_id: Optional[str]) -> bool:
+    @job_read(lambda self: None)
+    def get_active_op_id(self) -> Optional[str]:
+        return self._active_op_id
+
+    def _begin_op(
+        self,
+        op_id: Optional[str],
+        kind: Optional[str] = None,
+    ) -> bool:
         with self._op_lock:
             if op_id is not None and op_id in self._cancelled_op_ids:
                 self._cancelled_op_ids.discard(op_id)
                 return False
             # Reset here, before the id is cancellable, so a matching cancel that lands next is never erased.
             self._cancel_requested = False
+            if kind is not None:
+                # Published with the id, so a cancel that matches it already sees the kind.
+                self._active_op_kind = kind
             self._active_op_id = op_id
             return True
 
@@ -223,6 +261,14 @@ class ExportOrchestrator:
 
     def _terminate_worker(self) -> bool:
         self._cancel_requested = True
+        if self._active_op_kind == "merge":
+            # A merge leaves the checkpoint worker alone, so never fall through to it; between
+            # MergeKit steps the flag alone stops the next one from starting.
+            merge = self._merge_proc
+            if merge is not None and merge.poll() is None:
+                logger.info("Export cancel requested: terminating MergeKit (pid=%s)", merge.pid)
+                merge.terminate()
+            return True
         proc = self._proc
         if proc is None or not proc.is_alive():
             return False
@@ -806,6 +852,53 @@ class ExportOrchestrator:
                 self._end_op()
                 self._active_op_kind = None
                 self._export_active = False
+
+    @owned_job()
+    def merge_models(
+        self,
+        spec: dict,
+        hf_token: HfTokenArg = None,
+        install_missing_dependencies: bool = False,
+        op_id: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Merge models with MergeKit into outputs/<output_name>, where the export picker lists it."""
+        from core.export import mergekit
+        with self._lock:
+            if not self._begin_op(op_id, kind = "merge"):
+                return False, OP_CANCELLED, None
+            self.clear_logs()
+            self._export_active = True
+            op_success, op_message, op_output_path = False, "", None
+            try:
+                out_dir = mergekit.merge(
+                    spec,
+                    outputs_root() / spec["output_name"],
+                    log = lambda line, stream: self._append_log({"line": line, "stream": stream}),
+                    on_spawn = self._track_merge_proc,
+                    hf_token = hf_token,
+                    install_missing = install_missing_dependencies,
+                    cancelled = self.was_cancelled,
+                )
+                op_success, op_message, op_output_path = True, "Models merged", str(out_dir)
+                return op_success, op_message, op_output_path
+            except Exception as exc:
+                op_message = OP_CANCELLED if self._cancel_requested else str(exc)
+                logger.error("Model merge failed: %s", exc)
+                return False, op_message, None
+            finally:
+                self._merge_proc = None
+                self._record_op_finished(
+                    op_success, op_message, op_output_path, published = op_success
+                )
+                self._end_op()
+                self._active_op_kind = None
+                self._export_active = False
+
+    def _track_merge_proc(self, proc) -> None:
+        self._merge_proc = proc
+        # A cancel that landed before the spawn found nothing to terminate.
+        if self._cancel_requested:
+            proc.terminate()
 
     @job_control
     def cleanup_memory(self) -> bool:

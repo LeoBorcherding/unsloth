@@ -216,6 +216,7 @@ export async function loadCheckpoint(params: {
   trust_remote_code?: boolean;
   approved_remote_code_fingerprint?: string | null;
   hf_token?: string | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/load-checkpoint", {
     method: "POST",
@@ -236,6 +237,7 @@ export async function exportMerged(params: {
   private?: boolean;
   install_missing_dependencies?: boolean;
   reap?: ReapOptions | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/merged", {
     method: "POST",
@@ -274,6 +276,7 @@ export async function exportGGUF(params: {
   /** Also convert a Q4_0/Q4_1/Q4_K_M GGUF to Q4NX for the AMD NPU, into <save_directory>/npu-q4nx. */
   npu_q4nx?: boolean;
   reap?: ReapOptions | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/gguf", {
     method: "POST",
@@ -293,6 +296,77 @@ export async function convertGgufToQ4nx(params: {
   hf_token?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/convert/q4nx", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return parseJson<ExportOperationResponse>(response);
+}
+
+export type MergeMethod =
+  | "linear"
+  | "slerp"
+  | "ties"
+  | "dare_ties"
+  | "task_arithmetic"
+  | "moe";
+
+export type MergeGateMode =
+  | "hidden"
+  | "cheap_embed"
+  | "random"
+  | "uniform_random";
+
+export type MoeArchitecture = "mixtral" | "qwen3" | "deepseek";
+
+export interface MergeModelSpec {
+  model: string;
+  weight?: number | null;
+  density?: number | null;
+  /** MoE experts only: prompts the router should send to this expert. */
+  positive_prompts?: string[] | null;
+  negative_prompts?: string[] | null;
+}
+
+export interface MergeModelsParams {
+  method: MergeMethod;
+  models: MergeModelSpec[];
+  base_model: string | null;
+  t?: number | null;
+  dtype: "bfloat16" | "float16" | "float32";
+  /** Where the merged vocabulary comes from; MergeKit refuses models whose vocabularies differ without it. */
+  tokenizer_source?: string | null;
+  /** MoE only; the backend defaults to hidden gates, 2 experts per token and MergeKit's pick of architecture. */
+  gate_mode?: MergeGateMode | null;
+  experts_per_token?: number | null;
+  architecture?: MoeArchitecture | null;
+  /** Folder name under outputs; the merged model then shows up as a training run here. */
+  output_name: string;
+  cuda?: boolean;
+  hf_token?: string | null;
+  install_missing_dependencies?: boolean;
+  op_id?: string | null;
+}
+
+export interface MergeProbe {
+  ready: boolean;
+  needs_consent: boolean;
+  install_summary: string | null;
+  blocked_reason: string | null;
+  venv_path: string;
+  version: string;
+}
+
+export async function fetchMergeProbe(): Promise<MergeProbe> {
+  const response = await authFetch("/api/export/merge/probe");
+  return parseJson<MergeProbe>(response);
+}
+
+/** Runs on the export backend: its log stream and cancel cover the merge too. */
+export async function mergeModels(
+  params: MergeModelsParams,
+): Promise<ExportOperationResponse> {
+  const response = await authFetch("/api/export/merge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
@@ -322,6 +396,7 @@ export async function exportLoRA(params: {
   gguf?: boolean;
   gguf_outtype?: string;
   adapter_format?: "mlx" | "peft";
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/lora", {
     method: "POST",
@@ -336,9 +411,21 @@ export async function cleanupExport(): Promise<ExportOperationResponse> {
   return parseJson<ExportOperationResponse>(response);
 }
 
-/** Terminates the export worker only; always resolves so callers need no guard. */
-export async function cancelExport(): Promise<ExportOperationResponse> {
-  const response = await authFetch("/api/export/cancel", { method: "POST" });
+/** Terminates the export worker only; always resolves so callers need no guard.
+ *  With an op id only that op is stopped, so a queued merge never cancels another export. */
+export async function cancelExport(
+  expectedOpId?: string,
+): Promise<ExportOperationResponse> {
+  const response = await authFetch(
+    "/api/export/cancel",
+    expectedOpId
+      ? {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expected_op_id: expectedOpId }),
+        }
+      : { method: "POST" },
+  );
   return parseJson<ExportOperationResponse>(response);
 }
 
@@ -348,9 +435,11 @@ export interface ExportStatus {
   is_peft: boolean;
   is_export_active: boolean;
   active_op_kind?: string | null;
+  active_op_id?: string | null;
   /** Monotonic counter of finished ops; baseline to detect "my op finished". */
   last_op_seq?: number;
   last_op_kind?: string | null;
+  last_op_id?: string | null;
   last_op_status?: "success" | "error" | "cancelled" | null;
   last_op_output_path?: string | null;
   last_op_error?: string | null;
@@ -359,8 +448,13 @@ export interface ExportStatus {
 }
 
 /** Used on mount to show an export started in another tab or before a reload. */
-export async function getExportStatus(): Promise<ExportStatus> {
-  const response = await authFetch("/api/export/status");
+/** With `opId` the last_op fields describe that op while the server still keeps its record. */
+export async function getExportStatus(opId?: string): Promise<ExportStatus> {
+  const response = await authFetch(
+    opId
+      ? `/api/export/status?op_id=${encodeURIComponent(opId)}`
+      : "/api/export/status",
+  );
   return parseJson<ExportStatus>(response);
 }
 // ───────────────────────────────────────────────────────────────────── Live export log stream

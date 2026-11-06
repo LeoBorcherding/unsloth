@@ -289,6 +289,8 @@ def test_export_owner_single_mode_preserves_operation_and_status_bytes(export, m
         "is_peft": True,
         "is_export_active": False,
         "active_op_kind": None,
+        "active_op_id": None,
+        "last_op_id": None,
         "last_op_seq": 1,
         "last_op_kind": "load_checkpoint",
         "last_op_status": "success",

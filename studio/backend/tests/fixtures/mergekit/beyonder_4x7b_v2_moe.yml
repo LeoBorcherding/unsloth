@@ -1,0 +1,13 @@
+# https://huggingface.co/mlabonne/Beyonder-4x7B-v2 (model card). The repo's uploaded
+# mergekit_moe_config.yml also has `tokenizer_source: union`, which MergeKit 0.1.5's
+# MoEMergeConfig ignores: the published config.json keeps the base's 32000-token vocabulary.
+base_model: mlabonne/Marcoro14-7B-slerp
+experts:
+  - source_model: openchat/openchat-3.5-1210
+    positive_prompts: ["chat", "assistant", "tell me", "explain"]
+  - source_model: beowolx/CodeNinja-1.0-OpenChat-7B
+    positive_prompts: ["code", "python", "javascript", "programming", "algorithm"]
+  - source_model: maywell/PiVoT-0.1-Starling-LM-RP
+    positive_prompts: ["storywriting", "write", "scene", "story", "character"]
+  - source_model: WizardLM/WizardMath-7B-V1.1
+    positive_prompts: ["reason", "math", "mathematics", "solve", "count"]

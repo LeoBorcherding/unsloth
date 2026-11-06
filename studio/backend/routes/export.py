@@ -17,7 +17,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -53,6 +53,8 @@ from models import (
     ExportGGUFRequest,
     ExportLoRAAdapterRequest,
     ConvertQ4NXRequest,
+    MergeModelsRequest,
+    MergeProbeResponse,
     ExportDiffusionLoRARequest,
     LlmCompressorExportProbeResponse,
     ExportDecisionInfoResponse,
@@ -237,8 +239,14 @@ async def cancel_export(
 
 
 @router.get("/status", response_model = ExportStatusResponse)
-async def get_export_status(current_subject: str = Depends(get_current_subject)):
-    """Get export backend status (loaded checkpoint, model type, PEFT flag)."""
+async def get_export_status(
+    current_subject: str = Depends(get_current_subject),
+    op_id: Annotated[Optional[str], Query(max_length = 128)] = None,
+):
+    """Get export backend status (loaded checkpoint, model type, PEFT flag).
+
+    With ``op_id`` the last_op fields describe that op while its record is kept, so a client cut
+    off mid-op still finds its result after another op has finished."""
     if job_is_foreign(get_export_backend()):
         return ExportStatusResponse(
             current_checkpoint = None,
@@ -249,11 +257,11 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
         )
     try:
         backend = get_export_backend()
-        last_op = backend.get_last_op()
+        last_op = backend.get_last_op(op_id)
         # Relativise the recovered path like the per-op POST response, so both routes show the same path.
         last_op_output_path = None
         if last_op and last_op.get("output_path"):
-            if getattr(backend, "decision", None):
+            if getattr(backend, "decision", None) or last_op.get("kind") == "merge":
                 last_op_output_path = last_op["output_path"]
             else:
                 details = await asyncio.to_thread(_export_details, last_op["output_path"])
@@ -264,8 +272,10 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
             is_peft = bool(getattr(backend, "is_peft", False)),
             is_export_active = bool(backend.is_export_active()),
             active_op_kind = backend.get_active_op_kind(),
+            active_op_id = backend.get_active_op_id(),
             last_op_seq = int(last_op["seq"]) if last_op else 0,
             last_op_kind = last_op.get("kind") if last_op else None,
+            last_op_id = last_op.get("op_id") if last_op else None,
             last_op_status = last_op.get("status") if last_op else None,
             last_op_output_path = last_op_output_path,
             last_op_error = last_op.get("error") if last_op else None,
@@ -761,6 +771,57 @@ async def convert_q4nx(
         success = True,
         message = "Converted to Q4NX for the AMD NPU",
         details = await asyncio.to_thread(_export_details, output_path, refresh_index = True),
+    )
+
+
+@router.get("/merge/probe", response_model = MergeProbeResponse)
+async def probe_merge(current_subject: str = Depends(get_current_subject)):
+    """Whether MergeKit is installed, or what installing it would do."""
+    from core.export import mergekit
+    return MergeProbeResponse(**await asyncio.to_thread(mergekit.probe))
+
+
+@router.post("/merge", response_model = ExportOperationResponse)
+async def merge_models(
+    request: MergeModelsRequest,
+    current_subject: str = Depends(get_current_subject),
+    allow_ambient: bool = Depends(allow_ambient_hf_token),
+):
+    """Merge models with MergeKit into outputs/<output_name>; the result is a normal model folder
+    the export flow then loads like any checkpoint. Logs and cancel are the export ones."""
+    validate_job_paths({"base_model": request.base_model, "hf_token": request.hf_token})
+    token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient)
+    hub_models = []
+    for name in dict.fromkeys([*(m.model for m in request.models), request.base_model]):
+        if not name:
+            continue
+        # Rejects share and device paths before is_dir() can touch them.
+        validate_job_paths({"base_model": name})
+        if Path(name).expanduser().is_dir():
+            # A managed account may only merge folders inside its own workspace.
+            account_path(name)
+        else:
+            hub_models.append(name)
+    await asyncio.gather(
+        *(
+            asyncio.to_thread(account_access.authorize_download, name, "model", token)
+            for name in hub_models
+        )
+    )
+    backend = get_export_backend()
+    success, message, output_path = await asyncio.to_thread(
+        backend.merge_models,
+        request.model_dump(exclude = {"hf_token", "install_missing_dependencies", "op_id"}),
+        hf_token = token,
+        install_missing_dependencies = request.install_missing_dependencies,
+        op_id = request.op_id,
+    )
+    if not success:
+        raise HTTPException(status_code = 400, detail = message)
+    return ExportOperationResponse(
+        success = True,
+        message = message,
+        details = {"output_path": output_path, "run": request.output_name},
     )
 
 

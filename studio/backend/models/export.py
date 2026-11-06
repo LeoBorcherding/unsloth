@@ -5,8 +5,8 @@
 
 from pathlib import Path, PureWindowsPath
 
-from pydantic import BaseModel, Field, field_validator
-from typing import Annotated, List, Optional, Literal, Dict, Any, Union
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing import Annotated, List, Optional, Literal, Dict, Any, Tuple, Union
 
 
 def _validate_save_directory(value: str) -> str:
@@ -102,6 +102,12 @@ class ExportStatusResponse(BaseModel):
     active_op_kind: Optional[str] = Field(
         None,
         description = "Kind of the currently running op (load_checkpoint / export_* / cleanup)",
+    )
+    active_op_id: Optional[str] = Field(
+        None, description = "Client op_id of the running op, if it sent one"
+    )
+    last_op_id: Optional[str] = Field(
+        None, description = "Client op_id of the last finished op, if it sent one"
     )
     last_op_seq: int = Field(
         0,
@@ -440,3 +446,218 @@ class LlmCompressorExportProbeResponse(BaseModel):
     python_executable: str
     has_pip: bool
     has_uv: bool
+
+
+def _plain_model_name(v: str) -> str:
+    # MergeKit reads "a+b" as model a plus LoRA b and "a@r" as revision r, which would load a
+    # path the workspace check never saw. Hub repo ids can't contain either.
+    if "+" in v or "@" in v:
+        raise ValueError("Model names and folders can't contain '+' or '@'")
+    return v
+
+
+class MergeModelSpec(BaseModel):
+    """One model in a merge: a Hub repo id or a local model folder."""
+
+    model_config = ConfigDict(allow_inf_nan = False)
+
+    model: str = Field(
+        ..., min_length = 1, max_length = 1024, description = "Hub repo id or local model folder"
+    )
+    weight: Optional[float] = Field(
+        None, description = "Share of this model (linear, TIES, DARE, task arithmetic)"
+    )
+    density: Optional[float] = Field(
+        None, gt = 0, le = 1, description = "Fraction of its delta kept (TIES, DARE TIES)"
+    )
+    layer_range: Optional[Tuple[Annotated[int, Field(ge = 0)], Annotated[int, Field(ge = 0)]]] = Field(
+        None, description = "SLERP only: the [start, end) layers taken from this model"
+    )
+    positive_prompts: Optional[List[Annotated[str, Field(max_length = 2000)]]] = Field(
+        None, max_length = 64, description = "MoE only: prompts the router should send to this expert"
+    )
+    negative_prompts: Optional[List[Annotated[str, Field(max_length = 2000)]]] = Field(
+        None,
+        max_length = 64,
+        description = "MoE only: prompts the router should keep away from this expert",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _check_model(cls, v: str) -> str:
+        return _plain_model_name(v)
+
+    @field_validator("positive_prompts", "negative_prompts")
+    @classmethod
+    def _strip_prompts(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return None
+        return [p.strip() for p in v if p.strip()] or None
+
+
+class MergeGradientStep(BaseModel):
+    """A SLERP t for the tensors matching ``filter`` (all others when unset), or a gradient over layers."""
+
+    model_config = ConfigDict(allow_inf_nan = False)
+
+    filter: Optional[str] = None
+    value: Union[float, List[float]]
+
+
+class MergeModelsRequest(BaseModel):
+    """Merge two or more models with MergeKit into a new model folder under outputs."""
+
+    model_config = ConfigDict(allow_inf_nan = False)
+
+    method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic", "moe"]
+    models: List[MergeModelSpec] = Field(
+        ..., min_length = 1, max_length = 16, description = "The models to merge; for MoE, the experts"
+    )
+    base_model: Optional[str] = Field(
+        None,
+        description = "Required for SLERP (one of the two models), TIES, DARE TIES, task arithmetic "
+        "and MoE (attention, embeddings and tokenizer come from it; it may also be an expert)",
+    )
+    t: Optional[Union[float, List[MergeGradientStep]]] = Field(
+        None, description = "SLERP interpolation factor, 0 = base model"
+    )
+    normalize: Optional[bool] = None
+    int8_mask: Optional[bool] = None
+    dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    tokenizer_source: Optional[str] = Field(
+        None,
+        description = "Where the merged vocabulary comes from: base, union or one of the models. "
+        "Needed when the models' vocabularies differ",
+    )
+    random_seed: Optional[int] = Field(
+        None, ge = 0, lt = 2**32, description = "Seeds DARE's random pruning and MoE's random gates"
+    )
+    gate_mode: Optional[Literal["hidden", "cheap_embed", "random", "uniform_random"]] = Field(
+        None, description = "MoE only: how router weights are initialized (default hidden)"
+    )
+    experts_per_token: Optional[int] = Field(
+        None, description = "MoE only: experts active per token (default 2)"
+    )
+    # MergeKit's "qwen" output (Qwen2 MoE) needs a shared expert, which this request doesn't carry.
+    architecture: Optional[Literal["mixtral", "qwen3", "deepseek"]] = Field(
+        None, description = "MoE only: output architecture; MergeKit picks one when unset"
+    )
+    output_name: str = Field(..., description = "Folder name for the merged model under outputs")
+    cuda: bool = Field(False, description = "Run the merge arithmetic on the GPU")
+    hf_token: Optional[str] = Field(None, description = "Hugging Face token for gated repos")
+    install_missing_dependencies: bool = Field(
+        False, description = "The user agreed to install MergeKit into its own environment"
+    )
+    op_id: Optional[str] = Field(None, max_length = 128)
+
+    @field_validator("base_model")
+    @classmethod
+    def _check_base_model(cls, v: Optional[str]) -> Optional[str]:
+        return None if v is None else _plain_model_name(v)
+
+    @field_validator("output_name")
+    @classmethod
+    def _check_output_name(cls, v: str) -> str:
+        name = v.strip()
+        if (
+            not name
+            or name.startswith(".")
+            or len(name) > 255
+            or any(ch in name for ch in '/\\:*?"<>|')
+            or any(ord(ch) < 32 for ch in name)
+        ):
+            raise ValueError("output_name must be a plain folder name")
+        return name
+
+    @model_validator(mode = "after")
+    def _check_method(self):
+        method, models, base = self.method, self.models, self.base_model
+        names = [m.model for m in models]
+        if len(set(names)) != len(names):
+            raise ValueError("Each model may appear only once")
+        if method == "moe":
+            return self._check_moe()
+        if self.gate_mode or self.experts_per_token is not None or self.architecture:
+            raise ValueError("gate_mode, experts_per_token and architecture apply to MoE only")
+        if any(m.positive_prompts or m.negative_prompts for m in models):
+            raise ValueError("Prompts apply to MoE experts only")
+        if method == "slerp":
+            if len(models) != 2:
+                raise ValueError("SLERP merges exactly two models")
+            if base not in names:
+                raise ValueError("SLERP needs base_model set to one of its two models")
+            if self.t is None:
+                raise ValueError("SLERP needs t")
+            if any(m.weight is not None or m.density is not None for m in models):
+                raise ValueError("SLERP takes t, not per-model weight or density")
+            if sum(m.layer_range is not None for m in models) not in (0, 2):
+                raise ValueError("Set layer_range on both models or neither")
+        else:
+            if self.t is not None or any(m.layer_range is not None for m in models):
+                raise ValueError("t and layer_range are SLERP options")
+            if any(m.weight is None for m in models):
+                raise ValueError(f"{method} needs a weight for every model")
+        if method == "linear":
+            if len(models) < 2:
+                raise ValueError("Linear merges two or more models")
+            if base:
+                raise ValueError("Linear takes no base_model")
+        if method in ("ties", "dare_ties", "task_arithmetic"):
+            if not base:
+                raise ValueError(f"{method} needs a base_model")
+            if base in names:
+                raise ValueError("List the base model as base_model only, not among the models")
+        if method not in ("ties", "dare_ties") and any(m.density is not None for m in models):
+            raise ValueError("density applies to TIES and DARE TIES only")
+        if self.int8_mask is not None and method not in ("ties", "dare_ties", "task_arithmetic"):
+            raise ValueError("int8_mask applies to TIES, DARE TIES and task arithmetic only")
+        if self.normalize is not None and method == "slerp":
+            raise ValueError("normalize does not apply to SLERP")
+        source = self.tokenizer_source
+        if source == "base" and not base:
+            raise ValueError("tokenizer_source base needs a base_model")
+        if source not in (None, "base", "union", base, *names):
+            raise ValueError("tokenizer_source must be base, union or one of the merged models")
+        return self
+
+    def _check_moe(self):
+        # Mirrors mergekit.moe.config.is_bad_config, so a refused config fails here, not mid-run.
+        experts = self.models
+        if len(experts) < 2:
+            raise ValueError("MoE needs at least two experts")
+        if not self.base_model:
+            raise ValueError("MoE needs a base_model")
+        per_token = 2 if self.experts_per_token is None else self.experts_per_token
+        if not 1 <= per_token <= len(experts):
+            raise ValueError("experts_per_token must be between 1 and the number of experts")
+        if any(
+            m.weight is not None or m.density is not None or m.layer_range is not None
+            for m in experts
+        ):
+            raise ValueError("MoE experts take prompts, not weight, density or layer_range")
+        if self.t is not None or self.normalize is not None or self.int8_mask is not None:
+            raise ValueError("t, normalize and int8_mask do not apply to MoE")
+        if self.tokenizer_source is not None:
+            raise ValueError("MoE keeps the base model's tokenizer; drop tokenizer_source")
+        # MergeKit skips the prompt checks for random gates only; uniform_random still needs them.
+        if self.gate_mode != "random":
+            gates = self.gate_mode or "hidden"
+            if any(not m.positive_prompts for m in experts):
+                raise ValueError(f"Every expert needs positive_prompts for {gates} gates")
+            prompts = {
+                (tuple(m.positive_prompts), tuple(m.negative_prompts or [])) for m in experts
+            }
+            if len(prompts) == 1:
+                raise ValueError(
+                    "Give each expert different prompts, or the router cannot tell them apart"
+                )
+        return self
+
+
+class MergeProbeResponse(BaseModel):
+    ready: bool
+    needs_consent: bool
+    install_summary: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    venv_path: str
+    version: str

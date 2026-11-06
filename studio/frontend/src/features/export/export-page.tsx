@@ -65,7 +65,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { FolderSearchIcon } from "@/lib/folder-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -83,6 +83,7 @@ import {
   type ExportSummaryRow,
 } from "./components/export-summary-card";
 import { ImageLoraExportCard } from "./components/image-lora-export-card";
+import { MergeModelsCard } from "./components/merge-models-card";
 import { MethodPicker } from "./components/method-picker";
 import { Q4nxConvertCard } from "./components/q4nx-convert-card";
 import { QuantPicker } from "./components/quant-picker";
@@ -390,6 +391,17 @@ export function ExportPage() {
     from: "/export",
   });
   const appliedRunRef = useRef<string | null>(null);
+  const navigate = useNavigate();
+  // A merge lands in outputs like a training run: refresh the list, then select it through ?run=.
+  const handleMerged = useCallback(
+    (run: string) => {
+      refreshCheckpoints()
+        .then(setModels)
+        .catch(() => {});
+      void navigate({ to: "/export", search: (prev) => ({ ...prev, run }) });
+    },
+    [navigate],
+  );
   useEffect(() => {
     if (!preselectRun) {
       appliedRunRef.current = null;
@@ -1210,6 +1222,7 @@ export function ExportPage() {
           <>
             <ImageLoraExportCard preselect={preselectImageLora} />
             {hasNpu && <Q4nxConvertCard />}
+                <MergeModelsCard onMerged={handleMerged} />
           </>
         )}
 
@@ -2266,6 +2279,7 @@ export function ExportPage() {
                 )}
                 <ImageLoraExportCard preselect={preselectImageLora} />
                 {hasNpu && <Q4nxConvertCard />}
+                <MergeModelsCard onMerged={handleMerged} />
               </div>
               <div className="@4xl/export-configure:sticky @4xl/export-configure:top-6 @4xl/export-configure:self-start">
                 <ExportSummaryCard

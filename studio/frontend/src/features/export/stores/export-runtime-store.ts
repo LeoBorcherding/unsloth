@@ -18,6 +18,7 @@ import {
   type ExportStatus,
   type ReapOptions,
 } from "../api/export-api";
+import { newExportOpId } from "../lib/op-id";
 import type { ExportMethod } from "../constants";
 
 // Here, not in export-api: tests swap that module for a stub of its request functions.
@@ -48,13 +49,23 @@ const RECOVERY_MAX_STATUS_FAILS = 5;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// The op this tab's run has in flight: Cancel stops only it, never a merge it is queued behind.
+let inFlightOpId: string | null = null;
+
 /** Settle a phase whose POST hit a tunnel timeout by polling status. A record is ours once
- *  the op is inactive and we saw it active or its seq passed `baseline`. */
-async function recoverViaStatus(
+ *  the op is inactive and we saw it active or its seq passed `baseline`. With `opId` only that
+ *  op's record counts; without one, merges (which run on the same lock) are waited out. Ops
+ *  that are not ours restart the grace window, since ours may be queued behind them. */
+export async function recoverViaStatus(
   baseline: number | null,
   isCurrent: () => boolean,
+  opId?: string,
 ): Promise<{ outputPath: string | null }> {
-  const start = Date.now();
+  const othersActive = (st: ExportStatus) =>
+    opId ? st.active_op_id !== opId : st.active_op_kind === "merge";
+  const othersRecord = (st: ExportStatus) =>
+    opId ? st.last_op_id !== opId : st.last_op_kind === "merge";
+  let start = Date.now();
   let statusFails = 0;
   let sawActive = false;
 
@@ -64,7 +75,7 @@ async function recoverViaStatus(
 
     let st: ExportStatus;
     try {
-      st = await getExportStatus();
+      st = await getExportStatus(opId);
       statusFails = 0;
     } catch {
       statusFails += 1;
@@ -77,13 +88,32 @@ async function recoverViaStatus(
       continue;
     }
 
+    // Our kept record settles it even while a later op (a queued merge) is already running.
+    if (opId && st.last_op_id === opId) {
+      if (st.last_op_status === "success") {
+        return { outputPath: st.last_op_output_path ?? null };
+      }
+      if (st.last_op_status === "cancelled") throw new ExportCanceledError();
+      throw new Error(st.last_op_error || "Export failed");
+    }
+
     if (st.is_export_active) {
-      sawActive = true;
+      if (othersActive(st)) {
+        start = Date.now();
+      } else {
+        sawActive = true;
+      }
       continue;
     }
 
     const seq = st.last_op_seq ?? 0;
-    const isOurs = sawActive || (baseline !== null && seq > baseline);
+    const others = othersRecord(st);
+    if (others && baseline !== null && seq > baseline) {
+      baseline = seq;
+      start = Date.now();
+    }
+    const isOurs =
+      !others && (sawActive || (baseline !== null && seq > baseline));
     if (isOurs) {
       if (st.last_op_status === "success") {
         return { outputPath: st.last_op_output_path ?? null };
@@ -180,6 +210,8 @@ interface ExportRuntimeState {
   isExporting: boolean;
   /** True while this store's runExport drives the run (not a reload-recovered one). */
   ownsRun: boolean;
+  /** op_id of a run recovered from another tab, so its Cancel stops only it. */
+  recoveredOpId: string | null;
   method: ExportMethod | null;
   summary: ExportRunSummary | null;
   quantTotal: number;
@@ -222,6 +254,7 @@ const initialState: ExportRuntimeState = {
   phase: "idle",
   isExporting: false,
   ownsRun: false,
+  recoveredOpId: null,
   method: null,
   summary: null,
   quantTotal: 1,
@@ -297,19 +330,45 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
   applyBackendStatus: (status) =>
     set((state) => {
       const base = { hasHydrated: true, backendActive: status.is_export_active };
+      // A merge holds the export op but is the Merge models card's, not an export run.
+      const merging = status.active_op_kind === "merge";
       // Recover a run started before this store existed (reload or another tab).
-      if (status.is_export_active && !state.isExporting && !state.ownsRun) {
+      if (
+        status.is_export_active &&
+        !merging &&
+        !state.isExporting &&
+        !state.ownsRun
+      ) {
         return {
           ...base,
           isExporting: true,
           phase: "exporting" as const,
           startedAt: state.startedAt ?? Date.now(),
+          recoveredOpId: status.active_op_id ?? null,
         };
+      }
+      if (status.is_export_active && state.isExporting && !state.ownsRun) {
+        // The recovered export ended and a queued merge took the lock: that run is not ours.
+        if (merging) {
+          return {
+            ...base,
+            isExporting: false,
+            phase: "idle" as const,
+            recoveredOpId: null,
+          };
+        }
+        // Its next phase runs under a new op_id: follow it so Cancel still reaches it.
+        const opId = status.active_op_id ?? null;
+        if (opId !== state.recoveredOpId) {
+          return { ...state, ...base, recoveredOpId: opId };
+        }
       }
       if (!status.is_export_active && state.isExporting && !state.ownsRun) {
         // A standalone load_checkpoint must never settle as a finished export.
         const wasExport =
-          !!status.last_op_kind && status.last_op_kind !== "load_checkpoint";
+          !!status.last_op_kind &&
+          status.last_op_kind !== "load_checkpoint" &&
+          status.last_op_kind !== "merge";
         if (status.last_op_status === "error") {
           return {
             ...base,
@@ -356,7 +415,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
     if (!get().isExporting) return;
     set({ cancelRequested: true });
     try {
-      await cancelExport();
+      // A recovered run from a client that sent no op_id still cancels whatever holds the op.
+      const { ownsRun, recoveredOpId } = get();
+      await cancelExport((ownsRun ? inFlightOpId : recoveredOpId) ?? undefined);
     } catch {
       // The in-flight POST still rejects when the worker dies, giving the canceled phase.
     }
@@ -396,11 +457,14 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
 
     // Survive a Cloudflare 524 by settling a recoverable failure through status polls.
     const runRecoverableOp = async (
-      post: () => Promise<ExportOperationResponse>,
+      post: (opId: string) => Promise<ExportOperationResponse>,
     ): Promise<{
       outputPath: string | null;
       details?: ExportOperationResponse["details"];
     }> => {
+      // Status recovery settles only this op's record, not one a merge left behind.
+      const opId = newExportOpId();
+      inFlightOpId = opId;
       let baseline: number | null = null;
       try {
         baseline = (await getExportStatus()).last_op_seq ?? 0;
@@ -408,7 +472,7 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         baseline = null;
       }
       try {
-        const resp = await post();
+        const resp = await post(opId);
         return {
           outputPath: resp.details?.output_path ?? null,
           details: resp.details,
@@ -417,7 +481,7 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         if (!isRecoverableTransportError(err)) throw err;
         set({ reconnecting: true });
         try {
-          return await recoverViaStatus(baseline, isCurrent);
+          return await recoverViaStatus(baseline, isCurrent, opId);
         } finally {
           if (isCurrent()) set({ reconnecting: false });
         }
@@ -430,8 +494,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           throw new Error("No checkpoint selected");
         }
         const checkpointPath = params.checkpointPath;
-        await runRecoverableOp(() =>
+        await runRecoverableOp((op_id) =>
           loadCheckpoint({
+            op_id,
             checkpoint_path: checkpointPath,
             trust_remote_code: params.trustRemoteCode,
             approved_remote_code_fingerprint:
@@ -442,8 +507,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           }),
         );
       } else {
-        await runRecoverableOp(() =>
+        await runRecoverableOp((op_id) =>
           loadCheckpoint({
+            op_id,
             checkpoint_path: params.source,
             load_in_4bit: false,
             trust_remote_code:
@@ -469,8 +535,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           if (!isCurrent()) return;
           set({ quantIndex: i });
           const sel = selections[i];
-          const { outputPath, details: mergedDetails } = await runRecoverableOp(() =>
+          const { outputPath, details: mergedDetails } = await runRecoverableOp((op_id) =>
             exportMerged({
+              op_id,
               save_directory: params.saveDirectory,
               format_type: sel.formatType,
               compressed_method: sel.compressedMethod,
@@ -492,8 +559,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
       } else if (params.exportMethod === "gguf") {
         // Send the whole quant list in ONE call: the model is merged once and every GGUF comes
         // from that single merge (unsloth save_to_gguf loops internally).
-        const { outputPath, details } = await runRecoverableOp(() =>
+        const { outputPath, details } = await runRecoverableOp((op_id) =>
           exportGGUF({
+            op_id,
             save_directory: params.saveDirectory,
             quantization_method: params.quantLevels,
             push_to_hub: pushToHub,
@@ -527,8 +595,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         if (!isCurrent()) return;
         set({ quantIndex: get().quantTotal });
       } else if (params.exportMethod === "lora") {
-        const { outputPath, details: loraDetails } = await runRecoverableOp(() =>
+        const { outputPath, details: loraDetails } = await runRecoverableOp((op_id) =>
           exportLoRA({
+            op_id,
             save_directory: params.saveDirectory,
             push_to_hub: pushToHub,
             repo_id: params.repoId,
