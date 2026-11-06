@@ -468,6 +468,7 @@ import {
 import {
   type OffloadCounts,
   offloadCountsFrom,
+  offloadPool,
   offloadWarning,
 } from "../lib/partial-offload";
 
@@ -3424,7 +3425,10 @@ async function autoLoadSmallestModel(options?: AutoLoadOptions): Promise<{
       message,
       cpuFallbackReason,
       mmprojFallbackReason,
-      offloadWarning(offloadCounts ?? {}),
+      offloadWarning(
+        offloadCounts ?? {},
+        offloadPool(usePlatformStore.getState().appleSilicon),
+      ),
     );
     const options = {
       description: notice.description,

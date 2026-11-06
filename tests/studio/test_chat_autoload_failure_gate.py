@@ -416,7 +416,7 @@ function loadFallbackNotice(
 // Defined beside chat-adapter.ts's imports, outside the sliced region: toasts and resyncs the models a
 // load unloaded to make room, which no scenario here asserts on.
 function reportEvicted(_loadResp: any) {}
-// From ../lib/partial-offload: the auto-load success toast reports a layer split through them.
+// From ../lib/partial-offload: the auto-load success toast reports a layer split through these.
 // Real semantics are tested in studio/frontend/tests/partial-offload.test.ts.
 function offloadCountsFrom(response: any) {
   return { offloaded: response?.offloaded_layers, total: response?.offload_total_layers };
@@ -426,6 +426,9 @@ function offloadWarning(counts: any) {
   if (typeof offloaded !== "number" || typeof total !== "number") return null;
   if (total <= 0 || offloaded >= total) return null;
   return { titleSuffix: ", partly on CPU", description: `${offloaded} of ${total}` };
+}
+function offloadPool(appleSilicon: any) {
+  return appleSilicon ? "unified memory" : null;
 }
 async function prepareHfTokenForUse(token: any) {
   EVENTS.push({ kind: "prepareHfToken" });

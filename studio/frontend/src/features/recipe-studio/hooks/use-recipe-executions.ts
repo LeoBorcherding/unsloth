@@ -6,6 +6,7 @@ import {
   getInferenceStatus,
   loadModel,
   offloadCountsFrom,
+  offloadPool,
   offloadWarning,
   validateModel,
 } from "@/features/chat";
@@ -371,7 +372,10 @@ async function loadLocalModelSelection(
       // biome-ignore lint/style/useNamingConvention: api schema
       tensor_parallel: false,
     });
-    const offloadNotice = offloadWarning(offloadCountsFrom(loadResp));
+    const offloadNotice = offloadWarning(
+      offloadCountsFrom(loadResp),
+      offloadPool(usePlatformStore.getState().appleSilicon),
+    );
     const successOptions = {
       description: offloadNotice?.description,
       duration: offloadNotice ? 8000 : 2000,

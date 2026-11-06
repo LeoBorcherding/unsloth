@@ -9,7 +9,11 @@ import {
 } from "./lib/engine-launch-fields";
 import { useChatArtifactsStore } from "./artifacts/store";
 import { mlxRuntimeStateFrom } from "./lib/mlx-runtime-state";
-import { offloadCountsFrom, offloadWarning } from "./lib/partial-offload";
+import {
+  offloadCountsFrom,
+  offloadPool,
+  offloadWarning,
+} from "./lib/partial-offload";
 import { llamaServerLoadFields } from "./lib/load-request";
 import {
   clearedServerTuningState,
@@ -1938,7 +1942,10 @@ export function SharedComposer({
           saveSpeculativeType(effectiveSpeculativeType);
         }
         persistGpuMemoryModeOnLoad(resp, effectiveGpuMemoryMode);
-        const compareOffload = offloadWarning(offloadCountsFrom(resp));
+        const compareOffload = offloadWarning(
+          offloadCountsFrom(resp),
+          offloadPool(usePlatformStore.getState().appleSilicon),
+        );
         if (compareOffload) {
           toast.warning(
             `${compareModelDisplayName(sel.id)} loaded${compareOffload.titleSuffix}`,

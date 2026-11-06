@@ -8,7 +8,7 @@ import { registerBundlerResolver } from "./helpers/kit.ts";
 
 registerBundlerResolver();
 
-const { offloadCountsFrom, offloadWarning } = await import(
+const { offloadCountsFrom, offloadPool, offloadWarning } = await import(
   "../src/features/chat/lib/partial-offload.ts"
 );
 
@@ -97,6 +97,10 @@ test("every load path reads the response the same way", () => {
       cpu_fallback_reason: null,
       // biome-ignore lint/style/useNamingConvention: api schema
       gpu_backend_unavailable: false,
+      // biome-ignore lint/style/useNamingConvention: api schema
+      gpu_weights_mib: 1228.8,
+      // biome-ignore lint/style/useNamingConvention: api schema
+      host_weights_mib: 2048,
     }),
     {
       offloaded: 38,
@@ -106,7 +110,61 @@ test("every load path reads the response the same way", () => {
       offloadOverridden: false,
       cpuFallbackReason: null,
       gpuBackendUnavailable: false,
+      gpuWeightsMib: 1228.8,
+      hostWeightsMib: 2048,
     },
+  );
+});
+
+test("a split says how much memory the weights take on each side", () => {
+  const split = offloadWarning({
+    offloaded: 9,
+    total: 25,
+    gpuWeightsMib: 1228.8,
+    hostWeightsMib: 2048,
+  });
+  assert.match(
+    split?.description ?? "",
+    /^9 of 25 layers are on the GPU \(1\.2 GiB in VRAM, 2\.0 GiB in RAM\)\. The rest run on CPU/,
+  );
+  const none = offloadWarning({
+    offloaded: 0,
+    total: 60,
+    gpuWeightsMib: 0,
+    hostWeightsMib: 22400,
+  });
+  assert.match(
+    none?.description ?? "",
+    /^None of the 60 layers fit on the GPU \(22 GiB in RAM\), so/,
+  );
+  assert.match(
+    offloadWarning({ offloaded: 9, total: 25, gpuWeightsMib: 40 })
+      ?.description ?? "",
+    /^9 of 25 layers are on the GPU \(40 MiB in VRAM\)\./,
+  );
+});
+
+test("missing or nonsense weight figures leave the notice as it was", () => {
+  for (const weights of [
+    {},
+    { gpuWeightsMib: null, hostWeightsMib: null },
+    { gpuWeightsMib: 0, hostWeightsMib: 0 },
+    { gpuWeightsMib: -5, hostWeightsMib: Number.NaN },
+  ]) {
+    assert.match(
+      offloadWarning({ offloaded: 38, total: 60, ...weights })?.description ??
+        "",
+      /^38 of 60 layers are on the GPU\. The rest/,
+    );
+  }
+  assert.equal(
+    offloadWarning({
+      offloaded: 60,
+      total: 60,
+      gpuWeightsMib: 4096,
+      hostWeightsMib: 300,
+    }),
+    null,
   );
 });
 
@@ -199,4 +257,21 @@ test("the advice does not promise that a smaller quantization fits", () => {
     assert.match(text, /smaller quantization or a shorter context may/);
     assert.doesNotMatch(text, /would fit entirely|would leave room/);
   }
+});
+
+test("on Apple Silicon the notice names one unified pool, as the placement row does", () => {
+  const counts = {
+    offloaded: 54,
+    total: 66,
+    gpuWeightsMib: 19276.2,
+    hostWeightsMib: 4840.4,
+  };
+  const unified = offloadWarning(counts, offloadPool(true))?.description ?? "";
+  assert.match(unified, /^54 of 66 layers are on the GPU \(24 GiB in unified memory\)\./);
+  assert.doesNotMatch(unified, /VRAM|in RAM/);
+  assert.match(
+    offloadWarning(counts, offloadPool(false))?.description ?? "",
+    /^54 of 66 layers are on the GPU \(19 GiB in VRAM, 4\.7 GiB in RAM\)\./,
+  );
+  assert.equal(offloadPool(false), null);
 });

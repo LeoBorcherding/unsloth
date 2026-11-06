@@ -48,6 +48,7 @@ import {
 import {
   type OffloadCounts,
   offloadCountsFrom,
+  offloadPool,
   offloadWarning,
 } from "../lib/partial-offload";
 import { isSettingsRouteAbsent } from "@/features/settings/api/settings-route-absent";
@@ -3404,7 +3405,10 @@ export function useChatModelRuntime() {
             `${toastDisplayName} loaded`,
             cpuFallbackReason,
             mmprojFallbackReason,
-            offloadWarning(offloadCounts),
+            offloadWarning(
+              offloadCounts,
+              offloadPool(usePlatformStore.getState().appleSilicon),
+            ),
           );
           const loadedTitle = notice.title;
           const loadedDescription = notice.description;
