@@ -32,6 +32,7 @@ test("TIES sends weights, densities and the base", () => {
     base_model: "org/base",
     t: null,
     dtype: "bfloat16",
+    tokenizer_source: "base",
     output_name: "merged-model",
     cuda: false,
   });
@@ -88,4 +89,22 @@ test("the merge is blocked where the backend would refuse it", () => {
   );
   assert.match(block({ outputName: "../x" }) ?? "", /plain folder name/);
   assert.match(block({ outputName: ".hidden" }) ?? "", /plain folder name/);
+});
+
+test("tokenizer source follows the setting, and linear only sends the union", () => {
+  const ties = mergeRequest({
+    ...DEFAULT_MERGE_SETTINGS,
+    rows: [
+      { model: "a", weight: 0.5, density: 0.5 },
+      { model: "b", weight: 0.5, density: 0.5 },
+    ],
+    baseModel: "base",
+  });
+  assert.equal(ties.tokenizer_source, "base");
+  const linear = { ...DEFAULT_MERGE_SETTINGS, method: "linear" as const };
+  assert.equal(mergeRequest(linear).tokenizer_source, null);
+  assert.equal(
+    mergeRequest({ ...linear, tokenizerSource: "union" }).tokenizer_source,
+    "union",
+  );
 });

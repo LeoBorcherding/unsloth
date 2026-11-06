@@ -30,6 +30,7 @@ import {
   DEFAULT_MERGE_SETTINGS,
   MERGE_DTYPES,
   MERGE_METHODS,
+  MERGE_TOKENIZERS,
   type MergeSettings,
   mergeBlockReason,
   mergeMethodInfo,
@@ -210,6 +211,31 @@ export function MergeModelsCard({
           </div>
         </div>
         <p className="-mt-3 text-xs text-muted-foreground">{info.hint}</p>
+
+        <div className="flex flex-col gap-2">
+          <Label>Tokenizer</Label>
+          <Select
+            value={s.tokenizerSource}
+            onValueChange={(v) =>
+              update({
+                tokenizerSource: v as MergeSettings["tokenizerSource"],
+              })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MERGE_TOKENIZERS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.value === "base" && s.method === "linear"
+                    ? "Models' own (vocabularies must match)"
+                    : o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         {info.base && (
           <div className="flex flex-col gap-2">

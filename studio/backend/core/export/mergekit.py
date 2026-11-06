@@ -127,6 +127,8 @@ def build_config(spec: dict) -> dict:
             parameters[key] = spec[key]
     if parameters:
         config["parameters"] = parameters
+    if spec.get("tokenizer_source"):
+        config["tokenizer_source"] = spec["tokenizer_source"]
     config["dtype"] = spec["dtype"]
     return config
 

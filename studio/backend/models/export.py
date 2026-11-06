@@ -479,6 +479,11 @@ class MergeModelsRequest(BaseModel):
     normalize: Optional[bool] = None
     int8_mask: Optional[bool] = None
     dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    tokenizer_source: Optional[str] = Field(
+        None,
+        description = "Where the merged vocabulary comes from: base, union or one of the models. "
+        "Needed when the models' vocabularies differ",
+    )
     random_seed: Optional[int] = Field(None, description = "Seeds DARE's random pruning")
     output_name: str = Field(..., description = "Folder name for the merged model under outputs")
     cuda: bool = Field(False, description = "Run the merge arithmetic on the GPU")
@@ -540,6 +545,11 @@ class MergeModelsRequest(BaseModel):
             raise ValueError("int8_mask applies to TIES, DARE TIES and task arithmetic only")
         if self.normalize is not None and method == "slerp":
             raise ValueError("normalize does not apply to SLERP")
+        source = self.tokenizer_source
+        if source == "base" and not base:
+            raise ValueError("tokenizer_source base needs a base_model")
+        if source not in (None, "base", "union", base, *names):
+            raise ValueError("tokenizer_source must be base, union or one of the merged models")
         return self
 
 

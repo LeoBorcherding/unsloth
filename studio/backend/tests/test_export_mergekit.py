@@ -506,3 +506,52 @@ def test_route_authorizes_hub_models_and_reports_the_run(monkeypatch):
     assert "hf_token" not in spec and spec["output_name"] == "m"
     assert kwargs["install_missing_dependencies"] is True
     assert response.details == {"output_path": "/x/outputs/m", "run": "m"}
+
+
+def test_route_refuses_a_share_path_before_touching_it(monkeypatch):
+    from fastapi import HTTPException
+    from core.training import account_jobs
+    from routes import export as export_routes
+
+    probed = []
+    monkeypatch.setattr(account_jobs, "managed_account", lambda: True)
+    monkeypatch.setattr(Path, "is_dir", lambda self: probed.append(str(self)) or False)
+    monkeypatch.setattr(export_routes.account_access, "require_model_allowed", lambda name: None)
+    monkeypatch.setattr(export_routes.account_access, "authorize_download", lambda *args: None)
+    monkeypatch.setattr(export_routes, "_resolve_export_hf_token", lambda token, allow_ambient: None)
+    request = MergeModelsRequest(
+        method = "ties",
+        base_model = "org/base",
+        models = [{"model": "//host/share/model", "weight": 1}],
+        output_name = "m",
+        hf_token = "hf_x",
+    )
+    with pytest.raises(HTTPException):
+        asyncio.run(export_routes.merge_models(request, "subject", allow_ambient = True))
+    assert not any("share" in path for path in probed)
+
+
+def test_tokenizer_source_is_written_when_vocabularies_differ():
+    spec = MergeModelsRequest(
+        method = "ties",
+        base_model = "mistralai/Mistral-7B-v0.1",
+        models = [
+            {"model": "OpenPipe/mistral-ft-optimized-1218", "density": 0.5, "weight": 0.5},
+            {"model": "mlabonne/NeuralHermes-2.5-Mistral-7B", "density": 0.5, "weight": 0.3},
+        ],
+        tokenizer_source = "base",
+        output_name = "m",
+    ).model_dump()
+    assert mergekit.build_config(spec)["tokenizer_source"] == "base"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"method": "linear", "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}], "tokenizer_source": "base"},
+        {"method": "linear", "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}], "tokenizer_source": "c"},
+    ],
+)
+def test_tokenizer_source_must_name_a_base_union_or_merged_model(fields):
+    with pytest.raises(ValueError, match = "tokenizer_source"):
+        MergeModelsRequest(**fields, output_name = "m")

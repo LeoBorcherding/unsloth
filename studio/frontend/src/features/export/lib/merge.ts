@@ -52,6 +52,11 @@ export const MERGE_METHODS: readonly MergeMethodInfo[] = [
 
 export const MERGE_DTYPES = ["bfloat16", "float16", "float32"] as const;
 
+export const MERGE_TOKENIZERS = [
+  { value: "base", label: "Base model's" },
+  { value: "union", label: "Union of all models" },
+] as const;
+
 export interface MergeRow {
   model: string;
   weight: number;
@@ -64,6 +69,7 @@ export interface MergeSettings {
   baseModel: string;
   t: number;
   dtype: (typeof MERGE_DTYPES)[number];
+  tokenizerSource: (typeof MERGE_TOKENIZERS)[number]["value"];
   outputName: string;
   cuda: boolean;
 }
@@ -77,6 +83,7 @@ export const DEFAULT_MERGE_SETTINGS: MergeSettings = {
   baseModel: "",
   t: 0.5,
   dtype: "bfloat16",
+  tokenizerSource: "base",
   outputName: "merged-model",
   cuda: false,
 };
@@ -141,6 +148,11 @@ export function mergeRequest(
         : null,
     t: slerp ? s.t : null,
     dtype: s.dtype,
+    // Linear has no base, so its vocabularies must match unless the union is asked for.
+    tokenizer_source:
+      s.method === "linear" && s.tokenizerSource === "base"
+        ? null
+        : s.tokenizerSource,
     output_name: s.outputName.trim(),
     cuda: s.cuda,
   };

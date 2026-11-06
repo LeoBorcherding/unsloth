@@ -319,6 +319,8 @@ export interface MergeModelsParams {
   base_model: string | null;
   t?: number | null;
   dtype: "bfloat16" | "float16" | "float32";
+  /** Where the merged vocabulary comes from; MergeKit refuses models whose vocabularies differ without it. */
+  tokenizer_source?: string | null;
   /** Folder name under outputs; the merged model then shows up as a training run here. */
   output_name: string;
   cuda?: boolean;

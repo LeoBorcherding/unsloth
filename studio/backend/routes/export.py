@@ -786,6 +786,8 @@ async def merge_models(
     for name in dict.fromkeys([*(m.model for m in request.models), request.base_model]):
         if not name:
             continue
+        # Rejects share and device paths before is_dir() can touch them.
+        validate_job_paths({"base_model": name})
         if Path(name).expanduser().is_dir():
             # A managed account may only merge folders inside its own workspace.
             account_path(name)
