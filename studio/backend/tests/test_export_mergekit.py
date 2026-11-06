@@ -664,3 +664,24 @@ def test_non_finite_weights_and_t_are_refused(bad):
             t = bad,
             output_name = "m",
         )
+
+
+def test_an_ops_record_outlives_a_later_merge_for_status_by_op_id(orchestrator, monkeypatch):
+    _mark_installed()
+
+    def fake_stream(argv, env, log, on_spawn):
+        out = Path(argv[5])
+        out.mkdir(parents = True)
+        (out / "config.json").write_text("{}", encoding = "utf-8")
+        return 0
+
+    monkeypatch.setattr(mergekit, "_stream", fake_stream)
+    assert orchestrator._begin_op("export-1", kind = "export_gguf")
+    orchestrator._record_op_finished(True, "", "/out/gguf")
+    orchestrator._end_op()
+    orchestrator._active_op_kind = None
+    ok, _message, _path = orchestrator.merge_models(dict(SPEC), op_id = "merge-1")
+    assert ok
+    assert orchestrator.get_last_op()["op_id"] == "merge-1"
+    assert orchestrator.get_last_op("export-1")["output_path"] == "/out/gguf"
+    assert orchestrator.get_last_op("gone")["op_id"] == "merge-1"

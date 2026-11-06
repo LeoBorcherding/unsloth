@@ -28,6 +28,7 @@ import {
   mergeModels,
 } from "../api/export-api";
 import { getExportLogLineClass } from "../lib/log-style";
+import { newExportOpId } from "../lib/op-id";
 import { recoverViaStatus } from "../stores/export-runtime-store";
 import {
   DEFAULT_MERGE_SETTINGS,
@@ -88,7 +89,7 @@ export function MergeModelsCard({
         if (cursor === null) {
           // Queued behind another export, its lines are not ours: wait until this op starts,
           // then read from its run start (the merge clears the buffer as it begins).
-          const st = await getExportStatus();
+          const st = await getExportStatus(opId);
           if (st.active_op_id === opId || st.last_op_id === opId) {
             const page = await fetchExportLogs(null);
             cursor = page.cursor;
@@ -116,10 +117,7 @@ export function MergeModelsCard({
     setLogs([]);
     setResult(null);
     let poller: Promise<void> | null = null;
-    // getRandomValues, not randomUUID: Unsloth on a LAN address is not a secure context.
-    const opId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
-      b.toString(16).padStart(2, "0"),
-    ).join("");
+    const opId = newExportOpId();
     opIdRef.current = opId;
     try {
       poller = pollLogs(opId);

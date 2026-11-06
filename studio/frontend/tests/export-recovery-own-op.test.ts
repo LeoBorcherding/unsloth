@@ -88,3 +88,16 @@ test("a running merge is not adopted as an export run, nor settled as one", () =
   assert.notEqual(useExportRuntimeStore.getState().phase, "success");
   useExportRuntimeStore.getState().reset();
 });
+
+test("an export settles on its own record even after a merge finished over it", async () => {
+  stub.resetStub();
+  // Polls pass the op id, so the server answers with this export's kept record.
+  stub.responses.set("getExportStatus", (opId?: string) =>
+    opId === "export-1"
+      ? done(4, "export_gguf", "export-1", "/out/gguf")
+      : done(5, "merge", "merge-1", "/out/merged"),
+  );
+  const result = await recoverViaStatus(3, () => true, "export-1");
+  assert.deepEqual(result, { outputPath: "/out/gguf" });
+  assert.ok(stub.calls.every((c) => c.args[0] === "export-1"));
+});

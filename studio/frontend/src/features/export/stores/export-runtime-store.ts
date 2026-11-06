@@ -18,6 +18,7 @@ import {
   type ExportStatus,
   type ReapOptions,
 } from "../api/export-api";
+import { newExportOpId } from "../lib/op-id";
 import type { ExportMethod } from "../constants";
 
 // Here, not in export-api: tests swap that module for a stub of its request functions.
@@ -71,7 +72,7 @@ export async function recoverViaStatus(
 
     let st: ExportStatus;
     try {
-      st = await getExportStatus();
+      st = await getExportStatus(opId);
       statusFails = 0;
     } catch {
       statusFails += 1;
@@ -422,11 +423,13 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
 
     // Survive a Cloudflare 524 by settling a recoverable failure through status polls.
     const runRecoverableOp = async (
-      post: () => Promise<ExportOperationResponse>,
+      post: (opId: string) => Promise<ExportOperationResponse>,
     ): Promise<{
       outputPath: string | null;
       details?: ExportOperationResponse["details"];
     }> => {
+      // Status recovery settles only this op's record, not one a merge left behind.
+      const opId = newExportOpId();
       let baseline: number | null = null;
       try {
         baseline = (await getExportStatus()).last_op_seq ?? 0;
@@ -434,7 +437,7 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         baseline = null;
       }
       try {
-        const resp = await post();
+        const resp = await post(opId);
         return {
           outputPath: resp.details?.output_path ?? null,
           details: resp.details,
@@ -443,7 +446,7 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         if (!isRecoverableTransportError(err)) throw err;
         set({ reconnecting: true });
         try {
-          return await recoverViaStatus(baseline, isCurrent);
+          return await recoverViaStatus(baseline, isCurrent, opId);
         } finally {
           if (isCurrent()) set({ reconnecting: false });
         }
@@ -456,8 +459,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           throw new Error("No checkpoint selected");
         }
         const checkpointPath = params.checkpointPath;
-        await runRecoverableOp(() =>
+        await runRecoverableOp((op_id) =>
           loadCheckpoint({
+            op_id,
             checkpoint_path: checkpointPath,
             trust_remote_code: params.trustRemoteCode,
             approved_remote_code_fingerprint:
@@ -468,8 +472,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           }),
         );
       } else {
-        await runRecoverableOp(() =>
+        await runRecoverableOp((op_id) =>
           loadCheckpoint({
+            op_id,
             checkpoint_path: params.source,
             load_in_4bit: false,
             trust_remote_code:
@@ -495,8 +500,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
           if (!isCurrent()) return;
           set({ quantIndex: i });
           const sel = selections[i];
-          const { outputPath, details: mergedDetails } = await runRecoverableOp(() =>
+          const { outputPath, details: mergedDetails } = await runRecoverableOp((op_id) =>
             exportMerged({
+              op_id,
               save_directory: params.saveDirectory,
               format_type: sel.formatType,
               compressed_method: sel.compressedMethod,
@@ -518,8 +524,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
       } else if (params.exportMethod === "gguf") {
         // Send the whole quant list in ONE call: the model is merged once and every GGUF comes
         // from that single merge (unsloth save_to_gguf loops internally).
-        const { outputPath, details } = await runRecoverableOp(() =>
+        const { outputPath, details } = await runRecoverableOp((op_id) =>
           exportGGUF({
+            op_id,
             save_directory: params.saveDirectory,
             quantization_method: params.quantLevels,
             push_to_hub: pushToHub,
@@ -553,8 +560,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
         if (!isCurrent()) return;
         set({ quantIndex: get().quantTotal });
       } else if (params.exportMethod === "lora") {
-        const { outputPath, details: loraDetails } = await runRecoverableOp(() =>
+        const { outputPath, details: loraDetails } = await runRecoverableOp((op_id) =>
           exportLoRA({
+            op_id,
             save_directory: params.saveDirectory,
             push_to_hub: pushToHub,
             repo_id: params.repoId,

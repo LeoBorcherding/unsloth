@@ -17,7 +17,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -239,8 +239,14 @@ async def cancel_export(
 
 
 @router.get("/status", response_model = ExportStatusResponse)
-async def get_export_status(current_subject: str = Depends(get_current_subject)):
-    """Get export backend status (loaded checkpoint, model type, PEFT flag)."""
+async def get_export_status(
+    current_subject: str = Depends(get_current_subject),
+    op_id: Annotated[Optional[str], Query(max_length = 128)] = None,
+):
+    """Get export backend status (loaded checkpoint, model type, PEFT flag).
+
+    With ``op_id`` the last_op fields describe that op while its record is kept, so a client cut
+    off mid-op still finds its result after another op has finished."""
     if job_is_foreign(get_export_backend()):
         return ExportStatusResponse(
             current_checkpoint = None,
@@ -251,7 +257,7 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
         )
     try:
         backend = get_export_backend()
-        last_op = backend.get_last_op()
+        last_op = backend.get_last_op(op_id)
         # Relativise the recovered path like the per-op POST response, so both routes show the same path.
         last_op_output_path = None
         if last_op and last_op.get("output_path"):

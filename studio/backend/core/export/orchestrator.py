@@ -95,6 +95,9 @@ class ExportOrchestrator:
         self._active_op_id: Optional[str] = None
         self._cancelled_op_ids: set = set()
         self._last_op: Optional[Dict[str, Any]] = None
+        # Recent records by client op_id: a merge queued behind an export would otherwise overwrite
+        # the export's record before a client cut off by a tunnel timeout reads it.
+        self._ops_by_id: Dict[str, Dict[str, Any]] = {}
 
         atexit.register(self._cleanup)
         logger.info("ExportOrchestrator initialized (subprocess mode)")
@@ -108,6 +111,7 @@ class ExportOrchestrator:
         self.is_vision = self.is_peft = False
         self.decision = None
         self._last_op = None
+        self._ops_by_id = {}
         self.clear_logs()
 
     def _append_log(self, entry: Dict[str, Any]) -> None:
@@ -159,12 +163,22 @@ class ExportOrchestrator:
     def was_cancelled(self) -> bool:
         return self._cancel_requested
 
-    def _record_op_finished(self, success: bool, message: str, output_path: Optional[str]) -> None:
+    def _record_op_finished(
+        self,
+        success: bool,
+        message: str,
+        output_path: Optional[str],
+        published: bool = False,
+    ) -> None:
         """Called before ``_export_active`` clears, so any read that sees the op inactive sees its
         result."""
         with self._op_lock:
             self._op_seq += 1
-            status = "cancelled" if self._cancel_requested else ("success" if success else "error")
+            # A published output is a success even if a cancel landed after it.
+            if published:
+                status = "success"
+            else:
+                status = "cancelled" if self._cancel_requested else ("success" if success else "error")
             self._last_op = {
                 "seq": self._op_seq,
                 "kind": self._active_op_kind,
@@ -173,11 +187,18 @@ class ExportOrchestrator:
                 "output_path": output_path if success else None,
                 "error": None if success else (message or None),
             }
+            if self._active_op_id is not None:
+                if len(self._ops_by_id) >= 64:
+                    self._ops_by_id.pop(next(iter(self._ops_by_id)))
+                self._ops_by_id[self._active_op_id] = self._last_op
 
-    @job_read(lambda self: None)
-    def get_last_op(self) -> Optional[Dict[str, Any]]:
+    @job_read(lambda self, op_id = None: None)
+    def get_last_op(self, op_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """The last finished op, or with ``op_id`` that op's record while it is still kept."""
         with self._op_lock:
-            return dict(self._last_op) if self._last_op is not None else None
+            record = self._ops_by_id.get(op_id) if op_id else None
+            record = record or self._last_op
+            return dict(record) if record is not None else None
 
     @job_read(lambda self: None)
     def get_active_op_kind(self) -> Optional[str]:
@@ -857,9 +878,6 @@ class ExportOrchestrator:
                     cancelled = self.was_cancelled,
                 )
                 op_success, op_message, op_output_path = True, "Models merged", str(out_dir)
-                with self._op_lock:
-                    # Published already: a cancel landing now must not record it as cancelled.
-                    self._cancel_requested = False
                 return op_success, op_message, op_output_path
             except Exception as exc:
                 op_message = OP_CANCELLED if self._cancel_requested else str(exc)
@@ -867,7 +885,9 @@ class ExportOrchestrator:
                 return False, op_message, None
             finally:
                 self._merge_proc = None
-                self._record_op_finished(op_success, op_message, op_output_path)
+                self._record_op_finished(
+                    op_success, op_message, op_output_path, published = op_success
+                )
                 self._end_op()
                 self._active_op_kind = None
                 self._export_active = False

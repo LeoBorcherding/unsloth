@@ -216,6 +216,7 @@ export async function loadCheckpoint(params: {
   trust_remote_code?: boolean;
   approved_remote_code_fingerprint?: string | null;
   hf_token?: string | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/load-checkpoint", {
     method: "POST",
@@ -236,6 +237,7 @@ export async function exportMerged(params: {
   private?: boolean;
   install_missing_dependencies?: boolean;
   reap?: ReapOptions | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/merged", {
     method: "POST",
@@ -274,6 +276,7 @@ export async function exportGGUF(params: {
   /** Also convert a Q4_0/Q4_1/Q4_K_M GGUF to Q4NX for the AMD NPU, into <save_directory>/npu-q4nx. */
   npu_q4nx?: boolean;
   reap?: ReapOptions | null;
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/gguf", {
     method: "POST",
@@ -377,6 +380,7 @@ export async function exportLoRA(params: {
   gguf?: boolean;
   gguf_outtype?: string;
   adapter_format?: "mlx" | "peft";
+  op_id?: string | null;
 }): Promise<ExportOperationResponse> {
   const response = await authFetch("/api/export/export/lora", {
     method: "POST",
@@ -428,8 +432,13 @@ export interface ExportStatus {
 }
 
 /** Used on mount to show an export started in another tab or before a reload. */
-export async function getExportStatus(): Promise<ExportStatus> {
-  const response = await authFetch("/api/export/status");
+/** With `opId` the last_op fields describe that op while the server still keeps its record. */
+export async function getExportStatus(opId?: string): Promise<ExportStatus> {
+  const response = await authFetch(
+    opId
+      ? `/api/export/status?op_id=${encodeURIComponent(opId)}`
+      : "/api/export/status",
+  );
   return parseJson<ExportStatus>(response);
 }
 // ───────────────────────────────────────────────────────────────────── Live export log stream
