@@ -641,8 +641,7 @@ export const useTrainingRuntimeStore = create<TrainingRuntimeStore>()(
               : state.currentEpoch,
           elapsedSeconds: payload.elapsed_seconds,
           etaSeconds: payload.eta_seconds,
-          sessionStartStep:
-            payload.session_start_step ?? state.sessionStartStep,
+          sessionStartStep: payload.session_start_step ?? state.sessionStartStep,
           currentGradNorm,
           currentNumTokens: payload.num_tokens,
           firstStepReceived: state.firstStepReceived || step > 0,

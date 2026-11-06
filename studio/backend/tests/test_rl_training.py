@@ -13,8 +13,8 @@ from pydantic import ValidationError
 from core.training.rl import (
     build_rl_trainer,
     install_fsdp_import_stub,
-    render_prompts_without_thinking,
     format_rl_dataset,
+    render_grpo_prompts,
     resolve_role_columns,
     rl_lengths,
     rl_log_metrics,
@@ -373,14 +373,14 @@ class _ThinkingTokenizer:
 
 def test_thinking_switch_renders_prompts_only_for_templates_that_have_one():
     ds = Dataset.from_list([{"prompt": [{"role": "user", "content": "2+2?"}], "answer": "4"}])
-    out, rendered = render_prompts_without_thinking(ds, _ThinkingTokenizer(), False)
+    out, rendered = render_grpo_prompts(ds, _ThinkingTokenizer(), False)
     assert rendered and out[0]["prompt"] == "<user>2+2?<assistant><think></think>"
     assert out[0]["answer"] == "4"
 
     class Plain:
         chat_template = "{{ messages }}"
 
-    same, rendered = render_prompts_without_thinking(ds, Plain(), False)
+    same, rendered = render_grpo_prompts(ds, Plain(), False)
     assert not rendered and same[0]["prompt"] == [{"role": "user", "content": "2+2?"}]
 
 

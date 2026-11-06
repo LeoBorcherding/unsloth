@@ -27,7 +27,9 @@ export function parseYamlConfig(text: string): BackendModelConfig {
   }
 
   const raw = parsed as Record<string, unknown>;
-  const unknownKeys = Object.keys(raw).filter((k) => !EXPECTED_TOP_KEYS.has(k));
+  const unknownKeys = Object.keys(raw).filter(
+    (k) => !EXPECTED_TOP_KEYS.has(k),
+  );
   if (unknownKeys.length > 0) {
     console.warn("Ignored unknown YAML keys:", unknownKeys.join(", "));
   }
@@ -39,13 +41,13 @@ export function parseYamlConfig(text: string): BackendModelConfig {
     typeof rawTraining === "object" &&
     !Array.isArray(rawTraining);
   let trainingObj: Record<string, unknown>;
-  if (isPlainTrainingObject) {
+  if (!isPlainTrainingObject) {
+    trainingObj = { vision_image_size: null };
+  } else {
     trainingObj = { ...(rawTraining as Record<string, unknown>) };
     if (!Object.hasOwn(trainingObj, "vision_image_size")) {
       trainingObj.vision_image_size = null;
     }
-  } else {
-    trainingObj = { vision_image_size: null };
   }
 
   return {

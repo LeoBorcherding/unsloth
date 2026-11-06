@@ -232,9 +232,7 @@ function ImportRewardDialog({
                   variant="secondary"
                   className={cn("ml-2", REWARD_TAG_CLASS)}
                 >
-                  {head.kind === "python"
-                    ? t("rl.rewards.kindPython")
-                    : t("rl.rewards.kindRule")}
+                  {t("rl.rewards.kindRule")}
                 </Badge>
               </p>
               {head.description && (
