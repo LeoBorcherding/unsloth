@@ -463,6 +463,19 @@ class MergeModelSpec(BaseModel):
     layer_range: Optional[Tuple[int, int]] = Field(
         None, description = "SLERP only: the [start, end) layers taken from this model"
     )
+    positive_prompts: Optional[List[str]] = Field(
+        None, description = "MoE only: prompts the router should send to this expert"
+    )
+    negative_prompts: Optional[List[str]] = Field(
+        None, description = "MoE only: prompts the router should keep away from this expert"
+    )
+
+    @field_validator("positive_prompts", "negative_prompts")
+    @classmethod
+    def _strip_prompts(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return None
+        return [p.strip() for p in v if p.strip()] or None
 
 
 class MergeGradientStep(BaseModel):
@@ -479,11 +492,14 @@ class MergeModelsRequest(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan = False)
 
-    method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic"]
-    models: List[MergeModelSpec] = Field(..., min_length = 1)
+    method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic", "moe"]
+    models: List[MergeModelSpec] = Field(
+        ..., min_length = 1, description = "The models to merge; for MoE, the experts"
+    )
     base_model: Optional[str] = Field(
         None,
-        description = "Required for SLERP (one of the two models), TIES, DARE TIES and task arithmetic",
+        description = "Required for SLERP (one of the two models), TIES, DARE TIES, task arithmetic "
+        "and MoE (attention, embeddings and tokenizer come from it; it may also be an expert)",
     )
     t: Optional[Union[float, List[MergeGradientStep]]] = Field(
         None, description = "SLERP interpolation factor, 0 = base model"
@@ -496,7 +512,19 @@ class MergeModelsRequest(BaseModel):
         description = "Where the merged vocabulary comes from: base, union or one of the models. "
         "Needed when the models' vocabularies differ",
     )
-    random_seed: Optional[int] = Field(None, description = "Seeds DARE's random pruning")
+    random_seed: Optional[int] = Field(
+        None, description = "Seeds DARE's random pruning and MoE's random gates"
+    )
+    gate_mode: Optional[Literal["hidden", "cheap_embed", "random", "uniform_random"]] = Field(
+        None, description = "MoE only: how router weights are initialized (default hidden)"
+    )
+    experts_per_token: Optional[int] = Field(
+        None, description = "MoE only: experts active per token (default 2)"
+    )
+    # MergeKit's "qwen" output (Qwen2 MoE) needs a shared expert, which this request doesn't carry.
+    architecture: Optional[Literal["mixtral", "qwen3", "deepseek"]] = Field(
+        None, description = "MoE only: output architecture; MergeKit picks one when unset"
+    )
     output_name: str = Field(..., description = "Folder name for the merged model under outputs")
     cuda: bool = Field(False, description = "Run the merge arithmetic on the GPU")
     hf_token: Optional[str] = Field(None, description = "Hugging Face token for gated repos")
@@ -525,6 +553,12 @@ class MergeModelsRequest(BaseModel):
         names = [m.model for m in models]
         if len(set(names)) != len(names):
             raise ValueError("Each model may appear only once")
+        if method == "moe":
+            return self._check_moe()
+        if self.gate_mode or self.experts_per_token is not None or self.architecture:
+            raise ValueError("gate_mode, experts_per_token and architecture apply to MoE only")
+        if any(m.positive_prompts or m.negative_prompts for m in models):
+            raise ValueError("Prompts apply to MoE experts only")
         if method == "slerp":
             if len(models) != 2:
                 raise ValueError("SLERP merges exactly two models")
@@ -562,6 +596,39 @@ class MergeModelsRequest(BaseModel):
             raise ValueError("tokenizer_source base needs a base_model")
         if source not in (None, "base", "union", base, *names):
             raise ValueError("tokenizer_source must be base, union or one of the merged models")
+        return self
+
+    def _check_moe(self):
+        # Mirrors mergekit.moe.config.is_bad_config, so a refused config fails here, not mid-run.
+        experts = self.models
+        if len(experts) < 2:
+            raise ValueError("MoE needs at least two experts")
+        if not self.base_model:
+            raise ValueError("MoE needs a base_model")
+        per_token = 2 if self.experts_per_token is None else self.experts_per_token
+        if not 1 <= per_token <= len(experts):
+            raise ValueError("experts_per_token must be between 1 and the number of experts")
+        if any(
+            m.weight is not None or m.density is not None or m.layer_range is not None
+            for m in experts
+        ):
+            raise ValueError("MoE experts take prompts, not weight, density or layer_range")
+        if self.t is not None or self.normalize is not None or self.int8_mask is not None:
+            raise ValueError("t, normalize and int8_mask do not apply to MoE")
+        if self.tokenizer_source is not None:
+            raise ValueError("MoE keeps the base model's tokenizer; drop tokenizer_source")
+        # MergeKit skips the prompt checks for random gates only; uniform_random still needs them.
+        if self.gate_mode != "random":
+            gates = self.gate_mode or "hidden"
+            if any(not m.positive_prompts for m in experts):
+                raise ValueError(f"Every expert needs positive_prompts for {gates} gates")
+            prompts = {
+                (tuple(m.positive_prompts), tuple(m.negative_prompts or [])) for m in experts
+            }
+            if len(prompts) == 1:
+                raise ValueError(
+                    "Give each expert different prompts, or the router cannot tell them apart"
+                )
         return self
 
 

@@ -308,12 +308,24 @@ export type MergeMethod =
   | "slerp"
   | "ties"
   | "dare_ties"
-  | "task_arithmetic";
+  | "task_arithmetic"
+  | "moe";
+
+export type MergeGateMode =
+  | "hidden"
+  | "cheap_embed"
+  | "random"
+  | "uniform_random";
+
+export type MoeArchitecture = "mixtral" | "qwen3" | "deepseek";
 
 export interface MergeModelSpec {
   model: string;
   weight?: number | null;
   density?: number | null;
+  /** MoE experts only: prompts the router should send to this expert. */
+  positive_prompts?: string[] | null;
+  negative_prompts?: string[] | null;
 }
 
 export interface MergeModelsParams {
@@ -324,6 +336,10 @@ export interface MergeModelsParams {
   dtype: "bfloat16" | "float16" | "float32";
   /** Where the merged vocabulary comes from; MergeKit refuses models whose vocabularies differ without it. */
   tokenizer_source?: string | null;
+  /** MoE only; the backend defaults to hidden gates, 2 experts per token and MergeKit's pick of architecture. */
+  gate_mode?: MergeGateMode | null;
+  experts_per_token?: number | null;
+  architecture?: MoeArchitecture | null;
   /** Folder name under outputs; the merged model then shows up as a training run here. */
   output_name: string;
   cuda?: boolean;

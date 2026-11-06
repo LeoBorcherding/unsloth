@@ -5,7 +5,7 @@
 installer, merges through the export orchestrator (the code the /api/export/merge route calls),
 then loads the result and every parent with transformers and prints a greedy completion and a
 perplexity for each. Exits 1 when the merge fails, its logits are NaN/inf, or its perplexity is
-over --max-ratio times the worse parent's.
+over --max-ratio times the worse parent's (for MoE, the base's).
 
 Run from ``studio/backend`` with the Unsloth Studio venv's python, e.g.::
 
@@ -13,6 +13,11 @@ Run from ``studio/backend`` with the Unsloth Studio venv's python, e.g.::
         --base mistralai/Mistral-7B-v0.1 \\
         --models OpenPipe/mistral-ft-optimized-1218 mlabonne/NeuralHermes-2.5-Mistral-7B \\
         --weights 0.5 0.3 --density 0.5 --cuda
+
+    python tests/manual/mergekit_merge_check.py --method moe \
+        --base Qwen/Qwen3-4B-Instruct-2507 \
+        --models Qwen/Qwen3-4B-Instruct-2507 Qwen/Qwen3-4B-Thinking-2507 \
+        --prompts "chat, explain, tell me, write" "reason, math, solve, prove, step by step" --cuda
 
 Set UNSLOTH_STUDIO_HOME to keep the venv and the merged model out of the default Studio home.
 """
@@ -39,6 +44,8 @@ TEXT = (
 def _spec(args) -> dict:
     from models import MergeModelsRequest
 
+    if args.method == "moe":
+        return _moe_spec(args)
     weights = args.weights or ([None] * len(args.models))
     densities = args.density or []
     if len(densities) == 1:
@@ -59,6 +66,34 @@ def _spec(args) -> dict:
         dtype = args.dtype,
         random_seed = args.seed,
         output_name = args.output_name or f"mergekit-check-{args.method}-{int(time.time())}",
+        cuda = args.cuda,
+    )
+    return request.model_dump(exclude = {"hf_token", "install_missing_dependencies", "op_id"})
+
+
+def _moe_spec(args) -> dict:
+    from models import MergeModelsRequest
+
+    prompts = args.prompts or []
+    if prompts and len(prompts) != len(args.models):
+        sys.exit("--prompts takes one comma-separated list per expert")
+    experts = [
+        {
+            "model": name,
+            "positive_prompts": prompts[i].split(",") if prompts else None,
+        }
+        for i, name in enumerate(args.models)
+    ]
+    request = MergeModelsRequest(
+        method = "moe",
+        models = experts,
+        base_model = args.base,
+        gate_mode = args.gate_mode,
+        experts_per_token = args.experts_per_token,
+        architecture = args.architecture,
+        dtype = args.dtype,
+        random_seed = args.seed,
+        output_name = args.output_name or f"mergekit-check-moe-{int(time.time())}",
         cuda = args.cuda,
     )
     return request.model_dump(exclude = {"hf_token", "install_missing_dependencies", "op_id"})
@@ -124,15 +159,26 @@ def main(argv = None) -> int:
     parser.add_argument(
         "--method",
         required = True,
-        choices = ("linear", "slerp", "ties", "dare_ties", "task_arithmetic"),
+        choices = ("linear", "slerp", "ties", "dare_ties", "task_arithmetic", "moe"),
     )
     parser.add_argument(
-        "--models", nargs = "+", required = True, help = "SLERP: both models, base included"
+        "--models",
+        nargs = "+",
+        required = True,
+        help = "SLERP: both models, base included. MoE: the experts",
     )
     parser.add_argument("--base", default = None)
     parser.add_argument("--weights", nargs = "+", type = float)
     parser.add_argument("--density", nargs = "+", type = float)
     parser.add_argument("--t", type = float, default = 0.5)
+    parser.add_argument(
+        "--prompts", nargs = "+", help = "MoE: one comma-separated prompt list per expert"
+    )
+    parser.add_argument(
+        "--gate-mode", choices = ("hidden", "cheap_embed", "random", "uniform_random")
+    )
+    parser.add_argument("--experts-per-token", type = int)
+    parser.add_argument("--architecture", choices = ("mixtral", "qwen3", "deepseek"))
     parser.add_argument("--dtype", default = "bfloat16", choices = ("bfloat16", "float16", "float32"))
     parser.add_argument("--seed", type = int, default = 0)
     parser.add_argument("--cuda", action = "store_true", help = "Merge on the GPU (mergekit --cuda)")
@@ -150,7 +196,8 @@ def main(argv = None) -> int:
             f"\n== {row['name']}\nppl {row['ppl']:.3f}  finite logits {row['finite']}\n{PROMPT}{row['text']}"
         )
     result, parent_ppl = rows[0], [row["ppl"] for row in rows[1:]]
-    worst = max(parent_ppl)
+    # A MoE is the base with routed MLPs, so the base is the yardstick; parents[0] is the base.
+    worst = parent_ppl[0] if args.method == "moe" else max(parent_ppl)
     bad = (
         not result["finite"]
         or not math.isfinite(result["ppl"])

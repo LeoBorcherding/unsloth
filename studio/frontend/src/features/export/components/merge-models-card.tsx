@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { hfApiToken, useHfTokenStore } from "@/features/hub";
 import { GitMergeIcon } from "@hugeicons/core-free-icons";
 import { useRef, useState } from "react";
@@ -32,9 +33,12 @@ import { newExportOpId } from "../lib/op-id";
 import { recoverViaStatus } from "../stores/export-runtime-store";
 import {
   DEFAULT_MERGE_SETTINGS,
+  EMPTY_MERGE_ROW,
   MERGE_DTYPES,
+  MERGE_GATE_MODES,
   MERGE_METHODS,
   MERGE_TOKENIZERS,
+  MOE_ARCHITECTURES,
   type MergeSettings,
   mergeBlockReason,
   mergeMethodInfo,
@@ -73,6 +77,7 @@ export function MergeModelsCard({
   const opIdRef = useRef<string | null>(null);
 
   const info = mergeMethodInfo(s.method);
+  const moe = s.method === "moe";
   const blockReason = mergeBlockReason(s);
   const update = (patch: Partial<MergeSettings>) =>
     setS((prev) => ({ ...prev, ...patch }));
@@ -242,34 +247,40 @@ export function MergeModelsCard({
         </div>
         <p className="-mt-3 text-xs text-muted-foreground">{info.hint}</p>
 
-        <div className="flex flex-col gap-2">
-          <Label>Tokenizer</Label>
-          <Select
-            value={s.tokenizerSource}
-            onValueChange={(v) =>
-              update({
-                tokenizerSource: v as MergeSettings["tokenizerSource"],
-              })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MERGE_TOKENIZERS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.value === "base" && s.method === "linear"
-                    ? "Models' own (vocabularies must match)"
-                    : o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {!moe && (
+          <div className="flex flex-col gap-2">
+            <Label>Tokenizer</Label>
+            <Select
+              value={s.tokenizerSource}
+              onValueChange={(v) =>
+                update({
+                  tokenizerSource: v as MergeSettings["tokenizerSource"],
+                })
+              }
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MERGE_TOKENIZERS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.value === "base" && s.method === "linear"
+                      ? "Models' own (vocabularies must match)"
+                      : o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {info.base && (
           <div className="flex flex-col gap-2">
-            <Label htmlFor="merge-base">Base model</Label>
+            <Label htmlFor="merge-base">
+              {moe
+                ? "Base model (attention, embeddings and tokenizer)"
+                : "Base model"}
+            </Label>
             <Input
               id="merge-base"
               placeholder="mistralai/Mistral-7B-v0.1 or a local folder"
@@ -280,7 +291,7 @@ export function MergeModelsCard({
         )}
 
         <div className="flex flex-col gap-2">
-          <Label>Models</Label>
+          <Label>{moe ? "Experts" : "Models"}</Label>
           {s.rows.map((row, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity besides their position
             <div key={i} className="flex flex-wrap items-center gap-2">
@@ -291,7 +302,17 @@ export function MergeModelsCard({
                 value={row.model}
                 onChange={(e) => updateRow(i, { model: e.target.value })}
               />
-              {s.method !== "slerp" && (
+              {moe && (
+                <Textarea
+                  aria-label={`Prompts ${i + 1}`}
+                  className="min-w-48 flex-1"
+                  rows={1}
+                  placeholder="Prompts for this expert, one per line or comma separated"
+                  value={row.prompts}
+                  onChange={(e) => updateRow(i, { prompts: e.target.value })}
+                />
+              )}
+              {s.method !== "slerp" && !moe && (
                 <Input
                   aria-label={`Weight ${i + 1}`}
                   className="w-24"
@@ -337,13 +358,9 @@ export function MergeModelsCard({
               variant="outline"
               size="sm"
               className="self-start"
-              onClick={() =>
-                update({
-                  rows: [...s.rows, { model: "", weight: 0.5, density: 0.5 }],
-                })
-              }
+              onClick={() => update({ rows: [...s.rows, EMPTY_MERGE_ROW] })}
             >
-              Add model
+              {moe ? "Add expert" : "Add model"}
             </Button>
           )}
         </div>
@@ -363,6 +380,67 @@ export function MergeModelsCard({
                 onChange={(e) => update({ t: e.target.valueAsNumber })}
               />
             </div>
+          )}
+          {moe && (
+            <>
+              <div className="flex flex-col gap-2">
+                <Label>Router</Label>
+                <Select
+                  value={s.gateMode}
+                  onValueChange={(v) =>
+                    update({ gateMode: v as MergeSettings["gateMode"] })
+                  }
+                >
+                  <SelectTrigger className="w-64">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MERGE_GATE_MODES.map((g) => (
+                      <SelectItem key={g.value} value={g.value}>
+                        {g.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="merge-experts-per-token">
+                  Experts per token
+                </Label>
+                <Input
+                  id="merge-experts-per-token"
+                  className="w-24"
+                  type="number"
+                  step="1"
+                  min={1}
+                  max={s.rows.length}
+                  value={s.expertsPerToken}
+                  onChange={(e) =>
+                    update({ expertsPerToken: e.target.valueAsNumber })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label>Output architecture</Label>
+                <Select
+                  value={s.architecture}
+                  onValueChange={(v) =>
+                    update({ architecture: v as MergeSettings["architecture"] })
+                  }
+                >
+                  <SelectTrigger className="w-64">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MOE_ARCHITECTURES.map((a) => (
+                      <SelectItem key={a.value} value={a.value}>
+                        {a.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
           )}
           <div className="flex items-center gap-2">
             <Switch

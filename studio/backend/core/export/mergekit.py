@@ -29,7 +29,7 @@ _NO_TORCH_OVERRIDE = 'torch ; sys_platform == "never"\n'
 
 # Methods that merge task vectors against a base model.
 TASK_METHODS = ("ties", "dare_ties", "task_arithmetic")
-METHODS = ("linear", "slerp", *TASK_METHODS)
+METHODS = ("linear", "slerp", *TASK_METHODS, "moe")
 
 Log = Callable[[str, str], None]
 
@@ -90,9 +90,33 @@ def probe() -> dict:
     }
 
 
+def build_moe_config(spec: dict) -> dict:
+    """mergekit-moe's config. Experts give only their MLPs; attention, embeddings and the
+    tokenizer all come from the base, so it takes no tokenizer option."""
+    experts = []
+    for entry in spec["models"]:
+        expert = {"source_model": entry["model"]}
+        for key in ("positive_prompts", "negative_prompts"):
+            if entry.get(key):
+                expert[key] = list(entry[key])
+        experts.append(expert)
+    config = {
+        "base_model": spec["base_model"],
+        "gate_mode": spec.get("gate_mode") or "hidden",
+        "dtype": spec["dtype"],
+        "experts_per_token": spec.get("experts_per_token") or 2,
+    }
+    if spec.get("architecture"):
+        config["architecture"] = spec["architecture"]
+    config["experts"] = experts
+    return config
+
+
 def build_config(spec: dict) -> dict:
     """MergeKit's YAML config, as a dict, from a validated MergeModelsRequest dump."""
     method = spec["method"]
+    if method == "moe":
+        return build_moe_config(spec)
     base = spec.get("base_model")
     entries = spec["models"]
     config: dict = {}
@@ -151,13 +175,16 @@ def merge_command(
     cuda: bool = False,
     random_seed: Optional[int] = None,
     python: Optional[Path] = None,
+    moe: bool = False,
 ) -> list[str]:
-    """mergekit-yaml, through the venv's interpreter so a cancel stops the merge itself."""
+    """mergekit-yaml (or mergekit-moe), through the venv's interpreter so a cancel stops the
+    merge itself. mergekit-moe's --i-understand-this-is-not-useful-without-training only
+    waives its all-experts-identical check, which request validation already refuses."""
     argv = [
         str(python or venv_python()),
         "-I",
         "-m",
-        "mergekit.scripts.run_yaml",
+        "mergekit.scripts.moe" if moe else "mergekit.scripts.run_yaml",
         str(config_path),
         str(out_dir),
         "--lazy-unpickle",
@@ -293,12 +320,17 @@ def merge(
     try:
         config_path = staging / "mergekit_config.yml"
         config_path.write_text(config_yaml(spec), encoding = "utf-8")
-        log(f"Merging {len(spec['models'])} models with {spec['method']}", "status")
+        moe = spec["method"] == "moe"
+        if moe:
+            log(f"Building a mixture of {len(spec['models'])} experts", "status")
+        else:
+            log(f"Merging {len(spec['models'])} models with {spec['method']}", "status")
         argv = merge_command(
             config_path,
             staging / "model",
             cuda = bool(spec.get("cuda")),
             random_seed = spec.get("random_seed"),
+            moe = moe,
         )
         if cancelled():
             raise RuntimeError("Merge cancelled.")

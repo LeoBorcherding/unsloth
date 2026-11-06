@@ -271,7 +271,7 @@ def streams(monkeypatch):
     def fake_stream(argv, env, log, on_spawn):
         calls.append((argv, env))
         log(f"ran {argv[0]}", "stdout")
-        if "mergekit.scripts.run_yaml" in argv:
+        if "mergekit.scripts.run_yaml" in argv or "mergekit.scripts.moe" in argv:
             out = Path(argv[5])
             out.mkdir(parents = True)
             (out / "config.json").write_text("{}", encoding = "utf-8")
@@ -685,3 +685,259 @@ def test_an_ops_record_outlives_a_later_merge_for_status_by_op_id(orchestrator, 
     assert orchestrator.get_last_op()["op_id"] == "merge-1"
     assert orchestrator.get_last_op("export-1")["output_path"] == "/out/gguf"
     assert orchestrator.get_last_op("gone")["op_id"] == "merge-1"
+
+
+# Mixture of experts (mergekit-moe).
+
+BEYONDER_EXPERTS = [
+    ("openchat/openchat-3.5-1210", ["chat", "assistant", "tell me", "explain"]),
+    ("beowolx/CodeNinja-1.0-OpenChat-7B", ["code", "python", "javascript", "programming", "algorithm"]),
+    ("maywell/PiVoT-0.1-Starling-LM-RP", ["storywriting", "write", "scene", "story", "character"]),
+    ("WizardLM/WizardMath-7B-V1.1", ["reason", "math", "mathematics", "solve", "count"]),
+]
+QWEN3_INSTRUCT, QWEN3_THINKING = "Qwen/Qwen3-4B-Instruct-2507", "Qwen/Qwen3-4B-Thinking-2507"
+
+
+def _moe(**fields) -> MergeModelsRequest:
+    return _request(
+        **{
+            "method": "moe",
+            "base_model": "org/base",
+            "models": [
+                {"model": "org/a", "positive_prompts": ["chat"]},
+                {"model": "org/b", "positive_prompts": ["math"]},
+            ],
+            **fields,
+        }
+    )
+
+
+def test_beyonder_moe_matches_the_published_config():
+    config = _config(
+        method = "moe",
+        base_model = "mlabonne/Marcoro14-7B-slerp",
+        models = [{"model": m, "positive_prompts": p} for m, p in BEYONDER_EXPERTS],
+    )
+    # The published config leaves these at MergeKit's defaults (and its base is bfloat16).
+    assert config == {
+        **_fixture("beyonder_4x7b_v2_moe.yml"),
+        "gate_mode": "hidden",
+        "dtype": "bfloat16",
+        "experts_per_token": 2,
+    }
+
+
+def test_qwen3_moe_takes_the_base_as_an_expert_and_names_the_architecture():
+    config = _config(
+        method = "moe",
+        base_model = QWEN3_INSTRUCT,
+        models = [
+            {"model": QWEN3_INSTRUCT, "positive_prompts": ["chat", "explain", "tell me", "write"]},
+            {
+                "model": QWEN3_THINKING,
+                "positive_prompts": ["reason", "math", "solve", "prove", "step by step"],
+                "negative_prompts": ["chat"],
+            },
+        ],
+        experts_per_token = 1,
+        architecture = "qwen3",
+        gate_mode = "cheap_embed",
+    )
+    assert config == {
+        "base_model": QWEN3_INSTRUCT,
+        "gate_mode": "cheap_embed",
+        "dtype": "bfloat16",
+        "experts_per_token": 1,
+        "architecture": "qwen3",
+        "experts": [
+            {
+                "source_model": QWEN3_INSTRUCT,
+                "positive_prompts": ["chat", "explain", "tell me", "write"],
+            },
+            {
+                "source_model": QWEN3_THINKING,
+                "positive_prompts": ["reason", "math", "solve", "prove", "step by step"],
+                "negative_prompts": ["chat"],
+            },
+        ],
+    }
+
+
+def test_random_gates_need_no_prompts_and_blank_prompts_are_dropped():
+    config = mergekit.build_config(
+        _moe(
+            gate_mode = "random",
+            models = [{"model": "org/a"}, {"model": "org/b", "positive_prompts": [" ", ""]}],
+        ).model_dump()
+    )
+    assert config["experts"] == [{"source_model": "org/a"}, {"source_model": "org/b"}]
+
+
+@pytest.mark.parametrize(
+    "fields, message",
+    [
+        (dict(models = [{"model": "org/a", "positive_prompts": ["x"]}]), "at least two experts"),
+        (dict(base_model = None), "needs a base_model"),
+        (dict(experts_per_token = 0), "between 1 and the number of experts"),
+        (dict(experts_per_token = 3), "between 1 and the number of experts"),
+        (
+            dict(
+                models = [
+                    {"model": "org/a", "positive_prompts": ["x"]},
+                    {"model": "org/a", "positive_prompts": ["y"]},
+                ]
+            ),
+            "only once",
+        ),
+        (
+            dict(models = [{"model": "org/a", "positive_prompts": ["x"]}, {"model": "org/b"}]),
+            "positive_prompts for hidden",
+        ),
+        (
+            dict(gate_mode = "uniform_random", models = [{"model": "org/a"}, {"model": "org/b"}]),
+            "positive_prompts for uniform_random",
+        ),
+        (
+            dict(
+                models = [
+                    {"model": "org/a", "positive_prompts": ["same"]},
+                    {"model": "org/b", "positive_prompts": ["same"]},
+                ]
+            ),
+            "different prompts",
+        ),
+        (
+            dict(
+                models = [
+                    {"model": "org/a", "positive_prompts": ["x"], "weight": 1},
+                    {"model": "org/b", "positive_prompts": ["y"]},
+                ]
+            ),
+            "not weight",
+        ),
+        (dict(tokenizer_source = "union"), "base model's tokenizer"),
+        (dict(t = 0.5), "do not apply to MoE"),
+        (dict(architecture = "qwen"), "architecture"),
+        (dict(gate_mode = "router"), "gate_mode"),
+    ],
+)
+def test_invalid_moe_requests_are_refused(fields, message):
+    with pytest.raises(ValidationError, match = message):
+        _moe(**fields)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        dict(gate_mode = "hidden"),
+        dict(experts_per_token = 2),
+        dict(architecture = "mixtral"),
+        dict(
+            models = [
+                {"model": "a", "weight": 1, "positive_prompts": ["x"]},
+                {"model": "b", "weight": 1},
+            ]
+        ),
+    ],
+)
+def test_moe_options_are_refused_on_dense_methods(fields):
+    with pytest.raises(ValidationError, match = "MoE"):
+        _request(
+            **{
+                "method": "linear",
+                "models": [{"model": "a", "weight": 1}, {"model": "b", "weight": 1}],
+                **fields,
+            }
+        )
+
+
+def test_moe_command_runs_mergekit_moe_from_the_venv(tmp_path):
+    argv = mergekit.merge_command(tmp_path / "c.yml", tmp_path / "out", moe = True, cuda = True)
+    assert argv[:6] == [
+        str(mergekit.venv_python()),
+        "-I",
+        "-m",
+        "mergekit.scripts.moe",
+        str(tmp_path / "c.yml"),
+        str(tmp_path / "out"),
+    ]
+    assert "--lazy-unpickle" in argv and "--copy-tokenizer" in argv and "--cuda" in argv
+    assert not any(arg.startswith("--i-understand") for arg in argv)
+
+
+def test_moe_merge_writes_its_config_and_publishes_the_folder(tmp_path, monkeypatch):
+    _mark_installed()
+    seen = {}
+
+    def fake_stream(argv, env, log, on_spawn):
+        seen["argv"] = argv
+        seen["config"] = yaml.safe_load(Path(argv[4]).read_text(encoding = "utf-8"))
+        out = Path(argv[5])
+        out.mkdir(parents = True)
+        (out / "config.json").write_text("{}", encoding = "utf-8")
+        return 0
+
+    monkeypatch.setattr(mergekit, "_stream", fake_stream)
+    spec = _moe(gate_mode = "random", random_seed = 3, cuda = True).model_dump()
+    out = tmp_path / "outputs" / "moe"
+    lines = []
+    merged = mergekit.merge(spec, out, log = lambda line, stream: lines.append(line), on_spawn = _noop)
+    assert merged == out and (out / "config.json").is_file()
+    argv = seen["argv"]
+    assert argv[3] == "mergekit.scripts.moe"
+    assert "--cuda" in argv and argv[argv.index("--random-seed") + 1] == "3"
+    assert seen["config"]["gate_mode"] == "random" and len(seen["config"]["experts"]) == 2
+    assert lines[0] == "Building a mixture of 2 experts"
+    assert [p.name for p in out.parent.iterdir()] == ["moe"], "staging was not cleaned up"
+
+
+def test_route_authorizes_every_expert_and_the_base_once(monkeypatch):
+    from routes import export as export_routes
+
+    checked, calls = [], []
+    monkeypatch.setattr(
+        export_routes.account_access,
+        "authorize_download",
+        lambda repo, repo_type, token: checked.append(repo),
+    )
+
+    class Backend:
+        def merge_models(self, spec, **kwargs):
+            calls.append(spec)
+            return True, "Models merged", "/x/outputs/m"
+
+    monkeypatch.setattr(export_routes, "get_export_backend", lambda: Backend())
+    request = _moe(
+        base_model = QWEN3_INSTRUCT,
+        models = [
+            {"model": QWEN3_INSTRUCT, "positive_prompts": ["chat"]},
+            {"model": QWEN3_THINKING, "positive_prompts": ["math"]},
+        ],
+    )
+    asyncio.run(export_routes.merge_models(request, "subject", allow_ambient = True))
+    assert sorted(checked) == sorted([QWEN3_INSTRUCT, QWEN3_THINKING])
+    assert calls[0]["method"] == "moe" and calls[0]["models"][1]["positive_prompts"] == ["math"]
+
+
+def test_route_refuses_an_expert_on_a_share_path_before_touching_it(monkeypatch):
+    from fastapi import HTTPException
+    from core.training import account_jobs
+    from routes import export as export_routes
+
+    probed = []
+    monkeypatch.setattr(account_jobs, "managed_account", lambda: True)
+    monkeypatch.setattr(Path, "is_dir", lambda self: probed.append(str(self)) or False)
+    monkeypatch.setattr(export_routes.account_access, "require_model_allowed", lambda name: None)
+    monkeypatch.setattr(export_routes.account_access, "authorize_download", lambda *args: None)
+    monkeypatch.setattr(
+        export_routes, "_resolve_export_hf_token", lambda token, allow_ambient: None
+    )
+    request = _moe(
+        models = [
+            {"model": "org/a", "positive_prompts": ["chat"]},
+            {"model": "//host/share/expert", "positive_prompts": ["math"]},
+        ],
+    )
+    with pytest.raises(HTTPException):
+        asyncio.run(export_routes.merge_models(request, "subject", allow_ambient = True))
+    assert not any("share" in path for path in probed)
