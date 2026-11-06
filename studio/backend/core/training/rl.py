@@ -831,7 +831,8 @@ def _template_takes_system(tokenizer) -> bool:
 def fold_system_into_user(dataset, keep_turns: bool = False):
     """For templates that reject a system turn (Gemma 2: "System role not supported"), put the
     system text at the top of the first user message instead, as the Gemma notebooks do.
-    ``keep_turns``: Python rewards still get the unfolded turns, as Try it gives them."""
+    ``keep_turns``: Python rewards and sample answers still get the unfolded turns, as Try it
+    gives them."""
 
     def fold(row: dict) -> dict:
         prompt = row["prompt"]

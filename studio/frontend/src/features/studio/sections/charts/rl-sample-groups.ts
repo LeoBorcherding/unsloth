@@ -10,7 +10,9 @@ export function keepNewest<T extends { seq: number }>(
   fresh: T[],
   selectedSeq: number | null = null,
 ): T[] {
-  const all = [...prev, ...fresh];
+  // Overlapping polls can return groups already held.
+  const last = prev.length ? prev[prev.length - 1].seq : 0;
+  const all = [...prev, ...fresh.filter((g) => g.seq > last)];
   const kept = all.slice(-KEEP_GROUPS);
   if (selectedSeq === null || kept.some((g) => g.seq === selectedSeq)) {
     return kept;
@@ -20,7 +22,7 @@ export function keepNewest<T extends { seq: number }>(
 }
 
 // The selection is a group's seq, not its position. null follows the newest group; a selection
-// that is gone (a new run) falls to the oldest kept.
+// that is gone falls to the oldest kept.
 export function shownIndex(
   groups: readonly { seq: number }[],
   selectedSeq: number | null,

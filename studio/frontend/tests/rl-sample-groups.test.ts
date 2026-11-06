@@ -47,3 +47,29 @@ test("a browsed sample stays put across many polls that each trim", () => {
   groups = keepNewest(groups, range(1000, 1001), null);
   assert.ok(!groups.some((g) => g.seq === selected));
 });
+
+test("a poll that overlaps the last one adds no group twice", () => {
+  const held = range(1, 3);
+  const groups = keepNewest(held, range(2, 5));
+  assert.deepEqual(
+    groups.map((g) => g.seq),
+    [1, 2, 3, 4, 5],
+  );
+});
+
+test("the sample card clears only for a new run, not when the run ends", async () => {
+  // No DOM in these tests: the reset effect's dependency list is the behaviour.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(
+    new URL(
+      "../src/features/studio/sections/charts/rl-samples.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const reset =
+    /setGroups\(\[\]\);[\s\S]*?lastSeq\.current = 0;\s*\}, \[([^\]]*)\]\);/.exec(
+      src,
+    );
+  assert.equal(reset?.[1], "jobId");
+});
