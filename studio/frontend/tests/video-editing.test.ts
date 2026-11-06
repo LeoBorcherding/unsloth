@@ -88,13 +88,13 @@ test("Video editing is its own page next to Video, and a bridge sends bridge_vid
   assert.match(router, /videoRoute,\s*videoEditingRoute,/);
   const route = await read("../src/app/routes/video-editing.tsx");
   assert.match(route, /path: "\/video-editing"/);
-  const store = await read("../src/features/settings/stores/appearance-custom-store.ts");
-  assert.match(store, /"video",\s*"editing",/);
+  const nav = await read("../src/features/settings/stores/appearance-custom-store.ts");
+  assert.match(nav, /"video",\s*"editing",/);
   const sidebar = await read("../src/components/app-sidebar.tsx");
   assert.match(sidebar, /editing: \{\s*icon: VideoReplayIcon,/);
-  const page = await read("../src/features/video-editing/video-editing-page.tsx");
-  assert.match(page, /bridge_video: await blobToDataUrl\(after\)/);
-  assert.match(page, /continuation_keep: "last"/);
+  const store = await read("../src/features/video-editing/editing-store.ts");
+  assert.match(store, /bridge_video: await blobToDataUrl\(after\)/);
+  assert.match(store, /continuation_keep: "last"/);
   const videoPage = await read("../src/features/video/video-page.tsx");
   assert.doesNotMatch(videoPage, /Timeline/);
 });

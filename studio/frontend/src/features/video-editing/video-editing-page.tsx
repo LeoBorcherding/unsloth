@@ -3,7 +3,7 @@
 
 import { ArrowDown01Icon, ArrowUp01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,25 +14,15 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
-  cancelVideoGeneration,
-  cancelVideoRestyle,
-  composeVideoTimeline,
-  fetchGalleryVideoBlob,
-  fetchVideoRestyleClip,
-  fetchVideoRestyleProgress,
   fetchVideoRestyleStatus,
-  generateVideo,
-  getVideoGenerateProgress,
   getVideoStatus,
   loadVideoModel,
-  startVideoRestyle,
   type VideoRestyleStatus,
   type VideoStatus,
 } from "../video/api";
+import { parseSeconds, type SegmentState, useVideoEditingStore } from "./editing-store";
 import {
   COSMOS3_NANO_REPO,
-  composeSpec,
-  DEFAULT_SEGMENT_LENGTH,
   EDIT_FPS,
   EDIT_HEIGHT,
   EDIT_WIDTH,
@@ -40,33 +30,12 @@ import {
   hasSource,
   kindInfo,
   newSeconds,
-  renderOrder,
   SEGMENT_KINDS,
   SEGMENT_LENGTHS,
   type SegmentKind,
   segmentProblem,
   trimProblem,
-  trimSpec,
 } from "./segments";
-
-const POLL_MS = 1000;
-
-type SegmentState = "idle" | "waiting" | "running" | "done" | "error";
-
-interface Segment {
-  id: number;
-  kind: SegmentKind;
-  file: File | null;
-  duration?: number;
-  inS: string;
-  outS: string;
-  prompt: string;
-  frames: number;
-  seed: string;
-  state: SegmentState;
-  note: string | null;
-  output: Blob | null;
-}
 
 // One hue per kind, used for the number badge and the movie's segment bar.
 const KIND_STYLE: Record<SegmentKind, string> = {
@@ -92,40 +61,8 @@ const STATE_LABEL: Record<SegmentState, string> = {
   error: "Failed",
 };
 
-let nextId = 1;
-function newSegment(kind: SegmentKind): Segment {
-  return {
-    id: nextId++,
-    kind,
-    file: null,
-    inS: "0",
-    outS: "",
-    prompt: "",
-    frames: DEFAULT_SEGMENT_LENGTH,
-    seed: "",
-    state: "idle",
-    note: null,
-    output: null,
-  };
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read the clip."));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function parseSeconds(value: string): number | null {
-  if (value.trim() === "") return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : Number.NaN;
 }
 
 function useObjectUrl(blob: Blob | null): string | null {
@@ -133,8 +70,6 @@ function useObjectUrl(blob: Blob | null): string | null {
   useEffect(() => () => void (url && URL.revokeObjectURL(url)), [url]);
   return url;
 }
-
-class Cancelled extends Error {}
 
 function ClipPreview({ blob, label }: { blob: Blob | null; label: string }) {
   const url = useObjectUrl(blob);
@@ -163,23 +98,17 @@ function SetupRow({ name, value, action }: { name: string; value: ReactNode; act
 
 /** Build one movie segment by segment: real clips, restyled clips, continuations, and bridges onto the next clip. */
 export function VideoEditingPage() {
-  const [segments, setSegments] = useState<Segment[]>(() => [
-    newSegment("real"),
-    newSegment("continue"),
-    newSegment("bridge"),
-    newSegment("real"),
-  ]);
-  const [running, setRunning] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [movie, setMovie] = useState<Blob | null>(null);
-  const [movieKinds, setMovieKinds] = useState<SegmentKind[]>([]);
+  const segments = useVideoEditingStore((s) => s.segments);
+  const running = useVideoEditingStore((s) => s.running);
+  const cancelling = useVideoEditingStore((s) => s.cancelling);
+  const error = useVideoEditingStore((s) => s.error);
+  const movie = useVideoEditingStore((s) => s.movie);
+  const movieKinds = useVideoEditingStore((s) => s.movieKinds);
+  const stage = useVideoEditingStore((s) => s.stage);
+  const { patch: update, edit, move, remove, add, setError, render, cancel } = useVideoEditingStore.getState();
   const [restyle, setRestyle] = useState<VideoRestyleStatus | null>(null);
   const [status, setStatus] = useState<VideoStatus | null>(null);
   const [loading, setLoading] = useState(false);
-  const [stage, setStage] = useState<{ index: number; step: number; total: number } | null>(null);
-  const cancelRef = useRef<null | (() => Promise<unknown>)>(null);
-  const cancelled = useRef(false);
   const movieUrl = useObjectUrl(movie);
 
   const refreshStatus = useCallback(async () => {
@@ -216,28 +145,6 @@ export function VideoEditingPage() {
     }
   };
 
-  const update = (id: number, patch: Partial<Segment>) =>
-    setSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
-  // A generated segment renders from its neighbours, so any change to the list makes every generated render stale
-  // (an uploaded clip's render stays good unless that segment itself changed), and with them the movie.
-  const restage = (list: Segment[], changed?: number): Segment[] =>
-    list.map((s) =>
-      s.id === changed || !hasSource(s.kind) ? { ...s, state: "idle", note: null, output: null } : s,
-    );
-  const edit = (id: number, patch: Partial<Segment>) => {
-    setSegments((prev) => restage(prev.map((s) => (s.id === id ? { ...s, ...patch } : s)), id));
-    setMovie(null);
-  };
-  const move = (index: number, by: number) => {
-    setSegments((prev) => {
-      const next = [...prev];
-      const [item] = next.splice(index, 1);
-      next.splice(index + by, 0, item);
-      return restage(next);
-    });
-    setMovie(null);
-  };
-
   const shapes = segments.map((s) => ({ kind: s.kind, hasFile: s.file !== null, prompt: s.prompt }));
   const problems = segments.map((s, i) => {
     const shape = segmentProblem(shapes, i);
@@ -256,121 +163,6 @@ export function VideoEditingPage() {
           : null;
   const ready = !blocker && problems.every((p) => p === null);
 
-  const checkCancel = () => {
-    if (cancelled.current) throw new Cancelled();
-  };
-
-  const renderUpload = async (seg: Segment): Promise<Blob> => {
-    const trimmed = await composeVideoTimeline(
-      [seg.file as File],
-      trimSpec(Number(seg.inS || 0), parseSeconds(seg.outS)),
-    );
-    if (seg.kind === "real") return trimmed;
-    const seed = seg.seed.trim() === "" ? null : Number.parseInt(seg.seed, 10);
-    const started = await startVideoRestyle({
-      prompt: seg.prompt,
-      seed,
-      video: new File([trimmed], "segment.mp4", { type: "video/mp4" }),
-    });
-    cancelRef.current = cancelVideoRestyle;
-    for (;;) {
-      await sleep(POLL_MS);
-      const p = await fetchVideoRestyleProgress();
-      if (p.id && started.id && p.id !== started.id) throw new Error("Another restyle took over the GPU.");
-      if (p.active && p.total) setStage((s) => (s ? { ...s, step: p.step ?? 0, total: p.total ?? 0 } : s));
-      if (p.phase === "done" && p.id) return fetchVideoRestyleClip(p.id, "output");
-      if (p.phase === "cancelled") throw new Cancelled();
-      if (p.phase === "error") throw new Error(p.error ?? "Restyle failed.");
-      checkCancel();
-    }
-  };
-
-  const renderGenerated = async (index: number, list: Segment[], outputs: Array<Blob | null>): Promise<Blob> => {
-    const seg = list[index];
-    const before = outputs[index - 1];
-    if (!before) throw new Error("The segment before it has not rendered.");
-    const after = kindInfo(seg.kind).needsNext ? outputs[index + 1] : null;
-    const seed = seg.seed.trim() === "" ? undefined : Number.parseInt(seg.seed, 10);
-    const previous = await getVideoGenerateProgress().catch(() => null);
-    await generateVideo({
-      prompt: seg.prompt,
-      continuation_video: await blobToDataUrl(before),
-      continuation_keep: "last",
-      ...(after ? { bridge_video: await blobToDataUrl(after) } : {}),
-      num_frames: seg.frames,
-      fps: EDIT_FPS,
-      width: EDIT_WIDTH,
-      height: EDIT_HEIGHT,
-      ...(seed === undefined ? {} : { seed }),
-      live_preview: false,
-    });
-    cancelRef.current = cancelVideoGeneration;
-    const stale = previous?.video?.id ?? null;
-    for (;;) {
-      await sleep(POLL_MS);
-      const p = await getVideoGenerateProgress();
-      if (p.active && p.total > 0) setStage({ index, step: p.step, total: p.total });
-      if (p.phase === "completed" && p.video && p.video.id !== stale) return fetchGalleryVideoBlob(p.video.id);
-      if (p.phase === "failed") {
-        const msg = p.error || "Video generation failed.";
-        if (msg.toLowerCase().includes("cancelled")) throw new Cancelled();
-        throw new Error(msg);
-      }
-      checkCancel();
-    }
-  };
-
-  const render = async () => {
-    if (running || !ready) return;
-    const list = segments;
-    setRunning(true);
-    setError(null);
-    setMovie(null);
-    cancelled.current = false;
-    const outputs: Array<Blob | null> = list.map((s) => (s.state === "done" ? s.output : null));
-    setSegments((prev) => prev.map((s) => (s.state === "done" ? s : { ...s, state: "waiting", note: null })));
-    try {
-      for (const index of renderOrder(list.map((s) => s.kind))) {
-        if (outputs[index]) continue;
-        checkCancel();
-        const seg = list[index];
-        update(seg.id, { state: "running" });
-        setStage({ index, step: 0, total: 0 });
-        try {
-          const out = hasSource(seg.kind) ? await renderUpload(seg) : await renderGenerated(index, list, outputs);
-          outputs[index] = out;
-          update(seg.id, { state: "done", output: out });
-        } catch (err) {
-          const stopped = err instanceof Cancelled;
-          update(seg.id, {
-            state: stopped ? "idle" : "error",
-            note: stopped ? null : err instanceof Error ? err.message : String(err),
-          });
-          throw err;
-        } finally {
-          cancelRef.current = null;
-        }
-      }
-      setStage(null);
-      const joined = await composeVideoTimeline(outputs as Blob[], composeSpec(list.map((s) => s.kind)));
-      setMovie(joined);
-      setMovieKinds(list.map((s) => s.kind));
-    } catch (err) {
-      if (!(err instanceof Cancelled)) setError(err instanceof Error ? err.message : String(err));
-      setSegments((prev) => prev.map((s) => (s.state === "waiting" ? { ...s, state: "idle" } : s)));
-    } finally {
-      setRunning(false);
-      setCancelling(false);
-      setStage(null);
-    }
-  };
-
-  const cancel = () => {
-    cancelled.current = true;
-    setCancelling(true);
-    void cancelRef.current?.().catch(() => undefined);
-  };
-
   const download = () => {
     if (!movieUrl) return;
     const a = document.createElement("a");
@@ -388,7 +180,7 @@ export function VideoEditingPage() {
     <Button
       variant="primary"
       className="rounded-full bg-control-accent text-control-accent-foreground hover:bg-control-accent/85 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
-      disabled={!ready}
+      disabled={!ready || loading}
       onClick={() => void render()}
     >
       Render video
@@ -532,10 +324,7 @@ export function VideoEditingPage() {
                       className="size-8"
                       aria-label={`Remove segment ${index + 1}`}
                       disabled={running}
-                      onClick={() => {
-                        setSegments((prev) => restage(prev.filter((s) => s.id !== seg.id)));
-                        setMovie(null);
-                      }}
+                      onClick={() => remove(seg.id)}
                     >
                       <HugeiconsIcon icon={Delete02Icon} className="size-4" />
                     </Button>
@@ -682,10 +471,7 @@ export function VideoEditingPage() {
                 size="sm"
                 variant="outline"
                 disabled={running || (k.engine === "cosmos3-sim-transfer" && restyle !== null && !restyle.available)}
-                onClick={() => {
-                  setSegments((prev) => restage([...prev, newSegment(k.value)]));
-                  setMovie(null);
-                }}
+                onClick={() => add(k.value)}
               >
                 + {k.label}
               </Button>
