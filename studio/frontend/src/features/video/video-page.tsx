@@ -20,6 +20,7 @@ import {
   ArrowUpDownIcon,
   Cancel01Icon,
   Download01Icon,
+  FilmRoll01Icon,
   FlimSlateIcon,
   ImageCropIcon,
   InformationCircleIcon,
@@ -59,6 +60,7 @@ import {
 import { GuidedTour, useGuidedTourController } from "@/features/tour";
 import { buildVideoTourSteps } from "./tour";
 import { VideoRestylePanel } from "./restyle-panel";
+import { VideoTimelinePanel } from "./timeline-panel";
 import { useSettingsDialogStore } from "@/features/settings/stores/settings-dialog-store";
 import {
   applyPin,
@@ -1316,10 +1318,13 @@ function VideoGenerator({
   const { familyOverride, setFamilyOverride, familySelect, opaqueKind, selectorModelId } = useFamilyOverride(status, status?.supported_families);
   // Controlled so the body-portaled selector force-closes when off-tab.
   const [selectorOpen, setSelectorOpen] = useState(false);
-  const [pageMode, setPageMode] = useState<"create" | "restyle" | "train">("create");
+  const [pageMode, setPageMode] = useState<"create" | "restyle" | "timeline" | "train">("create");
   // Mounted on first visit, then hidden rather than unmounted, so switching to Create keeps the training form.
   const [trainMounted, setTrainMounted] = useState(false);
   if (pageMode === "train" && !trainMounted) setTrainMounted(true);
+  // Kept mounted once opened, like Train: a timeline's clips and prompts survive a trip to another tab.
+  const [timelineMounted, setTimelineMounted] = useState(false);
+  if (pageMode === "timeline" && !timelineMounted) setTimelineMounted(true);
   const [trainFamilies, setTrainFamilies] = useState<TrainFamilyOption[]>([]);
   const [trainFamilyName, setTrainFamilyName] = useState("flux.1");
   const [trainBaseChoice, setTrainBaseChoice] = useState("");
@@ -4071,12 +4076,13 @@ function VideoGenerator({
               dataTour="video-mode"
               ariaLabel="Page mode"
               value={pageMode}
-              onValueChange={(v) => setPageMode(v as "create" | "restyle" | "train")}
+              onValueChange={(v) => setPageMode(v as "create" | "restyle" | "timeline" | "train")}
               fit={true}
               className="h-[calc(34px*var(--ui-space-scale,1))] [&>button]:h-[calc(34px*var(--ui-space-scale,1))] [&>button]:px-7 @[68rem]:[&>button]:px-14 [[data-media-header-tight]_&]:[&>button]:px-4 @max-[30rem]:[&>button]:px-2.5 @max-[30rem]:[&>button>[data-pill-tab-label]]:sr-only"
               tabs={[
                 { value: "create", label: "Create", icon: <HugeiconsIcon icon={SparklesIcon} className="size-3.5" /> },
                 { value: "restyle", label: "Restyle", icon: <HugeiconsIcon icon={PaintBrush02Icon} className="size-3.5" /> },
+                { value: "timeline", label: "Timeline", icon: <HugeiconsIcon icon={FilmRoll01Icon} className="size-3.5" /> },
                 { value: "train", label: "Train", icon: <HugeiconsIcon icon={TestTubeOutlineIcon} className="size-3.5" /> },
               ]}
             />
@@ -4093,6 +4099,14 @@ function VideoGenerator({
         </div>
       </div>
 
+      {timelineMounted && (
+        <div className={pageMode === "timeline" ? "contents" : "hidden"} inert={pageMode !== "timeline" || undefined}>
+          <VideoTimelinePanel
+            active={active && pageMode === "timeline"}
+            continuationReady={status ? supportsVideoContinuation(status) : null}
+          />
+        </div>
+      )}
       {trainMounted && (
         <div className={pageMode === "train" ? "contents" : "hidden"} inert={pageMode !== "train" || undefined}>
           <DiffusionTrainPanel

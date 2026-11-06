@@ -25,6 +25,8 @@ VIDEO_INPUT_REFERENCE_JSON_MAX_BYTES = VIDEO_INPUT_REFERENCE_B64_MAX_CHARS + 64 
 LIBRARY_UPLOAD_MAX_BYTES = 512 * _BYTES_PER_MB
 # One clip or up to 121 frames for the video restyle workflow.
 VIDEO_RESTYLE_UPLOAD_MAX_BYTES = 512 * _BYTES_PER_MB
+# Every clip of a video timeline, joined in one request.
+VIDEO_TIMELINE_UPLOAD_MAX_BYTES = 512 * _BYTES_PER_MB
 # One file into a chat's sandbox folder, the Library's per-file cap.
 SANDBOX_UPLOAD_MAX_BYTES = LIBRARY_UPLOAD_MAX_BYTES
 

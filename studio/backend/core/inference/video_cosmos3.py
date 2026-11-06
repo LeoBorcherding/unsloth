@@ -304,3 +304,45 @@ def fit_continuation_frames(frames: list, width: int, height: int) -> list:
     left, top = (src_w - crop_w) // 2, (src_h - crop_h) // 2
     box = (left, top, left + crop_w, top + crop_h)
     return [frame.crop(box) for frame in frames]
+
+
+
+def bridge_condition_indexes(num_frames: int, temporal_compression: int = 4) -> list[int]:
+    """Clean latent indexes for a bridge: the two the clip before fills, then the two the target clip fills."""
+    latents = (int(num_frames) - 1) // temporal_compression + 1
+    return [0, 1, latents - 2, latents - 1]
+
+
+@contextlib.contextmanager
+def bridge_conditioning(pipe: Any, target: list, num_frames: int, width: int, height: int, lead: int = 5):
+    """For one call: land the clip on ``target``'s first frames as well as starting from the ``lead`` kept ones.
+
+    ``Cosmos3OmniPipeline``'s video-to-video path fills its conditioning clip from the start, repeat-pads the tail
+    and encodes it whole. This puts ``target`` at the end of that clip and holds its first frame over the second half
+    of the gap, so the causal VAE encodes the target after a still of itself rather than after the clip before. The
+    call's ``condition_frame_indexes_vision`` marks both ends clean."""
+    had_own = "_encode_video" in vars(pipe)
+    original = pipe._encode_video
+    pending = [True]
+
+    def encode(x: Any) -> Any:
+        if not pending or x.shape[2] != num_frames:
+            return original(x)
+        pending.clear()
+        tail = pipe.video_processor.preprocess_video(target, height = height, width = width)
+        tail = tail.to(device = x.device, dtype = x.dtype)
+        kept = tail.shape[2]
+        x = x.clone()
+        middle = (lead + num_frames - kept) // 2
+        x[:, :, middle : num_frames - kept] = tail[:, :, :1]
+        x[:, :, num_frames - kept :] = tail
+        return original(x)
+
+    pipe._encode_video = encode
+    try:
+        yield
+    finally:
+        if had_own:
+            pipe._encode_video = original
+        else:
+            del pipe._encode_video

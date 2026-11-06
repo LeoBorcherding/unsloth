@@ -267,6 +267,7 @@ from .video_families import (
     local_cosmos3_pipeline_family,
     local_ltx_pipeline_family,
     pipeline_available_video_families,
+    COSMOS3_BRIDGE_FRAMES,
     COSMOS3_CONTINUATION_FRAMES,
     DEFAULT_VIDEO_CONTINUATION_KEEP,
     VideoFamily,
@@ -1020,6 +1021,12 @@ def _decode_b64_media(data: Optional[str]) -> bytes:
 
 # Gallery ``conditioning`` for a continued clip (the other values are MiniMax-H3's task names).
 VIDEO_CONTINUATION_CONDITIONING = "v2v"
+# A continuation that also lands on the first frames of a target clip.
+VIDEO_BRIDGE_CONDITIONING = "v2v-bridge"
+
+
+def _continuation_conditioning(continuation: Any) -> str:
+    return VIDEO_BRIDGE_CONDITIONING if continuation[2] is not None else VIDEO_CONTINUATION_CONDITIONING
 
 
 class _VideoGenerationCancelled(Exception):
@@ -1618,7 +1625,7 @@ class _VideoResolvedInputs:
     references: Any
     flow_shift: Optional[float]
     audio_flow_shift: Optional[float]
-    # (frames, keep) for a clip continuation, else None.
+    # (frames, keep, bridge target frames or None) for a clip continuation, else None.
     continuation: Any = None
 
 
@@ -12098,6 +12105,7 @@ class VideoBackend:
         audio_flow_shift: Optional[float] = None,
         continuation_video: Optional[str] = None,
         continuation_keep: Optional[str] = None,
+        bridge_video: Optional[str] = None,
         video_id: Optional[str] = None,
         decoded_reference_audios: Optional[Any] = None,
         decoded_reference_images: Optional[Any] = None,
@@ -12173,6 +12181,7 @@ class VideoBackend:
                 state.family,
                 continuation_video,
                 continuation_keep,
+                bridge_video = bridge_video,
                 requested_size = (width, height),
                 canvas = (canvas_w, canvas_h),
                 fps = fps,
@@ -12181,7 +12190,7 @@ class VideoBackend:
                 has_references = bool(references),
             )
             if continuation is not None:
-                conditioning = VIDEO_CONTINUATION_CONDITIONING
+                conditioning = _continuation_conditioning(continuation)
             resolved_inputs = _VideoResolvedInputs(
                 state = state,
                 first_frame = first_pil,
@@ -12477,6 +12486,7 @@ class VideoBackend:
         audio_flow_shift: Optional[float] = None,
         continuation_video: Optional[str] = None,
         continuation_keep: Optional[str] = None,
+        bridge_video: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
         _resolved_inputs: Optional[_VideoResolvedInputs] = None,
         # None = on unless UNSLOTH_DIFFUSION_PREVIEW=0.
@@ -12555,6 +12565,7 @@ class VideoBackend:
                         fam,
                         continuation_video,
                         continuation_keep,
+                        bridge_video = bridge_video,
                         requested_size = requested_size,
                         canvas = (width, height),
                         fps = fps,
@@ -12563,7 +12574,7 @@ class VideoBackend:
                         has_references = bool(references),
                     )
                     if continuation is not None:
-                        conditioning = VIDEO_CONTINUATION_CONDITIONING
+                        conditioning = _continuation_conditioning(continuation)
                     shift, audio_shift = self._resolve_flow_shifts(
                         fam, state.engine, flow_shift, audio_flow_shift
                     )
@@ -12968,8 +12979,13 @@ class VideoBackend:
                     from .video_minimax_h3 import h3_diffusers_references
                     kwargs["references"] = h3_diffusers_references(references)
                 if continuation is not None:
-                    kwargs["video"], kwargs["condition_video_keep"] = continuation
+                    kwargs["video"], kwargs["condition_video_keep"] = continuation[:2]
                     request_shape["continuation"] = continuation[1]
+                    if continuation[2] is not None:
+                        from .video_cosmos3 import bridge_condition_indexes
+
+                        kwargs["condition_frame_indexes_vision"] = bridge_condition_indexes(frames)
+                        request_shape["bridge"] = True
                 # Set scheduler shifts every run so prior requests cannot leak state.
                 for component, value in (
                     ("scheduler", shift),
@@ -13173,6 +13189,19 @@ class VideoBackend:
                         stack.enter_context(uint8_video_frames(pipe))
                         if stream_session is not None:
                             stack.enter_context(stream_session.hooks())
+                        if continuation is not None and continuation[2] is not None:
+                            from .video_cosmos3 import bridge_conditioning
+
+                            stack.enter_context(
+                                bridge_conditioning(
+                                    pipe,
+                                    continuation[2],
+                                    frames,
+                                    width,
+                                    height,
+                                    lead = COSMOS3_CONTINUATION_FRAMES,
+                                )
+                            )
                         stack.enter_context(_completed_step_poller(_pump))
                         yield
 
@@ -13473,6 +13502,7 @@ class VideoBackend:
         video: Optional[str],
         keep: Optional[str],
         *,
+        bridge_video: Optional[str] = None,
         requested_size: tuple[Optional[int], Optional[int]],
         canvas: tuple[int, int],
         fps: Optional[int],
@@ -13480,8 +13510,9 @@ class VideoBackend:
         has_keyframes: bool,
         has_references: bool,
     ) -> tuple[Any, int, int]:
-        """``((frames, keep), width, height)`` for a clip to continue, else ``(None, *canvas)``. Omitting both
-        dimensions takes the preset nearest the clip's aspect, as a first frame does."""
+        """``((frames, keep, target), width, height)`` for a clip to continue, else ``(None, *canvas)``; ``target``
+        is the first frames of ``bridge_video`` to land on, or None. Omitting both dimensions takes the preset
+        nearest the clip's aspect, as a first frame does."""
         validate_video_continuation(
             fam,
             has_video = bool(video),
@@ -13491,6 +13522,7 @@ class VideoBackend:
             num_frames = (
                 snap_num_frames(fam, num_frames or fam.default_num_frames) if video else None
             ),
+            has_bridge = bool(bridge_video),
         )
         if not video:
             return None, *canvas
@@ -13507,7 +13539,20 @@ class VideoBackend:
         width, height = canvas
         if requested_size == (None, None):
             width, height = first_frame_canvas(fam, *clip[0].size)
-        return (fit_continuation_frames(clip, width, height), keep), width, height
+        target = None
+        if bridge_video:
+            try:
+                target = decode_continuation_clip(
+                    _decode_b64_media(bridge_video),
+                    keep = "first",
+                    fps = int(fps or fam.default_fps),
+                    count = COSMOS3_BRIDGE_FRAMES,
+                )
+            except ValueError as exc:
+                # Its messages say "the clip to continue"; name the clip they are about.
+                raise type(exc)(f"The clip to bridge to: {exc}") from exc
+            target = fit_continuation_frames(target, width, height)
+        return (fit_continuation_frames(clip, width, height), keep, target), width, height
 
     @staticmethod
     def _resolve_ltx25_first_frame(

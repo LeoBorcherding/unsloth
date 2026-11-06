@@ -762,6 +762,7 @@ async def generate_video(
             has_video = bool(request.continuation_video),
             keep = request.continuation_keep,
             num_frames = snap_num_frames(fam, request.num_frames or fam.default_num_frames),
+            has_bridge = bool(request.bridge_video),
         )
 
     # Before the backend is resolved: the requested model may be the one this brings up.
@@ -802,6 +803,7 @@ async def generate_video(
         audio_flow_shift = request.audio_flow_shift,
         continuation_video = request.continuation_video,
         continuation_keep = request.continuation_keep,
+        bridge_video = request.bridge_video,
         live_preview = request.live_preview,
     )
     # Authorize the reservation-pinned token: a gap load must not render weights of another account.
