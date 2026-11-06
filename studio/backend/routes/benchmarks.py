@@ -7,7 +7,7 @@ the run here as it goes, so a run survives a reload and shows up on every device
 import asyncio
 import threading
 import time
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -199,6 +199,25 @@ def release_lease(
     drop_lease(holder)
 
 
+@router.get("/capabilities")
+def capabilities(current_subject: str = Depends(get_current_subject)):
+    """What the installed llama-server takes that a load's status can't show. The draft KV dtype
+    is dropped silently on builds without its flags, so a draft-cache row would chart the default."""
+    from core.inference.llama_cpp import LlamaCppBackend
+
+    try:
+        caps = LlamaCppBackend.probe_server_capabilities() or {}
+    except Exception:
+        caps = {}
+    # Unknown (no binary, probe failed) stays None so the runner doesn't skip rows on a guess.
+    draft_cache = (
+        bool(caps.get("spec_draft_cache_k_flag") and caps.get("spec_draft_cache_v_flag"))
+        if caps.get("found")
+        else None
+    )
+    return {"draft_cache_type": draft_cache}
+
+
 LEASE_HEADER = b"x-unsloth-bench-lease"
 # Compared without a trailing slash. main.py mounts the inference router under /v1 too, and
 # /models/* are the llama-server-compatible root routes.
@@ -271,19 +290,21 @@ def _busy_detail() -> str:
     return GPU_BUSY_DETAIL if lease and lease["kind"] == "llama-bench" else SWEEP_BUSY_DETAIL
 
 
-def refuse_if_sweep_holds(request) -> None:
-    """409 a model swap that bypasses LOAD_PATHS (auto-switch, preview) under another holder's
-    lease, of any kind: like a /load, it would reload the server mid-sweep or take the GPU back
-    from llama-bench."""
-    if _lease is None:
-        return
+def admit_swap(request) -> Optional[Callable[[], None]]:
+    """A model swap that skips LOAD_PATHS (auto-switch, preview), admitted like a load: 409 while a
+    benchmark lease of another holder (sweep or llama-bench) holds the server,
+    else counted in flight until the returned release runs."""
+    if request is None:
+        return None
     headers = getattr(request, "headers", None)
     holder = headers.get(LEASE_HEADER.decode()) if headers is not None else None
-    with _lease_lock:
-        busy = _lease_holds_against(holder)
-    if busy:
+    admitted = _admit_load(holder)
+    if admitted is False:
         from fastapi import HTTPException
         raise HTTPException(status_code = 409, detail = _busy_detail())
+    if admitted is None:
+        return None
+    return lambda: _load_done(holder)
 
 
 def note_inference_request(holder: Optional[str]) -> None:

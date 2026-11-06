@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-// Runs a sweep against this Unsloth server: per variant, reload the loaded GGUF with the
+// Runs a sweep against this backend: per variant, reload the loaded GGUF with the
 // variant's overrides, then stream timed completions and keep llama-server's own
 // timings. Everything goes through the public load / status / chat routes.
 
@@ -393,6 +393,9 @@ export async function runBenchmark(
       results: [],
     };
     events.onStart(run);
+    const draftCacheType = config.variants.some((v) => v.load.spec_draft_cache_type)
+      ? ((await getJson("/api/benchmarks/capabilities", signal))?.draft_cache_type ?? null)
+      : null;
     for (const variant of config.variants) {
       if (signal.aborted) throw abortError();
       const ctx = variant.load.max_seq_length;
@@ -443,7 +446,10 @@ export async function runBenchmark(
       }
       const loadMs = performance.now() - loadStarted;
       const served = await getInferenceStatus(signal);
-      const mismatch = servedMismatch(variant, served);
+      const mismatch = servedMismatch(variant, {
+        ...served,
+        draft_cache_type: typeof draftCacheType === "boolean" ? draftCacheType : null,
+      });
       if (mismatch) {
         setOutcome({
           label: variant.label,
