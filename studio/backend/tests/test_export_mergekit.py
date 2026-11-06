@@ -949,9 +949,17 @@ def test_route_refuses_an_expert_on_a_share_path_before_touching_it(monkeypatch)
 @pytest.mark.parametrize(
     "field",
     [
-        {"models": [{"model": "ws/m+/Users/bob/adapter", "weight": 1.0}, {"model": "b", "weight": 1.0}]},
+        {
+            "models": [
+                {"model": "ws/m+/Users/bob/adapter", "weight": 1.0},
+                {"model": "b", "weight": 1.0},
+            ]
+        },
         {"models": [{"model": "org/a@refs/pr/1", "weight": 1.0}, {"model": "b", "weight": 1.0}]},
-        {"models": [{"model": "a", "weight": 1.0}, {"model": "b", "weight": 1.0}], "base_model": "base+lora"},
+        {
+            "models": [{"model": "a", "weight": 1.0}, {"model": "b", "weight": 1.0}],
+            "base_model": "base+lora",
+        },
     ],
 )
 def test_lora_and_revision_syntax_is_refused(field):

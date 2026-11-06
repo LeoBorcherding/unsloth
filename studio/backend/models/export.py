@@ -477,7 +477,9 @@ class MergeModelSpec(BaseModel):
         None, max_length = 64, description = "MoE only: prompts the router should send to this expert"
     )
     negative_prompts: Optional[List[Annotated[str, Field(max_length = 2000)]]] = Field(
-        None, max_length = 64, description = "MoE only: prompts the router should keep away from this expert"
+        None,
+        max_length = 64,
+        description = "MoE only: prompts the router should keep away from this expert",
     )
 
     @field_validator("model")
