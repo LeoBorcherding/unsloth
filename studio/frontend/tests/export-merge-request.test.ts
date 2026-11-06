@@ -9,6 +9,7 @@ import {
   type MergeSettings,
   mergeBlockReason,
   mergeRequest,
+  rowsForMethod,
 } from "../src/features/export/lib/merge.ts";
 
 function settings(patch: Partial<MergeSettings>): MergeSettings {
@@ -107,4 +108,15 @@ test("tokenizer source follows the setting, and linear only sends the union", ()
     mergeRequest({ ...linear, tokenizerSource: "union" }).tokenizer_source,
     "union",
   );
+});
+
+test("switching to SLERP always leaves exactly two rows", () => {
+  const one = [{ model: "org/a", weight: 1, density: 0.5 }];
+  assert.deepEqual(
+    rowsForMethod("slerp", one).map((r) => r.model),
+    ["org/a", ""],
+  );
+  const three = [...one, ...one, ...one].map((r, i) => ({ ...r, model: `m${i}` }));
+  assert.equal(rowsForMethod("slerp", three).length, 2);
+  assert.equal(rowsForMethod("ties", one), one);
 });

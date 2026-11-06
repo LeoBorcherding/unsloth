@@ -88,6 +88,14 @@ export const DEFAULT_MERGE_SETTINGS: MergeSettings = {
   cuda: false,
 };
 
+/** SLERP takes exactly two rows and hides Add/Remove, so pad or trim to two when switching to it. */
+export function rowsForMethod(method: MergeMethod, rows: MergeRow[]): MergeRow[] {
+  if (method !== "slerp") return rows;
+  const two = rows.slice(0, 2);
+  while (two.length < 2) two.push({ model: "", weight: 0.5, density: 0.5 });
+  return two;
+}
+
 export function mergeMethodInfo(method: MergeMethod): MergeMethodInfo {
   return MERGE_METHODS.find((m) => m.value === method) ?? MERGE_METHODS[0];
 }

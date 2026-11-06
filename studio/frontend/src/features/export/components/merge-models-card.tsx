@@ -38,6 +38,7 @@ import {
   mergeBlockReason,
   mergeMethodInfo,
   mergeRequest,
+  rowsForMethod,
 } from "../lib/merge";
 
 const LOG_LINES = 400;
@@ -188,10 +189,7 @@ export function MergeModelsCard({
               value={s.method}
               onValueChange={(v) => {
                 const method = v as MergeMethod;
-                update({
-                  method,
-                  rows: method === "slerp" ? s.rows.slice(0, 2) : s.rows,
-                });
+                update({ method, rows: rowsForMethod(method, s.rows) });
               }}
             >
               <SelectTrigger className="w-full">
