@@ -785,6 +785,7 @@ async def merge_models(
     the export flow then loads like any checkpoint. Logs and cancel are the export ones."""
     validate_job_paths({"base_model": request.base_model, "hf_token": request.hf_token})
     token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient)
+    hub_models = []
     for name in dict.fromkeys([*(m.model for m in request.models), request.base_model]):
         if not name:
             continue
@@ -794,7 +795,13 @@ async def merge_models(
             # A managed account may only merge folders inside its own workspace.
             account_path(name)
         else:
-            await asyncio.to_thread(account_access.authorize_download, name, "model", token)
+            hub_models.append(name)
+    await asyncio.gather(
+        *(
+            asyncio.to_thread(account_access.authorize_download, name, "model", token)
+            for name in hub_models
+        )
+    )
     backend = get_export_backend()
     success, message, output_path = await asyncio.to_thread(
         backend.merge_models,

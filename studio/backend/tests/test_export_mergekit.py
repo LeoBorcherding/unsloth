@@ -534,6 +534,29 @@ def test_a_cancel_right_after_the_merge_claims_its_id_spares_the_worker(orchestr
     worker.terminated = True  # so the fixture's cleanup does not talk to it
 
 
+def test_a_cancel_after_the_merge_is_published_still_records_success(orchestrator, monkeypatch):
+    _mark_installed()
+    real_merge = mergekit.merge
+
+    def merge_then_cancel(*args, **kwargs):
+        out = real_merge(*args, **kwargs)
+        orchestrator.cancel_export()
+        return out
+
+    def fake_stream(argv, env, log, on_spawn):
+        out = Path(argv[5])
+        out.mkdir(parents = True)
+        (out / "config.json").write_text("{}", encoding = "utf-8")
+        return 0
+
+    monkeypatch.setattr(mergekit, "_stream", fake_stream)
+    monkeypatch.setattr(mergekit, "merge", merge_then_cancel)
+    monkeypatch.setattr(orchestrator, "_proc", None)
+    ok, _message, path = orchestrator.merge_models(dict(SPEC))
+    assert ok and Path(path).is_dir()
+    assert orchestrator.get_last_op()["status"] == "success"
+
+
 def test_route_authorizes_hub_models_and_reports_the_run(monkeypatch):
     from routes import export as export_routes
 

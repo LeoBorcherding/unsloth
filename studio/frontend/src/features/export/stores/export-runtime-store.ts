@@ -314,8 +314,15 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
   applyBackendStatus: (status) =>
     set((state) => {
       const base = { hasHydrated: true, backendActive: status.is_export_active };
+      // A merge holds the export op but is the Merge models card's, not an export run.
+      const merging = status.active_op_kind === "merge";
       // Recover a run started before this store existed (reload or another tab).
-      if (status.is_export_active && !state.isExporting && !state.ownsRun) {
+      if (
+        status.is_export_active &&
+        !merging &&
+        !state.isExporting &&
+        !state.ownsRun
+      ) {
         return {
           ...base,
           isExporting: true,
@@ -326,7 +333,9 @@ export const useExportRuntimeStore = create<ExportRuntimeStore>()((set, get) => 
       if (!status.is_export_active && state.isExporting && !state.ownsRun) {
         // A standalone load_checkpoint must never settle as a finished export.
         const wasExport =
-          !!status.last_op_kind && status.last_op_kind !== "load_checkpoint";
+          !!status.last_op_kind &&
+          status.last_op_kind !== "load_checkpoint" &&
+          status.last_op_kind !== "merge";
         if (status.last_op_status === "error") {
           return {
             ...base,

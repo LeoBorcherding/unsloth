@@ -2,8 +2,8 @@
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 """Model merging with MergeKit (LGPL-3.0), run as a subprocess from a venv of its own: it pins
-transformers>=5,<6 and peft>=0.18, which Studio's env must not be upgraded to. The venv shares
-Studio's torch the way opt-in engine envs do, so no second torch is downloaded."""
+transformers>=5,<6 and peft>=0.18, which the Unsloth Studio env must not be upgraded to. The venv
+shares its torch the way opt-in engine envs do, so no second torch is downloaded."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ MERGEKIT_VERSION = "0.1.5"
 # Bump the schema to force a rebuild when the venv layout changes.
 _FINGERPRINT = f"mergekit=={MERGEKIT_VERSION}|schema=1"
 _MARKER = ".unsloth_mergekit_fingerprint"
-# uv drops a dependency overridden with a marker that never holds; Studio's torch is used instead.
+# uv drops a dependency overridden with a marker that never holds; Unsloth Studio's torch is used instead.
 _NO_TORCH_OVERRIDE = 'torch ; sys_platform == "never"\n'
 
 # Methods that merge task vectors against a base model.
@@ -50,6 +50,12 @@ def _venv_site(root: Path) -> Path:
     return root / "lib" / "python{}.{}".format(*sys.version_info[:2]) / "site-packages"
 
 
+def _uv() -> Optional[str]:
+    # Also finds uv off a minimal GUI-launch PATH (Unsloth Desktop from the macOS Dock).
+    from utils.mlx_repair import _uv_executable
+    return _uv_executable()
+
+
 def is_installed() -> bool:
     root = venv_dir()
     try:
@@ -65,7 +71,7 @@ def probe() -> dict:
 
     ready = is_installed()
     blocked = None
-    if not ready and shutil.which("uv") is None:
+    if not ready and _uv() is None:
         blocked = "uv is unavailable. Repair the Unsloth installation and retry."
     elif not ready and _env_offline():
         blocked = "MergeKit is not installed and Hugging Face offline mode is set."
@@ -187,7 +193,7 @@ def _stream(
     from utils.process_lifetime import child_popen_kwargs, spawn_on_lifetime_thread
     from utils.subprocess_compat import windows_hidden_subprocess_kwargs
 
-    # Dies with Studio; text mode turns tqdm's carriage returns into lines.
+    # Dies with Unsloth Studio; text mode turns tqdm's carriage returns into lines.
     process = spawn_on_lifetime_thread(
         lambda: subprocess.Popen(
             argv,
@@ -216,7 +222,7 @@ def install(
     """Create the MergeKit venv; on any failure it is removed, so a retry starts clean."""
     from core.inference import engine_install
 
-    uv = shutil.which("uv")
+    uv = _uv()
     if uv is None:
         raise RuntimeError("uv is unavailable. Repair the Unsloth installation and retry.")
     root = venv_dir()
@@ -282,8 +288,8 @@ def merge(
     if out_dir.exists() or out_dir.is_symlink():
         raise RuntimeError(f"{out_dir} already exists; choose another output name.")
     out_dir.parent.mkdir(parents = True, exist_ok = True)
-    # Beside the outputs folder, not in it: the checkpoint scan would list a half-written merge.
-    staging = Path(tempfile.mkdtemp(prefix = ".mergekit-", dir = out_dir.parent.parent))
+    # Inside outputs so the final rename never crosses drives; the scan skips it (no config.json).
+    staging = Path(tempfile.mkdtemp(prefix = ".mergekit-", dir = out_dir.parent))
     try:
         config_path = staging / "mergekit_config.yml"
         config_path.write_text(config_yaml(spec), encoding = "utf-8")

@@ -81,19 +81,30 @@ export function MergeModelsCard({
       rows: prev.rows.map((r, i) => (i === index ? { ...r, ...patch } : r)),
     }));
 
-  async function pollLogs(since: number): Promise<number> {
-    let cursor = since;
+  async function pollLogs(opId: string): Promise<void> {
+    let cursor: number | null = null;
     while (true) {
       try {
-        const page = await fetchExportLogs(cursor);
-        cursor = page.cursor;
-        if (page.entries.length > 0) {
-          setLogs((prev) => [...prev, ...page.entries].slice(-LOG_LINES));
+        if (cursor === null) {
+          // Queued behind another export, its lines are not ours: wait until this op starts,
+          // then read from its run start (the merge clears the buffer as it begins).
+          const st = await getExportStatus();
+          if (st.active_op_id === opId || st.last_op_id === opId) {
+            const page = await fetchExportLogs(null);
+            cursor = page.cursor;
+            setLogs(page.entries.slice(-LOG_LINES));
+          }
+        } else {
+          const page = await fetchExportLogs(cursor);
+          cursor = page.cursor;
+          if (page.entries.length > 0) {
+            setLogs((prev) => [...prev, ...page.entries].slice(-LOG_LINES));
+          }
         }
       } catch {
         // A dropped poll is retried on the next tick.
       }
-      if (!runningRef.current) return cursor;
+      if (!runningRef.current) return;
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -104,16 +115,14 @@ export function MergeModelsCard({
     runningRef.current = true;
     setLogs([]);
     setResult(null);
-    let poller: Promise<number> | null = null;
+    let poller: Promise<void> | null = null;
     // getRandomValues, not randomUUID: Unsloth on a LAN address is not a secure context.
     const opId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
       b.toString(16).padStart(2, "0"),
     ).join("");
     opIdRef.current = opId;
     try {
-      // Lines after this cursor belong to this merge, not to an earlier export.
-      const { cursor } = await fetchExportLogs(null);
-      poller = pollLogs(cursor);
+      poller = pollLogs(opId);
       const baseline = await getExportStatus()
         .then((st) => st.last_op_seq ?? 0)
         .catch(() => null);

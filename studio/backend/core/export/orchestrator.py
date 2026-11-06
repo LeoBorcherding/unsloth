@@ -857,6 +857,9 @@ class ExportOrchestrator:
                     cancelled = self.was_cancelled,
                 )
                 op_success, op_message, op_output_path = True, "Models merged", str(out_dir)
+                with self._op_lock:
+                    # Published already: a cancel landing now must not record it as cancelled.
+                    self._cancel_requested = False
                 return op_success, op_message, op_output_path
             except Exception as exc:
                 op_message = OP_CANCELLED if self._cancel_requested else str(exc)

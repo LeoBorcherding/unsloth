@@ -7,7 +7,7 @@ import test from "node:test";
 
 register("./helpers/export-store-resolver.mjs", import.meta.url);
 
-const { recoverViaStatus } = await import(
+const { recoverViaStatus, useExportRuntimeStore } = await import(
   "../src/features/export/stores/export-runtime-store.ts"
 );
 const stub = await import("./helpers/export-api-stub.mjs");
@@ -68,4 +68,23 @@ test("an export recovered without an op id waits out a merge ahead of it", async
     done(5, "export_gguf", null, "/out/gguf"),
   ]);
   assert.deepEqual(result, { outputPath: "/out/gguf" });
+});
+
+test("a running merge is not adopted as an export run, nor settled as one", () => {
+  const store = useExportRuntimeStore.getState();
+  store.reset();
+  store.applyBackendStatus({
+    is_export_active: true,
+    active_op_kind: "merge",
+  } as Parameters<typeof store.applyBackendStatus>[0]);
+  assert.equal(useExportRuntimeStore.getState().isExporting, false);
+  useExportRuntimeStore.setState({ isExporting: true, ownsRun: false });
+  useExportRuntimeStore.getState().applyBackendStatus({
+    is_export_active: false,
+    last_op_kind: "merge",
+    last_op_status: "success",
+    last_op_output_path: "/out/merged",
+  } as Parameters<typeof store.applyBackendStatus>[0]);
+  assert.notEqual(useExportRuntimeStore.getState().phase, "success");
+  useExportRuntimeStore.getState().reset();
 });
