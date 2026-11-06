@@ -128,6 +128,7 @@ export function MergeModelsCard({
         ({ outputPath } = await recoverViaStatus(
           baseline,
           () => opIdRef.current === opId,
+          "merge",
         ));
       }
       const run = s.outputName.trim();

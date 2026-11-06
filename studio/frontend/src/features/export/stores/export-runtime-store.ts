@@ -49,12 +49,14 @@ const RECOVERY_MAX_STATUS_FAILS = 5;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Settle a phase whose POST hit a tunnel timeout by polling status. A record is ours once
- *  the op is inactive and we saw it active or its seq passed `baseline`. */
+ *  the op is inactive and we saw it active or its seq passed `baseline`. With `kind`, ops of
+ *  another kind (an export a merge queued behind) are waited out, never taken as ours. */
 export async function recoverViaStatus(
   baseline: number | null,
   isCurrent: () => boolean,
+  kind?: string,
 ): Promise<{ outputPath: string | null }> {
-  const start = Date.now();
+  let start = Date.now();
   let statusFails = 0;
   let sawActive = false;
 
@@ -78,12 +80,25 @@ export async function recoverViaStatus(
     }
 
     if (st.is_export_active) {
-      sawActive = true;
+      if (kind && st.active_op_kind !== kind) {
+        start = Date.now(); // ours is still queued: restart the grace window
+      } else {
+        sawActive = true;
+      }
       continue;
     }
 
     const seq = st.last_op_seq ?? 0;
-    const isOurs = sawActive || (baseline !== null && seq > baseline);
+    if (kind && st.last_op_kind !== kind && !sawActive) {
+      if (baseline !== null && seq > baseline) {
+        // Another op just finished; ours may only now take the lock.
+        baseline = seq;
+        start = Date.now();
+      }
+    }
+    const isOurs =
+      (!kind || st.last_op_kind === kind) &&
+      (sawActive || (baseline !== null && seq > baseline));
     if (isOurs) {
       if (st.last_op_status === "success") {
         return { outputPath: st.last_op_output_path ?? null };
