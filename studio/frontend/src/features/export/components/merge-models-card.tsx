@@ -1,0 +1,375 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+import { SectionBox } from "@/components/section-box";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
+import { hfApiToken, useHfTokenStore } from "@/features/hub";
+import { GitMergeIcon } from "@hugeicons/core-free-icons";
+import { useRef, useState } from "react";
+import {
+  type ExportLogEntry,
+  type MergeMethod,
+  type MergeProbe,
+  cancelExport,
+  fetchExportLogs,
+  fetchMergeProbe,
+  mergeModels,
+} from "../api/export-api";
+import { getExportLogLineClass } from "../lib/log-style";
+import {
+  DEFAULT_MERGE_SETTINGS,
+  MERGE_DTYPES,
+  MERGE_METHODS,
+  type MergeSettings,
+  mergeBlockReason,
+  mergeMethodInfo,
+  mergeRequest,
+} from "../lib/merge";
+
+const LOG_LINES = 400;
+
+function Label({ htmlFor, children }: { htmlFor?: string; children: string }) {
+  return (
+    <label
+      htmlFor={htmlFor}
+      className="text-xs font-medium text-muted-foreground"
+    >
+      {children}
+    </label>
+  );
+}
+
+/** Merges models with MergeKit; the result lands in outputs and is exported like a training run. */
+export function MergeModelsCard({
+  onMerged,
+}: {
+  onMerged: (runName: string) => void;
+}) {
+  const hfToken = useHfTokenStore((s) => s.token);
+  const [s, setS] = useState<MergeSettings>(DEFAULT_MERGE_SETTINGS);
+  const [consent, setConsent] = useState<MergeProbe | null>(null);
+  const [running, setRunning] = useState(false);
+  const [logs, setLogs] = useState<ExportLogEntry[]>([]);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const runningRef = useRef(false);
+
+  const info = mergeMethodInfo(s.method);
+  const blockReason = mergeBlockReason(s);
+  const update = (patch: Partial<MergeSettings>) =>
+    setS((prev) => ({ ...prev, ...patch }));
+  const updateRow = (index: number, patch: Partial<MergeSettings["rows"][0]>) =>
+    setS((prev) => ({
+      ...prev,
+      rows: prev.rows.map((r, i) => (i === index ? { ...r, ...patch } : r)),
+    }));
+
+  async function pollLogs(since: number): Promise<number> {
+    let cursor = since;
+    while (true) {
+      try {
+        const page = await fetchExportLogs(cursor);
+        cursor = page.cursor;
+        if (page.entries.length > 0) {
+          setLogs((prev) => [...prev, ...page.entries].slice(-LOG_LINES));
+        }
+      } catch {
+        // A dropped poll is retried on the next tick.
+      }
+      if (!runningRef.current) return cursor;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  async function runMerge(installMissing: boolean) {
+    setConsent(null);
+    setRunning(true);
+    runningRef.current = true;
+    setLogs([]);
+    setResult(null);
+    let poller: Promise<number> | null = null;
+    try {
+      // Lines after this cursor belong to this merge, not to an earlier export.
+      const { cursor } = await fetchExportLogs(null);
+      poller = pollLogs(cursor);
+      const response = await mergeModels({
+        ...mergeRequest(s),
+        hf_token: hfApiToken(hfToken) ?? null,
+        install_missing_dependencies: installMissing,
+      });
+      const run = String(response.details?.run ?? s.outputName.trim());
+      setResult({
+        ok: true,
+        text: `Saved to ${response.details?.output_path ?? run}. It is listed under Training runs.`,
+      });
+      onMerged(run);
+    } catch (error) {
+      setResult({
+        ok: false,
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      runningRef.current = false;
+      await poller;
+      setRunning(false);
+    }
+  }
+
+  async function handleMerge() {
+    setResult(null);
+    let probe: MergeProbe;
+    try {
+      probe = await fetchMergeProbe();
+    } catch (error) {
+      setResult({
+        ok: false,
+        text: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (probe.blocked_reason) {
+      setResult({ ok: false, text: probe.blocked_reason });
+    } else if (!probe.ready) {
+      setConsent(probe);
+    } else {
+      await runMerge(false);
+    }
+  }
+
+  return (
+    <SectionBox
+      icon={GitMergeIcon}
+      chipTint="var(--chart-3)"
+      title="Merge models"
+      description="Combine two or more models with MergeKit. The merged model is saved as a training run you can then export or push to the Hub."
+    >
+      <div className="flex flex-col gap-6">
+        <div className="grid gap-4 @md/train-section:grid-cols-3">
+          <div className="flex flex-col gap-2">
+            <Label>Method</Label>
+            <Select
+              value={s.method}
+              onValueChange={(v) => {
+                const method = v as MergeMethod;
+                update({
+                  method,
+                  rows: method === "slerp" ? s.rows.slice(0, 2) : s.rows,
+                });
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MERGE_METHODS.map((m) => (
+                  <SelectItem key={m.value} value={m.value}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Precision</Label>
+            <Select
+              value={s.dtype}
+              onValueChange={(v) =>
+                update({ dtype: v as MergeSettings["dtype"] })
+              }
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MERGE_DTYPES.map((d) => (
+                  <SelectItem key={d} value={d}>
+                    {d}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="merge-output">Output name</Label>
+            <Input
+              id="merge-output"
+              value={s.outputName}
+              onChange={(e) => update({ outputName: e.target.value })}
+            />
+          </div>
+        </div>
+        <p className="-mt-3 text-xs text-muted-foreground">{info.hint}</p>
+
+        {info.base && (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="merge-base">Base model</Label>
+            <Input
+              id="merge-base"
+              placeholder="mistralai/Mistral-7B-v0.1 or a local folder"
+              value={s.baseModel}
+              onChange={(e) => update({ baseModel: e.target.value })}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <Label>Models</Label>
+          {s.rows.map((row, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: rows have no identity besides their position
+            <div key={i} className="flex flex-wrap items-center gap-2">
+              <Input
+                aria-label={`Model ${i + 1}`}
+                className="min-w-48 flex-1"
+                placeholder="Hugging Face repo or local folder"
+                value={row.model}
+                onChange={(e) => updateRow(i, { model: e.target.value })}
+              />
+              {s.method !== "slerp" && (
+                <Input
+                  aria-label={`Weight ${i + 1}`}
+                  className="w-24"
+                  type="number"
+                  step="0.05"
+                  title="Weight"
+                  value={row.weight}
+                  onChange={(e) =>
+                    updateRow(i, { weight: e.target.valueAsNumber })
+                  }
+                />
+              )}
+              {info.density && (
+                <Input
+                  aria-label={`Density ${i + 1}`}
+                  className="w-24"
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={1}
+                  title="Density"
+                  value={row.density}
+                  onChange={(e) =>
+                    updateRow(i, { density: e.target.valueAsNumber })
+                  }
+                />
+              )}
+              {s.method !== "slerp" && s.rows.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    update({ rows: s.rows.filter((_, j) => j !== i) })
+                  }
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
+          ))}
+          {s.method !== "slerp" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() =>
+                update({
+                  rows: [...s.rows, { model: "", weight: 0.5, density: 0.5 }],
+                })
+              }
+            >
+              Add model
+            </Button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-6">
+          {s.method === "slerp" && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="merge-t">t</Label>
+              <Input
+                id="merge-t"
+                className="w-24"
+                type="number"
+                step="0.05"
+                min={0}
+                max={1}
+                value={s.t}
+                onChange={(e) => update({ t: e.target.valueAsNumber })}
+              />
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <Switch
+              id="merge-cuda"
+              checked={s.cuda}
+              onCheckedChange={(cuda) => update({ cuda })}
+            />
+            <Label htmlFor="merge-cuda">Merge on the GPU</Label>
+          </div>
+        </div>
+
+        {consent && (
+          <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3 text-xs">
+            <p>{consent.install_summary}</p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConsent(null)}>
+                Not now
+              </Button>
+              <Button variant="dark" onClick={() => void runMerge(true)}>
+                Install and merge
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {logs.length > 0 && (
+          <div className="h-48 w-full overflow-auto scroll-rounded rounded-lg border border-border/40 bg-black/85 p-3 font-mono text-ui-11 leading-[1.45] text-emerald-200/90 whitespace-pre-wrap break-words">
+            {logs.map((entry, idx) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: log lines are append-only
+              <div key={idx} className={getExportLogLineClass(entry)}>
+                {entry.line}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <p
+            className={
+              result?.ok === false
+                ? "text-xs text-destructive"
+                : "text-xs text-muted-foreground"
+            }
+          >
+            {result?.text ??
+              blockReason ??
+              "MergeKit is installed on first use."}
+          </p>
+          {running ? (
+            <Button variant="destructive" onClick={() => void cancelExport()}>
+              Cancel
+            </Button>
+          ) : (
+            <Button
+              variant="dark"
+              disabled={!!blockReason || !!consent}
+              onClick={() => void handleMerge()}
+            >
+              Merge
+            </Button>
+          )}
+        </div>
+      </div>
+    </SectionBox>
+  );
+}

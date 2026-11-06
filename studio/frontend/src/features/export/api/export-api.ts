@@ -300,6 +300,58 @@ export async function convertGgufToQ4nx(params: {
   return parseJson<ExportOperationResponse>(response);
 }
 
+export type MergeMethod =
+  | "linear"
+  | "slerp"
+  | "ties"
+  | "dare_ties"
+  | "task_arithmetic";
+
+export interface MergeModelSpec {
+  model: string;
+  weight?: number | null;
+  density?: number | null;
+}
+
+export interface MergeModelsParams {
+  method: MergeMethod;
+  models: MergeModelSpec[];
+  base_model: string | null;
+  t?: number | null;
+  dtype: "bfloat16" | "float16" | "float32";
+  /** Folder name under outputs; the merged model then shows up as a training run here. */
+  output_name: string;
+  cuda?: boolean;
+  hf_token?: string | null;
+  install_missing_dependencies?: boolean;
+}
+
+export interface MergeProbe {
+  ready: boolean;
+  needs_consent: boolean;
+  install_summary: string | null;
+  blocked_reason: string | null;
+  venv_path: string;
+  version: string;
+}
+
+export async function fetchMergeProbe(): Promise<MergeProbe> {
+  const response = await authFetch("/api/export/merge/probe");
+  return parseJson<MergeProbe>(response);
+}
+
+/** Runs on the export backend: its log stream and cancel cover the merge too. */
+export async function mergeModels(
+  params: MergeModelsParams,
+): Promise<ExportOperationResponse> {
+  const response = await authFetch("/api/export/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return parseJson<ExportOperationResponse>(response);
+}
+
 /** Copy an image-generation LoRA from the Images catalog (weights plus its .json sidecar) to a folder. */
 export async function exportDiffusionLora(params: {
   lora_id: string;

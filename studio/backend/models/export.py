@@ -5,8 +5,8 @@
 
 from pathlib import Path, PureWindowsPath
 
-from pydantic import BaseModel, Field, field_validator
-from typing import Annotated, List, Optional, Literal, Dict, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Annotated, List, Optional, Literal, Dict, Any, Tuple, Union
 
 
 def _validate_save_directory(value: str) -> str:
@@ -440,3 +440,113 @@ class LlmCompressorExportProbeResponse(BaseModel):
     python_executable: str
     has_pip: bool
     has_uv: bool
+
+
+class MergeModelSpec(BaseModel):
+    """One model in a merge: a Hub repo id or a local model folder."""
+
+    model: str = Field(..., min_length = 1, description = "Hub repo id or local model folder")
+    weight: Optional[float] = Field(
+        None, description = "Share of this model (linear, TIES, DARE, task arithmetic)"
+    )
+    density: Optional[float] = Field(
+        None, gt = 0, le = 1, description = "Fraction of its delta kept (TIES, DARE TIES)"
+    )
+    layer_range: Optional[Tuple[int, int]] = Field(
+        None, description = "SLERP only: the [start, end) layers taken from this model"
+    )
+
+
+class MergeGradientStep(BaseModel):
+    """A SLERP t for the tensors matching ``filter`` (all others when unset), or a gradient over layers."""
+
+    filter: Optional[str] = None
+    value: Union[float, List[float]]
+
+
+class MergeModelsRequest(BaseModel):
+    """Merge two or more models with MergeKit into a new model folder under outputs."""
+
+    method: Literal["linear", "slerp", "ties", "dare_ties", "task_arithmetic"]
+    models: List[MergeModelSpec] = Field(..., min_length = 1)
+    base_model: Optional[str] = Field(
+        None,
+        description = "Required for SLERP (one of the two models), TIES, DARE TIES and task arithmetic",
+    )
+    t: Optional[Union[float, List[MergeGradientStep]]] = Field(
+        None, description = "SLERP interpolation factor, 0 = base model"
+    )
+    normalize: Optional[bool] = None
+    int8_mask: Optional[bool] = None
+    dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
+    random_seed: Optional[int] = Field(None, description = "Seeds DARE's random pruning")
+    output_name: str = Field(..., description = "Folder name for the merged model under outputs")
+    cuda: bool = Field(False, description = "Run the merge arithmetic on the GPU")
+    hf_token: Optional[str] = Field(None, description = "Hugging Face token for gated repos")
+    install_missing_dependencies: bool = Field(
+        False, description = "The user agreed to install MergeKit into its own environment"
+    )
+    op_id: Optional[str] = Field(None, max_length = 128)
+
+    @field_validator("output_name")
+    @classmethod
+    def _check_output_name(cls, v: str) -> str:
+        name = v.strip()
+        if (
+            not name
+            or name.startswith(".")
+            or len(name) > 255
+            or any(ch in name for ch in '/\\:*?"<>|')
+            or any(ord(ch) < 32 for ch in name)
+        ):
+            raise ValueError("output_name must be a plain folder name")
+        return name
+
+    @model_validator(mode = "after")
+    def _check_method(self):
+        method, models, base = self.method, self.models, self.base_model
+        names = [m.model for m in models]
+        if len(set(names)) != len(names):
+            raise ValueError("Each model may appear only once")
+        if method == "slerp":
+            if len(models) != 2:
+                raise ValueError("SLERP merges exactly two models")
+            if base not in names:
+                raise ValueError("SLERP needs base_model set to one of its two models")
+            if self.t is None:
+                raise ValueError("SLERP needs t")
+            if any(m.weight is not None or m.density is not None for m in models):
+                raise ValueError("SLERP takes t, not per-model weight or density")
+            if sum(m.layer_range is not None for m in models) not in (0, 2):
+                raise ValueError("Set layer_range on both models or neither")
+        else:
+            if self.t is not None or any(m.layer_range is not None for m in models):
+                raise ValueError("t and layer_range are SLERP options")
+            if any(m.weight is None for m in models):
+                raise ValueError(f"{method} needs a weight for every model")
+        if method == "linear":
+            if len(models) < 2:
+                raise ValueError("Linear merges two or more models")
+            if base:
+                raise ValueError("Linear takes no base_model")
+        if method in ("ties", "dare_ties", "task_arithmetic"):
+            if not base:
+                raise ValueError(f"{method} needs a base_model")
+            if base in names:
+                raise ValueError("List the base model as base_model only, not among the models")
+        if method not in ("ties", "dare_ties") and any(m.density is not None for m in models):
+            raise ValueError("density applies to TIES and DARE TIES only")
+        if self.int8_mask is not None and method not in ("ties", "dare_ties", "task_arithmetic"):
+            raise ValueError("int8_mask applies to TIES, DARE TIES and task arithmetic only")
+        if self.normalize is not None and method == "slerp":
+            raise ValueError("normalize does not apply to SLERP")
+        return self
+
+
+class MergeProbeResponse(BaseModel):
+    ready: bool
+    needs_consent: bool
+    install_summary: Optional[str] = None
+    blocked_reason: Optional[str] = None
+    venv_path: str
+    version: str

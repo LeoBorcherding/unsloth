@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from loggers import get_logger
 import multiprocessing as mp
 import queue
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -61,6 +62,8 @@ class ExportOrchestrator:
     def __init__(self):
         init_job_owner(self, self.is_export_active, self.cancel_export, self._clear_account_result)
         self._proc: Optional[mp.Process] = None
+        # A MergeKit run; it needs no checkpoint, so it runs beside the worker, not in it.
+        self._merge_proc: Optional[subprocess.Popen] = None
         self._cmd_queue: Any = None
         self._resp_queue: Any = None
         # Serializes export ops so concurrent HTTP requests can't interleave commands.
@@ -223,6 +226,11 @@ class ExportOrchestrator:
 
     def _terminate_worker(self) -> bool:
         self._cancel_requested = True
+        merge = self._merge_proc
+        if merge is not None and merge.poll() is None:
+            logger.info("Export cancel requested: terminating MergeKit (pid=%s)", merge.pid)
+            merge.terminate()
+            return True
         proc = self._proc
         if proc is None or not proc.is_alive():
             return False
@@ -802,6 +810,46 @@ class ExportOrchestrator:
                     op_success, op_message = False, str(exc)
                     return False, str(exc), None
             finally:
+                self._record_op_finished(op_success, op_message, op_output_path)
+                self._end_op()
+                self._active_op_kind = None
+                self._export_active = False
+
+    @owned_job()
+    def merge_models(
+        self,
+        spec: dict,
+        hf_token: HfTokenArg = None,
+        install_missing_dependencies: bool = False,
+        op_id: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Merge models with MergeKit into outputs/<output_name>, where the export picker lists it."""
+        from core.export import mergekit
+        with self._lock:
+            if not self._begin_op(op_id):
+                return False, OP_CANCELLED, None
+            self.clear_logs()
+            self._active_op_kind = "merge"
+            self._export_active = True
+            op_success, op_message, op_output_path = False, "", None
+            try:
+                out_dir = mergekit.merge(
+                    spec,
+                    outputs_root() / spec["output_name"],
+                    log = lambda line, stream: self._append_log({"line": line, "stream": stream}),
+                    on_spawn = lambda proc: setattr(self, "_merge_proc", proc),
+                    hf_token = hf_token,
+                    install_missing = install_missing_dependencies,
+                    cancelled = self.was_cancelled,
+                )
+                op_success, op_message, op_output_path = True, "Models merged", str(out_dir)
+                return op_success, op_message, op_output_path
+            except Exception as exc:
+                op_message = OP_CANCELLED if self._cancel_requested else str(exc)
+                logger.error("Model merge failed: %s", exc)
+                return False, op_message, None
+            finally:
+                self._merge_proc = None
                 self._record_op_finished(op_success, op_message, op_output_path)
                 self._end_op()
                 self._active_op_kind = None

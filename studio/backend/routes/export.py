@@ -53,6 +53,8 @@ from models import (
     ExportGGUFRequest,
     ExportLoRAAdapterRequest,
     ConvertQ4NXRequest,
+    MergeModelsRequest,
+    MergeProbeResponse,
     ExportDiffusionLoRARequest,
     LlmCompressorExportProbeResponse,
     ExportDecisionInfoResponse,
@@ -253,7 +255,7 @@ async def get_export_status(current_subject: str = Depends(get_current_subject))
         # Relativise the recovered path like the per-op POST response, so both routes show the same path.
         last_op_output_path = None
         if last_op and last_op.get("output_path"):
-            if getattr(backend, "decision", None):
+            if getattr(backend, "decision", None) or last_op.get("kind") == "merge":
                 last_op_output_path = last_op["output_path"]
             else:
                 details = await asyncio.to_thread(_export_details, last_op["output_path"])
@@ -761,6 +763,48 @@ async def convert_q4nx(
         success = True,
         message = "Converted to Q4NX for the AMD NPU",
         details = await asyncio.to_thread(_export_details, output_path, refresh_index = True),
+    )
+
+
+@router.get("/merge/probe", response_model = MergeProbeResponse)
+async def probe_merge(current_subject: str = Depends(get_current_subject)):
+    """Whether MergeKit is installed, or what installing it would do."""
+    from core.export import mergekit
+    return MergeProbeResponse(**await asyncio.to_thread(mergekit.probe))
+
+
+@router.post("/merge", response_model = ExportOperationResponse)
+async def merge_models(
+    request: MergeModelsRequest,
+    current_subject: str = Depends(get_current_subject),
+    allow_ambient: bool = Depends(allow_ambient_hf_token),
+):
+    """Merge models with MergeKit into outputs/<output_name>; the result is a normal model folder
+    the export flow then loads like any checkpoint. Logs and cancel are the export ones."""
+    validate_job_paths({"base_model": request.base_model, "hf_token": request.hf_token})
+    token = _resolve_export_hf_token(request.hf_token, allow_ambient = allow_ambient)
+    for name in dict.fromkeys([*(m.model for m in request.models), request.base_model]):
+        if not name:
+            continue
+        if Path(name).expanduser().is_dir():
+            # A managed account may only merge folders inside its own workspace.
+            account_path(name)
+        else:
+            await asyncio.to_thread(account_access.authorize_download, name, "model", token)
+    backend = get_export_backend()
+    success, message, output_path = await asyncio.to_thread(
+        backend.merge_models,
+        request.model_dump(exclude = {"hf_token", "install_missing_dependencies", "op_id"}),
+        hf_token = token,
+        install_missing_dependencies = request.install_missing_dependencies,
+        op_id = request.op_id,
+    )
+    if not success:
+        raise HTTPException(status_code = 400, detail = message)
+    return ExportOperationResponse(
+        success = True,
+        message = message,
+        details = {"output_path": output_path, "run": request.output_name},
     )
 
 
