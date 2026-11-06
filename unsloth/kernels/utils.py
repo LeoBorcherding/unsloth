@@ -120,6 +120,24 @@ def is_rdna():
     )
 
 
+@functools.lru_cache(maxsize = None)
+def _max_num_warps_at(index):
+    with torch.cuda.device(index):
+        return 1024 // triton.runtime.driver.active.get_current_target().warp_size
+
+
+def max_num_warps(device = None):
+    """Most warps one launch on `device` can use: 1024 threads per block over the warp size, so 32 on
+    NVIDIA and wave32 RDNA, 16 on wave64 AMD (GCN and every CDNA, not only the archs is_cdna lists).
+    Cached per device index, since one process can hold both wave32 and wave64 GPUs."""
+    if not is_hip():
+        return 32
+    index = getattr(device, "index", device)
+    if index is None:
+        index = torch.cuda.current_device()
+    return _max_num_warps_at(index)
+
+
 def calculate_settings(
     n: int,
 ) -> (
