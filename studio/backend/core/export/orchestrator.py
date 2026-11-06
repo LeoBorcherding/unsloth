@@ -178,7 +178,9 @@ class ExportOrchestrator:
             if published:
                 status = "success"
             else:
-                status = "cancelled" if self._cancel_requested else ("success" if success else "error")
+                status = (
+                    "cancelled" if self._cancel_requested else ("success" if success else "error")
+                )
             self._last_op = {
                 "seq": self._op_seq,
                 "kind": self._active_op_kind,
