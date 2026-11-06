@@ -202,3 +202,10 @@ def test_a_group_split_across_processes_is_gathered_before_it_is_shown(monkeypat
     run(0, ["a", "b"])
     assert sent[1] == []
     assert [i["completion"] for i in sent[0][0]["items"]] == ["a", "b", "c", "d"]
+
+
+def test_a_turn_with_no_content_reads_as_empty_not_none():
+    from core.training.rl_samples import _text
+
+    turns = [{"role": "assistant", "content": None}, {"role": "assistant", "content": "ok"}]
+    assert _text(turns, 100) == "ok"

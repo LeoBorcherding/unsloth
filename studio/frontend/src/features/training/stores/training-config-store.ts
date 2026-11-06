@@ -132,7 +132,6 @@ function canReapplyModelDefaults(modelName: string): boolean {
 
 const DEFAULT_DECISION_CHECKPOINT = "laya-multilingual";
 
-// Saved runs and YAML files carry it, but it is not a model default: switching models keeps it.
 /** The learning rate SFT starts from for this method and model. */
 export function sftLearningRate(state: TrainingConfigState): number {
   return state.trainingMethod === "full"
@@ -141,6 +140,7 @@ export function sftLearningRate(state: TrainingConfigState): number {
         LR_DEFAULT_LORA);
 }
 
+// Saved runs and YAML files carry it, but it is not a model default: switching models keeps it.
 function earlyStoppingPatienceFrom(value: unknown): number {
   const patience = Number(value);
   return Number.isFinite(patience) && patience > 0 ? Math.floor(patience) : 0;
@@ -1916,10 +1916,7 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
             config.training ?? {},
             "early_stopping_patience",
           );
-          const importsDrafter = Object.hasOwn(
-            config.training ?? {},
-            "drafter",
-          );
+          const importsDrafter = Object.hasOwn(config.training ?? {}, "drafter");
           setUserEdit((state) => {
             const importsCompletionsInCpt =
               state.trainingMethod === "cpt" &&

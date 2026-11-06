@@ -280,7 +280,7 @@ def grpo_reward_inputs(
 ) -> tuple[list, dict[str, list]]:
     """(prompts, kwargs) a GRPO reward gets for ``row`` in training: the row run through
     format_rl_dataset as a one-row dataset (Arrow types included), each column but the prompt
-    as a list, as TRL passes them. ``answer`` replaces the answer role's cell (Try it's edit)."""
+    as a list, as TRL passes them. ``answer`` replaces the answer role's cell (the "Try it" panel's edit)."""
     from datasets import Dataset
 
     if answer is not None:
@@ -543,15 +543,6 @@ def render_grpo_prompts(
 
     map_kwargs = {"num_proc": num_proc} if num_proc and num_proc > 1 else {}
     return dataset.map(render, remove_columns = drop, **map_kwargs), True
-
-
-def render_prompts_without_thinking(
-    dataset,
-    tokenizer,
-    enable_thinking: bool,
-    num_proc = None,
-):
-    return render_grpo_prompts(dataset, tokenizer, enable_thinking, num_proc)
 
 
 def reasoning_format_refusal(dataset) -> Optional[str]:
@@ -878,7 +869,8 @@ def _template_takes_system(tokenizer) -> bool:
 def fold_system_into_user(dataset, keep_turns: bool = False):
     """For templates that reject a system turn (Gemma 2: "System role not supported"), put the
     system text at the top of the first user message instead, as the Gemma notebooks do.
-    ``keep_turns``: Python rewards still get the unfolded turns, as Try it gives them."""
+    ``keep_turns``: Python rewards and sample answers still get the unfolded turns, as Try it
+    gives them."""
 
     def fold(row: dict) -> dict:
         prompt = row["prompt"]
@@ -957,7 +949,7 @@ def _reward_funcs(
         try:
             worker = worker_cls(python, mode = mode).start()
         except SandboxUnavailableError as exc:
-            raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation)) from exc
+            raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation, mode)) from exc
         if worker.isolation.get("os_isolation"):
             logger.info("Python rewards run with %s", worker.isolation)
         else:
@@ -1111,7 +1103,6 @@ def build_rl_trainer(
                 "mask_truncated_completions": bool(settings.get("mask_truncated_completions")),
                 # Empty means the regular clip: Unsloth reads an explicit dapo with None as DAPO's 0.28.
                 "epsilon_high": settings.get("epsilon_high")
-                or settings.get("epsilon")
                 or next(
                     (f.default for f in dataclasses.fields(trl.GRPOConfig) if f.name == "epsilon"),
                     0.2,

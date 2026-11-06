@@ -68,7 +68,7 @@ class RewardPreviewRequest(BaseModel):
     # way training does. With no row, a sample answer stands in.
     row: Optional[dict[StrictStr, JsonValue]] = Field(None, max_length = 1024)
     mapping: Optional[dict[StrictStr, StrictStr]] = Field(None, max_length = 1024)
-    # Try it's edited answer, in place of the row's answer cell.
+    # The "Try it" panel's edited answer, in place of the row's answer cell.
     reference: Optional[StrictStr] = Field(None, max_length = 16 * 1024)
     system_prompt: Optional[StrictStr] = Field(None, max_length = 16 * 1024)
     # Same choice as a run's grpo_python_reward_isolation: no OS sandbox, no Python preview.

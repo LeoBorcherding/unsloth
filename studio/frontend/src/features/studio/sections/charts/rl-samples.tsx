@@ -53,22 +53,12 @@ function SampleItem({
     >
       <div className="flex flex-wrap items-center gap-1.5">
         <span
-          className={cn(
-            SCORE_CHIP_CLASS,
-            "font-medium",
-            scoreTone(item.total),
-          )}
+          className={cn(SCORE_CHIP_CLASS, "font-medium", scoreTone(item.total))}
         >
           {t("rl.samples.total")} {formatScore(item.total)}
         </span>
         {Object.entries(item.rewards).map(([name, value]) => (
-          <span
-            key={name}
-            className={cn(
-              SCORE_CHIP_CLASS,
-              scoreTone(value),
-            )}
-          >
+          <span key={name} className={cn(SCORE_CHIP_CLASS, scoreTone(value))}>
             {name} {formatScore(value)}
           </span>
         ))}
@@ -111,12 +101,16 @@ export function RlSamplesCard({
   const selectedSeqRef = useRef<number | null>(null);
   selectedSeqRef.current = selectedSeq;
 
+  // Only a new run clears the card; the run ending (isTraining false) keeps what it shows.
   useEffect(() => {
     setGroups([]);
     setSelectedSeq(null);
     setLoaded(false);
     setPollError(null);
     lastSeq.current = 0;
+  }, [jobId]);
+
+  useEffect(() => {
     if (!jobId) {
       return;
     }

@@ -34,7 +34,7 @@ def _text(
             users = [m for m in turns if m.get("role") == "user"] or turns
             value = users[-1].get("content", "") if users else ""
         else:
-            value = "".join(str(m.get("content", "")) for m in turns)
+            value = "".join(str(m.get("content") or "") for m in turns)
     text = "" if value is None else str(value)
     if len(text) <= limit:
         return text

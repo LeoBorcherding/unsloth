@@ -897,8 +897,6 @@ class TrainingStartRequest(BaseModel):
             return self
         if getattr(self, "training_type", None) == "Continued Pretraining":
             raise ValueError(f"{objective.upper()} cannot be combined with Continued Pretraining.")
-        if self.is_decision:
-            raise ValueError(f"{objective.upper()} cannot train a decision model.")
         if self.is_dataset_image or self.is_dataset_audio or self.is_embedding:
             raise ValueError(f"{objective.upper()} supports text datasets only for now.")
         if getattr(self, "is_decision", False):
