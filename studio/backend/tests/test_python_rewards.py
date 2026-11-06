@@ -397,9 +397,16 @@ def test_a_worker_cannot_be_started_twice(worker_factory):
         worker.start()
 
 
-def test_an_orphaned_worker_exits_when_the_host_goes_quiet(worker_factory):
+def test_an_orphaned_worker_exits_when_the_host_goes_quiet(worker_factory, monkeypatch, tmp_path):
     import time
 
+    # The quiet time counts from ready at the earliest, so the timeout is scaled down to see it.
+    source = Path(python_rewards._WORKER_SOURCE).read_text("utf-8")
+    worker_copy = tmp_path / "reward_worker_main.py"
+    worker_copy.write_text(
+        source.replace("ALIVE_TIMEOUT_SECONDS = 60.0", "ALIVE_TIMEOUT_SECONDS = 1.0"), "utf-8"
+    )
+    monkeypatch.setattr(python_rewards, "_WORKER_SOURCE", worker_copy)
     worker = worker_factory([_spec("t", "def reward(completions, **kw):\n    return []\n")])
     worker._closed.set()  # the host "dies": no more heartbeats
     stale = time.time() - 3600
@@ -1175,6 +1182,8 @@ def test_the_windows_reward_job_carries_the_memory_limit(monkeypatch):
     # Windows has no RLIMIT_AS; the job's per-process memory limit stands in for it.
     import types
 
+    from core.training import reward_worker_main as worker_main
+
     from core.inference import tools
 
     kernel32 = _RecordingKernel()
@@ -1183,7 +1192,7 @@ def test_the_windows_reward_job_carries_the_memory_limit(monkeypatch):
     monkeypatch.setattr(tools, "_windows_job_capture", lambda proc: job)
     monkeypatch.setattr(python_rewards, "_reward_as_bytes", 8 * 1024**3)
     assert python_rewards._windows_job(object()) is job
-    assert kernel32.calls == [(77, 9, python_rewards._JOB_OBJECT_LIMIT_PROCESS_MEMORY, 8 * 1024**3)]
+    assert kernel32.calls == [(77, 9, worker_main._JOB_OBJECT_LIMIT_PROCESS_MEMORY, 8 * 1024**3)]
 
 
 def test_no_memory_limit_set_means_no_windows_job_limit():
@@ -1340,3 +1349,41 @@ def test_a_fifo_the_reward_left_is_refused_not_waited_on(tmp_path):
     os.mkfifo(log)
     with pytest.raises(OSError, match = "not a regular file"):
         io.read_text(str(log))
+
+
+def test_a_slow_loading_reward_does_not_make_the_worker_quit_after_ready(monkeypatch, tmp_path):
+    # The host's heartbeat starts once ready.json is read, so a load longer than the alive
+    # timeout used to leave a stale alive file and the worker quit right after saying ready.
+    source = Path(python_rewards._WORKER_SOURCE).read_text("utf-8")
+    worker_copy = tmp_path / "reward_worker_main.py"
+    worker_copy.write_text(
+        source.replace("ALIVE_TIMEOUT_SECONDS = 60.0", "ALIVE_TIMEOUT_SECONDS = 1.0"), "utf-8"
+    )
+    monkeypatch.setattr(python_rewards, "_WORKER_SOURCE", worker_copy)
+    monkeypatch.setattr(python_rewards, "HEARTBEAT_SECONDS", 0.2)
+    code = "import time\ntime.sleep(2)\n\ndef reward(completions, **kw):\n    return [1.0]\n"
+    worker = RewardWorker([_spec("slow", code)], mode = "full").start()
+    try:
+        time.sleep(1.5)
+        got = worker.score(["slow"], [[]], [[{"role": "assistant", "content": "x"}]], {})
+        assert got == {"slow": [1.0]}
+    finally:
+        worker.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink") or os.name == "nt", reason = "POSIX symlinks")
+def test_a_reply_the_reward_replaced_with_a_link_is_a_reward_error_not_a_crash(worker_factory):
+    # The reward plants res-0.json as a link; reading it must fail like any worker error.
+    code = (
+        "import os\nos.symlink('/etc/hosts', 'res-0.json')\n\n"
+        "def reward(completions, **kw):\n    return [1.0]\n"
+    )
+    worker = worker_factory([_spec("planted", code)], batch_timeout = 5.0)
+    with pytest.raises(PythonRewardError, match = "res-0.json could not be read"):
+        worker.score(["planted"], [[]], [[{"role": "assistant", "content": "x"}]], {})
+    assert worker._proc.poll() is not None or worker._proc.wait(5) is not None
+
+
+def test_the_auto_refusal_does_not_suggest_auto():
+    text = python_rewards.sandbox_refusal("no user namespaces", mode = "auto")
+    assert "No user namespaces." in text and "Auto" not in text

@@ -62,7 +62,7 @@ _TOOL_WORDING = (
 )
 
 
-def sandbox_refusal(reason: str, remediation: str = "") -> str:
+def sandbox_refusal(reason: str, remediation: str = "", mode: str = "required") -> str:
     """The one refusal Try it, Start and training show when Python rewards need an OS sandbox
     this host cannot start: the fix in plain words, no internal error codes."""
     from core.inference.os_sandbox import _FALLBACK_NOTE
@@ -76,6 +76,9 @@ def sandbox_refusal(reason: str, remediation: str = "") -> str:
         detail = detail[:1].upper() + detail[1:]
         if detail and not detail.endswith("."):
             detail += "."
+    if mode == "auto":
+        # Already on Auto: there is no setting left to suggest.
+        return f"Python rewards could not start their worker. {detail}".strip()
     return (
         f"Python rewards need the OS sandbox, and this system has none. {detail} To run them "
         "with software safeguards only, which do not stop a reward from reading your files or "
@@ -186,7 +189,6 @@ def _kill_tree(proc) -> None:
         pass
 
 
-_JOB_OBJECT_LIMIT_PROCESS_MEMORY = _worker_io._JOB_OBJECT_LIMIT_PROCESS_MEMORY
 _limit_job_memory = _worker_io._limit_job_memory
 
 
@@ -386,7 +388,13 @@ class RewardWorker:
             if time.monotonic() > deadline:
                 raise PythonRewardError(f"The reward worker did not answer within {timeout:.0f} s.")
             time.sleep(_POLL_SECONDS)
-        return _worker_io.take(path)
+        try:
+            return _worker_io.take(path)
+        except (OSError, ValueError) as exc:
+            # A link, FIFO or junk the reward left there: fail like any other worker error.
+            raise PythonRewardError(
+                f"The reward worker's {filename} could not be read: {exc.__class__.__name__}."
+            ) from exc
 
     def log_tail(self, limit: int = 2000) -> str:
         try:
@@ -552,7 +560,7 @@ def _start_preview_worker(specs: list[dict], mode: str) -> RewardWorker:
     try:
         return RewardWorker(specs, mode = mode, batch_timeout = 30.0, strict = False).start()
     except SandboxUnavailableError as exc:
-        raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation)) from exc
+        raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation, mode)) from exc
 
 
 def preview_python_scores(

@@ -307,6 +307,9 @@ def main():
     funcs, errors = _load(specs)
     errors.update(refused)
     put(os.path.join(workdir, "ready.json"), {"loaded": sorted(funcs), "errors": errors})
+    # The host's heartbeat starts only once it reads ready.json, so a slow load must not count
+    # against it.
+    ready_at = time.time()
     seq = 0
     alive_path = os.path.join(workdir, "alive")
     next_check = 0.0
@@ -319,7 +322,7 @@ def main():
             if now >= next_check:
                 next_check = now + 1.0
                 try:
-                    quiet = time.time() - os.path.getmtime(alive_path)
+                    quiet = time.time() - max(os.path.getmtime(alive_path), ready_at)
                 except OSError:
                     return 0
                 if quiet > ALIVE_TIMEOUT_SECONDS:

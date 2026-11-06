@@ -29,7 +29,8 @@ export interface ModelCacheReferenceOptions {
   modelFormat?: ModelInventoryFormat | null;
 }
 
-export interface TrainingModelSelectionOptions extends ModelCacheReferenceOptions {
+export interface TrainingModelSelectionOptions
+  extends ModelCacheReferenceOptions {
   isEmbedding?: boolean | null;
   isAudio?: boolean | null;
   isVision?: boolean | null;

@@ -284,11 +284,11 @@ function CheckpointSelect({
 function ModelPanel() {
   const t = useT();
   const openSettings = useSettingsDialogStore((s) => s.openDialog);
-  const isDecisionModel = useTrainingConfigStore(
-    (s) => s.modelType === "decision",
-  );
   const decisionCheckpoints = useTrainingConfigStore((s) =>
     s.modelType === "decision" ? s.decisionCheckpoints : null,
+  );
+  const isDecisionModel = useTrainingConfigStore(
+    (s) => s.modelType === "decision",
   );
   // Text and vision LLMs can also train as decision models; Laya, Clef, audio and embeddings cannot.
   const canTrainAsDecision = useTrainingConfigStore(
