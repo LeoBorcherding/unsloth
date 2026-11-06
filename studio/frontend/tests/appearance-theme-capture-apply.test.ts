@@ -13,7 +13,7 @@ import { DEFAULT_CUSTOMIZATION, sanitizeCustomization } from "../src/features/se
 
 const BACKGROUND = "data:image/png;base64,iVBORw0KGgo=";
 const TYPOGRAPHY = ["uiFont", "headingFont", "chatFont", "codeFont", "uiFontSize", "codeFontSize", "fontSmoothing"] as const;
-const GLASS = ["material", "strength", "lens", "menus"] as const;
+const GLASS = ["material", "strength", "lens", "menus", "scope"] as const;
 
 const font = (name: string, data = "QUJD") => ({ name, dataUrl: `data:font/woff2;base64,${data}` });
 const pick = <T extends object, K extends keyof T>(source: T, keys: readonly K[]) =>
@@ -41,7 +41,7 @@ function roundTrip(snapshot: AppearanceSnapshot, includeAssets = false) {
 const BASE: AppearanceSnapshot = {
   palette: "standard",
   customization: DEFAULT_CUSTOMIZATION,
-  glass: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true },
+  glass: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true, scope: "all" },
   background: null,
 };
 const withFonts = (fonts: ReturnType<typeof font>[]): AppearanceSnapshot => ({
@@ -61,7 +61,7 @@ const FULL: AppearanceSnapshot = {
     sidebarNav: [{ id: "tasks", pinned: true }, { id: "hub", pinned: false }],
     sidebarNavAuto: [],
   }),
-  glass: { material: "frosted", style: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false },
+  glass: { material: "frosted", style: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false, scope: "chats" },
   background: null,
 };
 
@@ -129,7 +129,7 @@ test("a solid theme keeps the remembered glass style; any other material sets it
 test("changes follow THEME_CHANGES order whatever order the file lists them in", () => {
   const theme = parseOk(JSON.stringify(file({
     assets: { background: { dataUrl: BACKGROUND }, fonts: [font("Brand")] },
-    layout: { sentAttachments: "chips" },
+    layout: { sidebarMenu: [{ id: "profile", visible: true }] },
     glass: { material: "frosted" },
     chat: { width: "wide" },
     code: { wordWrap: true },

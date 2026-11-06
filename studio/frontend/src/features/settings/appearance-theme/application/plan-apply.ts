@@ -82,8 +82,8 @@ function mergeFonts(themeFonts: ImportedFont[], currentFonts: ImportedFont[]): I
   return [...themeFonts, ...currentFonts.filter((font) => !names.has(font.name))];
 }
 
-const glassKey = ({ material, strength, lens, menus }: GlassSettings) =>
-  JSON.stringify([material, strength.light, strength.dark, lens, menus]);
+const glassKey = ({ material, strength, lens, menus, scope }: GlassSettings) =>
+  JSON.stringify([material, strength.light, strength.dark, lens, menus, scope]);
 
 /**
  * What applying a parsed theme would do, without touching the app. The parser fills every look
@@ -145,13 +145,6 @@ export function planUndo(
   for (const key of Object.keys(now.customization) as (keyof AppearanceCustomization)[]) {
     customization[key] = revert(before.customization[key], applied.customization[key], now.customization[key]);
   }
-  // A font the user picked after applying keeps its imported file, even if the list itself reverts.
-  const fonts = customization.importedFonts as ImportedFont[];
-  const selected = new Set(FONT_FIELDS.map((field) => customization[field]));
-  const stillNeeded = now.customization.importedFonts.filter(
-    (font) => selected.has(font.name) && !fonts.some((kept) => kept.name === font.name),
-  );
-  customization.importedFonts = [...stillNeeded, ...fonts];
   const glass = { ...now.glass } as Record<string, unknown>;
   for (const key of Object.keys(now.glass) as (keyof AppearanceSnapshot["glass"])[]) {
     glass[key] = revert(before.glass[key], applied.glass[key], now.glass[key]);

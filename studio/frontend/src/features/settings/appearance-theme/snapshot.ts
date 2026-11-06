@@ -37,12 +37,12 @@ export function sameBackground(
 
 /** Reads the live appearance. Does not write anything. */
 export function readAppearanceSnapshot(): AppearanceSnapshot {
-  const { material, style, strength, lens, menus } = useMaterialStore.getState();
+  const { material, style, strength, lens, menus, scope } = useMaterialStore.getState();
   const background = useBackgroundStore.getState().value;
   return {
     palette: getPalette(),
     customization: useAppearanceCustomStore.getState().customization,
-    glass: { material, style, strength, lens, menus },
+    glass: { material, style, strength, lens, menus, scope },
     background: background
       ? { adjustments: sanitizeAdjustments(background), blob: background.blob }
       : null,
@@ -56,8 +56,8 @@ export function readAppearanceSnapshot(): AppearanceSnapshot {
 export function applyAppearanceSnapshot(next: AppearanceTarget): void {
   useAppearanceCustomStore.getState().replaceAll(next.customization);
   setPalette(next.palette);
-  const { material, style, strength, lens, menus } = next.glass;
-  useMaterialStore.setState({ material, style, strength, lens, menus, nativeFailed: false });
+  const { material, style, strength, lens, menus, scope } = next.glass;
+  useMaterialStore.setState({ material, style, strength, lens, menus, scope, nativeFailed: false });
 }
 
 /**

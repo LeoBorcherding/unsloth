@@ -2406,6 +2406,7 @@ export const ptBR = {
         importApplyLayout: "Aplicar também o layout da barra lateral",
         importApplyAssets: "Aplicar também as fontes e a imagem de fundo",
         importApply: "Aplicar tema",
+        applyFailed: "Não foi possível aplicar o tema.",
         changesTitle: "O que vai mudar",
         noChanges: "Este tema corresponde à sua aparência atual.",
         warningsTitle: "Avisos",

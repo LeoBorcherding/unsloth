@@ -2317,6 +2317,7 @@ export const it = {
         importApplyLayout: "Applica anche il layout della barra laterale",
         importApplyAssets: "Applica anche font e immagine di sfondo",
         importApply: "Applica tema",
+        applyFailed: "Impossibile applicare il tema.",
         changesTitle: "Cosa cambierà",
         noChanges: "Questo tema corrisponde al tuo aspetto attuale.",
         warningsTitle: "Avvisi",

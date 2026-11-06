@@ -2400,6 +2400,7 @@ export const ru = {
         importApplyLayout: "Также применить расположение боковой панели",
         importApplyAssets: "Также применить шрифты и фоновое изображение",
         importApply: "Применить тему",
+        applyFailed: "Не удалось применить тему.",
         changesTitle: "Что изменится",
         noChanges: "Эта тема совпадает с вашим текущим оформлением.",
         warningsTitle: "Предупреждения",

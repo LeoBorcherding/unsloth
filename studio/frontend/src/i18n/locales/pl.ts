@@ -2615,6 +2615,7 @@ export const pl = {
         importApplyLayout: "Zastosuj też układ paska bocznego",
         importApplyAssets: "Zastosuj też czcionki i obraz tła",
         importApply: "Zastosuj motyw",
+        applyFailed: "Nie udało się zastosować motywu.",
         changesTitle: "Co się zmieni",
         noChanges: "Ten motyw odpowiada twojemu obecnemu wyglądowi.",
         warningsTitle: "Ostrzeżenia",

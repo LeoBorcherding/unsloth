@@ -2619,6 +2619,7 @@ export const es419 = {
         importApplyLayout: "Aplicar también el diseño de la barra lateral",
         importApplyAssets: "Aplicar también las fuentes y la imagen de fondo",
         importApply: "Aplicar tema",
+        applyFailed: "No se pudo aplicar el tema.",
         changesTitle: "Qué cambiará",
         noChanges: "Este tema coincide con tu apariencia actual.",
         warningsTitle: "Advertencias",

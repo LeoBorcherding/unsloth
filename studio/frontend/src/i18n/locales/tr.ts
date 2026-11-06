@@ -2576,6 +2576,7 @@ export const tr = {
         importApplyLayout: "Kenar çubuğu düzenini de uygula",
         importApplyAssets: "Yazı tiplerini ve arka plan görselini de uygula",
         importApply: "Temayı uygula",
+        applyFailed: "Tema uygulanamadı.",
         changesTitle: "Neler değişecek",
         noChanges: "Bu tema mevcut görünümünüzle aynı.",
         warningsTitle: "Uyarılar",

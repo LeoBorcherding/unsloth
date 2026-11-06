@@ -2446,6 +2446,7 @@ export const he = {
         importApplyLayout: "החל גם את פריסת סרגל הצד",
         importApplyAssets: "החל גם גופנים ותמונת רקע",
         importApply: "החל ערכת נושא",
+        applyFailed: "לא ניתן להחיל את ערכת הנושא.",
         changesTitle: "מה ישתנה",
         noChanges: "ערכת נושא זו תואמת למראה הנוכחי שלך.",
         warningsTitle: "אזהרות",

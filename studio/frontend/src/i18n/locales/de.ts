@@ -2419,6 +2419,7 @@ export const de = {
         importApplyLayout: "Seitenleisten-Layout ebenfalls übernehmen",
         importApplyAssets: "Schriften und Hintergrundbild ebenfalls übernehmen",
         importApply: "Design übernehmen",
+        applyFailed: "Das Design konnte nicht angewendet werden.",
         changesTitle: "Was sich ändert",
         noChanges: "Dieses Design entspricht deinem aktuellen Erscheinungsbild.",
         warningsTitle: "Warnungen",

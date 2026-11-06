@@ -2516,6 +2516,7 @@ export const sv = {
         importApplyLayout: "Använd även layouten för sidofältet",
         importApplyAssets: "Använd även typsnitt och bakgrundsbild",
         importApply: "Använd tema",
+        applyFailed: "Temat kunde inte tillämpas.",
         changesTitle: "Vad som ändras",
         noChanges: "Det här temat matchar ditt nuvarande utseende.",
         warningsTitle: "Varningar",

@@ -54,8 +54,8 @@ export function captureTheme(snapshot: AppearanceSnapshot, opts: CaptureOptions)
   writeSection("typography");
   writeSection("code");
   writeSection("chat");
-  const { material, strength, lens, menus } = snapshot.glass;
-  file.glass = { material, strength, lens, menus };
+  const { material, strength, lens, menus, scope } = snapshot.glass;
+  file.glass = { material, strength, lens, menus, scope };
   if (opts.includeLayout) writeSection("layout");
 
   if (opts.includeAssets) {

@@ -2620,6 +2620,7 @@ export const nl = {
         importApplyLayout: "Ook de indeling van de zijbalk toepassen",
         importApplyAssets: "Ook lettertypen en achtergrondafbeelding toepassen",
         importApply: "Thema toepassen",
+        applyFailed: "Het thema kon niet worden toegepast.",
         changesTitle: "Wat er verandert",
         noChanges: "Dit thema komt overeen met je huidige uiterlijk.",
         warningsTitle: "Waarschuwingen",

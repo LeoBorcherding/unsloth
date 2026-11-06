@@ -2466,6 +2466,7 @@ export const zhTW = {
         importApplyLayout: "同時套用側邊欄版面配置",
         importApplyAssets: "同時套用字型和背景圖片",
         importApply: "套用主題",
+        applyFailed: "無法套用主題。",
         changesTitle: "將會變更的內容",
         noChanges: "此主題與你目前的外觀相同。",
         warningsTitle: "警告",

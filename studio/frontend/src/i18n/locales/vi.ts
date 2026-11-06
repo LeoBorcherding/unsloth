@@ -2586,6 +2586,7 @@ export const vi = {
         importApplyLayout: "Áp dụng cả bố cục thanh bên",
         importApplyAssets: "Áp dụng cả phông chữ và ảnh nền",
         importApply: "Áp dụng chủ đề",
+        applyFailed: "Không thể áp dụng chủ đề.",
         changesTitle: "Những gì sẽ thay đổi",
         noChanges: "Chủ đề này trùng với giao diện hiện tại của bạn.",
         warningsTitle: "Cảnh báo",

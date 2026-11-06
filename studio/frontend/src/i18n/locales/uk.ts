@@ -2607,6 +2607,7 @@ export const uk = {
         importApplyLayout: "Також застосувати розташування бічної панелі",
         importApplyAssets: "Також застосувати шрифти та фонове зображення",
         importApply: "Застосувати тему",
+        applyFailed: "Не вдалося застосувати тему.",
         changesTitle: "Що зміниться",
         noChanges: "Ця тема відповідає вашому поточному оформленню.",
         warningsTitle: "Попередження",

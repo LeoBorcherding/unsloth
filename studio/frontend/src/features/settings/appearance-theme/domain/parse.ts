@@ -9,6 +9,7 @@ import {
   sanitizeAdjustments,
   sanitizeLens,
   sanitizeMaterial,
+  sanitizeScope,
   sanitizeStrength,
 } from "../../../chat-background/model.ts";
 import {
@@ -60,7 +61,7 @@ const KNOWN_KEYS: Record<string, readonly string[]> = {
   code: keysOf("code"),
   chat: keysOf("chat"),
   layout: keysOf("layout"),
-  glass: ["material", "strength", "lens", "menus"],
+  glass: ["material", "strength", "lens", "menus", "scope"],
   "glass.strength": ["light", "dark"],
   assets: ["fonts", "background"],
   "assets.background": ["dataUrl", "adjustments"],
@@ -155,6 +156,13 @@ function readGlass(section: Dict | null, warn: Warn): GlassSettings {
       DEFAULT_GLASS.menus,
       (value) => (typeof value === "boolean" ? value : DEFAULT_GLASS.menus),
       "glass.menus",
+      warn,
+    ),
+    scope: readValue(
+      own(section, "scope"),
+      DEFAULT_GLASS.scope,
+      (value) => sanitizeScope(value, DEFAULT_GLASS.scope),
+      "glass.scope",
       warn,
     ),
   };

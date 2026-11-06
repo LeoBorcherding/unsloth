@@ -2396,6 +2396,7 @@ export const hi = {
         importApplyLayout: "साइडबार लेआउट भी लागू करें",
         importApplyAssets: "फ़ॉन्ट और पृष्ठभूमि छवि भी लागू करें",
         importApply: "थीम लागू करें",
+        applyFailed: "थीम लागू नहीं हो सकी।",
         changesTitle: "क्या बदलेगा",
         noChanges: "यह थीम आपके वर्तमान रूप-रंग से मेल खाती है।",
         warningsTitle: "चेतावनियाँ",

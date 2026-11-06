@@ -2373,6 +2373,7 @@ export const ja = {
         importApplyLayout: "サイドバーのレイアウトも適用する",
         importApplyAssets: "フォントと背景画像も適用する",
         importApply: "テーマを適用",
+        applyFailed: "テーマを適用できませんでした。",
         changesTitle: "変更される内容",
         noChanges: "このテーマは現在の見た目と同じです。",
         warningsTitle: "警告",

@@ -2407,6 +2407,7 @@ export const en = {
         importApplyLayout: "Also apply sidebar layout",
         importApplyAssets: "Also apply fonts and background image",
         importApply: "Apply theme",
+        applyFailed: "Couldn't apply the theme.",
         changesTitle: "What will change",
         noChanges: "This theme matches your current look.",
         warningsTitle: "Warnings",

@@ -2571,6 +2571,7 @@ export const fa = {
         importApplyLayout: "چیدمان نوار کناری هم اعمال شود",
         importApplyAssets: "فونت‌ها و تصویر پس‌زمینه هم اعمال شود",
         importApply: "اعمال پوسته",
+        applyFailed: "پوسته اعمال نشد.",
         changesTitle: "چه چیزی تغییر می‌کند",
         noChanges: "این پوسته با ظاهر فعلی شما یکسان است.",
         warningsTitle: "هشدارها",

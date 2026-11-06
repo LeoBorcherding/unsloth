@@ -18,7 +18,7 @@ function createHost() {
   const state = {
     palette: "standard",
     customization: DEFAULT_CUSTOMIZATION as AppearanceCustomization,
-    material: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true, nativeFailed: false } as Record<string, unknown>,
+    material: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true, scope: "all", nativeFailed: false } as Record<string, unknown>,
     background: null as null | { adjustments: unknown; blob: Blob },
   };
   const upload = { result: true }; let ticket = 0;
@@ -76,7 +76,7 @@ function createHost() {
 const load = (host: ReturnType<typeof createHost>) =>
   loadWithStubs<typeof SnapshotModule>(new URL("../src/features/settings/appearance-theme/snapshot.ts", import.meta.url), host.stubs);
 
-const GLASS = { material: "frosted", style: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false } as const;
+const GLASS = { material: "frosted", style: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false, scope: "chats" } as const;
 const NEXT: SnapshotModule.AppearanceTarget = { palette: "cherry", customization: { ...DEFAULT_CUSTOMIZATION, uiFont: "Brand Sans", uiFontSize: 17 }, glass: GLASS };
 
 test("applying a snapshot writes the store, palette and material once each", () => {
@@ -96,7 +96,7 @@ test("reading the snapshot and applying it back restores the look, glass style i
   const before = snapshot.readAppearanceSnapshot();
   assert.deepEqual(before, {
     palette: "standard", customization: DEFAULT_CUSTOMIZATION,
-    glass: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true },
+    glass: { material: "solid", style: "frosted", strength: { light: 40, dark: 15 }, lens: "off", menus: true, scope: "all" },
     background: null,
   });
   const original = structuredClone(host.state.material);

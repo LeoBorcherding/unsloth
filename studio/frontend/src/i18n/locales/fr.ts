@@ -2417,6 +2417,7 @@ export const fr = {
         importApplyLayout: "Appliquer aussi la disposition de la barre latérale",
         importApplyAssets: "Appliquer aussi les polices et l'image de fond",
         importApply: "Appliquer le thème",
+        applyFailed: "Impossible d'appliquer le thème.",
         changesTitle: "Ce qui va changer",
         noChanges: "Ce thème correspond à votre apparence actuelle.",
         warningsTitle: "Avertissements",

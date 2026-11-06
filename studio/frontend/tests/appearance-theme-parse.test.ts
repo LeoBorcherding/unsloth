@@ -63,7 +63,6 @@ test("sanitizer issue paths map to their file paths", () => {
 });
 
 const FULL_LAYOUT = {
-  sentAttachments: "chips",
   sidebarMenu: [...SIDEBAR_MENU_ITEM_IDS].reverse().map((id) => ({
     id,
     visible: !SIDEBAR_MENU_DEFAULT_VISIBLE[id],
@@ -88,9 +87,9 @@ const FULL = {
     uiFontSize: 17, codeFontSize: 13, fontSmoothing: false,
   },
   code: { lineNumbers: true, wordWrap: true, ligatures: false },
-  chat: { width: "wide", composerOutline: 40 },
+  chat: { width: "wide", composerOutline: 40, elementOutline: 25, sentAttachments: "chips" },
   layout: FULL_LAYOUT,
-  glass: { material: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false },
+  glass: { material: "frosted", strength: { light: 62, dark: 33 }, lens: "magnify", menus: false, scope: "chats" },
   assets: { fonts: [{ name: "Brand", dataUrl: "data:font/woff2;base64,QUJDRA==" }] },
 };
 
@@ -114,6 +113,8 @@ test("a full non-default file parses back to every value it holds, with no warni
     codeLigatures: false,
     chatWidth: "wide",
     composerOutline: 40,
+    elementOutline: 25,
+    sentAttachments: "chips",
   });
   assert.deepEqual(theme.layout, FULL_LAYOUT);
   assert.deepEqual(theme.glass, FULL.glass);
@@ -132,6 +133,7 @@ test("missing sections fall back to the defaults, and an empty layout is present
     strength: { light: 40, dark: 15 },
     lens: "off",
     menus: true,
+    scope: "all",
   });
   assert.equal(bare.theme.layout, null);
   assert.equal(bare.theme.fonts, null);

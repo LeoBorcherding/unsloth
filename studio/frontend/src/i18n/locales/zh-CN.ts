@@ -2366,6 +2366,7 @@ export const zhCN = {
         importApplyLayout: "同时应用侧边栏布局",
         importApplyAssets: "同时应用字体和背景图片",
         importApply: "应用主题",
+        applyFailed: "无法应用主题。",
         changesTitle: "将会更改的内容",
         noChanges: "此主题与你当前的外观相同。",
         warningsTitle: "警告",

@@ -90,7 +90,7 @@ export const useMaterialStore = create<{
       menus: DEFAULT_GLASS.menus,
       strength: DEFAULT_GLASS.strength,
       lens: DEFAULT_GLASS.lens,
-      scope: "all",
+      scope: DEFAULT_GLASS.scope,
       here: true,
       setMaterial: (material) => {
         const next = sanitizeMaterial(material);

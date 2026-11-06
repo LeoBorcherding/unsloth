@@ -168,6 +168,8 @@ function ImportThemeForm({
           },
         },
       );
+    } catch {
+      toast.error(t("settings.appearance.themeFile.applyFailed"));
     } finally {
       setBusy(false);
     }

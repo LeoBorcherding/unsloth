@@ -2599,6 +2599,7 @@ export const cs = {
         importApplyLayout: "Použít také rozvržení postranního panelu",
         importApplyAssets: "Použít také písma a obrázek na pozadí",
         importApply: "Použít motiv",
+        applyFailed: "Motiv se nepodařilo použít.",
         changesTitle: "Co se změní",
         noChanges: "Tento motiv odpovídá vašemu aktuálnímu vzhledu.",
         warningsTitle: "Upozornění",

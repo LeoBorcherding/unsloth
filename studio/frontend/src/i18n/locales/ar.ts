@@ -2390,6 +2390,7 @@ export const ar = {
         importApplyLayout: "تطبيق تخطيط الشريط الجانبي أيضًا",
         importApplyAssets: "تطبيق الخطوط وصورة الخلفية أيضًا",
         importApply: "تطبيق السمة",
+        applyFailed: "تعذّر تطبيق السمة.",
         changesTitle: "ما الذي سيتغير",
         noChanges: "هذه السمة مطابقة لمظهرك الحالي.",
         warningsTitle: "تحذيرات",

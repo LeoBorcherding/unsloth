@@ -2478,6 +2478,7 @@ export const th = {
         importApplyLayout: "ใช้การจัดวางแถบด้านข้างด้วย",
         importApplyAssets: "ใช้ฟอนต์และรูปพื้นหลังด้วย",
         importApply: "ใช้ธีม",
+        applyFailed: "ไม่สามารถใช้ธีมได้",
         changesTitle: "สิ่งที่จะเปลี่ยน",
         noChanges: "ธีมนี้ตรงกับรูปลักษณ์ปัจจุบันของคุณ",
         warningsTitle: "คำเตือน",

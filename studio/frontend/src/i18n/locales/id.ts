@@ -2583,6 +2583,7 @@ export const id = {
         importApplyLayout: "Terapkan juga tata letak bilah sisi",
         importApplyAssets: "Terapkan juga font dan gambar latar",
         importApply: "Terapkan tema",
+        applyFailed: "Tema tidak dapat diterapkan.",
         changesTitle: "Yang akan berubah",
         noChanges: "Tema ini sama dengan tampilan Anda saat ini.",
         warningsTitle: "Peringatan",

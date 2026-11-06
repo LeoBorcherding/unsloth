@@ -48,7 +48,7 @@ export const CUSTOMIZATION_FIELDS = {
   chatWidth: { category: "look", section: "chat", key: "width", change: "chat" },
   composerOutline: { category: "look", section: "chat", key: "composerOutline", change: "chat" },
   elementOutline: { category: "look", section: "chat", key: "elementOutline", change: "chat" },
-  sentAttachments: { category: "layout", section: "layout", key: "sentAttachments", change: "layout" },
+  sentAttachments: { category: "look", section: "chat", key: "sentAttachments", change: "chat" },
   sidebarMenu: { category: "layout", section: "layout", key: "sidebarMenu", change: "layout" },
   sidebarNav: { category: "layout", section: "layout", key: "sidebarNav", change: "layout" },
   sidebarNavAuto: { category: "layout", section: "layout", key: "sidebarNavAuto", change: "layout" },

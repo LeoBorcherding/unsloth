@@ -2384,6 +2384,7 @@ export const ko = {
         importApplyLayout: "사이드바 레이아웃도 적용",
         importApplyAssets: "글꼴 및 배경 이미지도 적용",
         importApply: "테마 적용",
+        applyFailed: "테마를 적용하지 못했습니다.",
         changesTitle: "변경될 내용",
         noChanges: "이 테마는 현재 외관과 같습니다.",
         warningsTitle: "경고",
