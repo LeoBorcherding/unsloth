@@ -1,0 +1,24 @@
+{
+ "model": "LiquidAI/LFM3-Omni-2B",
+ "loaded": {
+  "has_audio_input": true,
+  "speaks": true
+ },
+ "voicePick": "chat-model-voice",
+ "micTarget": "asr",
+ "completions": [
+  {
+   "endpoint": "chat/completions",
+   "audio_in_body": 611728,
+   "at": 1793951258232,
+   "audio_base64_len": 611728,
+   "modalities": [
+    "text",
+    "audio"
+   ],
+   "lastUserText": "Which planet is the largest in our solar system? Answer in one short sentence."
+  }
+ ],
+ "ttsAfterTurn": [],
+ "micCalls": 3
+}

@@ -1,0 +1,72 @@
+{
+ "model": "unsloth/gemma-4-E2B-it-GGUF",
+ "loaded": {
+  "has_audio_input": true,
+  "speaks": false
+ },
+ "voicePick": "default",
+ "micTarget": "model",
+ "completions": [
+  {
+   "endpoint": "chat/completions",
+   "audio_in_body": 469736,
+   "at": 1793951198763,
+   "audio_base64_len": 469736,
+   "modalities": null,
+   "lastUserText": "What is the capital of France? Answer in one short sentence."
+  }
+ ],
+ "ttsAfterTurn": [
+  {
+   "at": 1793951193522,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Running it real quick."
+  },
+  {
+   "at": 1793951194006,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Trying it out."
+  },
+  {
+   "at": 1793951194445,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking the file."
+  },
+  {
+   "at": 1793951194839,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Reading through it."
+  },
+  {
+   "at": 1793951195314,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking something."
+  },
+  {
+   "at": 1793951195809,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Still thinking."
+  },
+  {
+   "at": 1793951196294,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "This is a larger request, one moment please."
+  },
+  {
+   "at": 1793951197020,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Give me a second."
+  },
+  {
+   "at": 1793951199245,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Let me think that through."
+  },
+  {
+   "at": 1793951208057,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "The capital of France is Paris."
+  }
+ ],
+ "micCalls": 2
+}

@@ -1,0 +1,81 @@
+{
+ "model": "unsloth/gemma-4-E2B-it-GGUF",
+ "loaded": {
+  "has_audio_input": true,
+  "speaks": false
+ },
+ "voicePick": "default",
+ "micTarget": "asr",
+ "completions": [
+  {
+   "endpoint": "chat-runs",
+   "audio_in_body": 0,
+   "at": 1793950675559,
+   "audio_base64_len": 0,
+   "modalities": null
+  }
+ ],
+ "ttsAfterTurn": [
+  {
+   "at": 1793950669270,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Can you allow that in the chat? I'll wait."
+  },
+  {
+   "at": 1793950670080,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Looking that up."
+  },
+  {
+   "at": 1793950670817,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking on that."
+  },
+  {
+   "at": 1793950671501,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Running it real quick."
+  },
+  {
+   "at": 1793950672282,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Trying it out."
+  },
+  {
+   "at": 1793950672812,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking the file."
+  },
+  {
+   "at": 1793950673504,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Reading through it."
+  },
+  {
+   "at": 1793950674587,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking something."
+  },
+  {
+   "at": 1793950675391,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Still thinking."
+  },
+  {
+   "at": 1793950678832,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Jupiter is the largest planet in our solar system."
+  },
+  {
+   "at": 1793950682849,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Still thinking."
+  },
+  {
+   "at": 1793950683408,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "This is a larger request, one moment please."
+  }
+ ],
+ "micCalls": 2
+}

@@ -1,0 +1,77 @@
+{
+ "model": "LiquidAI/LFM3-Omni-2B-GGUF",
+ "loaded": {
+  "has_audio_input": true,
+  "speaks": false
+ },
+ "voicePick": "default",
+ "micTarget": "model",
+ "completions": [
+  {
+   "endpoint": "chat/completions",
+   "audio_in_body": 600808,
+   "at": 1793950728842,
+   "audio_base64_len": 600808,
+   "modalities": null,
+   "lastUserText": "Which planet is the largest in our solar system? Answer in one short sentence."
+  }
+ ],
+ "ttsAfterTurn": [
+  {
+   "at": 1793950722454,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Looking that up."
+  },
+  {
+   "at": 1793950723010,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking on that."
+  },
+  {
+   "at": 1793950723459,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Running it real quick."
+  },
+  {
+   "at": 1793950723942,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Trying it out."
+  },
+  {
+   "at": 1793950724432,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking the file."
+  },
+  {
+   "at": 1793950724948,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Reading through it."
+  },
+  {
+   "at": 1793950725450,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Checking something."
+  },
+  {
+   "at": 1793950725970,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Still thinking."
+  },
+  {
+   "at": 1793950726384,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "This is a larger request, one moment please."
+  },
+  {
+   "at": 1793950727034,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "Give me a second."
+  },
+  {
+   "at": 1793950731733,
+   "model": "audio-cpp/audio.cpp-gguf/Kokoro-82M-GGUF",
+   "text": "The largest planet in our solar system is Jupiter."
+  }
+ ],
+ "micCalls": 2
+}
