@@ -691,7 +691,10 @@ def test_an_ops_record_outlives_a_later_merge_for_status_by_op_id(orchestrator, 
 
 BEYONDER_EXPERTS = [
     ("openchat/openchat-3.5-1210", ["chat", "assistant", "tell me", "explain"]),
-    ("beowolx/CodeNinja-1.0-OpenChat-7B", ["code", "python", "javascript", "programming", "algorithm"]),
+    (
+        "beowolx/CodeNinja-1.0-OpenChat-7B",
+        ["code", "python", "javascript", "programming", "algorithm"],
+    ),
     ("maywell/PiVoT-0.1-Starling-LM-RP", ["storywriting", "write", "scene", "story", "character"]),
     ("WizardLM/WizardMath-7B-V1.1", ["reason", "math", "mathematics", "solve", "count"]),
 ]
