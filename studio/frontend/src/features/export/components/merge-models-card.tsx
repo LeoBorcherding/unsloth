@@ -23,9 +23,12 @@ import {
   cancelExport,
   fetchExportLogs,
   fetchMergeProbe,
+  getExportStatus,
+  isRecoverableTransportError,
   mergeModels,
 } from "../api/export-api";
 import { getExportLogLineClass } from "../lib/log-style";
+import { recoverViaStatus } from "../stores/export-runtime-store";
 import {
   DEFAULT_MERGE_SETTINGS,
   MERGE_DTYPES,
@@ -65,6 +68,7 @@ export function MergeModelsCard({
     null,
   );
   const runningRef = useRef(false);
+  const opIdRef = useRef<string | null>(null);
 
   const info = mergeMethodInfo(s.method);
   const blockReason = mergeBlockReason(s);
@@ -100,19 +104,36 @@ export function MergeModelsCard({
     setLogs([]);
     setResult(null);
     let poller: Promise<number> | null = null;
+    const opId = crypto.randomUUID();
+    opIdRef.current = opId;
     try {
       // Lines after this cursor belong to this merge, not to an earlier export.
       const { cursor } = await fetchExportLogs(null);
       poller = pollLogs(cursor);
-      const response = await mergeModels({
-        ...mergeRequest(s),
-        hf_token: hfApiToken(hfToken) ?? null,
-        install_missing_dependencies: installMissing,
-      });
-      const run = String(response.details?.run ?? s.outputName.trim());
+      const baseline = await getExportStatus()
+        .then((st) => st.last_op_seq ?? 0)
+        .catch(() => null);
+      let outputPath: string | null;
+      try {
+        const response = await mergeModels({
+          ...mergeRequest(s),
+          hf_token: hfApiToken(hfToken) ?? null,
+          install_missing_dependencies: installMissing,
+          op_id: opId,
+        });
+        outputPath = response.details?.output_path ?? null;
+      } catch (error) {
+        // A tunnel timeout cuts the POST off while the merge keeps running: settle it via status.
+        if (!isRecoverableTransportError(error)) throw error;
+        ({ outputPath } = await recoverViaStatus(
+          baseline,
+          () => opIdRef.current === opId,
+        ));
+      }
+      const run = s.outputName.trim();
       setResult({
         ok: true,
-        text: `Saved to ${response.details?.output_path ?? run}. It is listed under Training runs.`,
+        text: `Saved to ${outputPath ?? run}. It is listed under Training runs.`,
       });
       onMerged(run);
     } catch (error) {
@@ -382,7 +403,10 @@ export function MergeModelsCard({
               "MergeKit is installed on first use."}
           </p>
           {running ? (
-            <Button variant="destructive" onClick={() => void cancelExport()}>
+            <Button
+              variant="destructive"
+              onClick={() => void cancelExport(opIdRef.current ?? undefined)}
+            >
               Cancel
             </Button>
           ) : (

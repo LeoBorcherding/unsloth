@@ -226,10 +226,13 @@ class ExportOrchestrator:
 
     def _terminate_worker(self) -> bool:
         self._cancel_requested = True
-        merge = self._merge_proc
-        if merge is not None and merge.poll() is None:
-            logger.info("Export cancel requested: terminating MergeKit (pid=%s)", merge.pid)
-            merge.terminate()
+        if self._active_op_kind == "merge":
+            # A merge leaves the checkpoint worker alone, so never fall through to it; between
+            # MergeKit steps the flag alone stops the next one from starting.
+            merge = self._merge_proc
+            if merge is not None and merge.poll() is None:
+                logger.info("Export cancel requested: terminating MergeKit (pid=%s)", merge.pid)
+                merge.terminate()
             return True
         proc = self._proc
         if proc is None or not proc.is_alive():
@@ -837,7 +840,7 @@ class ExportOrchestrator:
                     spec,
                     outputs_root() / spec["output_name"],
                     log = lambda line, stream: self._append_log({"line": line, "stream": stream}),
-                    on_spawn = lambda proc: setattr(self, "_merge_proc", proc),
+                    on_spawn = self._track_merge_proc,
                     hf_token = hf_token,
                     install_missing = install_missing_dependencies,
                     cancelled = self.was_cancelled,
@@ -854,6 +857,12 @@ class ExportOrchestrator:
                 self._end_op()
                 self._active_op_kind = None
                 self._export_active = False
+
+    def _track_merge_proc(self, proc) -> None:
+        self._merge_proc = proc
+        # A cancel that landed before the spawn found nothing to terminate.
+        if self._cancel_requested:
+            proc.terminate()
 
     @job_control
     def cleanup_memory(self) -> bool:

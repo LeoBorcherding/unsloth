@@ -414,6 +414,20 @@ class _FakeProc:
         self.terminated = True
 
 
+class _FakeWorker:
+    pid = 1234
+    terminated = False
+
+    def is_alive(self):
+        return not self.terminated
+
+    def terminate(self):
+        self.terminated = True
+
+    def join(self, timeout = None):
+        pass
+
+
 @pytest.fixture
 def orchestrator(monkeypatch):
     from core.export.orchestrator import ExportOrchestrator
@@ -474,6 +488,29 @@ def test_a_cancel_aimed_at_another_op_leaves_the_merge_running(orchestrator, mon
     monkeypatch.setattr(mergekit, "_stream", fake_stream)
     ok, _message, _path = orchestrator.merge_models(dict(SPEC), op_id = "mine")
     assert ok and not proc.terminated
+
+
+def test_a_cancel_before_mergekit_spawns_spares_the_worker_and_skips_the_merge(
+    orchestrator, monkeypatch
+):
+    _mark_installed()
+    worker = _FakeWorker()
+    spawned = []
+    monkeypatch.setattr(orchestrator, "_proc", worker)
+    monkeypatch.setattr(
+        mergekit, "_stream", lambda argv, env, log, on_spawn: spawned.append(argv) or 0
+    )
+    real_config_yaml = mergekit.config_yaml
+
+    def cancel_while_staging(spec):
+        assert orchestrator.cancel_export() is True
+        return real_config_yaml(spec)
+
+    monkeypatch.setattr(mergekit, "config_yaml", cancel_while_staging)
+    ok, message, _path = orchestrator.merge_models(dict(SPEC))
+    assert (ok, message) == (False, "Export cancelled")
+    assert not worker.terminated and spawned == []
+    worker.terminated = True  # so the fixture's cleanup does not talk to it
 
 
 def test_route_authorizes_hub_models_and_reports_the_run(monkeypatch):

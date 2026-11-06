@@ -50,7 +50,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Settle a phase whose POST hit a tunnel timeout by polling status. A record is ours once
  *  the op is inactive and we saw it active or its seq passed `baseline`. */
-async function recoverViaStatus(
+export async function recoverViaStatus(
   baseline: number | null,
   isCurrent: () => boolean,
 ): Promise<{ outputPath: string | null }> {

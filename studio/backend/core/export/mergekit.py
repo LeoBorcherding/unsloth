@@ -227,7 +227,7 @@ def install(
     shared = "torch" in engine_install._studio_packages()
 
     def run(argv: list[str], failure: str) -> None:
-        if _stream(argv, env, log, on_spawn) != 0 or cancelled():
+        if cancelled() or _stream(argv, env, log, on_spawn) != 0 or cancelled():
             raise RuntimeError("MergeKit installation cancelled." if cancelled() else failure)
 
     try:
@@ -294,6 +294,8 @@ def merge(
             cuda = bool(spec.get("cuda")),
             random_seed = spec.get("random_seed"),
         )
+        if cancelled():
+            raise RuntimeError("Merge cancelled.")
         code = _stream(argv, child_env(hf_token), log, on_spawn)
         if cancelled():
             raise RuntimeError("Merge cancelled.")

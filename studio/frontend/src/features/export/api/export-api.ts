@@ -326,6 +326,7 @@ export interface MergeModelsParams {
   cuda?: boolean;
   hf_token?: string | null;
   install_missing_dependencies?: boolean;
+  op_id?: string | null;
 }
 
 export interface MergeProbe {
@@ -390,9 +391,21 @@ export async function cleanupExport(): Promise<ExportOperationResponse> {
   return parseJson<ExportOperationResponse>(response);
 }
 
-/** Terminates the export worker only; always resolves so callers need no guard. */
-export async function cancelExport(): Promise<ExportOperationResponse> {
-  const response = await authFetch("/api/export/cancel", { method: "POST" });
+/** Terminates the export worker only; always resolves so callers need no guard.
+ *  With an op id only that op is stopped, so a queued merge never cancels another export. */
+export async function cancelExport(
+  expectedOpId?: string,
+): Promise<ExportOperationResponse> {
+  const response = await authFetch(
+    "/api/export/cancel",
+    expectedOpId
+      ? {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expected_op_id: expectedOpId }),
+        }
+      : { method: "POST" },
+  );
   return parseJson<ExportOperationResponse>(response);
 }
 
