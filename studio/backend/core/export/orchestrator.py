@@ -187,7 +187,11 @@ class ExportOrchestrator:
     def get_active_op_id(self) -> Optional[str]:
         return self._active_op_id
 
-    def _begin_op(self, op_id: Optional[str], kind: Optional[str] = None) -> bool:
+    def _begin_op(
+        self,
+        op_id: Optional[str],
+        kind: Optional[str] = None,
+    ) -> bool:
         with self._op_lock:
             if op_id is not None and op_id in self._cancelled_op_ids:
                 self._cancelled_op_ids.discard(op_id)
