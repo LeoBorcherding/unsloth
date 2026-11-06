@@ -910,7 +910,7 @@ def _reward_funcs(
         try:
             worker = worker_cls(python, mode = mode).start()
         except SandboxUnavailableError as exc:
-            raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation)) from exc
+            raise PythonRewardError(sandbox_refusal(str(exc), exc.remediation, mode)) from exc
         if worker.isolation.get("os_isolation"):
             logger.info("Python rewards run with %s", worker.isolation)
         else:

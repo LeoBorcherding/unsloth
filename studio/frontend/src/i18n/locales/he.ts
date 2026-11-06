@@ -5227,7 +5227,7 @@ export const he = {
       add: "הוסף תגמול",
       import: "ייבוא",
       importTitle: "ייבוא תגמול",
-      importDescription: "הדבק קובץ REWARD.md. תגמולי כללים הם נתונים פשוטים, ולכן בטוח לייבא אותם.",
+      importDescription: "הדבק קובץ REWARD.md: כלל (נתונים פשוטים) או פונקציית Python.",
       importAction: "ייבא",
       importEmpty: "הדבק תחילה קובץ REWARD.md.",
       overwrite: "החלף תגמול בעל אותו שם",

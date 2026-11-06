@@ -5372,7 +5372,7 @@ export const sv = {
       add: "Lägg till belöning",
       import: "Importera",
       importTitle: "Importera en belöning",
-      importDescription: "Klistra in en REWARD.md-fil. Regelbelöningar är ren data, så de är säkra att importera.",
+      importDescription: "Klistra in en REWARD.md-fil: en regel (ren data) eller en Python-funktion.",
       importAction: "Importera",
       importEmpty: "Klistra in en REWARD.md först.",
       overwrite: "Ersätt en belöning med samma namn",
