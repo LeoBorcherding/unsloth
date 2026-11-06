@@ -250,7 +250,7 @@ export function VideoEditingPage() {
         </Alert>
       )}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <section aria-label="Segments" className="grid content-start gap-3">
           <h2 className="text-ui-15 font-semibold text-foreground">Segments</h2>
           <ol className="grid gap-3">
@@ -478,7 +478,7 @@ export function VideoEditingPage() {
           </div>
         </section>
 
-        <section aria-label="Movie" className="grid content-start gap-3 lg:sticky lg:top-6 lg:self-start">
+        <section aria-label="Movie" className="grid content-start gap-3 xl:sticky xl:top-6 xl:self-start">
           <h2 className="text-ui-15 font-semibold text-foreground">Movie</h2>
           {running && stage && (
             <div className="grid gap-1.5 rounded-xl border border-border/60 bg-muted/20 p-3" data-testid="edit-progress">
