@@ -923,15 +923,15 @@ def test_an_eval_refuses_internal_model_swaps(monkeypatch):
     monkeypatch.setattr(orch, "_orchestrator", backend)
     request = SimpleNamespace(headers = {})
     # A swap admitted before the Eval stays counted until it ends, so the Eval cannot claim under it.
-    release = lease_routes.refuse_if_sweep_holds(request)
+    release = lease_routes.admit_swap(request)
     assert not lease_routes.claim_run_lease("evals-test", "evals")
     release()
     release()
     assert lease_routes._loads_in_flight == {}
     seq = backend.try_begin()
     with pytest.raises(benchmark_routes.HTTPException) as exc:
-        lease_routes.refuse_if_sweep_holds(request)
+        lease_routes.admit_swap(request)
     assert exc.value.status_code == 409 and exc.value.detail == lease_routes.EVAL_BUSY_DETAIL
     assert lease_routes._loads_in_flight == {}
     backend.release(seq)
-    lease_routes.refuse_if_sweep_holds(request)()
+    lease_routes.admit_swap(request)()

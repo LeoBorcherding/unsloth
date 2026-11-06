@@ -200,6 +200,25 @@ def release_lease(
             _lease = None
 
 
+@router.get("/capabilities")
+def capabilities(current_subject: str = Depends(get_current_subject)):
+    """What the installed llama-server takes that a load's status can't show. The draft KV dtype
+    is dropped silently on builds without its flags, so a draft-cache row would chart the default."""
+    from core.inference.llama_cpp import LlamaCppBackend
+
+    try:
+        caps = LlamaCppBackend.probe_server_capabilities() or {}
+    except Exception:
+        caps = {}
+    # Unknown (no binary, probe failed) stays None so the runner doesn't skip rows on a guess.
+    draft_cache = (
+        bool(caps.get("spec_draft_cache_k_flag") and caps.get("spec_draft_cache_v_flag"))
+        if caps.get("found")
+        else None
+    )
+    return {"draft_cache_type": draft_cache}
+
+
 LEASE_HEADER = b"x-unsloth-bench-lease"
 # Compared without a trailing slash. main.py mounts the inference router under /v1 too, and
 # /models/* are the llama-server-compatible root routes.
@@ -264,9 +283,11 @@ SWEEP_BUSY_DETAIL = (
 EVAL_BUSY_DETAIL = SWEEP_BUSY_DETAIL.replace("A benchmark", "An eval", 1)
 
 
-def refuse_if_sweep_holds(request) -> Callable[[], None]:
-    """409 a model swap that bypasses LOAD_PATHS (auto-switch, preview) while a sweep or an Eval holds the server.
-    An admitted swap counts as a load in flight, so no lease is claimed under it; call the returned release when it ends."""
+def admit_swap(request) -> Optional[Callable[[], None]]:
+    """A model swap that skips LOAD_PATHS (auto-switch, preview), admitted like a load: 409 while a
+    sweep or an Eval holds the server, else counted in flight until the returned release runs."""
+    if request is None:
+        return None
     headers = getattr(request, "headers", None)
     holder = headers.get(LEASE_HEADER.decode()) if headers is not None else None
     with _lease_lock:
@@ -280,6 +301,8 @@ def refuse_if_sweep_holds(request) -> Callable[[], None]:
             refused = EVAL_BUSY_DETAIL
         elif _sweep_holds_against(holder):
             refused = SWEEP_BUSY_DETAIL
+        elif holder is not None and _loads_in_flight.get(holder):
+            return None
         else:
             refused = None
             _loads_in_flight[holder] = _loads_in_flight.get(holder, 0) + 1
@@ -288,6 +311,7 @@ def refuse_if_sweep_holds(request) -> Callable[[], None]:
     released = [False]
 
     def release() -> None:
+        # Idempotent: a second call would uncount another request sharing the holder (None).
         with _lease_lock:
             if released[0]:
                 return
