@@ -72,8 +72,8 @@ from core.inference.llama_cpp import (
     _mla_mtp_auto_enabled,
     _swa_full_from_args_or_env,
 )
-from core.inference import llama_cpp as mod
 import subprocess as _subprocess
+from llama_cpp_source import package_source, package_tree
 
 
 def _matches(backend: LlamaCppBackend, **kwargs) -> bool:
@@ -3375,7 +3375,7 @@ def test_a_slot_clamp_from_an_inconclusive_probe_is_also_retried(monkeypatch):
 
 def test_the_probe_marker_is_committed_only_once_the_runtime_is_replaced():
     """The probe marker is written only at launch commit; early exits leave the old server running."""
-    source = inspect.getsource(mod)
+    source = package_source()
     tree = ast.parse(source)
     load_model = next(
         node
@@ -3429,7 +3429,7 @@ def test_unload_clears_the_capability_marker():
 def test_a_diffusion_load_never_pays_for_the_capability_probe():
     load_model = next(
         node
-        for node in ast.walk(ast.parse(inspect.getsource(mod)))
+        for node in ast.walk(package_tree())
         if isinstance(node, ast.FunctionDef) and node.name == "load_model"
     )
     # In-load probes go through the _launch_caps helper, so count both it and direct calls.
@@ -3484,7 +3484,7 @@ def test_the_marker_comes_from_the_launch_snapshot_not_a_probe_after_startup():
     """Marker comes from the launch snapshot; a later probe would let a degraded server dedupe forever."""
     load_model = next(
         node
-        for node in ast.walk(ast.parse(inspect.getsource(mod)))
+        for node in ast.walk(package_tree())
         if isinstance(node, ast.FunctionDef) and node.name == "load_model"
     )
 
@@ -3527,7 +3527,7 @@ def test_a_later_successful_probe_cannot_erase_an_earlier_degrading_one():
     """The marker must accumulate: a later successful probe must not erase an earlier slot clamp."""
     load_model = next(
         node
-        for node in ast.walk(ast.parse(inspect.getsource(mod)))
+        for node in ast.walk(package_tree())
         if isinstance(node, ast.FunctionDef) and node.name == "load_model"
     )
     helper = next(
@@ -3585,7 +3585,7 @@ def test_the_accumulator_latches_across_probes():
 
 def test_the_dspark_pre_download_gate_latches_into_the_launch_accumulator():
     """The DSpark pre-download gate's inconclusive probe must latch into the launch accumulator."""
-    tree = ast.parse(inspect.getsource(mod))
+    tree = package_tree()
     download = next(
         node
         for node in ast.walk(tree)

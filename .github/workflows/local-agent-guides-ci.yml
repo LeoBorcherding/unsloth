@@ -23,7 +23,7 @@ on:
       # inference.py declares every endpoint the preflight curls.
       - 'studio/backend/routes/inference.py'
       - 'studio/backend/main.py'
-      - 'studio/backend/core/inference/llama_cpp.py'
+      - 'studio/backend/core/inference/llama_cpp/**'
       - 'studio/backend/models/**'
       - 'install.sh'
       - '.github/workflows/local-agent-guides-ci.yml'
@@ -58,7 +58,7 @@ on:
       - 'studio/backend/routes/inference.py'
       # Contracts asserted here that live outside routes/ (/api/health, KV-cache logs, dialect schemas).
       - 'studio/backend/main.py'
-      - 'studio/backend/core/inference/llama_cpp.py'
+      - 'studio/backend/core/inference/llama_cpp/**'
       - 'studio/backend/models/**'
       - 'install.sh'
       - '.github/workflows/local-agent-guides-ci.yml'

@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { readLlamaCppPackage } from "./helpers/backend-llama-cpp-source.ts";
 
 import { registerBundlerResolver } from "./helpers/kit.ts";
 
@@ -25,7 +26,8 @@ const BACKEND = new URL("../../backend/", import.meta.url);
 
 /** Parsed, not imported (no Python runtime); a missing set fails rather than passing silently. */
 function frozensetLiterals(source: string, name: string): string[] {
-  const start = source.indexOf(name);
+  // The definition, not the first mention: the package modules import these names too.
+  const start = source.search(new RegExp(`^${name}\\s*(?::[^=\\n]*)?=`, "m"));
   assert.ok(start >= 0, `${name} is gone from the backend; update this test`);
   const open = source.indexOf("frozenset(", start);
   assert.ok(open >= 0, `${name} is no longer a frozenset literal`);
@@ -40,10 +42,7 @@ const SERVER_ARGS = readFileSync(
   new URL("core/inference/llama_server_args.py", BACKEND),
   "utf8",
 );
-const LLAMA_CPP = readFileSync(
-  new URL("core/inference/llama_cpp.py", BACKEND),
-  "utf8",
-);
+const LLAMA_CPP = readLlamaCppPackage();
 
 test("every placement spelling the launch honours makes the bar abstain", () => {
   const groups = [

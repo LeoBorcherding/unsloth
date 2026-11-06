@@ -43,8 +43,12 @@ def _httpx_calls_without_verify(path: Path) -> list[int]:
 
 
 def test_loopback_llama_calls_pass_verify():
-    missing = _httpx_calls_without_verify(Path(llama_cpp.__file__))
-    assert missing == [], f"llama_cpp.py: httpx calls without verify= at lines {missing}"
+    missing = {
+        path.name: lines
+        for path in sorted(Path(llama_cpp.__file__).parent.glob("*.py"))
+        if (lines := _httpx_calls_without_verify(path))
+    }
+    assert missing == {}, f"llama_cpp: httpx calls without verify= at {missing}"
 
 
 def _stub(port: int) -> LlamaCppBackend:

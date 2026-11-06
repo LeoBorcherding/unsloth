@@ -37,7 +37,9 @@ def _http_error(name: str, *, fallback: str | None = None) -> Exception:
 _BACKEND = Path(__file__).resolve().parents[1]
 
 _GUARDED = {
-    "core/inference/llama_cpp.py": {"_fetch_swa_entry_from_hf": "hf_file_definitely_absent"},
+    "core/inference/llama_cpp/swa_cache.py": {
+        "_fetch_swa_entry_from_hf": "hf_file_definitely_absent"
+    },
     "picker/service.py": {"read_default_chat_template": "get_paths_info"},
     "utils/models/model_config.py": {
         "_read_raw_config_json": "hf_file_definitely_absent",

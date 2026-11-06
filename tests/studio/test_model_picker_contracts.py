@@ -10,6 +10,7 @@ import itertools
 import re
 from pathlib import Path
 from tests.studio._js_source import assert_guard_holds, blank_literals_and_comments
+from llama_cpp_source import package_source
 
 WORKDIR = Path(__file__).resolve().parents[2]
 FRONTEND = WORKDIR / "studio" / "frontend" / "src"
@@ -248,7 +249,7 @@ def test_model_config_page_floors_the_context_ceiling():
 def test_auto_offload_context_matches_picker_custom_seed():
     """Custom's safe seed must track the backend Auto offload context."""
     frontend = _read("features/model-picker/components/model-config-page.tsx")
-    backend = _read_backend("core/inference/llama_cpp.py")
+    backend = package_source()
     frontend_value = re.search(r"\bAUTO_OFFLOAD_CONTEXT_LENGTH\s*=\s*(\d+)", frontend)
     backend_value = re.search(r"\b_AUTO_OFFLOAD_CTX\s*=\s*(\d+)", backend)
     assert frontend_value is not None
@@ -258,7 +259,7 @@ def test_auto_offload_context_matches_picker_custom_seed():
 
 def test_ui_safe_zone_anchor_tracks_the_auto_offload_context():
     """Ceiling and Auto's offload context must share one constant, else every Auto load warns."""
-    backend = _read_backend("core/inference/llama_cpp.py")
+    backend = package_source()
     anchor = re.search(
         r"max_available_ctx\s*=\s*min\(\s*([A-Za-z_0-9]+)\s*,\s*native_ctx_for_cap",
         backend,
@@ -270,7 +271,7 @@ def test_ui_safe_zone_anchor_tracks_the_auto_offload_context():
 def test_auto_offload_context_is_not_below_the_fit_floor():
     """Raising the Auto offload context is placement-neutral only above the fit
     floor: below it, the offload re-check starts awarding GPU residency again."""
-    backend = _read_backend("core/inference/llama_cpp.py")
+    backend = package_source()
     auto = re.search(r"\b_AUTO_OFFLOAD_CTX\s*=\s*(\d+)", backend)
     floor = re.search(r"\b_FIT_MIN_CTX\s*=\s*(\d+)", backend)
     assert auto is not None and floor is not None

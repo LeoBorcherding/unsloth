@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ctypes
+import inspect
 import os
 import subprocess
 import sys
@@ -76,9 +77,12 @@ def _clear_cuda_visible_devices(monkeypatch):
     monkeypatch.delenv("CUDA_DEVICE_ORDER", raising = False)
 
 
-# Captured before the autouse fixture stubs them, so the probes can run for real.
-_REAL_IOMMU_IS_TRANSLATING = LlamaCppBackend.__dict__["_iommu_is_translating"].__func__
-_REAL_NVML_LIBRARY = LlamaCppBackend.__dict__["_nvml_library"].__func__
+# Captured before the autouse fixture stubs them, so the probes can run for real. The methods
+# live on mixins, so look them up through the MRO rather than the composing class's __dict__.
+_REAL_IOMMU_IS_TRANSLATING = inspect.getattr_static(
+    LlamaCppBackend, "_iommu_is_translating"
+).__func__
+_REAL_NVML_LIBRARY = inspect.getattr_static(LlamaCppBackend, "_nvml_library").__func__
 
 
 def _no_nvidia_smi(*a, **k):

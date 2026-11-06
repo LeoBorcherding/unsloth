@@ -20,6 +20,7 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 from core.inference.llama_cpp import GgufLoadIntent, LlamaCppBackend  # noqa: E402
+from llama_cpp_source import package_source
 
 _REAL_POPEN = subprocess.Popen
 
@@ -439,10 +440,7 @@ class TestArchCrashRetryFiresAtMostOnce:
     Pinned here so a future refactor into a retry loop has to notice."""
 
     def test_source_has_a_single_archfallback_spawn(self):
-        source = Path(LlamaCppBackend.__module__.replace(".", "/"))
-        path = Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-        assert path.exists(), source
-        text = path.read_text(encoding = "utf-8")
+        text = package_source()
         assert text.count('label = "-archfallback"') == 1
         assert text.count("_arch_crash_retry_gpu_ids(") == 2
 
@@ -520,8 +518,7 @@ class TestArchRetryDropsTensorSplit:
 
     def test_the_retry_call_site_drops_it_before_respawning(self):
         # The respawn has no test seam, so pin at source that the drop sits between narrowing and respawn.
-        path = Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-        text = path.read_text(encoding = "utf-8")
+        text = package_source()
         # Arch-crash retry and the gated manual-split launch both mask devices under a positional ratio.
         assert text.count("self._without_tensor_split(") == 2
         block = text.split("_arch_crash_retry_gpu_ids(\n")[-1].split('label = "-archfallback"')[0]
@@ -536,8 +533,7 @@ class TestArchRetryRestoresTheMemoryPolicy:
 
     @staticmethod
     def _source():
-        path = Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-        return path.read_text(encoding = "utf-8")
+        return package_source()
 
     def test_the_launch_snapshots_what_cmd_means(self):
         text = self._source()
