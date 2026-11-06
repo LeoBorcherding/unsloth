@@ -16,7 +16,12 @@ av = pytest.importorskip("av")
 from core.inference import video_timeline as vt  # noqa: E402
 
 
-def _clip(count, fps = 24, size = (64, 48), base = 0):
+def _clip(
+    count,
+    fps = 24,
+    size = (64, 48),
+    base = 0,
+):
     """Frame i is solid gray 4 * (base + i), so a decoded frame names its source index."""
     buf = io.BytesIO()
     with av.open(buf, "w", format = "mp4") as out:
@@ -40,7 +45,9 @@ def _labels(mp4):
 
 def test_segments_join_in_order_on_one_canvas():
     a, b = _clip(10, base = 0), _clip(6, base = 40, size = (96, 48))
-    mp4, counts = vt.compose([a, b], vt.parse_segments([{"clip": 0}, {"clip": 1}], 2), width = 64, height = 48)
+    mp4, counts = vt.compose(
+        [a, b], vt.parse_segments([{"clip": 0}, {"clip": 1}], 2), width = 64, height = 48
+    )
     labels, shape = _labels(mp4)
     assert counts == [10, 6] and labels == list(range(10)) + list(range(40, 46))
     assert shape == (48, 64, 3)
@@ -61,7 +68,9 @@ def test_a_generated_part_drops_the_frames_it_shares_with_its_neighbours():
 
 @pytest.mark.parametrize("fps, count, expected", [(48, 24, 12), (12, 6, 12), (30, 30, 24)])
 def test_every_clip_lands_on_the_output_frame_rate(fps, count, expected):
-    mp4, counts = vt.compose([_clip(count, fps = fps)], [vt.parse_segments([{"clip": 0}], 1)[0]], width = 64, height = 48)
+    mp4, counts = vt.compose(
+        [_clip(count, fps = fps)], [vt.parse_segments([{"clip": 0}], 1)[0]], width = 64, height = 48
+    )
     assert counts == [expected]
 
 
@@ -96,7 +105,9 @@ def test_unreadable_trimmed_away_and_long_inputs_are_refused(monkeypatch):
     with pytest.raises(vt.TimelineError, match = "could not be read"):
         vt.compose([b"junk"], vt.parse_segments([{"clip": 0}], 1))
     with pytest.raises(vt.TimelineError, match = "no frames"):
-        vt.compose([_clip(4)], vt.parse_segments([{"clip": 0, "skip_head": 4}], 1), width = 64, height = 48)
+        vt.compose(
+            [_clip(4)], vt.parse_segments([{"clip": 0, "skip_head": 4}], 1), width = 64, height = 48
+        )
     monkeypatch.setattr(vt, "MAX_CLIP_SECONDS", 0.2)
     with pytest.raises(vt.TimelineError, match = "longer than 0.2 seconds"):
         vt.compose([_clip(24)], vt.parse_segments([{"clip": 0}], 1), width = 64, height = 48)
@@ -118,7 +129,10 @@ def test_route_joins_and_reports_frames():
     app.dependency_overrides[get_current_subject] = lambda: "owner"
     client = TestClient(app)
     url = "/api/inference/video/timeline/compose"
-    files = [("clips", ("a.mp4", _clip(10), "video/mp4")), ("clips", ("b.mp4", _clip(4, base = 30), "video/mp4"))]
+    files = [
+        ("clips", ("a.mp4", _clip(10), "video/mp4")),
+        ("clips", ("b.mp4", _clip(4, base = 30), "video/mp4")),
+    ]
     spec = {"segments": [{"clip": 1}, {"clip": 0, "end": 0.25}], "width": 64, "height": 48}
     res = client.post(url, data = {"spec": json.dumps(spec)}, files = files)
     assert res.status_code == 200 and res.headers["content-type"] == "video/mp4", res.text

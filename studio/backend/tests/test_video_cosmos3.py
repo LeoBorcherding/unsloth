@@ -1588,7 +1588,9 @@ def test_bridge_rules(kwargs, error, fragment):
         vf.validate_video_continuation(_fam("cosmos3-nano"), **kwargs)
 
 
-@pytest.mark.parametrize("frames, expected", [(93, [0, 1, 22, 23]), (17, [0, 1, 3, 4]), (121, [0, 1, 29, 30])])
+@pytest.mark.parametrize(
+    "frames, expected", [(93, [0, 1, 22, 23]), (17, [0, 1, 3, 4]), (121, [0, 1, 29, 30])]
+)
 def test_a_bridge_marks_both_ends_clean(frames, expected):
     assert vc3.bridge_condition_indexes(frames) == expected
 
@@ -1632,8 +1634,8 @@ def test_bridge_conditioning_puts_the_target_at_the_end_for_one_encode():
     middle = (5 + frames - 8) // 2
     assert got[:5] == [1, 2, 3, 4, 5]
     assert got[5:middle] == [5.0] * (middle - 5)
-    assert got[middle:frames - 8] == [100.0] * (frames - 8 - middle)
-    assert got[frames - 8:] == [100.0 + i for i in range(8)]
+    assert got[middle : frames - 8] == [100.0] * (frames - 8 - middle)
+    assert got[frames - 8 :] == [100.0 + i for i in range(8)]
     assert torch.equal(pipe.encoded[1], x) and pipe.encoded[2].shape[2] == 9
     assert float(x[0, 0, -1, 0, 0]) == 5.0  # the caller's tensor is not written to
 
@@ -1644,7 +1646,14 @@ def test_nano_bridges_from_one_clip_onto_the_next(cosmos3_runtime, monkeypatch):
     entered = []
 
     @contextlib.contextmanager
-    def _record(p, target, num_frames, width, height, lead = 5):
+    def _record(
+        p,
+        target,
+        num_frames,
+        width,
+        height,
+        lead = 5,
+    ):
         entered.append((p, _indexes(target), num_frames, width, height, lead))
         yield
 
@@ -1660,7 +1669,13 @@ def test_nano_bridges_from_one_clip_onto_the_next(cosmos3_runtime, monkeypatch):
     )
     passed = pipe.passed
     assert passed["condition_frame_indexes_vision"] == [0, 1, 7, 8]
-    assert passed["condition_video_keep"] == "last" and _indexes(passed["video"]) == [7, 8, 9, 10, 11]
+    assert passed["condition_video_keep"] == "last" and _indexes(passed["video"]) == [
+        7,
+        8,
+        9,
+        10,
+        11,
+    ]
     assert entered == [(pipe, [0, 1, 2, 3, 4, 5, 6, 7], 33, 832, 480, 5)]
     assert result["conditioning"] == "v2v-bridge"
     backend.generate(prompt = "p", continuation_video = _clip_url(12), num_frames = 33, steps = 1)
@@ -1697,7 +1712,10 @@ def test_the_request_model_needs_a_clip_to_bridge_from():
     assert ok.bridge_video == "y"
     for extra, fragment in (
         ({"bridge_video": "y"}, "needs a continuation_video"),
-        ({"continuation_video": "x", "continuation_keep": "first", "bridge_video": "y"}, "must be 'last'"),
+        (
+            {"continuation_video": "x", "continuation_keep": "first", "bridge_video": "y"},
+            "must be 'last'",
+        ),
     ):
         with pytest.raises(ValidationError, match = fragment):
             VideoGenerateRequest(prompt = "p", **extra)

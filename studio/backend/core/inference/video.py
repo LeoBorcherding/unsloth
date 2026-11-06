@@ -1026,7 +1026,11 @@ VIDEO_BRIDGE_CONDITIONING = "v2v-bridge"
 
 
 def _continuation_conditioning(continuation: Any) -> str:
-    return VIDEO_BRIDGE_CONDITIONING if continuation[2] is not None else VIDEO_CONTINUATION_CONDITIONING
+    return (
+        VIDEO_BRIDGE_CONDITIONING
+        if continuation[2] is not None
+        else VIDEO_CONTINUATION_CONDITIONING
+    )
 
 
 class _VideoGenerationCancelled(Exception):
@@ -12983,7 +12987,6 @@ class VideoBackend:
                     request_shape["continuation"] = continuation[1]
                     if continuation[2] is not None:
                         from .video_cosmos3 import bridge_condition_indexes
-
                         kwargs["condition_frame_indexes_vision"] = bridge_condition_indexes(frames)
                         request_shape["bridge"] = True
                 # Set scheduler shifts every run so prior requests cannot leak state.
@@ -13191,7 +13194,6 @@ class VideoBackend:
                             stack.enter_context(stream_session.hooks())
                         if continuation is not None and continuation[2] is not None:
                             from .video_cosmos3 import bridge_conditioning
-
                             stack.enter_context(
                                 bridge_conditioning(
                                     pipe,

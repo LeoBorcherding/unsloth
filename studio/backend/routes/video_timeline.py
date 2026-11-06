@@ -28,8 +28,14 @@ async def compose_timeline(request: Request, current_subject: str = Depends(get_
     try:
         form = await request.form(max_files = video_timeline.MAX_SEGMENTS)
     except Exception:  # noqa: BLE001
-        raise HTTPException(status_code = 400, detail = "Send the clips and a spec as multipart/form-data.")
-    uploads = [value for name, value in form.multi_items() if name == "clips" and isinstance(value, UploadFile)]
+        raise HTTPException(
+            status_code = 400, detail = "Send the clips and a spec as multipart/form-data."
+        )
+    uploads = [
+        value
+        for name, value in form.multi_items()
+        if name == "clips" and isinstance(value, UploadFile)
+    ]
     if sum(u.size or 0 for u in uploads) > VIDEO_TIMELINE_UPLOAD_MAX_BYTES:
         raise HTTPException(status_code = 413, detail = "The upload is too large.")
     raw_spec = form.get("spec")
@@ -38,7 +44,9 @@ async def compose_timeline(request: Request, current_subject: str = Depends(get_
     except ValueError:
         spec = None
     if not isinstance(spec, dict):
-        raise HTTPException(status_code = 400, detail = "spec must be a JSON object with a segments list.")
+        raise HTTPException(
+            status_code = 400, detail = "spec must be a JSON object with a segments list."
+        )
     try:
         segments = video_timeline.parse_segments(spec.get("segments"), len(uploads))
         size = {}

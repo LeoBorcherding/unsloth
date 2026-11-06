@@ -306,7 +306,6 @@ def fit_continuation_frames(frames: list, width: int, height: int) -> list:
     return [frame.crop(box) for frame in frames]
 
 
-
 def bridge_condition_indexes(num_frames: int, temporal_compression: int = 4) -> list[int]:
     """Clean latent indexes for a bridge: the two the clip before fills, then the two the target clip fills."""
     latents = (int(num_frames) - 1) // temporal_compression + 1
@@ -314,7 +313,14 @@ def bridge_condition_indexes(num_frames: int, temporal_compression: int = 4) -> 
 
 
 @contextlib.contextmanager
-def bridge_conditioning(pipe: Any, target: list, num_frames: int, width: int, height: int, lead: int = 5):
+def bridge_conditioning(
+    pipe: Any,
+    target: list,
+    num_frames: int,
+    width: int,
+    height: int,
+    lead: int = 5,
+):
     """For one call: land the clip on ``target``'s first frames as well as starting from the ``lead`` kept ones.
 
     ``Cosmos3OmniPipeline``'s video-to-video path fills its conditioning clip from the start, repeat-pads the tail

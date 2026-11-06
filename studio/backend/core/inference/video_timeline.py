@@ -33,10 +33,14 @@ def parse_segments(raw: Any, clip_count: int) -> list[dict[str, Any]]:
             raise TimelineError(f"Segment {i} must be an object.")
         clip = seg.get("clip")
         if isinstance(clip, bool) or not isinstance(clip, int) or not 0 <= clip < clip_count:
-            raise TimelineError(f"Segment {i} names clip {clip!r}, but {clip_count} clip(s) were sent.")
+            raise TimelineError(
+                f"Segment {i} names clip {clip!r}, but {clip_count} clip(s) were sent."
+            )
         start, end = seg.get("start", 0.0) or 0.0, seg.get("end")
         for name, value in (("start", start), ("end", end)):
-            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
+            ):
                 raise TimelineError(f"Segment {i}: {name} must be a number of seconds, 0 or more.")
         if end is not None and end <= start:
             raise TimelineError(f"Segment {i}: the out point must come after the in point.")
@@ -44,9 +48,18 @@ def parse_segments(raw: Any, clip_count: int) -> list[dict[str, Any]]:
         for name in ("skip_head", "skip_tail"):
             value = seg.get(name, 0) or 0
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise TimelineError(f"Segment {i}: {name} must be a whole number of frames, 0 or more.")
+                raise TimelineError(
+                    f"Segment {i}: {name} must be a whole number of frames, 0 or more."
+                )
             skips[name] = value
-        out.append({"clip": clip, "start": float(start), "end": None if end is None else float(end), **skips})
+        out.append(
+            {
+                "clip": clip,
+                "start": float(start),
+                "end": None if end is None else float(end),
+                **skips,
+            }
+        )
     return out
 
 
@@ -60,7 +73,13 @@ def fit(image: Any, width: int, height: int) -> Any:
     return ImageOps.fit(image, (width, height), Image.Resampling.BICUBIC)
 
 
-def clip_frames(data: bytes, *, start: float = 0.0, end: Optional[float] = None, fps: int = FPS) -> Iterator[Any]:
+def clip_frames(
+    data: bytes,
+    *,
+    start: float = 0.0,
+    end: Optional[float] = None,
+    fps: int = FPS,
+) -> Iterator[Any]:
     """Frames of ``data`` from ``start`` to ``end`` seconds on an ``fps`` clock, picked by presentation time (held when
     the source is slower, dropped when faster), as decoded ``av.VideoFrame`` objects."""
     import av
@@ -79,13 +98,17 @@ def clip_frames(data: bytes, *, start: float = 0.0, end: Optional[float] = None,
         try:
             for index, frame in enumerate(container.decode(stream)):
                 if max(frame.width, frame.height) > MAX_SIDE:
-                    raise TimelineError(f"A clip is {frame.width}x{frame.height}; the limit is {MAX_SIDE} px a side.")
+                    raise TimelineError(
+                        f"A clip is {frame.width}x{frame.height}; the limit is {MAX_SIDE} px a side."
+                    )
                 t = frame.time if frame.time is not None else index / rate
                 if origin is None:
                     origin = t
                 t -= origin
                 if t > MAX_CLIP_SECONDS + 1e-6:
-                    raise TimelineError(f"A clip runs longer than {MAX_CLIP_SECONDS:g} seconds. Trim it first.")
+                    raise TimelineError(
+                        f"A clip runs longer than {MAX_CLIP_SECONDS:g} seconds. Trim it first."
+                    )
                 while held is not None and start + tick / fps < t - 1e-6:
                     if end is not None and start + tick / fps >= end - 1e-6:
                         return
@@ -105,7 +128,9 @@ def clip_frames(data: bytes, *, start: float = 0.0, end: Optional[float] = None,
 def _segment_frames(clips: list[bytes], seg: dict[str, Any], fps: int) -> Iterator[Any]:
     head, tail = seg["skip_head"], seg["skip_tail"]
     buffer: list[Any] = []
-    for index, frame in enumerate(clip_frames(clips[seg["clip"]], start = seg["start"], end = seg["end"], fps = fps)):
+    for index, frame in enumerate(
+        clip_frames(clips[seg["clip"]], start = seg["start"], end = seg["end"], fps = fps)
+    ):
         if index < head:
             continue
         buffer.append(frame)
@@ -138,7 +163,9 @@ def compose(
             last_id, last_fitted = None, None
             for frame in _segment_frames(clips, seg, fps):
                 if total >= limit:
-                    raise TimelineError(f"The timeline runs longer than {MAX_TOTAL_SECONDS:g} seconds.")
+                    raise TimelineError(
+                        f"The timeline runs longer than {MAX_TOTAL_SECONDS:g} seconds."
+                    )
                 # A held source frame is fitted once.
                 if frame is not last_id:
                     last_id, last_fitted = frame, fit(frame.to_image(), width, height)

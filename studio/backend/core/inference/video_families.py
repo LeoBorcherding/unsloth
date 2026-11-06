@@ -1734,7 +1734,9 @@ def validate_video_continuation(
     if not has_bridge:
         return
     if keep == "first":
-        raise ValueError("A bridge continues from the last frames of a clip, so continuation_keep must be 'last'.")
+        raise ValueError(
+            "A bridge continues from the last frames of a clip, so continuation_keep must be 'last'."
+        )
     kept = COSMOS3_CONTINUATION_FRAMES + COSMOS3_BRIDGE_FRAMES
     if num_frames is not None and num_frames <= kept:
         raise VideoShapeError(
