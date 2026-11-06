@@ -946,6 +946,83 @@ def training_precision_preflight_error(resolved_family: str, base_precision: str
     return None
 
 
+# Block Swap only empties plain frozen nn.Parameters; torchao int8 is a tensor subclass and fp8 / mxfp8 keep
+# their frozen weights in buffers or swapped Linear classes, so those bases would stream nothing or break.
+OFFLOAD_LAYERS_PRECISIONS = ("nf4", "bf16", "auto")
+
+
+def _validate_offload_layers(
+    value: Any, resolved_family: str, base_precision: str, gradient_checkpointing: Any
+) -> int:
+    """The normalized offload_layers count; raises ValueError where Block Swap cannot run (before eviction)."""
+    if value is None or value is False:
+        return 0
+    if isinstance(value, bool) or (isinstance(value, str) and value.strip().lower() == "auto"):
+        raise ValueError(
+            "offload_layers takes a block count (0 = off); 'auto' is not available for image "
+            "training, since no planner can size a DiT step's activations up front."
+        )
+    try:
+        n = int(str(value).strip()) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"offload_layers must be a whole number, got {value!r}") from exc
+    if isinstance(value, float) and value != n:
+        raise ValueError(f"offload_layers must be a whole number, got {value!r}")
+    if n < 0:
+        raise ValueError("offload_layers must be >= 0 (0 disables it)")
+    if n == 0:
+        return 0
+    if resolved_family not in _DIT_TRAIN_FAMILIES:
+        raise ValueError(
+            f"offload_layers is not supported for {resolved_family}: Block Swap streams the DiT "
+            f"transformer blocks ({', '.join(sorted(_DIT_TRAIN_FAMILIES))})."
+        )
+    if not gradient_checkpointing:
+        raise ValueError(
+            "offload_layers needs gradient_checkpointing: without it every swapped block stays "
+            "on the GPU until backward, so nothing is saved."
+        )
+    if base_precision not in OFFLOAD_LAYERS_PRECISIONS:
+        raise ValueError(
+            f"offload_layers is not supported with base_precision={base_precision!r}: Block Swap "
+            f"streams plain frozen weights, which only nf4 and bf16 bases have. Use 'nf4', 'bf16' "
+            f"or 'auto'."
+        )
+    return n
+
+
+def offload_layers_preflight_error(cfg: Any) -> Optional[str]:
+    """Reason this host cannot run cfg.offload_layers, else None; the start route checks it before eviction."""
+    if not int(getattr(cfg, "offload_layers", 0) or 0):
+        return None
+    try:
+        import torch
+
+        has_cuda = torch.cuda.is_available()
+    except Exception:  # noqa: BLE001 -- no torch / probe failure -> treat as no CUDA
+        has_cuda = False
+    if not has_cuda:
+        # Prefetch runs on CUDA / HIP copy streams; XPU, MPS and CPU have none.
+        return "offload_layers needs a CUDA or ROCm GPU; this host has none. Set it to 0."
+    try:
+        props = [torch.cuda.get_device_properties(i) for i in range(torch.cuda.device_count())]
+        if props and all(getattr(p, "is_integrated", 0) for p in props):
+            return (
+                "offload_layers has nothing to swap to on a unified-memory GPU: host and device "
+                "already share the same RAM. Set it to 0."
+            )
+    except Exception:  # noqa: BLE001 -- probe failure: the swap's own checks still run
+        pass
+    try:
+        from unsloth_zoo.block_swap import BlockSwap  # noqa: F401
+    except ImportError:
+        return (
+            "offload_layers needs a newer unsloth_zoo with block_swap. "
+            "Run `pip install --upgrade unsloth_zoo`."
+        )
+    return None
+
+
 def _training_fetch_repo(base: str, token: Optional[str] = None) -> str:
     from core.inference.diffusion_families import (
         _is_local_path,
@@ -1128,6 +1205,8 @@ class DiffusionLoraConfig:
     enable_tf32: bool = True
     # "nf4" | "bf16" | "int8" | "fp8" | "auto"; non-nf4 needs a dense base.
     base_precision: str = "nf4"
+    # DiT blocks whose frozen base weights stream from pinned host RAM (unsloth_zoo BlockSwap); 0 = off.
+    offload_layers: int = 0
     # None: model's own schedule ("auto" for AUTO_FLOW_SHIFT_FAMILIES); a number is the effective shift on unshifted u.
     flow_shift: Optional[Any] = None
     # Per-sample chance of using an empty prompt instead of the caption (CFG dropout); 0.0 disables.
@@ -1288,6 +1367,9 @@ class DiffusionLoraConfig:
                     f"base_precision={base_precision!r} is not validated for training "
                     f"{resolved_family}. Use 'nf4', 'int8', 'bf16', or 'auto'."
                 )
+        offload_layers = _validate_offload_layers(
+            self.offload_layers, resolved_family, base_precision, self.gradient_checkpointing
+        )
         flow_shift = self.flow_shift
         if flow_shift is None and resolved_family in AUTO_FLOW_SHIFT_FAMILIES:
             flow_shift = "auto"
@@ -1368,6 +1450,7 @@ class DiffusionLoraConfig:
             ema_decay = ema_decay,
             compile_transformer = compile_transformer,
             base_precision = base_precision,
+            offload_layers = offload_layers,
             flow_shift = flow_shift,
             cfg_dropout = cfg_dropout,
             weighting_scheme = weighting_scheme,

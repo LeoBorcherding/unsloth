@@ -3790,6 +3790,12 @@ async def start_diffusion_training(
     if _precision_reason:
         raise HTTPException(status_code = 400, detail = _precision_reason)
 
+    from core.training.diffusion_train_common import offload_layers_preflight_error
+
+    _offload_reason = offload_layers_preflight_error(normalized_cfg)
+    if _offload_reason:
+        raise HTTPException(status_code = 400, detail = _offload_reason)
+
     # Trainer child imports the pipeline in this interpreter; refuse a broken import before GPU teardown.
     from core.training.diffusion_train_common import training_pipeline_import_error
 

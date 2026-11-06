@@ -48,6 +48,7 @@ from core.training.diffusion_train_common import (
     LATENT_CACHE_OVER_BUDGET,
     StopCb,
     enable_diffusion_gradient_checkpointing,
+    offload_layers_preflight_error,
     TrainingPeakMemory,
     resume_steps_left,
     make_lora_optimizer,
@@ -363,7 +364,10 @@ def _load_dit_transformer(transformer_cls, cfg, device, base_precision):
         token = cfg.hf_token,
     )
     # int8 stays on host: _int8_quantize_base streams Linears to device so the bf16 base is never whole in VRAM.
-    return transformer if base_precision == "int8" else transformer.to(device)
+    # So does a Block Swap bf16 base: _install_dit_block_swap places all but the swapped blocks.
+    if base_precision == "int8" or int(getattr(cfg, "offload_layers", 0) or 0):
+        return transformer
+    return transformer.to(device)
 
 
 def _load_fp8_prequant_transformer(transformer_cls, cfg, device):
@@ -812,7 +816,7 @@ def _resolve_base_precision(cfg, spec, device) -> str:
             has_fp8 = hasattr(torch, "float8_e4m3fn")
         except Exception:  # noqa: BLE001 -- probe failure -> the safe mode
             pass
-    return _pick_auto_precision(
+    picked = _pick_auto_precision(
         prequant,
         device,
         free_gb,
@@ -821,6 +825,10 @@ def _resolve_base_precision(cfg, spec, device) -> str:
         has_fp8,
         has_torchao,
     )
+    # Block Swap streams plain weights only; the VRAM int8 buys is what the swap already frees.
+    if int(getattr(cfg, "offload_layers", 0) or 0) and picked not in ("nf4", "bf16"):
+        return "bf16"
+    return picked
 
 
 def _flux_load_conditioners(cfg, device, weight_dtype):
@@ -2304,6 +2312,7 @@ def _maybe_compile_transformer(
     on_event,
     base_precision = "nf4",
     steps_left = None,
+    skip_blocks = None,
 ) -> bool:
     """Regionally compile the transformer blocks (diffusers compile_repeated_blocks) after the LoRA
     is attached. Never fatal: a wrap failure falls back to eager with a warning event, and
@@ -2345,11 +2354,117 @@ def _maybe_compile_transformer(
             _install_backports()
         except Exception:  # noqa: BLE001 -- the backport is best-effort
             pass
-        fn(fullgraph = not base_is_bnb, dynamic = True)
-        return True
+        if not skip_blocks:
+            fn(fullgraph = not base_is_bnb, dynamic = True)
+            return True
+        # Block Swap hooks swap .data on copy streams and cannot be traced, so swapped blocks stay eager.
+        return _compile_blocks_except(
+            transformer, skip_blocks, fullgraph = not base_is_bnb, dynamic = True
+        )
     except Exception as exc:  # noqa: BLE001 -- optimisation only, never fatal
         _emit(on_event, "warning", message = f"torch.compile disabled (eager fallback): {exc}")
         return False
+
+
+def _compile_blocks_except(transformer, skip_blocks, **compile_kwargs) -> bool:
+    """compile_repeated_blocks minus ``skip_blocks``; False when every repeated block is skipped."""
+    names = set(getattr(transformer, "_repeated_blocks", None) or ())
+    skip = {id(m) for m in skip_blocks}
+    compiled = False
+    for module in transformer.modules():
+        if type(module).__name__ in names and id(module) not in skip:
+            module.compile(**compile_kwargs)
+            compiled = True
+    return compiled
+
+
+def _dit_block_lists(transformer) -> list:
+    """The ModuleLists of regionally compiled blocks (``_repeated_blocks``), in registration order, which is forward
+    order for every trainable family (Flux dual then single, Z-Image refiners then layers)."""
+    import torch.nn as nn
+
+    names = set(getattr(transformer, "_repeated_blocks", None) or ())
+    if not names:
+        return []
+    return [
+        m
+        for m in transformer.modules()
+        if isinstance(m, nn.ModuleList) and len(m) and all(type(b).__name__ in names for b in m)
+    ]
+
+
+def _plan_block_swap(block_lists, n: int) -> list[tuple[Any, list[int]]]:
+    """(list, indices) per block list for ``n`` swapped blocks spread over the whole stack in forward order, so each
+    copy hides behind several blocks of compute (the LLM path's "spread"); lists that get none are left out."""
+    from unsloth_zoo.block_swap import swap_indices
+
+    total = sum(len(lst) for lst in block_lists)
+    if n > total:
+        raise ValueError(
+            f"offload_layers={n} is more than this transformer's {total} blocks; use {total} or fewer."
+        )
+    picks = swap_indices(total, n, "spread")
+    plan, start = [], 0
+    for lst in block_lists:
+        idx = [g - start for g in picks if start <= g < start + len(lst)]
+        if idx:
+            plan.append((lst, idx))
+        start += len(lst)
+    return plan
+
+
+def _place_unswapped(transformer, swapped_blocks, device) -> None:
+    """Move everything but the swapped blocks' frozen params to ``device``: a host-loaded base never sits whole in
+    VRAM. BlockSwap packs those params from host and moves the blocks' trainable ones itself; buffers move here."""
+    import torch
+
+    inside = {id(m) for b in swapped_blocks for m in b.modules()}
+    with torch.no_grad():
+        for module in transformer.modules():
+            swapped = id(module) in inside
+            for p in module.parameters(recurse = False):
+                if p.device.type == "cpu" and not (swapped and not p.requires_grad):
+                    p.data = p.data.to(device)
+            for name, b in module.named_buffers(recurse = False):
+                if b is not None and b.device.type == "cpu":
+                    module._buffers[name] = b.to(device)
+
+
+def _install_dit_block_swap(transformer, n: int, device) -> tuple[list, list]:
+    """Stream ``n`` DiT blocks' frozen base weights from pinned host RAM; returns (swappers, swapped blocks)."""
+    import torch
+    from unsloth_zoo.block_swap import BlockSwap
+
+    block_lists = _dit_block_lists(transformer)
+    if not block_lists:
+        raise ValueError(
+            f"offload_layers: {type(transformer).__name__} declares no repeated transformer blocks to swap."
+        )
+    plan = _plan_block_swap(block_lists, n)
+    swapped = [lst[i] for lst, idx in plan for i in idx]
+    # Indexed: BlockSwap compares devices, and a bare "cuda" never equals the "cuda:0" the rest sits on.
+    dev = torch.device(device)
+    if dev.type == "cuda" and dev.index is None:
+        dev = torch.device("cuda", torch.cuda.current_device())
+    _place_unswapped(transformer, swapped, dev)
+    swappers = []
+    try:
+        for lst, idx in plan:
+            swappers.append(BlockSwap(lst, idx, prefetch_depth = 2, device = dev))
+    except Exception:
+        for sw in swappers:
+            sw.remove()
+        raise
+    import logging
+
+    logging.getLogger(__name__).info(
+        "Block Swap: %d of %d DiT blocks stream from host RAM",
+        len(swapped),
+        sum(len(lst) for lst in block_lists),
+    )
+    # Hooks keep the swappers alive; this makes them reachable for stats and teardown.
+    transformer._unsloth_block_swap = swappers
+    return swappers, swapped
 
 
 def _dynamo_compile_counters() -> Optional[tuple[int, int, int]]:
@@ -2673,6 +2788,13 @@ def _train_dit(
         else "transformer",
         fetch_repo = training_fetch_repo(cfg),
     )
+    offload_layers = int(getattr(cfg, "offload_layers", 0) or 0)
+    if offload_layers:
+        reason = offload_layers_preflight_error(cfg) or (
+            None if device == "cuda" else "offload_layers needs a CUDA or ROCm GPU. Set it to 0."
+        )
+        if reason:
+            raise ValueError(reason)
     with report_model_load_progress(on_event):
         transformer = spec.load_transformer(fetch_cfg, device, weight_dtype, base_precision)
     base_is_bnb = base_precision == "nf4"
@@ -2688,7 +2810,8 @@ def _train_dit(
         )
     )
     if cfg.gradient_checkpointing:
-        enable_diffusion_gradient_checkpointing(transformer)
+        # Block Swap needs every block checkpointed: an unchecked block keeps its weights until backward.
+        enable_diffusion_gradient_checkpointing(transformer, "plain" if offload_layers else None)
     cast_training_params(transformer, dtype = torch.float32)
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
 
@@ -2706,6 +2829,13 @@ def _train_dit(
     ):
         base_precision = "bf16"
 
+    # After LoRA and the precision conversions: BlockSwap swaps only what is frozen by then.
+    swapped_blocks: list = []
+    if offload_layers:
+        _, swapped_blocks = _install_dit_block_swap(transformer, offload_layers, device)
+        # Re-collect: a host-loaded base's adapters just moved to device.
+        lora_params = [p for p in transformer.parameters() if p.requires_grad]
+
     # LoRA EMA shadows ONLY the trainable adapter params; initialised after the precision conversions so it tracks the final fp32 objects.
     ema = LoRAEMA(transformer, decay = cfg.ema_decay) if getattr(cfg, "ema_decay", 0.0) else None
 
@@ -2718,6 +2848,7 @@ def _train_dit(
         on_event,
         base_precision,
         resume_steps_left(cfg, identity),
+        skip_blocks = swapped_blocks,
     )
     # Compiled Qwen graphs need one fixed text length across steps.
     qwen_pad_to = None

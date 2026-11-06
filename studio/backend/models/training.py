@@ -1116,6 +1116,17 @@ class DiffusionTrainingStartRequest(BaseModel):
             "or auto (pick by free VRAM + GPU class). Dense modes need a non-prequant base."
         ),
     )
+    offload_layers: int = Field(
+        0,
+        ge = 0,
+        le = 1000,
+        description = (
+            "Block Swap: stream this many DiT transformer blocks' frozen base weights from pinned "
+            "host RAM each step instead of keeping them in VRAM. 0 (the default) is off. Needs a "
+            "discrete CUDA or ROCm GPU, gradient checkpointing, and an nf4 / bf16 / auto base; "
+            "swapped blocks run without torch.compile."
+        ),
+    )
     # DiT-only lever: undeclared, model_dump() silently dropped it. Defaults match DiffusionLoraConfig.
     ema_decay: float = Field(
         0.0, ge = 0.0, lt = 1.0, description = "EMA of the LoRA weights; 0 disables it"
