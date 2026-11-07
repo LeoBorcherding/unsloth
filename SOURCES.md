@@ -26,6 +26,10 @@
 Generated, not footage: Cosmos3-Nano text-to-video through Unsloth Studio, prompt in `scripts/demo_api.py` (`DRONE`),
 seeds 0 to 3, 121 frames at 832x480 / 24 fps. Seed 2 used (smoothest, worst step 20.7 dB). `demo/t2v/`.
 
+## Long-gap bridge showcase (longgap/)
+
+Generated, not footage. The 34 s original is the seed-2 drone clip extended by six Cosmos3-Nano continuations (seeds 100 to 105, 121 frames each) through Unsloth Studio; the gap fills are new continuations and a bridge from different seeds. `scripts/longgap.py`.
+
 ## Rejected
 
 | What | Why |
