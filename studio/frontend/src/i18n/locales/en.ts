@@ -904,6 +904,7 @@ export const en = {
       recipes: "Recipes",
       images: "Images",
       video: "Video",
+      videoEditing: "Video editing",
       audio: "Audio",
       tasks: "Scheduled",
       // Hover text while the row spins, before this machine's capability is measured.
