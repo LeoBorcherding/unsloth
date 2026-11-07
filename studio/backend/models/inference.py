@@ -4007,7 +4007,7 @@ class ResponsesUnknownInputItem(BaseModel):
     """Catch-all for unmodelled Responses input item types.
 
     Covers ``reasoning`` items and future types, so unrelated turns don't 422.
-    Normalisation replays reasoning text and drops every other unknown item.
+    Normalisation replays reasoning text, refuses ``item_reference``, drops the rest.
     """
 
     type: str
@@ -7010,6 +7010,11 @@ class AudioCatalogModel(BaseModel):
     languages: Optional[List[str]] = None
     status: Optional[Literal["supported", "community", "experimental", "testing", "wip"]] = None
     size_bytes: Optional[int] = None
+    # GiB of GPU memory the load check requires for size_bytes; set per request (it reads the GPUs).
+    estimated_resident_gb: Optional[float] = None
+    # The smallest variant a GPU runs: a row fits a card when that variant does.
+    smallest_size_bytes: Optional[int] = None
+    smallest_estimated_resident_gb: Optional[float] = None
     downloaded: bool = False
     unsupported_reason: Optional[str] = None
 
@@ -7688,6 +7693,18 @@ class VideoGenerationDefaults(BaseModel):
     guidance: float = Field(..., description = "Default guidance scale")
     num_frames: int = Field(..., description = "Default frame count")
     fps: int = Field(..., description = "Default playback frame rate")
+    fps_range: Optional[list[int]] = Field(
+        None,
+        description = "Inclusive [min, max] frame rate a request may pick, or null (see fps_choices)",
+    )
+    fps_choices: list[int] = Field(
+        default_factory = list,
+        description = "Frame rates a request may pick; with neither this nor fps_range the rate is fixed",
+    )
+    min_num_frames: Optional[int] = Field(None, description = "Smallest frame count the family takes")
+    max_num_frames: Optional[int] = Field(
+        None, description = "Largest frame count the family takes, or null for no family cap"
+    )
     frame_step: int = Field(..., description = "Temporal lattice stride")
     frame_offset: int = Field(
         1, description = "Temporal lattice offset: valid counts are k * frame_step + frame_offset"

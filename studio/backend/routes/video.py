@@ -101,6 +101,11 @@ def _training_is_active() -> bool:
     return _images_training_is_active()
 
 
+def _video_backend():
+    from core.inference.video import get_video_backend
+    return get_video_backend()
+
+
 def _derived_h3_task(gguf_filename: Optional[str], kind: str) -> Optional[str]:
     """The MiniMax-H3 partition a GGUF load resolves to from its filename, else None."""
     if kind != "gguf" or not gguf_filename:
@@ -728,7 +733,9 @@ async def generate_video(
         fam = _detect_load_family(pick.model_path, pick.gguf_filename, None)
         if fam is None:
             return
-        validate_video_request_shape(fam, request.width, request.height, request.num_frames)
+        validate_video_request_shape(
+            fam, request.width, request.height, request.num_frames, fps = request.fps
+        )
         h3_task = expected_partition(pick)
         validate_video_keyframe_conditioning(
             fam,
@@ -930,12 +937,12 @@ async def video_status(
 ):
     if account_access.resident_hidden("video"):
         return account_access.hidden_resident_response()
-    from core.inference.video import get_video_backend
     from hub.utils.host_paths import redact_host_paths
 
     from core.inference import media_load_ids
 
-    backend = get_video_backend()
+    # Polled on page mount, so usually the first import of the video stack: keep it off the loop.
+    backend = await asyncio.to_thread(_video_backend)
     # With the load id of the same state, so an unload can name exactly what this answer shows.
     status_dict, load_id, resident_load_id = await asyncio.to_thread(
         media_load_ids.snapshot_ids, "video", backend, backend.status
@@ -1829,6 +1836,8 @@ def _all_videos() -> list[VideoJob]:
 
 
 def _shape_error_param(exc: Exception, body) -> str:
+    if "frame rate" in str(exc):
+        return "fps"
     if "frame count" not in str(exc):
         return "size"
     return "num_frames" if body.num_frames is not None else "seconds"
@@ -2226,7 +2235,7 @@ def _refuse_family_inputs(
         if seconds is not None
         else None
     )
-    validate_video_request_shape(fam, width, height, want_frames)
+    validate_video_request_shape(fam, width, height, want_frames, fps = body.fps)
     ref2va = h3_task == H3_TASK_REFERENCES
     validate_video_keyframe_conditioning(
         fam,
@@ -2277,7 +2286,7 @@ async def _start_openai_video(
         maybe_auto_switch_media_model,
         resident_answers_media_request,
     )
-    from core.inference.video import get_video_backend
+    from core.inference.video import get_video_backend, video_failure_detail
     from core.inference.video_families import (
         VIDEO_GENERATION_BUSY_MSG,
         VIDEO_MODEL_CHANGED_MSG,
@@ -2405,7 +2414,7 @@ async def _start_openai_video(
                     continue
                 raise _openai_video_error(409, msg, code = "model_changed", param = "model")
             logger.error("openai_videos.generate_failed: %s", exc, exc_info = True)
-            raise HTTPException(status_code = 500, detail = "Video generation failed.")
+            raise HTTPException(status_code = 500, detail = video_failure_detail(exc))
         break
 
     _note_generation_account()
