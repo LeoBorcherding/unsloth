@@ -165,7 +165,11 @@ def standardize_chat_format(
                 if not _normalize_role_alias(original_role):
                     original_role = message.get("role") or message.get("from") or ""
                 if original_content is None:
-                    original_content = message.get("content") or message.get("value") or ""
+                    original_content = message.get("content")
+                if original_content is None:
+                    original_content = message.get("value")
+                if original_content is None and not message.get("tool_calls"):
+                    original_content = ""
 
                 # Unknown alias left as written; blank is "user", as most templates reject one.
                 normalized_role = _normalize_role_alias(original_role)
@@ -175,10 +179,15 @@ def standardize_chat_format(
                     else "user"
                 )
 
-                if is_vlm:
+                if is_vlm and original_content is not None:
                     original_content = [{"type": "text", "text": original_content}]
 
-                new_message = {"role": standard_role, "content": original_content}
+                new_message = {
+                    key: value
+                    for key, value in message.items()
+                    if key not in (role_key, content_key, "from", "value")
+                }
+                new_message.update(role = standard_role, content = original_content)
                 new_convo.append(new_message)
 
             all_convos.append(new_convo)
@@ -191,12 +200,9 @@ def standardize_chat_format(
     }
 
     if not is_streaming_dataset(dataset):
-        from utils.hardware import dataset_map_num_proc
+        from utils.hardware import light_map_num_proc
 
-        if num_proc is None or type(num_proc) is not int:
-            num_proc = dataset_map_num_proc()
-        else:
-            num_proc = dataset_map_num_proc(num_proc)
+        num_proc = light_map_num_proc(dataset, num_proc)
 
         dataset_map_kwargs["num_proc"] = num_proc
         dataset_map_kwargs["desc"] = "Standardizing chat format"
@@ -348,12 +354,9 @@ def convert_chatml_to_alpaca(
     }
 
     if not is_iterable:
-        from utils.hardware import dataset_map_num_proc
+        from utils.hardware import light_map_num_proc
 
-        if num_proc is None or type(num_proc) is not int:
-            num_proc = dataset_map_num_proc()
-        else:
-            num_proc = dataset_map_num_proc(num_proc)
+        num_proc = light_map_num_proc(dataset, num_proc)
 
         dataset_map_kwargs["num_proc"] = num_proc
         dataset_map_kwargs["desc"] = "Converting ChatML to Alpaca format"
@@ -410,12 +413,9 @@ def convert_alpaca_to_chatml(
     }
 
     if not is_iterable:
-        from utils.hardware import dataset_map_num_proc
+        from utils.hardware import light_map_num_proc
 
-        if num_proc is None or type(num_proc) is not int:
-            num_proc = dataset_map_num_proc()
-        else:
-            num_proc = dataset_map_num_proc(num_proc)
+        num_proc = light_map_num_proc(dataset, num_proc)
 
         dataset_map_kwargs["num_proc"] = num_proc
         dataset_map_kwargs["desc"] = "Converting Alpaca to ChatML format"
@@ -843,6 +843,227 @@ def convert_to_vlm_format(
     return converted_list
 
 
+class _HubClips:
+    """Repo-relative clip names of a Hub dataset, resolved by download the way bare image filenames are."""
+
+    def __init__(
+        self,
+        dataset_name,
+        revision = None,
+    ):
+        self.repo, self.revision, self.files, self.listed = dataset_name, revision, None, False
+        if (
+            not isinstance(dataset_name, str)
+            or dataset_name.count("/") != 1
+            or os.path.exists(dataset_name)
+        ):
+            self.repo = None
+
+    def resolve(self, path):
+        if self.repo is None or os.path.exists(path) or "://" in path or os.path.isabs(path):
+            return None
+        if self.files is None:
+            from huggingface_hub import HfApi
+
+            from .format_detection import _VIDEO_EXTENSIONS
+
+            self.files, ambiguous = {}, {}
+            try:
+                repo_files = HfApi().list_repo_files(
+                    self.repo, repo_type = "dataset", revision = self.revision
+                )
+                self.listed = True
+            except Exception as e:  # noqa: BLE001 -- not a Hub repo or offline: paths stay local
+                logger.info(f"Could not list {self.repo} to resolve video filenames: {e}")
+                repo_files = []
+            for f in repo_files:
+                if f.lower().endswith(_VIDEO_EXTENSIONS + (".webm",)):
+                    ambiguous.setdefault(os.path.basename(f), []).append(f)
+            for f in repo_files:
+                if f.lower().endswith(_VIDEO_EXTENSIONS + (".webm",)):
+                    name = os.path.basename(f)
+                    # A name in several folders resolves to its list, refused below: one copy is a guess.
+                    self.files.setdefault(name, f if len(ambiguous[name]) == 1 else ambiguous[name])
+                    self.files[f] = f
+        from huggingface_hub import hf_hub_download
+
+        from utils.hf_cache_settings import active_hf_hub_cache
+
+        if path not in self.files:
+            if self.listed:
+                return None
+            # Offline: an exact repo path may still be in the cache.
+            try:
+                return hf_hub_download(
+                    self.repo,
+                    path,
+                    repo_type = "dataset",
+                    revision = self.revision,
+                    cache_dir = active_hf_hub_cache(),
+                    local_files_only = True,
+                )
+            except Exception:  # noqa: BLE001 -- not cached: the path stays local
+                return None
+        if isinstance(self.files[path], list):
+            raise ValueError(
+                f"Video '{path}' matches several files in {self.repo} ({', '.join(self.files[path])}); "
+                "use the repo-relative path."
+            )
+        return hf_hub_download(
+            self.repo,
+            self.files[path],
+            repo_type = "dataset",
+            revision = self.revision,
+            cache_dir = active_hf_hub_cache(),
+        )
+
+
+def _own_video_part(
+    video,
+    account,
+    hub = None,
+):
+    from .format_detection import encoded_video
+
+    video = encoded_video(video)
+    embedded = isinstance(video, dict) and bool(video.get("bytes"))
+    if isinstance(video, dict):
+        video = video.get("path")
+    # Before any stat: probing a UNC path can already contact the share.
+    if isinstance(video, str) and is_network_share(video) and not private_sources_allowed():
+        raise OSError(
+            f"Refusing a video path on a network share: {video}. "
+            "Set UNSLOTH_ALLOW_PRIVATE_URL_FETCH=1 to load videos from shares you trust."
+        )
+    # An embedded clip's path is often just its original filename, with no file behind it.
+    if embedded and not (isinstance(video, str) and os.path.isfile(video)):
+        resolved = (
+            hub.resolve(video)
+            if hub is not None and isinstance(video, str) and video.strip()
+            else None
+        )
+        if resolved is not None:
+            return resolved
+        raise ValueError(
+            "A video is stored as embedded bytes with no readable file path; training reads clips from "
+            "files, so save the clips to files and point the column at their paths."
+        )
+    if not isinstance(video, str) or not video.strip():
+        raise ValueError("Row has no video")
+    if video.strip().lower().startswith(("http://", "https://")):
+        # The collator would fetch it unguarded; the image fetchers' 64 MB cap does not fit clips.
+        raise ValueError(
+            f"Remote video URLs are not fetched for training: {video}. "
+            "Download the clips and point the column at local files or a Hub dataset."
+        )
+    resolved = hub.resolve(video) if hub is not None else None
+    if resolved is not None:
+        return resolved
+    return _own_image_path(video, account)
+
+
+def own_message_videos(
+    rows,
+    dataset_name = None,
+    dataset_revision = None,
+):
+    """VLM messages rows as a list, every video path checked like an image path."""
+    from utils.account_context import current_account
+    from .format_detection import video_parts
+
+    account = current_account()
+    hub = _HubClips(dataset_name, dataset_revision)
+    rows = [row for row in rows]
+    for row in rows:
+        if not isinstance(row.get("messages"), list):
+            continue
+        for message in row["messages"]:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            # Arrow fills absent keys with None; templates and the collator read key presence.
+            content[:] = [
+                {k: v for k, v in part.items() if v is not None} if isinstance(part, dict) else part
+                for part in content
+            ]
+        for part in video_parts(row["messages"]):
+            part["video"] = _own_video_part(part["video"], account, hub)
+    return rows
+
+
+def convert_video_to_vlm_format(
+    dataset,
+    video_column,
+    text_column,
+    question_column = None,
+    instruction = None,
+    video_columns = None,
+    dataset_name = None,
+    dataset_revision = None,
+):
+    """Flat video + text rows to VLM messages; clips stay paths for the collator to decode."""
+    from utils.account_context import current_account
+
+    from .format_detection import _holds_images, _is_image_value
+
+    account = current_account()
+    hub = _HubClips(dataset_name, dataset_revision)
+    answer_feature = (getattr(dataset, "features", None) or {}).get(text_column)
+    as_label = getattr(answer_feature, "int2str", None)
+    default_instruction = instruction or "Describe this video."
+    converted = []
+    for row in dataset:
+        answer = row.get(text_column)
+        clip_columns = video_columns or [video_column]
+        # Detection probes a few rows; an image further down would otherwise be dropped silently.
+        images = [
+            c
+            for c, v in row.items()
+            if c not in clip_columns and (_is_image_value(v) or _holds_images(v))
+        ]
+        if images:
+            raise ValueError(
+                f"Rows mix video with image columns {images}; video conversion would drop the images, "
+                "so remove those columns or split the dataset."
+            )
+        clips = [
+            row[c]
+            for c in clip_columns
+            if row.get(c) is not None and not (isinstance(row[c], str) and not row[c].strip())
+        ]
+        if not clips or answer is None or not str(answer).strip():
+            continue
+        answer = as_label(answer) if as_label and isinstance(answer, int) else str(answer)
+        question = row.get(question_column) if question_column else None
+        if not isinstance(question, str) or not question.strip():
+            question = default_instruction
+        converted.append(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            *(
+                                {"type": "video", "video": _own_video_part(clip, account, hub)}
+                                for clip in clips
+                            ),
+                            {"type": "text", "text": question},
+                        ],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+                ]
+            }
+        )
+    if not converted:
+        raise ValueError(
+            f"No rows have both a video in '{video_column}' and text in '{text_column}'"
+        )
+    skipped = len(dataset) - len(converted) if hasattr(dataset, "__len__") else 0
+    if skipped:
+        logger.info(f"Skipping {skipped} rows without a video or text")
+    return converted
+
+
 def convert_sharegpt_with_images_to_vlm_format(
     dataset,
     image_column = "image",
@@ -850,7 +1071,7 @@ def convert_sharegpt_with_images_to_vlm_format(
     dataset_name = None,
     progress_callback = None,
 ):
-    """Convert ShareGPT/ChatML datasets carrying a separate image column and ``<image>`` placeholders in the conversation text, e.g. {"image": "sam/images/sa_545504.jpg", "conversations": [{"from": "human", "value": "<image> What is this photo about?"}, ...]}. Returns a list of dicts in standard VLM messages format, PIL Images inline."""
+    """Convert ShareGPT/ChatML datasets carrying a separate image column and ``<image>`` placeholders in the conversation text, e.g. {"image": "sam/images/sa_545504.jpg", "conversations": [{"from": "human", "value": "<image> What is this photo about?"}, ...]}. Image lists match placeholders in conversation order. Returns a list of dicts in standard VLM messages format, PIL Images inline."""
     from PIL import Image
     from tqdm import tqdm
     from utils.account_context import current_account
@@ -871,7 +1092,14 @@ def convert_sharegpt_with_images_to_vlm_format(
 
     # Resolve image loading, the same 3 tiers as convert_to_vlm_format.
     total = len(dataset)
-    first_image = next(iter(dataset))[image_column]
+    first_image = None
+    for sample in dataset:
+        image_data = sample.get(image_column)
+        if isinstance(image_data, list):
+            image_data = next((image for image in image_data if image is not None), None)
+        if image_data is not None:
+            first_image = image_data
+            break
 
     _image_lookup = None
     if (
@@ -904,9 +1132,8 @@ def convert_sharegpt_with_images_to_vlm_format(
                 )
             else:
                 logger.info(
-                    f"⚠️ Built lookup with {len(_image_lookup)} images but '{first_image}' not found — falling back to local open"
+                    f"⚠️ Built lookup with {len(_image_lookup)} images but '{first_image}' not found; unmatched filenames use local paths"
                 )
-                _image_lookup = None
         except Exception as e:
             logger.info(f"⚠️ Failed to build HF repo image lookup: {e}")
             _image_lookup = None
@@ -941,10 +1168,25 @@ def convert_sharegpt_with_images_to_vlm_format(
 
     def _convert_single_sample(sample):
         """Convert one ShareGPT+image sample to standard VLM format."""
-        pil_image = _resolve_image(sample[image_column])
+        image_data = sample[image_column]
         conversation = sample[messages_column]
+        is_image_list = isinstance(image_data, list)
+        if is_image_list:
+            marker_count = sum(
+                (msg.get("value") or msg.get("content") or "").count("<image>")
+                for msg in conversation
+            )
+            if not image_data or len(image_data) != marker_count:
+                raise ValueError(
+                    f"Image list has {len(image_data)} images but conversation has "
+                    f"{marker_count} <image> placeholders"
+                )
+            pil_images = [_resolve_image(image) for image in image_data]
+        else:
+            pil_images = [_resolve_image(image_data)]
 
         new_messages = []
+        image_index = 0
         for msg in conversation:
             role_raw = msg.get("from") or msg.get("role", "user")
             role = _ROLE_MAP.get(role_raw.lower(), role_raw.lower())
@@ -958,9 +1200,15 @@ def convert_sharegpt_with_images_to_vlm_format(
                     if part:
                         content.append({"type": "text", "text": part})
                     if i < len(parts) - 1:
-                        content.append({"type": "image", "image": pil_image})
+                        content.append(
+                            {
+                                "type": "image",
+                                "image": pil_images[image_index if is_image_list else 0],
+                            }
+                        )
+                        image_index += 1
                 if not content:
-                    content.append({"type": "image", "image": pil_image})
+                    content.append({"type": "image", "image": pil_images[0]})
             else:
                 content = [{"type": "text", "text": text}]
 
