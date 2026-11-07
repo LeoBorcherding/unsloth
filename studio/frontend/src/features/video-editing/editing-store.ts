@@ -122,6 +122,14 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
   const checkCancel = () => {
     if (cancelled) throw new Cancelled();
   };
+  // A Cancel clicked while the start request was in flight found nothing to stop; stop the job it started now.
+  const startedJob = async (stop: () => Promise<unknown>) => {
+    cancelActive = stop;
+    if (cancelled) {
+      await stop().catch(() => undefined);
+      throw new Cancelled();
+    }
+  };
 
   const renderUpload = async (seg: Segment): Promise<Blob> => {
     const trimmed = (
@@ -134,7 +142,7 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
       seed,
       video: new File([trimmed], "segment.mp4", { type: "video/mp4" }),
     });
-    cancelActive = cancelVideoRestyle;
+    await startedJob(cancelVideoRestyle);
     for (;;) {
       await sleep(POLL_MS);
       const p = await fetchVideoRestyleProgress();
@@ -166,7 +174,7 @@ export const useVideoEditingStore = create<EditingState>((set, get) => {
       ...(seed === undefined ? {} : { seed }),
       live_preview: false,
     });
-    cancelActive = cancelVideoGeneration;
+    await startedJob(cancelVideoGeneration);
     const stale = previous?.video?.id ?? null;
     for (;;) {
       await sleep(POLL_MS);

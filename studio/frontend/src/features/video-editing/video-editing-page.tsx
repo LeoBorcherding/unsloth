@@ -234,7 +234,7 @@ export function VideoEditingPage() {
             </span>
           }
         />
-        <SetupRow name="Output" value={`${EDIT_WIDTH} x ${EDIT_HEIGHT}, ${EDIT_FPS} fps, MP4`} />
+        <SetupRow name="Output" value={`${EDIT_WIDTH} x ${EDIT_HEIGHT}, ${EDIT_FPS} fps, MP4, no audio`} />
       </section>
 
       {blocker && (

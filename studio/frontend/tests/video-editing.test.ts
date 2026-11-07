@@ -95,6 +95,9 @@ test("Video editing is its own page next to Video, and a bridge sends bridge_vid
   const store = await read("../src/features/video-editing/editing-store.ts");
   assert.match(store, /bridge_video: await blobToDataUrl\(after\)/);
   assert.match(store, /continuation_keep: "last"/);
+  // A Cancel during the start request still stops the GPU job it started.
+  assert.match(store, /await startedJob\(cancelVideoGeneration\)/);
+  assert.match(store, /await startedJob\(cancelVideoRestyle\)/);
   const videoPage = await read("../src/features/video/video-page.tsx");
   assert.doesNotMatch(videoPage, /Timeline/);
 });
