@@ -22,6 +22,7 @@ from core.inference.audio_cpp_models import (
     AUDIO_CPP_REPO,
     AudioCppModel,
     AudioCppModelError,
+    forget,
     parse_identifier,
     require_runnable,
     resolve,
@@ -129,7 +130,7 @@ def _debug_dump(wav_bytes: bytes, payload: dict, result: dict) -> None:
         stem = root / f"clip-{time.strftime('%H%M%S')}-{int(time.time() * 1000) % 1000:03d}"
         stem.with_suffix(".wav").write_bytes(wav_bytes)
         stem.with_suffix(".json").write_text(
-            json.dumps({"raw": payload, "result": result}, indent = 1)
+            json.dumps({"raw": payload, "result": result}, indent = 1), encoding = "utf-8"
         )
     except OSError:
         pass
@@ -141,11 +142,19 @@ class AudioCppVadSidecar:
         self._server: Optional[AudioCppServer] = None
         self._model: Optional[AudioCppModel] = None
         self._loading: Optional[str] = None
+        # Where the live server runs: on the CPU while training holds the GPU, as STT does.
+        self._on_cpu = False
 
     @property
     def loaded_model(self) -> Optional[str]:
         with self._lock:
             return self._model.id if self._model and self._server_alive() else None
+
+    @property
+    def on_cpu(self) -> bool:
+        """Whether the live server runs on the CPU (it holds no VRAM through training)."""
+        with self._lock:
+            return self._on_cpu
 
     @property
     def is_loading(self) -> bool:
@@ -185,8 +194,18 @@ class AudioCppVadSidecar:
         hf_token: Optional[str] = None,
     ) -> str:
         entry = resolve_vad_model(model, network = False)
+        from core.inference.stt_sidecar import _training_active
+
         with self._lock:
-            if self._model is not None and self._model.id == entry.id and self._server_alive():
+            # Decided under the lock training admission's release takes, so a load cannot read
+            # "no training" and then start on the GPU after admission has freed it.
+            on_cpu = _training_active()
+            if (
+                self._model is not None
+                and self._model.id == entry.id
+                and self._server_alive()
+                and self._on_cpu == on_cpu
+            ):
                 return entry.id
             try:
                 path = audio_cpp_files.materialize(entry)
@@ -200,11 +219,12 @@ class AudioCppVadSidecar:
             try:
                 self._release_locked()
                 try:
-                    server = AudioCppServer.start(entry, path)
+                    server = AudioCppServer.start(entry, path, force_cpu = on_cpu)
                 except AudioCppUnavailableError as exc:
                     raise VadUnavailableError(str(exc)) from exc
                 self._server = server
                 self._model = entry
+                self._on_cpu = on_cpu
             finally:
                 self._loading = None
         return entry.id
@@ -218,6 +238,8 @@ class AudioCppVadSidecar:
 
         entry = resolve_vad_model(model, network = True)
         audio_cpp_backend.AudioCppBackend._download_missing(entry, hf_token)
+        # The load right after reads the cache-only resolution, which still remembers the miss.
+        forget(entry.id)
         return entry.id
 
     def detect(

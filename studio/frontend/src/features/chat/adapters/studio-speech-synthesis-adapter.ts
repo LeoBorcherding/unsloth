@@ -249,7 +249,7 @@ function readAloudError(
     );
   }
   // Only this 404 is about the voice; another one (a model hidden from the account) must not
-  // drop the user's choice.
+  // drop the user's choice. Voice mode names its own voice, so the setting is not the stale one.
   if (readAloud && voiceId && /saved voice no longer exists/i.test(detail)) {
     useVoiceSettingsStore.getState().setTtsStudioVoiceId("");
     return new Error(
@@ -269,7 +269,7 @@ function readAloudError(
 export async function generateStudioTtsAudio(
   text: string,
   signal?: AbortSignal,
-  options?: { model: string; voiceId: string },
+  options?: { model: string; voiceId: string; speaker?: string },
 ): Promise<string> {
   const ttsStudioVoiceId =
     options?.voiceId ?? useVoiceSettingsStore.getState().ttsStudioVoiceId;
@@ -287,6 +287,7 @@ export async function generateStudioTtsAudio(
       max_tokens: TTS_MAX_TOKENS,
       ...(model ? { model } : {}),
       ...(ttsStudioVoiceId ? { voice_id: ttsStudioVoiceId } : {}),
+      ...(options?.speaker ? { audio_options: { voice: options.speaker } } : {}),
     }),
     signal,
   });

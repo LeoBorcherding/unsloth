@@ -187,9 +187,11 @@ import {
 import {
   loadVoiceMode,
   requestVoiceToggle,
+  requestVoiceTypedSubmit,
   useVoiceAvailable,
   useVoiceRequested,
 } from "@/features/chat/voice/voice-loop-bridge";
+import { VoicePauseStopButton } from "@/components/assistant-ui/voice-pause-stop-button";
 import {
   PromptStorageDialog,
   exportConversationShareGPT,
@@ -2447,7 +2449,8 @@ export const Thread: FC<{
             hideComposer={hideComposer}
             bottomOffsetPx={footerBottomPx}
           />
-          {voiceRequested && (
+          {/* Only the pane with the composer voices; a Compare pane has none. */}
+          {voiceRequested && !hideComposer && (
             <Suspense fallback={null}>
               <VoiceOrb />
             </Suspense>
@@ -5494,6 +5497,13 @@ const Composer: FC<{
     }
     wasDictatingRef.current = false;
     if (!sendAfterDictationRef.current) return;
+    // Voice mode's turn ends through the loop (requestVoiceSubmit), which appends the utterance
+    // itself; submitting the box too would queue a copy behind the running reply.
+    if (voiceEngaged) {
+      sendAfterDictationRef.current = false;
+      heldTextRef.current = null;
+      return;
+    }
     // A partial transcript stays in the composer but must not send half a message. Settled before
     // the hold below.
     const text = composerText;
@@ -5525,7 +5535,7 @@ const Composer: FC<{
     sendAfterDictationRef.current = false;
     heldTextRef.current = null;
     formRef.current?.requestSubmit();
-  }, [isDictating, aui, composerIdentity, dictationBlocked, composerText]);
+  }, [isDictating, aui, composerIdentity, dictationBlocked, composerText, voiceEngaged]);
 
   const handleSubmit = useCallback(
     (event: {
@@ -5540,6 +5550,15 @@ const Composer: FC<{
       pendingFollowUpBehaviorRef.current = behavior;
       if (isResearchActive) {
         event.preventDefault();
+        return;
+      }
+      // Enter or Send while the voice loop is listening ends the turn; the loop
+      // delivers the words. Sending or queueing the box here too doubled them.
+      // Typed words are the exception: the loop sends the box itself, paused or not.
+      if (voiceEngaged && isDictating) {
+        event.preventDefault();
+        if (requestVoiceTypedSubmit(composerText)) return;
+        aui.composer().stopDictation();
         return;
       }
       // A command, not a prompt: ahead of the model and queue gates, so it works with no model loaded.
@@ -5760,6 +5779,8 @@ const Composer: FC<{
       sendReservedComposer,
       shouldBlockSend,
       threadIsRunning,
+      voiceEngaged,
+      isDictating,
     ],
   );
 
@@ -5818,7 +5839,9 @@ const Composer: FC<{
             researchAvailable={!researchUsed}
             audioUploadBusy={audioUpload.busy}
           />
-          {/* Voice mode keeps dictation open between turns, so it keeps the pills. */}
+          {/* While dictating, show only the "+"; hide the pill and tool toggles
+              so the waveform is the sole status indicator. Voice mode keeps
+              dictation open between turns, so it keeps the pills. */}
           {!showDictationUi ? (
             <>
               <PermissionModeComposerPill side={effectiveMenuSide} />
@@ -5840,6 +5863,8 @@ const Composer: FC<{
           ) : null}
         </div>
         {showDictationUi ? (
+          // The recording UI replaces the input and send controls; only the
+          // left plus stays visible alongside it.
           <ChatDictationBar
             onSend={sendAfterDictation}
             // Every state handleSubmit would reject after transcription; text comes from the transcript.
@@ -7658,6 +7683,7 @@ const ComposerRightControls: FC<{
       {voiceRequested && (
         <Suspense fallback={null}>
           <VoiceEngine />
+          <VoiceMuteButton />
           <VoiceControlButton />
         </Suspense>
       )}
@@ -7697,6 +7723,14 @@ const ComposerRightControls: FC<{
           )}
         </ComposerPrimitive.If>
       </div>
+      {/* Voice mode owns the send slot: one button the whole time, in place of the
+          arrow, the run's stop and the stop-speaking button, so the controls never
+          change width under the orb. Tap pauses or resumes; a hold cuts whatever
+          is in flight (reply, run, held utterances) and goes back to listening.
+          Voice mode stays on; the plus-menu Voice item turns it off and unloads. */}
+      {voiceEngaged ? (
+        <VoicePauseStopButton />
+      ) : (
       <AuiIf
         condition={({ thread }) =>
           !thread.isRunning && !isQueueRunning && !isResearchActive
@@ -7727,7 +7761,8 @@ const ComposerRightControls: FC<{
           </TooltipIconButton>
         </ComposerPrimitive.Send>
       </AuiIf>
-      {isQueueRunning && !isResearchActive ? (
+      )}
+      {!voiceEngaged && isQueueRunning && !isResearchActive ? (
         <AuiIf condition={({ thread }) => !thread.isRunning}>
           {queueEntry?.paused && queueDisabled ? (
             <TooltipIconButton
@@ -7770,7 +7805,7 @@ const ComposerRightControls: FC<{
           )}
         </AuiIf>
       ) : null}
-      {isResearchActive ? (
+      {voiceEngaged ? null : isResearchActive ? (
         <Button
           type="button"
           variant="primary"
@@ -8791,6 +8826,11 @@ const VoiceEngine = lazy(() =>
 const VoiceControlButton = lazy(() =>
   loadVoiceMode().then((module) => ({
     default: module.VoiceControlButton,
+  })),
+);
+const VoiceMuteButton = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoiceMuteButton,
   })),
 );
 const VoiceOrb = lazy(() =>

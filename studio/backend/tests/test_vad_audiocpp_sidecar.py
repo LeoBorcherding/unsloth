@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import time
+from types import SimpleNamespace
+
 import pytest
 
 from core.inference import audio_cpp_models as acm
@@ -53,6 +56,77 @@ def test_only_vad_models_resolve(monkeypatch):
         vad.resolve_vad_model(fake.id)
     with pytest.raises(vad.VadError, match = "not an audio GGUF"):
         vad.resolve_vad_model("not a model id at all!!")
+
+
+def test_a_download_drops_the_cached_miss_so_the_next_load_sees_it(monkeypatch):
+    """The load route downloads on a miss and loads again at once; that load must not reuse the miss."""
+    entry = SimpleNamespace(id = vad.DEFAULT_VAD_MODEL)
+    monkeypatch.setattr(vad, "resolve_vad_model", lambda *a, **k: entry)
+    from core.inference import audio_cpp_backend
+
+    monkeypatch.setattr(
+        audio_cpp_backend.AudioCppBackend, "_download_missing", staticmethod(lambda *a: True)
+    )
+    miss = (vad.DEFAULT_VAD_MODEL.lower(), "", False, "", (), "")
+    monkeypatch.setitem(acm._resolve_cache, miss, (time.monotonic(), None))
+
+    assert vad.AudioCppVadSidecar().download(None) == vad.DEFAULT_VAD_MODEL
+    assert miss not in acm._resolve_cache
+
+
+def test_the_detector_runs_on_the_cpu_while_training_holds_the_gpu(monkeypatch, tmp_path):
+    """As the STT sidecar does: no second GPU runtime beside training, and back to the GPU after."""
+    from core.inference import stt_sidecar
+
+    entry = SimpleNamespace(id = vad.DEFAULT_VAD_MODEL, display_name = "PulseVAD")
+    monkeypatch.setattr(vad, "resolve_vad_model", lambda *a, **k: entry)
+    monkeypatch.setattr(vad.audio_cpp_files, "materialize", lambda e: tmp_path / "vad.gguf")
+    launched = []
+
+    def start(
+        model,
+        path,
+        force_cpu = False,
+    ):
+        launched.append(force_cpu)
+        return SimpleNamespace(process = SimpleNamespace(poll = lambda: None), stop = lambda: None)
+
+    monkeypatch.setattr(vad.AudioCppServer, "start", staticmethod(start))
+    training = {"on": True}
+    monkeypatch.setattr(stt_sidecar, "_training_active", lambda: training["on"])
+    sidecar = vad.AudioCppVadSidecar()
+
+    sidecar.load(None)
+    sidecar.load(None)
+    training["on"] = False
+    sidecar.load(None)
+    assert launched == [True, False]
+
+
+@pytest.mark.parametrize("on_cpu", [False, True])
+def test_training_admission_frees_a_gpu_placed_detector(monkeypatch, on_cpu):
+    """Training start releases the detector unless it already runs on the CPU, outside the STT list."""
+    from routes import training_vram
+
+    unloaded = []
+    fake = SimpleNamespace(
+        loaded_model = vad.DEFAULT_VAD_MODEL,
+        on_cpu = on_cpu,
+        unload = lambda: unloaded.append(True) or True,
+    )
+    monkeypatch.setattr(vad, "get_audio_cpp_vad_sidecar", lambda: fake)
+
+    monkeypatch.setattr(training_vram, "free_prompt_upsampler_for_training", lambda reason: [])
+    monkeypatch.setattr(training_vram, "_coordinate_resident_models", lambda can_keep: [])
+
+    freed = training_vram.coordinate_models_for_training(lambda: (True, {}))
+
+    assert (f"vad:{vad.DEFAULT_VAD_MODEL}" in freed) is (not on_cpu)
+    # The STT release list, which admission reads as "STT let go", never carries the detector.
+    assert not any(
+        f.startswith("vad:") for f in training_vram.free_stt_model_for_training(reason = "test")
+    )
+    assert unloaded == ([] if on_cpu else [True])
 
 
 def test_a_detect_keeps_the_server_it_loaded_until_the_run_ends(monkeypatch):

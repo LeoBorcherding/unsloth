@@ -7,9 +7,12 @@ import test from "node:test";
 
 import {
   isVoiceRequested,
+  registerVoiceThreadReset,
   registerVoiceToggle,
+  requestVoiceThreadReset,
   requestVoiceToggle,
   subscribeVoiceRequested,
+  voiceRunToStop,
 } from "../src/features/chat/voice/voice-loop-bridge.ts";
 
 const SRC = new URL("../src/", import.meta.url);
@@ -52,12 +55,15 @@ test("a click with the loop registered toggles at once and is not replayed later
 
 test("the voice chunk is rendered only once Voice is requested", () => {
   const thread = read("components/assistant-ui/thread.tsx");
-  for (const name of ["VoiceOrb", "VoiceEngine", "VoiceControlButton"]) {
+  for (const name of ["VoiceOrb", "VoiceEngine", "VoiceMuteButton", "VoiceControlButton"]) {
     const at = thread.indexOf(`<${name} />`);
     assert.ok(at > 0, name);
-    const gate = thread.lastIndexOf("{voiceRequested && (", at);
-    assert.ok(gate > 0 && at - gate < 120, `${name} is gated on voiceRequested`);
+    const gate = thread.lastIndexOf("{voiceRequested && ", at);
+    assert.ok(gate > 0 && at - gate < 160, `${name} is gated on voiceRequested`);
   }
+  // The overlay mounts only in the pane with the composer, never in each Compare pane.
+  const orb = thread.indexOf("<VoiceOrb />");
+  assert.ok(orb - thread.lastIndexOf("{voiceRequested && !hideComposer && (", orb) < 160);
 });
 
 test("the loop's mic plays nothing back and starts its context", () => {
@@ -68,4 +74,22 @@ test("the loop's mic plays nothing back and starts its context", () => {
   assert.ok(
     adapter.indexOf("await audioCtx.resume();") < adapter.indexOf("createScriptProcessor("),
   );
+});
+
+test("a thread switch stops only the run the loop was voicing, and only while it runs", () => {
+  assert.equal(voiceRunToStop("a", "a", { a: true }), "a");
+  assert.equal(voiceRunToStop("a", "a", { a: false }), null);
+  assert.equal(voiceRunToStop("a", "b", { a: true }), null);
+  assert.equal(voiceRunToStop(null, null, {}), null);
+  assert.equal(voiceRunToStop("a", null, { a: true }), null);
+});
+
+test("the thread reset hands the loop the thread it is leaving", () => {
+  const seen: Array<string | null> = [];
+  registerVoiceThreadReset((prev) => seen.push(prev));
+  requestVoiceThreadReset("old");
+  requestVoiceThreadReset(null);
+  registerVoiceThreadReset(null);
+  requestVoiceThreadReset("ignored");
+  assert.deepEqual(seen, ["old", null]);
 });
