@@ -30,6 +30,16 @@ seeds 0 to 3, 121 frames at 832x480 / 24 fps. Seed 2 used (smoothest, worst step
 
 Generated, not footage. The 34 s original is the seed-2 drone clip extended by six Cosmos3-Nano continuations (seeds 100 to 105, 121 frames each) through Unsloth Studio; the gap fills are new continuations and a bridge from different seeds. `scripts/longgap.py`.
 
+## Jeep long-gap showcase (longgap/jeep/)
+
+| | |
+|---|---|
+| File page | https://commons.wikimedia.org/wiki/File:Jeep_driving_on_Christmas_Valley_Sand_Dunes_(40688287560).webm |
+| Author | BLM Oregon & Washington (video: Larisa Bogardus, BLM); via Flickr https://www.flickr.com/photos/blmoregon/40688287560 |
+| License | Public domain, `{{PD-USGov-BLM}}` (US federal government work, Bureau of Land Management) |
+| Used | the whole clip, 0 to 31.0 s; one continuous shot (ffmpeg scene detection at 0.25 found no cuts) |
+| Processing | rear plate blurred on every frame (CSRT track of the Jeep's rear from a hand-placed box, Gaussian blur over the padded plate area; the tracker never lost it), then fps=24 by frame drop, scale to height 480, centre-crop to 832x480, H.264 |
+
 ## Rejected
 
 | What | Why |
