@@ -135,7 +135,9 @@ import {
   richPasteMarkdown,
   currentDictationEntryMode,
   isStudioDictationAvailable,
+  micRecordsForModel,
   notifyStudioDictationUnavailable,
+  setMicAudioClipTarget,
   YoutubeTranscriptPrompt,
   stripSearchImageTokens,
   ChatComposerFocusableContext,
@@ -359,6 +361,7 @@ import {
   type PromptQueueRunFailedEventDetail,
   type PromptQueueStopEventDetail,
   dictationFailed,
+  dictationProducedClip,
   dictationProducedTranscript,
   readComposerDraft,
   type PromptQueueUIEntry,
@@ -392,9 +395,14 @@ import {
   updateStoredChatThread,
 } from "@/features/chat/utils/chat-history-storage";
 import {
+  clipStillAttached,
   dictationSendBlocked,
   shouldSubmitDictation,
 } from "@/features/chat/utils/dictation-send";
+import {
+  micSendsAudioToModel,
+  pickAudioForModel,
+} from "@/features/chat/utils/mic-target";
 import {
   isRagClientError,
   listProjectDocuments,
@@ -5327,10 +5335,14 @@ const Composer: FC<{
   const startDictation = useCallback(() => {
     if (audioUpload.busy || dictationEntryDisabled) return;
     if (currentDictationEntryMode() === "recording-file") {
-      audioUpload.openDialog();
+      if (micRecordsForModel()) {
+        pickAudioForModel((file) => aui.composer().addAttachment(file));
+      } else {
+        audioUpload.openDialog();
+      }
       return;
     }
-    if (!isStudioDictationAvailable()) {
+    if (!micRecordsForModel() && !isStudioDictationAvailable()) {
       notifyStudioDictationUnavailable();
       return;
     }
@@ -5340,6 +5352,21 @@ const Composer: FC<{
       notifyStudioDictationUnavailable();
     }
   }, [aui, audioUpload, dictationEntryDisabled]);
+  useEffect(
+    () =>
+      setMicAudioClipTarget({
+        add: (file) => aui.composer().addAttachment(file),
+        attached: () =>
+          aui
+            .composer()
+            .getState()
+            .attachments.flatMap((attachment) =>
+              attachment.file ? [attachment.file] : [],
+            ),
+      }),
+    // Per chat: the old chat's unregister discards its unfinished clip.
+    [aui, composerIdentity],
+  );
   const sendAfterDictation = useCallback(() => {
     sendAfterDictationRef.current = true;
     dictationComposerRef.current = composerIdentity;
@@ -5452,6 +5479,10 @@ const Composer: FC<{
         originComposer: dictationComposerRef.current,
         currentComposer: composerIdentity,
         producedTranscript: dictationProducedTranscript(),
+        producedClip: clipStillAttached(
+          dictationProducedClip(),
+          aui.composer().getState().attachments,
+        ),
         baseText: dictationBaseTextRef.current,
         text,
       });
@@ -7459,6 +7490,16 @@ const ComposerRightControls: FC<{
   const t = useT();
   const followUpBehavior = useChatPreferencesStore((s) => s.followUpBehavior);
   const sendShortcut = useChatPreferencesStore((s) => s.sendShortcut);
+  const micTarget = useVoiceSettingsStore((s) => s.micTarget);
+  const modelHearsAudio = useChatRuntimeStore(
+    (s) =>
+      !s.modelLoading &&
+      s.models.find((model) => model.id === s.params.checkpoint)
+        ?.hasAudioInput === true,
+  );
+  const micLabel = micSendsAudioToModel(micTarget, modelHearsAudio)
+    ? t("settings.voice.dictation.micRecordForModel")
+    : "Dictate";
   // A boolean, so typing re-renders this only when a line break comes or goes.
   const multiline = useAuiState(({ composer }) => composer.text.includes("\n"));
   const shortcutLabels = composerShortcutLabels(
@@ -7588,8 +7629,8 @@ const ComposerRightControls: FC<{
           </Button>
         ) : (
           <TooltipIconButton
-            tooltip="Dictate"
-            aria-label="Dictate"
+            tooltip={micLabel}
+            aria-label={micLabel}
             type="button"
             variant="ghost"
             className="size-9 rounded-full text-foreground"
