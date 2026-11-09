@@ -143,6 +143,18 @@ import {
   videoDimOptions,
   videoSizeLimits,
 } from "./video-size";
+import {
+  type FpsPick,
+  keptNumFrames,
+  pickedFpsFor,
+  presetFamilyKnown,
+  resolvePresetFps,
+  presetVideoFps,
+  resolveVideoFps,
+  restoredClipDuration,
+  videoDurationOptions,
+  videoFpsOptions,
+} from "./video-fps";
 import { usePersistedChoice } from "@/hooks/use-persisted-choice";
 import { useScrollFades } from "@/hooks/use-scroll-fades";
 import { ModelSelector } from "@/features/model-picker/components/model-selector";
@@ -225,6 +237,7 @@ import { loadGalleryUntil } from "@/lib/gallery-deep-link";
 import { subscribeModelEjected } from "@/lib/model-lifecycle-events";
 import { BlobUrlCache } from "@/lib/blob-url-cache";
 
+import { videoFailureToast } from "./generation-failure";
 import { keyframeSupport, matchedCanvas } from "./keyframe-canvas";
 import { hasReferenceCapacity } from "./reference-budget";
 import {
@@ -285,6 +298,28 @@ function useVideoModels(
   );
 }
 
+const FAILURE_WITH_REASON_TOAST_MS = 10_000;
+
+/** False for the user's own Cancel, which is not an error. */
+function showVideoFailureToast(error: string | null | undefined): boolean {
+  const failure = videoFailureToast(error);
+  if (!failure) return false;
+  const { title, errorType, detail } = failure;
+  const hasReason = Boolean(errorType || detail);
+  toast.error(title, {
+    description: hasReason ? (
+      <span className="[overflow-wrap:anywhere]">
+        {errorType && <code className="font-mono">{errorType}</code>}
+        {errorType && detail ? ": " : null}
+        {detail}
+      </span>
+    ) : undefined,
+    duration: hasReason ? FAILURE_WITH_REASON_TOAST_MS : undefined,
+    action: generationFailureLogsAction(title),
+  });
+  return true;
+}
+
 // Per-model generation defaults (steps + guidance), matched by repo-id substring, most specific first. The id is
 // normalized like the backend's family matcher (separator runs become "-", plus a trailing "-"), so "Wan2_1-T2V-14B"
 // and "wan2.1_t2v_14b" hit the same row.
@@ -318,12 +353,9 @@ function defaultsFor(repoId: string, family?: string): { steps: number; guidance
   const id = fold(repoId);
   // The Wan and FusionX rows count only in the model / file name, as on the backend.
   const name = fold(repoId.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "");
-  // LTX-2.5 (diffusers' pre-release "2.4" too) is decided on the two names the backend gets: the selected file and
-  // the repo, read by their last segment. A local file's repo is the folder it sits in (the picker loads it from that
-  // directory), a Hub file's is the repo segment after the owner. The version is ltx_name_version's ("ltx-2.5",
-  // "LTX25", "ltx2.5", "LTX-Video-2.5"), or the explicit ltx-2.5 family. The variant is ltx25_is_dev's: the first
-  // name naming one decides, "distill" before a dev / full / sft token (or transformer_full); a dev pick runs 30
-  // steps at guidance 3, anything else the distilled 8 at guidance 1.
+  // LTX-2.5 (and pre-release 2.4) is read from the file and repo last path segments as the backend
+  // does; the first name naming a variant decides, distill before a dev, full or sft token (or
+  // transformer_full); dev runs 30 steps at guidance 3, else distilled 8 at guidance 1.
   const segments = repoId.replace(/[\\/]+$/, "").split(/[\\/]/);
   const local = /^([\\/~.]|[a-z]:)/i.test(repoId);
   const fileLeaf = segments[segments.length - 1] ?? "";
@@ -1255,6 +1287,10 @@ function VideoGenerator({
   const [durationIntentSeconds, setDurationIntentSeconds] = useState(
     numFrames / FALLBACK_FPS,
   );
+  const [fpsPick, setFpsPick] = useState<FpsPick | null>(null);
+  // Rate of a preset or clip applied before the family is known; boxed so a null rate (family default) still waits.
+  const [pendingPresetFps, setPendingPresetFps] = useState<{ fps: number | null } | null>(null);
+  const [loadProbed, setLoadProbed] = useState(false);
   const [advancedOpen, setAdvancedOpen] = usePersistedToggle(
     "unsloth_video_advanced_open",
   );
@@ -1486,24 +1522,27 @@ function VideoGenerator({
 
   const frameStep = status?.defaults?.frame_step ?? FALLBACK_FRAME_STEP;
   const frameOffset = status?.defaults?.frame_offset ?? FALLBACK_FRAME_OFFSET;
-  const fps = status?.defaults?.fps ?? FALLBACK_FPS;
+  const fpsOptions = useMemo(() => videoFpsOptions(status?.defaults), [status?.defaults]);
+  const loadedFamily = status?.loaded ? status.family : null;
+  // Scoped to its family in render: a reset effect would land after the next family's defaults are seeded.
+  const fps = resolveVideoFps(status?.defaults, pickedFpsFor(fpsPick, loadedFamily));
+  const setPickedFps = useCallback(
+    (picked: number) => {
+      setPendingPresetFps(null);
+      setFpsPick({ family: loadedFamily, fps: picked });
+    },
+    [loadedFamily],
+  );
   const durationTargets =
     status?.defaults?.duration_presets ?? FALLBACK_DURATION_TARGETS;
+  const minFrames = status?.defaults?.min_num_frames;
+  const maxFrames = status?.defaults?.max_num_frames;
 
-  // Frame counts closest to ~1s/2s/3s/5s at the current fps, deduped.
-  const durationOptions = useMemo<Array<{ frames: number; seconds: number }>>(() => {
-    const seen = new Set<number>();
-    const out: Array<{ frames: number; seconds: number }> = [];
-    for (const t of durationTargets) {
-      const desired = t * fps;
-      const k = Math.max(1, Math.round((desired - frameOffset) / frameStep));
-      const frames = k * frameStep + frameOffset;
-      if (seen.has(frames)) continue;
-      seen.add(frames);
-      out.push({ frames, seconds: frames / fps });
-    }
-    return out;
-  }, [frameStep, frameOffset, fps, durationTargets]);
+  const durationOptions = useMemo<Array<{ frames: number; seconds: number }>>(
+    () =>
+      videoDurationOptions(durationTargets, fps, frameStep, frameOffset, minFrames, maxFrames),
+    [frameStep, frameOffset, fps, durationTargets, minFrames, maxFrames],
+  );
 
   const { first: supportsFirstFrame, last: supportsLastFrame } = keyframeSupport(status);
   const supportsKeyframes = supportsFirstFrame || supportsLastFrame;
@@ -1580,14 +1619,40 @@ function VideoGenerator({
       guidance,
       flowShift,
       audioFlowShift,
+      fps: pendingPresetFps ? pendingPresetFps.fps : status?.defaults != null && fpsOptions ? fps : null,
     };
-  }, [audioFlowShift, durationIntentSeconds, flowShift, guidance, matchedResolution, negativePrompt, sourceSized, videoSize, steps]);
+  }, [audioFlowShift, durationIntentSeconds, flowShift, fps, fpsOptions, guidance, pendingPresetFps, status?.defaults, matchedResolution, negativePrompt, sourceSized, videoSize, steps]);
   const defaultSteps = status?.defaults?.steps;
   const defaultGuidance = status?.defaults?.guidance;
   const familyDefaultFrames = status?.defaults?.num_frames;
   const defaultFlowShift = status?.defaults?.flow_shift ?? null;
   const defaultAudioFlowShift = status?.defaults?.audio_flow_shift ?? null;
   const presetRepoId = status?.repo_id ?? "";
+  const familyFps = status?.defaults?.fps ?? FALLBACK_FPS;
+  const statusKnown = presetFamilyKnown(status?.defaults, busy === "loading" || !loadProbed);
+  // Null where the rate is fixed; kept as stored until the family is known.
+  const presetFps = useCallback(
+    (stored: number | null | undefined) =>
+      !statusKnown
+        ? (stored ?? null)
+        : fpsOptions
+          ? (presetVideoFps(fpsOptions, stored) ?? familyFps)
+          : null,
+    [familyFps, fpsOptions, statusKnown],
+  );
+  useEffect(() => {
+    if (!statusKnown || pendingPresetFps == null) return;
+    const rate = resolvePresetFps(fpsOptions, pendingPresetFps.fps, familyFps);
+    setPendingPresetFps(null);
+    if (rate != null) setPickedFps(rate);
+  }, [familyFps, fpsOptions, pendingPresetFps, setPickedFps, statusKnown]);
+  const presetDurationOptions = useCallback(
+    (rate: number | null) =>
+      rate == null || rate === fps
+        ? durationOptions
+        : videoDurationOptions(durationTargets, rate, frameStep, frameOffset, minFrames, maxFrames),
+    [durationOptions, durationTargets, fps, frameOffset, frameStep, maxFrames, minFrames],
+  );
   const videoDefaultRecipe = useMemo<VideoGenerationPresetParams>(() => {
     const resolution = resolutionPresets[0] ?? [768, 512];
     const recommended =
@@ -1595,9 +1660,10 @@ function VideoGenerator({
       (defaultSteps != null && defaultGuidance != null
         ? { steps: defaultSteps, guidance: defaultGuidance }
         : defaultsFor(presetRepoId));
+    const defaultOptions = presetDurationOptions(fpsOptions ? familyFps : null);
     const defaultDuration = familyDefaultFrames
-      ? durationOptions[
-          closestDurationIndex(durationOptions, familyDefaultFrames / fps)
+      ? defaultOptions[
+          closestDurationIndex(defaultOptions, familyDefaultFrames / (fpsOptions ? familyFps : fps))
         ]?.seconds
       : status?.loaded
         ? durationOptions[2]?.seconds ?? durationOptions[0]?.seconds ?? 3
@@ -1611,14 +1677,18 @@ function VideoGenerator({
       guidance: recommended.guidance,
       flowShift: defaultFlowShift,
       audioFlowShift: defaultAudioFlowShift,
+      fps: presetFps(null),
     };
-  }, [defaultAudioFlowShift, defaultFlowShift, defaultGuidance, defaultSteps, durationOptions, familyDefaultFrames, fps, pendingModelDefaults, presetRepoId, resolutionPresets, status?.loaded]);
+  }, [presetFps, presetDurationOptions, familyFps, fpsOptions, defaultAudioFlowShift, defaultFlowShift, defaultGuidance, defaultSteps, durationOptions, familyDefaultFrames, fps, pendingModelDefaults, presetRepoId, resolutionPresets, status?.loaded]);
   const applyVideoPresetParams = useCallback(
     (params: VideoGenerationPresetParams) => {
       const size = fitVideoSize(params.width, params.height, sizeLimits);
-      const durationIndex = closestDurationIndex(durationOptions, params.durationSeconds);
-      const durationFrames =
-        durationOptions[durationIndex]?.frames ?? durationOptions[0]?.frames ?? numFrames;
+      const rate = presetFps(params.fps);
+      const options = presetDurationOptions(rate);
+      const durationIndex = closestDurationIndex(options, params.durationSeconds);
+      const durationFrames = options[durationIndex]?.frames ?? options[0]?.frames ?? numFrames;
+      if (!statusKnown) setPendingPresetFps({ fps: rate });
+      else if (rate != null) setPickedFps(rate);
       setResolutionIntent(size);
       const matched = matchAspect(size[0], size[1]);
       setAspect(matched.key);
@@ -1633,25 +1703,26 @@ function VideoGenerator({
       setGuidance(params.guidance);
       setFlowShift(params.flowShift);
       setAudioFlowShift(params.audioFlowShift);
-      return params;
+      return { ...params, fps: rate };
     },
-    [durationOptions, numFrames, sizeLimits],
+    [numFrames, presetDurationOptions, presetFps, setPickedFps, sizeLimits, statusKnown],
   );
   const normalizeVideoPresetParams = useCallback(
     (params: VideoGenerationPresetParams) => {
       const resolution = fitVideoSize(params.width, params.height, sizeLimits);
+      const rate = presetFps(params.fps);
+      const options = presetDurationOptions(rate);
       const duration =
-        durationOptions[
-          closestDurationIndex(durationOptions, params.durationSeconds)
-        ]?.seconds ?? params.durationSeconds;
+        options[closestDurationIndex(options, params.durationSeconds)]?.seconds ?? params.durationSeconds;
       return {
         ...params,
         width: resolution[0],
         height: resolution[1],
         durationSeconds: duration,
+        fps: rate,
       };
     },
-    [durationOptions, sizeLimits],
+    [presetDurationOptions, presetFps, sizeLimits],
   );
   const videoPresets = useMediaGenerationPresets({
     kind: "video",
@@ -1703,11 +1774,13 @@ function VideoGenerator({
     setMatchSource(has);
   }, [canvasKeyframe, matchedResolution]);
 
-  const loadedFamily = status?.loaded ? status.family : null;
   const prevFamilyRef = useRef<string | null>(null);
+  const prevFpsRef = useRef(fps);
   useEffect(() => {
     const familyChanged = loadedFamily !== prevFamilyRef.current;
     prevFamilyRef.current = loadedFamily;
+    const fpsChanged = fps !== prevFpsRef.current;
+    prevFpsRef.current = fps;
     // Apply the family's default clip length, or every default run stays a ~1s clip.
     const applyFamilyDefault = shouldApplyModelDefaults(
       familySeeded.current,
@@ -1726,14 +1799,9 @@ function VideoGenerator({
         return;
       }
     }
-    setNumFrames((cur) => {
-      if (!familyChanged && durationOptions.some((o) => o.frames === cur)) return cur;
-      return (
-        durationOptions[
-          closestDurationIndex(durationOptions, durationIntentSeconds)
-        ]?.frames ?? cur
-      );
-    });
+    setNumFrames((cur) =>
+      keptNumFrames(durationOptions, cur, durationIntentSeconds, familyChanged || fpsChanged),
+    );
   }, [
     durationIntentSeconds,
     durationOptions,
@@ -2372,14 +2440,30 @@ function VideoGenerator({
       setAspect(matched.key);
       setPortrait(matched.portrait);
       setMatchSource(false);
-      // Restore the frame count when it lies on the current lattice.
-      if (durationOptions.some((o) => o.frames === video.num_frames)) {
+      // The clip's count only when this family's window takes it.
+      if (!statusKnown) {
+        setPendingPresetFps({ fps: video.fps });
+        setDurationIntentSeconds(video.num_frames / video.fps);
+        setNumFrames(video.num_frames);
+      } else if (fpsOptions?.includes(video.fps)) {
+        const option = restoredClipDuration(
+          videoDurationOptions(durationTargets, video.fps, frameStep, frameOffset, minFrames, maxFrames),
+          video.num_frames,
+          video.fps,
+        );
+        setPickedFps(video.fps);
+        if (option) {
+          setDurationIntentSeconds(option.seconds);
+          setNumFrames(option.frames);
+        }
+      } else if (durationOptions.some((o) => o.frames === video.num_frames)) {
+        // Restore the frame count when it lies on the current lattice.
         setDurationIntentSeconds(video.num_frames / fps);
         setNumFrames(video.num_frames);
       }
       toast.success("Settings restored to inputs");
     },
-    [sizeLimits, durationOptions, fps],
+    [sizeLimits, durationOptions, fps, fpsOptions, durationTargets, frameStep, frameOffset, minFrames, maxFrames, setPickedFps, statusKnown],
   );
 
   // No periodic poll corrects a stale read, so only the newest ticket may write.
@@ -2636,10 +2720,8 @@ function VideoGenerator({
               void ensureSrc(clip);
             }
           } else if (p.phase === "failed") {
-            const msg = p.error || "Video generation failed";
             // The user's own Cancel surfaces as the cancelled sentinel; not an error.
-            if (!msg.toLowerCase().includes("cancelled"))
-              toast.error(msg, { action: generationFailureLogsAction(msg) });
+            showVideoFailureToast(p.error);
           }
           return;
         }
@@ -2677,6 +2759,7 @@ function VideoGenerator({
       } catch {
         // Resume is best-effort; a failed probe just leaves the idle view.
       }
+      setLoadProbed(true);
       // Generation also runs on a daemon thread, so a reload re-enters the poll loop.
       try {
         const g = await getVideoGenerateProgress();
@@ -2698,9 +2781,7 @@ function VideoGenerator({
           }
         } else if (g.phase === "failed") {
           // Kept until the next job, so a reload still shows the failure.
-          const msg = g.error || "Video generation failed";
-          if (!msg.toLowerCase().includes("cancelled"))
-              toast.error(msg, { action: generationFailureLogsAction(msg) });
+          showVideoFailureToast(g.error);
         }
       } catch {
         // Resume is best-effort; a failed probe just leaves the idle view.
@@ -3675,8 +3756,9 @@ function VideoGenerator({
       });
     } catch (err) {
       if (!isMounted.current) return;
-      const refusal = err instanceof Error ? err.message : "Video generation failed";
-      toast.error(refusal, { action: generationFailureLogsAction(refusal) });
+      const refusal = err instanceof Error ? err.message : null;
+      // A refusal is never the user's own Cancel, so one that mentions "cancelled" still shows.
+      if (!showVideoFailureToast(refusal) && refusal) toast.error(refusal);
       setBusy(null);
       setGenStep(null);
       // The refusal can be "No video model is loaded"; re-read status.
@@ -4556,13 +4638,43 @@ function VideoGenerator({
             </Select>
           </Field>
 
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-              Frame rate
-              <InfoHint>Playback frame rate, fixed per model.</InfoHint>
-            </span>
-            <span className="font-mono text-xs font-medium text-foreground">{fps} fps</span>
-          </div>
+          {fpsOptions == null ? (
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
+                Frame rate
+                <InfoHint>Playback frame rate, fixed per model.</InfoHint>
+              </span>
+              <span className="font-mono text-xs font-medium text-foreground">{fps} fps</span>
+            </div>
+          ) : status?.defaults?.fps_choices?.length ? (
+            <Field
+              label="Frame rate"
+              hint="Frames per second the model generates and the clip plays at. Durations above follow it."
+            >
+              <Select value={String(fps)} onValueChange={(v) => setPickedFps(Number(v))}>
+                <SelectTrigger aria-label="Frame rate">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {fpsOptions.map((f) => (
+                    <SelectItem key={f} value={String(f)}>
+                      {f} fps
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : (
+            <SliderField
+              label="Frame rate"
+              hint={`Frames per second the model generates and the clip plays at (${fpsOptions[0]} to ${fpsOptions[fpsOptions.length - 1]}). Durations above follow it.`}
+              value={fps}
+              min={fpsOptions[0]}
+              max={fpsOptions[fpsOptions.length - 1]}
+              step={1}
+              onChange={(v) => setPickedFps(Math.round(v))}
+            />
+          )}
 
           <SliderField
             label="Steps"
@@ -4641,7 +4753,7 @@ function VideoGenerator({
                   variant="primary"
                   className="relative z-10 h-11 px-8 text-ui-14 bg-control-accent text-control-accent-foreground hover:bg-control-accent/85 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
                   onClick={handleGenerate}
-                  disabled={busy !== null || !status?.loaded}
+                  disabled={busy !== null || !status?.loaded || !statusKnown || pendingPresetFps != null}
                 >
                   Generate
                 </Button>
