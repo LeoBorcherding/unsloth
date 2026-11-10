@@ -1690,6 +1690,7 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
             earlyStoppingPatience: earlyStoppingPatienceFrom(
               config.early_stopping_patience,
             ),
+            enableActivationCapture: config.enable_activation_capture === true,
             ...drafterStateFrom(config.drafter),
           });
           // Fetch capabilities without replacing the saved recipe.

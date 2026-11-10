@@ -239,3 +239,19 @@ test("duplicate keeps a run's early stopping patience", async () => {
   await settle();
   assert.equal(store.getState().earlyStoppingPatience, 0);
 });
+
+test("duplicate keeps a run's activation capture setting", async () => {
+  setAuthFetchHandler(() => modelResponse());
+  const base = { model_name: "org/model", hf_dataset: "org/data", training_type: "LoRA/QLoRA" };
+  store.getState().restoreRunConfig({ ...base, enable_activation_capture: true });
+  await settle();
+  assert.equal(store.getState().enableActivationCapture, true);
+  assert.equal(
+    buildTrainingStartPayload(store.getState(), null).enable_activation_capture,
+    true,
+  );
+
+  store.getState().restoreRunConfig(base);
+  await settle();
+  assert.equal(store.getState().enableActivationCapture, false);
+});
