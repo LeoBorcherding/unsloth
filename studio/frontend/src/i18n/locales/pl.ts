@@ -4044,6 +4044,8 @@ export const pl = {
       llamaCppVersion: "Wersja llama.cpp",
       audioCppVersion: "Wersja audio.cpp",
       mlxVersion: "Wersja MLX",
+      fastflowlmVersion: "Wersja FastFlowLM",
+      lemonadeVersion: "Wersja Lemonade",
       whisperCppVersion: "Wersja whisper.cpp",
       engines: {
         title: "Silniki",

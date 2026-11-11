@@ -3786,6 +3786,8 @@ export const he = {
       llamaCppVersion: "גרסת llama.cpp",
       audioCppVersion: "גרסת audio.cpp",
       mlxVersion: "גרסת MLX",
+      fastflowlmVersion: "גרסת FastFlowLM",
+      lemonadeVersion: "גרסת Lemonade",
       whisperCppVersion: "גרסת whisper.cpp",
       engines: {
         title: "מנועים",

@@ -3998,6 +3998,8 @@ export const vi = {
       llamaCppVersion: "Phiên bản llama.cpp",
       audioCppVersion: "Phiên bản audio.cpp",
       mlxVersion: "Phiên bản MLX",
+      fastflowlmVersion: "Phiên bản FastFlowLM",
+      lemonadeVersion: "Phiên bản Lemonade",
       whisperCppVersion: "Phiên bản whisper.cpp",
       engines: {
         title: "Công cụ chạy",

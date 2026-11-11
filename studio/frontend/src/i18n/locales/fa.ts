@@ -3984,6 +3984,8 @@ export const fa = {
       llamaCppVersion: "نسخهٔ llama.cpp",
       audioCppVersion: "نسخهٔ audio.cpp",
       mlxVersion: "نسخهٔ MLX",
+      fastflowlmVersion: "نسخهٔ FastFlowLM",
+      lemonadeVersion: "نسخهٔ Lemonade",
       whisperCppVersion: "نسخهٔ whisper.cpp",
       engines: {
         title: "موتورها",
