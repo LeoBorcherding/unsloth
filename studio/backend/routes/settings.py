@@ -1202,6 +1202,11 @@ class ModelOverridePayload(BaseModel):
     mlx_int8_prefill: bool = False
     mlx_ane_prefill: bool = False
     mlx_fast_verify: bool = False
+    npu_power_mode: Optional[
+        Literal["default", "powersaver", "balanced", "performance", "turbo"]
+    ] = None
+    npu_prefill_chunk_len: Optional[StrictInt] = Field(default = None, ge = 1, le = 1048576)
+    npu_img_pre_resize: Optional[StrictInt] = Field(default = None, ge = 0, le = 4)
     # Auto (null or "auto") is stored as absence; omitted keeps the stored value.
     mlx_ple_offload: Optional[Union[Literal["auto", "off"], float]] = None
     mlx_expert_offload: Optional[Union[Literal["auto", "off"], float]] = None
@@ -3092,7 +3097,13 @@ def update_openai_auto_switch_override(
                     field: getattr(payload, field)
                     if field in fields_set or is_removal
                     else (_alias_row or get_model_override(target_id)).get(field)
-                    for field in ("mlx_ple_offload", "mlx_expert_offload")
+                    for field in (
+                        "mlx_ple_offload",
+                        "mlx_expert_offload",
+                        "npu_power_mode",
+                        "npu_prefill_chunk_len",
+                        "npu_img_pre_resize",
+                    )
                 },
                 max_seq_length = max_seq_length,
                 custom_context_length = custom_context_length,
