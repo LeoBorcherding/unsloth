@@ -942,7 +942,14 @@ def test_the_completion_log_scores_each_task_by_its_headline_metric():
     assert line("arc", {"acc,none": 0.5, "acc_norm,none": 0.6, "acc_norm_stderr,none": 0.01}) == (
         "  arc: acc_norm,none=0.6 ± 0.01"
     )
-    gsm = {"alias": "gsm8k", "exact_match,strict-match": 0.4, "exact_match_stderr,strict-match": "N/A"}
+    gsm = {
+        "alias": "gsm8k",
+        "exact_match,strict-match": 0.4,
+        "exact_match_stderr,strict-match": "N/A",
+    }
     assert line("gsm8k", gsm) == "  gsm8k: exact_match,strict-match=0.4"
-    assert line("mmlu_pro", {"exact_match,custom-extract": 0.3}) == "  mmlu_pro: exact_match,custom-extract=0.3"
+    assert (
+        line("mmlu_pro", {"exact_match,custom-extract": 0.3})
+        == "  mmlu_pro: exact_match,custom-extract=0.3"
+    )
     assert line("odd", {"alias": "odd"}) == "  odd: no score"
