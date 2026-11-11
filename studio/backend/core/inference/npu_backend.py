@@ -30,6 +30,7 @@ from core.inference.flm_files import (
 )
 from core.inference.lemonade_server import LemonadeServer, LemonadeUnavailable, OutputWindow
 from core.inference.npu_context import DEFAULT_CONTEXT_LENGTH, plan_context
+from core.inference.npu_flm_args import clamp_prefill_chunk
 from utils.hardware.npu import detect_amd_npu
 from utils.native_path_leases import child_env_without_native_path_secret
 from utils.process_lifetime import (
@@ -965,6 +966,8 @@ class LemonadeNpuBackend:
                 previous = self._loaded.model if self._loaded is not None else None
                 plan = plan_context(model, files, context_length, previous)
                 ctx = plan.context_length
+                # Lemonade refuses a prefill chunk longer than the context, which Auto only knows now.
+                flm_args = clamp_prefill_chunk(flm_args, ctx)
                 server = self._ensure_running()
                 replaced = True
                 self._loaded = None
