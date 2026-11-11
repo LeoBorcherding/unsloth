@@ -24,6 +24,7 @@ from core.inference.flm_files import (
     FlmModelFiles,
     download_files,
     read_model_files,
+    read_model_repo,
 )
 from core.inference.lemonade_server import LemonadeServer, LemonadeUnavailable, OutputWindow
 from core.inference.npu_context import DEFAULT_CONTEXT_LENGTH, plan_context
@@ -131,6 +132,8 @@ class NpuModel:
     labels: tuple[str, ...]
     max_context_length: Optional[int]
     resume_percent: Optional[int] = None
+    hf_repo: Optional[str] = None
+    hf_revision: Optional[str] = None
     memory_needed_gb: Optional[float] = None
     fits_memory: Optional[bool] = None
 
@@ -163,6 +166,8 @@ class NpuModel:
             "supports_tools": self.tools,
             "max_context_length": self.max_context_length,
             "resume_percent": self.resume_percent,
+            "hf_repo": self.hf_repo,
+            "hf_revision": self.hf_revision,
             "memory_needed_gb": self.memory_needed_gb,
             "fits_memory": self.fits_memory,
         }
@@ -737,6 +742,7 @@ class LemonadeNpuBackend:
             checkpoint = str(row.get("checkpoint") or "")
             downloaded = bool(row.get("downloaded"))
             files = None if downloaded else self._model_files(checkpoint, flm_binary)
+            hf_repo, hf_revision = read_model_repo(flm_binary, checkpoint)
             models.append(
                 NpuModel(
                     id = str(row.get("id")),
@@ -748,6 +754,8 @@ class LemonadeNpuBackend:
                         checkpoint, row.get("max_context_window")
                     ),
                     resume_percent = files.resume_percent() if files else None,
+                    hf_repo = hf_repo,
+                    hf_revision = hf_revision,
                     memory_needed_gb = npu_memory_needed_gb(size_gb),
                     fits_memory = fits_npu_memory(size_gb, window_gb),
                 )
