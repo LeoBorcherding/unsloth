@@ -187,6 +187,7 @@ def test_header_reads_skip_the_vocab_without_gguf_reader(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gguf, "GGUFReader", _no_full_parse)
     assert export_mod.q4nx._gguf_architecture(path) == "qwen35"
+    assert export_mod.q4nx._gguf_header(path) == {"general.architecture": "qwen35"}
     assert export_mod.q4nx._gguf_chat_template(Path(path)) == "{{ chat }}"
     assert export_mod.q4nx._gguf_architecture(str(tmp_path / "missing.gguf")) == ""
 
