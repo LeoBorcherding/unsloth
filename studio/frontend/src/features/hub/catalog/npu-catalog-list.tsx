@@ -7,7 +7,6 @@ import {
   type NpuDownloadPhase,
   type NpuModel,
   type NpuPickerSource,
-  NpuRuntimeVersions,
   NpuSetupNotice,
   npuDownloadLabel,
   npuMemoryWarning,
@@ -79,7 +78,6 @@ export function NpuCatalogList({
       className="mx-auto flex min-h-0 w-full max-w-[var(--hub-measure)] flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-3"
     >
       {body()}
-      <NpuRuntimeVersions catalog={catalog} className="mt-auto px-3 pt-4" />
     </div>
   );
 }
