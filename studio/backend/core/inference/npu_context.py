@@ -50,6 +50,23 @@ def _available_mib() -> Optional[int]:
     return host_memory.usable_host_ram_mib()
 
 
+def _npu_window_gb() -> Optional[float]:
+    from core.inference.npu_backend import _total_ram_gb, npu_memory_window_gb
+    return npu_memory_window_gb(_total_ram_gb())
+
+
+def _npu_window_bytes(weights: int) -> Optional[int]:
+    """What the NPU memory window leaves after the weights and load margin, priced as the
+    memory-fit warning does (half of RAM on Windows); None when RAM is unknown."""
+    from core.inference.npu_backend import npu_memory_needed_gb
+
+    window = _npu_window_gb()
+    needed = npu_memory_needed_gb(weights / _GIB)
+    if window is None or needed is None:
+        return None
+    return int((window - needed) * _GIB)
+
+
 def _positive(config: dict, key: str) -> Optional[int]:
     value = config.get(key)
     return value if isinstance(value, int) and value > 0 else None
@@ -120,6 +137,9 @@ def plan_context(
     if available is not None:
         reclaimed = int((previous.size_gb or 0) * _GIB) if previous is not None else 0
         budget = (available - HOST_RAM_HEADROOM_MIB) * _MIB + reclaimed - weights
+        window = _npu_window_bytes(weights)
+        if window is not None:
+            budget = min(budget, window)
         ceiling = limit or max(AUTO_CONTEXT_CEILING, requested or 0)
         fits = max(_largest_fitting(budget, kv, ceiling), floor)
     if requested is not None:
