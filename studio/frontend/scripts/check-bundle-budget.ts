@@ -11,8 +11,10 @@ const DIST = resolve(HERE, "..", "dist");
 
 export const BUDGET = {
   // Keep the prior headroom when measured startup imports move out of the entry graph.
-  transferBytes: 1_271_720,
-  rawBytes: 3_971_182,
+  // The llama-bench tab (#12522), the lazy Benchmarks route's longer preload list: +1,540 B raw /
+  // +259 B transfer. Raised by that.
+  transferBytes: 1_271_979,
+  rawBytes: 3_972_722,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.
