@@ -52,7 +52,6 @@ def _available_mib() -> Optional[int]:
 
 def _npu_window_gb() -> Optional[float]:
     from core.inference.npu_backend import _total_ram_gb, npu_memory_window_gb
-
     return npu_memory_window_gb(_total_ram_gb())
 
 
