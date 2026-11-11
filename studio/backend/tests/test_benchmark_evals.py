@@ -935,3 +935,14 @@ def test_an_eval_refuses_internal_model_swaps(monkeypatch):
     assert lease_routes._loads_in_flight == {}
     backend.release(seq)
     lease_routes.admit_swap(request)()
+
+
+def test_the_completion_log_scores_each_task_by_its_headline_metric():
+    line = benchmark_routes._results_line
+    assert line("arc", {"acc,none": 0.5, "acc_norm,none": 0.6, "acc_norm_stderr,none": 0.01}) == (
+        "  arc: acc_norm,none=0.6 ± 0.01"
+    )
+    gsm = {"alias": "gsm8k", "exact_match,strict-match": 0.4, "exact_match_stderr,strict-match": "N/A"}
+    assert line("gsm8k", gsm) == "  gsm8k: exact_match,strict-match=0.4"
+    assert line("mmlu_pro", {"exact_match,custom-extract": 0.3}) == "  mmlu_pro: exact_match,custom-extract=0.3"
+    assert line("odd", {"alias": "odd"}) == "  odd: no score"

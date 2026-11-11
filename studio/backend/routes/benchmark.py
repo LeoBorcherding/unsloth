@@ -53,6 +53,19 @@ from core.benchmark import (
     extract_samples,
     get_benchmark_backend,
 )
+from core.benchmark.parse import pick_default_metric
+
+
+def _results_line(task_name: str, metrics: dict) -> str:
+    """One completion-log line, scored by the task's headline metric as history shows it."""
+    name = pick_default_metric([{"name": k} for k in metrics if isinstance(k, str)])
+    if not name:
+        return f"  {task_name}: no score"
+    base, sep, filt = name.partition(",")
+    stderr = metrics.get(f"{base}_stderr{sep}{filt}")
+    return f"  {task_name}: {name}={metrics[name]}" + (
+        f" ± {stderr}" if isinstance(stderr, (int, float)) else ""
+    )
 
 
 _CURATED_TASKS: list[BenchmarkTaskInfo] = [
@@ -547,10 +560,7 @@ async def run_benchmark(
         task_results = results.get("results", {})
         backend._append_log("stdout", "Results:")
         for task_name, metrics in task_results.items():
-            acc = metrics.get("acc,none", metrics.get("acc", "N/A"))
-            stderr = metrics.get("acc_stderr,none", None)
-            line = f"  {task_name}: acc={acc}" + (f" ± {stderr}" if stderr else "")
-            backend._append_log("stdout", line)
+            backend._append_log("stdout", _results_line(task_name, metrics))
         backend._append_log("status", "Benchmark complete.")
         backend.finish(op_seq = run_seq)
 
