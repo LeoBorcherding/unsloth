@@ -953,3 +953,13 @@ def test_the_completion_log_scores_each_task_by_its_headline_metric():
         == "  mmlu_pro: exact_match,custom-extract=0.3"
     )
     assert line("odd", {"alias": "odd"}) == "  odd: no score"
+
+
+def test_eval_log_lines_lose_host_paths_for_api_key_callers(monkeypatch):
+    entry = {"stream": "stdout", "line": "Results saved to /home/u/evals/run1/results.json", "ts": 1}
+    monkeypatch.setattr(benchmark_routes, "host_paths_visible", lambda via_api_key: not via_api_key)
+    owner = json.loads(benchmark_routes._log_payload(entry, via_api_key = False))
+    assert owner["line"] == entry["line"]
+    api = json.loads(benchmark_routes._log_payload(entry, via_api_key = True))
+    assert "/home/u" not in api["line"] and api["line"].startswith("Results saved to ")
+    assert api["stream"] == "stdout" and api["ts"] == 1

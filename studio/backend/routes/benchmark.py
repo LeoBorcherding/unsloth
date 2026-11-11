@@ -27,7 +27,7 @@ if str(backend_path) not in sys.path:
     sys.path.insert(0, str(backend_path))
 
 from auth.authentication import authenticated_via_api_key, get_current_subject
-from hub.utils.host_paths import host_paths_visible, redact_host_paths
+from hub.utils.host_paths import host_paths_visible, redact_host_paths, redact_paths_in_text
 from core.training.account_jobs import _has_managed_accounts
 from utils.account_context import AccountContext, current_account
 from utils.host_policy import LOOPBACK_FALLBACK_HOST, dial_host
@@ -656,6 +656,15 @@ def _live_progress(backend) -> Optional[dict]:
     return backend.get_latest_progress() if backend.is_active() else None
 
 
+def _log_payload(entry: dict, *, via_api_key: bool) -> str:
+    """One SSE log line. Lines name the model and results paths, so API-key callers lose them,
+    as on the run history."""
+    line = entry.get("line", "")
+    if not host_paths_visible(via_api_key):
+        line = redact_paths_in_text(line)
+    return json.dumps({"stream": entry.get("stream", "stdout"), "line": line, "ts": entry.get("ts")})
+
+
 @router.get("/logs/stream")
 async def stream_benchmark_logs(
     request: Request,
@@ -664,6 +673,7 @@ async def stream_benchmark_logs(
         description = "Return log entries with seq strictly greater than this cursor.",
     ),
     current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ):
     """Eval logs as SSE: `log` lines (id = seq, resumed via `since` or Last-Event-ID),
     `progress` while a run is live, and an idle `heartbeat` carrying {"active"}."""
@@ -705,13 +715,7 @@ async def stream_benchmark_logs(
                     entries = []
                 if entries:
                     for entry in entries:
-                        payload = json.dumps(
-                            {
-                                "stream": entry.get("stream", "stdout"),
-                                "line": entry.get("line", ""),
-                                "ts": entry.get("ts"),
-                            }
-                        )
+                        payload = _log_payload(entry, via_api_key = via_api_key)
                         yield _format_sse(
                             payload,
                             event = "log",
