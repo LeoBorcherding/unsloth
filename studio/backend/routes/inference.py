@@ -3010,9 +3010,14 @@ async def _tunnel_safe_json(coro, *, label: str):
     """Pad a slow call's body; early failures keep their status; a disconnect does not cancel the work."""
     from hub.utils.host_paths import restore_inventory_handles
 
+    from core.inference.llama_keepwarm import detached_work_hold
+
     task = asyncio.ensure_future(coro)
     # Retrieve the exception to avoid 'never retrieved' logs; result() below still raises.
     task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    hold = detached_work_hold.get()
+    if hold is not None:
+        task.add_done_callback(lambda _t, release = hold(): release())
     done, _ = await asyncio.wait({task}, timeout = _TUNNEL_KEEPALIVE_AFTER_S)
     if done:
         # Here rather than at each `return LoadResponse`: the one funnel every answer passes.
@@ -9111,6 +9116,26 @@ async def _acquire_swap_gate() -> None:
         await asyncio.sleep(0.02)
 
 
+# The swap gate's holder's benchmark admission; only the gate's holder touches it.
+_swap_admission: Optional[Callable[[], None]] = None
+
+
+def _begin_swap_admission(fastapi_request) -> None:
+    """Under the swap gate: 409 while a benchmark holds the server, else count the swap as a load
+    in flight until the gate is released, so no benchmark lease is granted under it."""
+    global _swap_admission
+    from routes.benchmarks import admit_swap
+
+    _swap_admission = admit_swap(fastapi_request)
+
+
+def _end_swap_admission() -> None:
+    global _swap_admission
+    release, _swap_admission = _swap_admission, None
+    if release is not None:
+        release()
+
+
 # Queued auto-switch requests are not generating; the drain wait excludes them.
 _auto_switch_waiters: dict[tuple[str, str], int] = {}
 _auto_switch_waiters_guard = threading.Lock()
@@ -11187,6 +11212,7 @@ async def _auto_switch_npu_model(
         async with _auto_switch_lock():
             await _acquire_swap_gate()
             try:
+                _begin_swap_admission(fastapi_request)
                 async with model_load_gate(), inference_lifecycle_gate():
                     # Re-read under the gate: another request may have loaded it while this one waited.
                     if await asyncio.to_thread(_loaded_satisfies, named_model):
@@ -11224,6 +11250,7 @@ async def _auto_switch_npu_model(
                 # Deregister before releasing the gate, as the GGUF switch does.
                 _note_switch_waiter(key, -1)
                 key = None
+                _end_swap_admission()
                 _auto_switch_process_lock.release()
     finally:
         if key is not None:
@@ -11942,6 +11969,7 @@ async def _maybe_auto_switch_model(
                 # Process-wide gate: the asyncio lock is per loop.
                 await _acquire_swap_gate()
                 try:
+                    _begin_swap_admission(fastapi_request)
                     # Hold the keep-warm gate across the swap so no new inference can
                     # start on the model while it is being torn down and replaced.
                     from utils.multi_model_settings import get_multi_model_enabled
@@ -12164,6 +12192,7 @@ async def _maybe_auto_switch_model(
                     # Deregister before releasing the gate or another loop's swap counts this as queued.
                     _note_switch_waiter(key, -1)
                     waiter_noted = False
+                    _end_swap_admission()
                     _auto_switch_process_lock.release()
         finally:
             if waiter_noted:
@@ -12697,6 +12726,11 @@ async def load_model_for_preview(
         await _acquire_swap_gate()
         _swap_begun = False
         try:
+            try:
+                _begin_swap_admission(fastapi_request)
+            except HTTPException:
+                untrack_current_request(scope)
+                raise
             async with model_load_gate(), inference_lifecycle_gate():
                 # Preview loads bypass load_model(), so re-apply its sidecar install guard: a load must not finish mid-install or the installer later aborts.
                 if sidecar_swap_in_progress():
@@ -12813,6 +12847,7 @@ async def load_model_for_preview(
             # Cleared only after the lifecycle gate is released, so window arrivals are rejected.
             if _swap_begun:
                 note_preview_swap_end()
+            _end_swap_admission()
             _auto_switch_process_lock.release()
 
 
@@ -39253,6 +39288,44 @@ async def openai_embeddings(request: Request, current_subject: str = Depends(get
     return Response(
         content = resp.content,
         status_code = resp.status_code,
+        media_type = "application/json",
+    )
+
+
+# =====================================================================
+
+# llama.cpp tokenize passthrough  (/tokenize → llama-server /tokenize)
+# =====================================================================
+
+
+@router.post("/tokenize")
+@account_access.gpu_busy_route
+async def llama_tokenize(request: Request, current_subject: str = Depends(get_current_subject)):
+    """llama-server ``/tokenize`` passthrough (GGUF only), for lm_eval's ``gguf`` backend."""
+    llama_backend = get_llama_cpp_backend()
+    body = await _auto_switch_from_request_body(request, current_subject, gguf_only = True)
+    if not llama_backend.is_loaded:
+        _status, _detail = await _no_model_loaded_error(
+            "No GGUF model loaded. Load a GGUF model first.",
+            _raw_body_model(body) if isinstance(body, dict) else None,
+            request,
+            status = 503,
+        )
+        raise HTTPException(status_code = _status, detail = _detail)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code = 400, detail = "Request body must be a JSON object")
+
+    # Through _LlamaUpstream: the child's key, plus one respawn if llama-server died mid-eval.
+    try:
+        async with _LlamaUpstream(llama_backend, "/tokenize") as upstream:
+            _resp = await upstream.post(body, timeout = 30)
+    except httpx.RequestError as _exc:
+        raise HTTPException(status_code = 502, detail = _friendly_error(_exc))
+    if _resp.status_code != 200:
+        raise _openai_passthrough_error(_resp.status_code, _resp.text)
+    return Response(
+        content = _resp.content,
+        status_code = _resp.status_code,
         media_type = "application/json",
     )
 

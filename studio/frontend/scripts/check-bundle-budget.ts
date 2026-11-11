@@ -11,8 +11,9 @@ const DIST = resolve(HERE, "..", "dist");
 
 export const BUDGET = {
   // Keep the prior headroom when measured startup imports move out of the entry graph.
-  transferBytes: 1_271_720,
-  rawBytes: 3_971_182,
+  // The Evals tab (#12521), its strings in the eager en locale: +6,058 B raw / +1,585 B transfer. Raised by that on top of main.
+  transferBytes: 1_273_305,
+  rawBytes: 3_977_240,
 };
 
 // Chunk count is not budgeted: splitting a page out raises it while lowering bytes.
