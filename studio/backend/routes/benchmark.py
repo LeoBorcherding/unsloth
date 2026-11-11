@@ -662,7 +662,9 @@ def _log_payload(entry: dict, *, via_api_key: bool) -> str:
     line = entry.get("line", "")
     if not host_paths_visible(via_api_key):
         line = redact_paths_in_text(line)
-    return json.dumps({"stream": entry.get("stream", "stdout"), "line": line, "ts": entry.get("ts")})
+    return json.dumps(
+        {"stream": entry.get("stream", "stdout"), "line": line, "ts": entry.get("ts")}
+    )
 
 
 @router.get("/logs/stream")
