@@ -61,6 +61,9 @@ class LlamaBenchRequest(BaseModel):
     repetitions: int = Field(default = 5, ge = 1, le = 20)
     flash_attn: Literal["auto", "on", "off"] = "auto"
     n_gpu_layers: Optional[int] = Field(default = None, ge = 0, le = 999)
+    # The tab's tag for this start, echoed on the job: a tab that reloads before the answer
+    # lands can still tell its run from another tab's.
+    client_ref: Optional[str] = Field(default = None, max_length = 64)
 
     @field_validator("prompt_tokens", "gen_tokens", "depths")
     @classmethod
@@ -102,7 +105,8 @@ class _Job:
             "error": self.error,
             "model": self.model,
             "ggufVariant": self.variant,
-            "config": self.request.model_dump(),
+            "config": self.request.model_dump(exclude = {"client_ref"}),
+            "clientRef": self.request.client_ref,
             "rows": list(self.rows),
             "meta": dict(self.meta),
             "done": len(self.rows),
@@ -208,7 +212,7 @@ def _save(job: _Job, status: str) -> None:
             "sweep": KIND,
             "model": job.model,
             "ggufVariant": job.variant,
-            "config": job.request.model_dump(),
+            "config": job.request.model_dump(exclude = {"client_ref"}),
             "meta": {**job.meta, "status": status, "total": job.total},
             "outcomes": job.rows,
             "results": [],

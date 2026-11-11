@@ -57,6 +57,8 @@ export interface LlamaBenchJob {
   log: string[];
   createdAt: number;
   finishedAt: number | null;
+  /** Echo of the start request's clientRef. */
+  clientRef?: string | null;
 }
 
 /** A saved run as /runs lists it; the rows ride in `outcomes`. */
@@ -99,11 +101,12 @@ export async function getLlamaBenchStatus(signal?: AbortSignal): Promise<{
 
 export async function startLlamaBench(
   config: LlamaBenchConfig,
+  clientRef?: string,
 ): Promise<LlamaBenchJob> {
   const res = await authFetch(`${BASE}/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
+    body: JSON.stringify({ ...config, client_ref: clientRef }),
   });
   return parse(res, "Starting llama-bench");
 }

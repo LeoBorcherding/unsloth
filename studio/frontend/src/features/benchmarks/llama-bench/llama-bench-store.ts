@@ -63,6 +63,8 @@ interface PendingRestore {
   originalLoad: ReturnType<typeof chatBaseLoad>;
   /** The run it belongs to; null until the server has answered with one. */
   jobId: string | null;
+  /** Sent with the start, so the run can be recognised before jobId is known. */
+  clientRef?: string;
   benched: { model: string | null; variant: string | null };
 }
 
@@ -148,8 +150,14 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
         // A run started in another tab or before a reload: follow it, then put chat's model back.
         if (status.job) set({ job: status.job });
         const running = status.job?.status === "running";
-        const owned = ownsRestore(get().pendingRestore?.jobId, status.job?.id);
+        const pendingRestore = get().pendingRestore;
+        const owned = ownsRestore(
+          pendingRestore,
+          status.job && { jobId: status.job.id, clientRef: status.job.clientRef },
+        );
         if (!owned) set({ pendingRestore: null });
+        else if (pendingRestore && status.job && !pendingRestore.jobId)
+          set({ pendingRestore: { ...pendingRestore, jobId: status.job.id } });
         if (!running && !owned) return;
         set({ phase: "running" });
         try {
@@ -173,10 +181,12 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
         }
         const original = status;
         const originalLoad = chatBaseLoad(original);
+        const clientRef = crypto.randomUUID();
         const pending = (jobId: string | null): PendingRestore => ({
           original,
           originalLoad,
           jobId,
+          clientRef,
           benched: {
             model: model ?? original.active_model,
             variant: model ? variant : (original.gguf_variant ?? null),
@@ -212,7 +222,7 @@ export const useLlamaBenchStore = create<LlamaBenchState>()(
           // Before the POST: the server unloads chat's model, and a lost answer must still restore it.
           touched = true;
           if (original.active_model) set({ pendingRestore: pending(null) });
-          const job = await startLlamaBench(get().config);
+          const job = await startLlamaBench(get().config, clientRef);
           if (original.active_model) set({ pendingRestore: pending(job.id) });
           set({ job, phase: "running" });
           const done = await pollUntilDone(set);

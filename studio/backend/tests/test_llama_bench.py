@@ -111,6 +111,17 @@ def test_a_run_unloads_the_model_parses_rows_and_saves_as_its_own_kind(bench):
     assert runs[0]["ggufVariant"] == "Q4_K_M"
 
 
+def test_the_start_tag_is_echoed_on_the_job_but_not_saved_with_the_config(bench):
+    client, _, _ = bench
+    res = client.post("/api/benchmarks/llama-bench/run", json = {"client_ref": "tab-1"})
+    assert res.status_code == 200, res.text
+    assert res.json()["clientRef"] == "tab-1"
+    job = _wait(client)
+    assert job["clientRef"] == "tab-1" and "client_ref" not in job["config"]
+    run = client.get("/api/benchmarks/runs", params = {"kind": "llama-bench"}).json()["runs"][0]
+    assert "client_ref" not in run["config"]
+
+
 def test_a_second_run_is_refused_while_one_is_going_and_cancel_stops_it(bench):
     client, slow, _ = bench
     slow["on"] = True
