@@ -1666,6 +1666,8 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
           setUserEdit({ targetModules });
         },
         setS3Config: (s3Config) => setUserEdit({ s3Config }),
+        setEnableActivationCapture: (enableActivationCapture) =>
+          setUserEdit({ enableActivationCapture }),
         restoreRunConfig: (config) => {
           const selections = runConfigDraftSelections(config);
           const hyperparameters = mapBackendModelConfigToTrainingPatch({
@@ -1688,6 +1690,7 @@ export const useTrainingConfigStore = create<TrainingConfigStore>()(
             earlyStoppingPatience: earlyStoppingPatienceFrom(
               config.early_stopping_patience,
             ),
+            enableActivationCapture: config.enable_activation_capture === true,
             ...drafterStateFrom(config.drafter),
           });
           // Fetch capabilities without replacing the saved recipe.

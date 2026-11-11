@@ -553,8 +553,7 @@ class TrainingStartRequest(BaseModel):
     save_steps: int = Field(100, description = "Steps between checkpoints")
     # NaN clears _check_weight_decay's 0..10 range check (every comparison with it is False), so it is refused here.
     weight_decay: float = Field(0.001, allow_inf_nan = False, description = "Weight decay")
-    # Finite as well as non-negative: JSON 1e309 floats to inf, which clears ge=0 but never binds, so
-    # the run would train unclipped while reporting a threshold.
+    # Reject inf too: JSON 1e309 parses to inf, which passes ge=0 but never binds the clip.
     max_grad_norm: Optional[float] = Field(
         None,
         ge = 0,
@@ -686,6 +685,12 @@ class TrainingStartRequest(BaseModel):
     # The history detail hands out a handle for the resumable directory; Resume sends it back.
     _resolve_the_resume_handle = field_validator("resume_from_checkpoint")(
         _resolve_inventory_handle
+    )
+
+    # Interpretability parameters
+    enable_activation_capture: bool = Field(
+        False,
+        description = "Capture neuron activation statistics for interpretability visualizations",
     )
 
     gpu_ids: Optional[List[int]] = Field(
