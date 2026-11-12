@@ -4504,7 +4504,10 @@ export function ModelConfigPage({
                 <NpuAdvancedSettings
                   config={config}
                   update={update}
-                  contextLength={maxSeqLengthValue}
+                  // Under Auto the load clamps the chunk to the context it resolves, up to the model's limit.
+                  contextLength={
+                    savedContextPin(config) != null ? maxSeqLengthValue : nativeMaxSeqLength
+                  }
                   showImagePreResize={target.meta.isVision === true || npuCatalogVision}
                 />
               ) : (
