@@ -200,12 +200,37 @@ def _try_lock(handle: BinaryIO) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
+def _lock_path(folder: Path) -> Path:
+    # Beside the folder, not in it: FastFlowLM owns the folder's contents.
+    return folder.with_name(folder.name + ".unsloth-download.lock")
+
+
+def download_lock_held(folder: Path) -> bool:
+    """True while any Unsloth Studio process on this home is downloading into folder."""
+    try:
+        handle = open(_lock_path(folder), "r+b", buffering = 0)
+    except FileNotFoundError:
+        return False
+    with handle:
+        try:
+            _try_lock(handle)
+        except OSError:
+            return True
+        if os.name == "nt":
+            import msvcrt
+            handle.seek(_LOCK_OFFSET)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return False
+
+
 def _acquire_lock(model: FlmModelFiles) -> BinaryIO:
     """One downloader per model across processes on this home. An OS lock, so a process that dies
     releases it and no stale-lock cleanup can race a live owner."""
-    # Beside the folder, not in it: FastFlowLM owns the folder's contents.
     # Unbuffered: a buffered read would reach the locked byte.
-    path = model.folder.with_name(model.folder.name + ".unsloth-download.lock")
+    path = _lock_path(model.folder)
     handle = open(path, "a+b", buffering = 0)
     try:
         _try_lock(handle)

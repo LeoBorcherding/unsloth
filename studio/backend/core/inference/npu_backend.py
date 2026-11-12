@@ -24,6 +24,7 @@ from core.inference.flm_files import (
     FlmDownloadError,
     FlmModelFiles,
     download_files,
+    download_lock_held,
     model_folder_checkpoints,
     read_model_files,
     read_model_repo,
@@ -903,6 +904,28 @@ class LemonadeNpuBackend:
         except OSError as exc:
             logger.debug("Could not list %s: %s", base, exc)
         return rows
+
+    def downloading_elsewhere(self, model_ids: Optional[frozenset[str]] = None) -> Optional[str]:
+        """A model of model_ids (any when None) another Studio process is downloading, so a delete
+        cannot pull its files out from under that download."""
+        held = [
+            (folder, checkpoint)
+            for folder, checkpoint in self.model_folders()
+            if folder.is_dir() and download_lock_held(folder)
+        ]
+        if not held:
+            return None
+        try:
+            ids = {str(row.get("checkpoint")): str(row.get("id")) for row in self._flm_rows()}
+        except (NpuError, LemonadeUnavailable):
+            ids = {}
+        for folder, checkpoint in held:
+            model_id = ids.get(checkpoint) if checkpoint else None
+            if model_ids is None:
+                return model_id or folder.name
+            if model_id in model_ids:
+                return model_id
+        return None
 
     def delete_checkpoint(
         self,

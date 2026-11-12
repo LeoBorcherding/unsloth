@@ -100,10 +100,15 @@ def downloads_held(model_ids: Optional[Iterable[str]] = None):
     is held only to check and mark, so a pull asked for meanwhile is refused, not blocked.
     Raises NpuBusy if one of them is already pulling."""
     ids = None if model_ids is None else frozenset(model_ids)
+    # Another Studio process on this home has its own _downloads, but takes the same OS lock.
+    # Checked outside _downloads_lock: it may ask lemond which model a folder is.
+    elsewhere = get_npu_backend().downloading_elsewhere(ids)
     with _downloads_lock:
         for model_id, job in _downloads.items():
             if not job.finished and (ids is None or model_id in ids):
                 raise NpuBusy(f"Cancel the download of {model_id} before deleting it.")
+        if elsewhere is not None:
+            raise NpuBusy(f"Cancel the download of {elsewhere} before deleting it.")
         _deleting.append(ids)
     try:
         yield

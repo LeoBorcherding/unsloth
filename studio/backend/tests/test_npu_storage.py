@@ -298,3 +298,44 @@ def test_a_pull_asked_for_during_a_storage_delete_is_refused_without_waiting(npu
     )
     assert npu_routes._deleting == []
     assert start("qwen3-4b-FLM") == "started"
+
+
+def _held_by_another_handle(npu_home, folder: str):
+    from core.inference import flm_files
+    folder = npu_home.root / "flm" / "models" / folder
+    return flm_files._acquire_lock(flm_files.FlmModelFiles(folder, ()))
+
+
+def test_a_folder_another_process_is_downloading_is_not_deleted(npu_home, monkeypatch):
+    import asyncio
+
+    import routes.npu as npu_routes
+
+    monkeypatch.setattr(npu_routes, "get_npu_backend", lambda: npu_home)
+    monkeypatch.setattr(npu_routes, "_downloads", {})
+    lock = _held_by_another_handle(npu_home, "Qwen3-4B-NPU2")
+    try:
+        with pytest.raises(npu_routes.HTTPException, match = "Cancel the download of qwen3-4b-FLM"):
+            asyncio.run(npu_routes.delete_npu_checkpoint("qwen3:4b"))
+        assert npu_home.deleted == []
+        # Another model's lock does not block this one.
+        asyncio.run(npu_routes.delete_npu_checkpoint("qwen3:0.6b"))
+        assert npu_home.deleted == ["qwen3-0.6b-FLM"]
+    finally:
+        lock.close()
+    asyncio.run(npu_routes.delete_npu_checkpoint("qwen3:4b"))
+    assert npu_home.deleted == ["qwen3-0.6b-FLM", "qwen3-4b-FLM"]
+
+
+def test_clearing_waits_for_a_download_in_another_process(npu_home, monkeypatch):
+    import routes.npu as npu_routes
+
+    monkeypatch.setattr(npu_routes, "get_npu_backend", lambda: npu_home)
+    monkeypatch.setattr(npu_routes, "_downloads", {})
+    lock = _held_by_another_handle(npu_home, "EmbedGemma-300M-NPU2")
+    try:
+        result = purge_cache("npu_models")
+        assert npu_home.deleted == []
+        assert result["errors"] == [cache_inventory._PURGE_BUSY]
+    finally:
+        lock.close()
