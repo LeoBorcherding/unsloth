@@ -3,6 +3,9 @@
 
 // Mirrors SOURCE_QUANTS in backend core/export/q4nx.py; any other quant is dequantized and rounded again.
 const DIRECT_QUANTS = ["q4_0", "q4_1", "q4_k_m"];
+// Only the q4k converter unpacks Q4_K, and only these architectures use it
+// (q4k_architectures in q4nx_converter_pins.json); the q4nx converter rounds Q4_K_M again.
+const Q4K_ARCHITECTURES = ["qwen35", "qwen35moe"];
 
 // GGUF general.architecture values the pinned ROCm/FLM_Q4NX_Converter accepts (q4nx_converter_pins.json),
 // with the caveat when it only takes some models of that architecture. Some (qwen35, qwen2vl) it
@@ -21,6 +24,12 @@ const Q4NX_ARCHITECTURES: Record<string, string | null> = {
   phi3: "Only Phi-4 mini converts.",
   "gpt-oss": null,
   nanbeige: null,
+};
+
+// Parameter counts, in billions, behind the size caveats above. Qwen3.5 Omni is matched by name.
+const Q4NX_SIZES: Record<string, readonly number[]> = {
+  qwen35: [0.8, 2, 4, 9],
+  qwen35moe: [35],
 };
 
 // modelInfo fields for a typed repo. "gguf" is outside the SDK's expandable-key type but is forwarded to expand= as is.
@@ -45,13 +54,50 @@ function directRank(quant: string): number {
   return i === -1 ? DIRECT_QUANTS.length : i;
 }
 
-export function packsDirectly(quant: string): boolean {
-  return directRank(quant) < DIRECT_QUANTS.length;
+/** "by-architecture": Q4_K_M of a file whose architecture is not known yet. */
+export type Q4nxPacking = "direct" | "by-architecture" | "requantized";
+
+export function q4nxPacking(
+  quant: string,
+  architecture?: string | null,
+): Q4nxPacking {
+  const rank = directRank(quant);
+  if (rank === DIRECT_QUANTS.length) return "requantized";
+  if (DIRECT_QUANTS[rank] !== "q4_k_m") return "direct";
+  const arch = architecture?.trim().toLowerCase();
+  if (!arch) return "by-architecture";
+  return Q4K_ARCHITECTURES.includes(arch) ? "direct" : "requantized";
+}
+
+export function packsDirectly(quant: string, architecture?: string | null): boolean {
+  return q4nxPacking(quant, architecture) === "direct";
+}
+
+const PACKING_ORDER: Q4nxPacking[] = ["direct", "by-architecture", "requantized"];
+
+/** A 4xx from the convert endpoint: the same request gets the same answer. 5xx and network drops do not count. */
+export function q4nxIsRefusal(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+// A split GGUF is listed as one variant named by its first shard; the converter reads one file.
+const SPLIT_SHARD = /-\d{3,}-of-\d{3,}\.gguf$/i;
+
+/** Drops what cannot be converted: empty leftover quant folders (no file) and split GGUFs. */
+export function q4nxConvertibleFiles<T extends { filename: string; cleanable?: boolean }>(
+  variants: T[],
+): T[] {
+  return variants.filter((v) => !v.cleanable && !SPLIT_SHARD.test(v.filename));
 }
 
 /** Directly packed quants first (backend order), then the rest; the first one is the default pick. */
-export function sortQ4nxVariants<T extends Q4nxVariant>(variants: T[]): T[] {
-  const rank = (v: T) => directRank(v.quant);
+export function sortQ4nxVariants<T extends Q4nxVariant>(
+  variants: T[],
+  architecture?: string | null,
+): T[] {
+  const rank = (v: T) =>
+    PACKING_ORDER.indexOf(q4nxPacking(v.quant, architecture)) * 10 + directRank(v.quant);
   return variants
     .map((variant, index) => ({ variant, index }))
     .sort((a, b) => rank(a.variant) - rank(b.variant) || a.index - b.index)
@@ -68,9 +114,20 @@ export function q4nxBaseModel(
   return (repoId ?? "").trim().replace(/-GGUF$/i, "");
 }
 
+// "Qwen3.5-9B", "Qwen3-0.6B-GGUF"; in "35B-A3B" the first, total count wins.
+const NAME_PARAMS_RE = /(?:^|[^A-Za-z0-9.])(\d+(?:\.\d+)?)B(?![A-Za-z0-9])/i;
+
+/** Parameter count read off a model name, for a row with no count from the Hub. */
+export function q4nxParamsFromName(name: string): number | null {
+  const billions = Number(NAME_PARAMS_RE.exec(name)?.[1]);
+  return billions > 0 ? billions * 1e9 : null;
+}
+
 export type Q4nxArchFit =
   | { status: "supported"; note: string | null }
-  | { status: "unsupported" | "unknown"; note: string };
+  // `sized`: the architecture converts, this model's size does not.
+  | { status: "unsupported"; note: string; sized?: true }
+  | { status: "unknown"; note: string };
 
 // The converter finds no qwen2vl architecture name, so a Qwen2-VL basename falls to the dense qwen2 prefix.
 const QWEN2_VL_NAME = /(^|[\s/\\._-])qwen2[-_]?vl/i;
@@ -99,7 +156,22 @@ export function q4nxArchFit(
       note: `The Q4NX converter does not support the ${arch} architecture.`,
     };
   }
-  return { status: "supported", note: Q4NX_ARCHITECTURES[arch] };
+  const caveat = Q4NX_ARCHITECTURES[arch];
+  const sizes = Q4NX_SIZES[arch];
+  if (!sizes) return { status: "supported", note: caveat };
+  // A size named in the repo or file settles the caveat up front, not after the download.
+  const billions = (q4nxParamsFromName(name ?? "") ?? 0) / 1e9;
+  if (/omni/i.test(name ?? "") || sizes.includes(billions)) {
+    return { status: "supported", note: null };
+  }
+  if (billions) {
+    return {
+      status: "unsupported",
+      note: `The Q4NX converter does not support this ${billions}B model. ${caveat}`,
+      sized: true,
+    };
+  }
+  return { status: "supported", note: caveat };
 }
 
 /** Which listing the file picker shows. Only the active source counts: a picked local folder survives a switch to the Hub. */
@@ -117,9 +189,177 @@ export function q4nxVariantLookup(
   };
 }
 
-/** Whether the field still shows the picked model; typing a new query leaves it picked but uncommitted. */
-export function q4nxPickCommitted(selected: string, inputText: string): boolean {
-  return !!selected && inputText.trim() === selected;
+/** Which models show their quantizations. "Expand quantizations" opens every model; without it the list is by model, one open at a time. */
+export interface Q4nxExpansion {
+  expandAll: boolean;
+  /** Models toggled against the default: closed under expandAll, else the one that is open. */
+  toggled: readonly string[];
+}
+
+export function q4nxIsExpanded(state: Q4nxExpansion, id: string): boolean {
+  return state.toggled.includes(id) !== state.expandAll;
+}
+
+export function q4nxToggleExpanded(state: Q4nxExpansion, id: string): Q4nxExpansion {
+  const open = q4nxIsExpanded(state, id);
+  if (!state.expandAll) return { ...state, toggled: open ? [] : [id] };
+  return {
+    ...state,
+    toggled: open ? [...state.toggled, id] : state.toggled.filter((t) => t !== id),
+  };
+}
+
+// Context buffers and the runtime on top of the weights; the backend's NPU memory fit (_NPU_LOAD_MARGIN_GB) uses the same margin.
+const NPU_LOAD_MARGIN_GB = 1;
+// About Q4_K_M's bits per weight, for a repo whose files are not listed yet.
+const Q4_BYTES_PER_PARAM = 0.6;
+const GIB = 1024 ** 3;
+
+export interface Q4nxWeights {
+  bytes: number;
+  /** Not the size of a file that packs directly. */
+  estimated: boolean;
+}
+
+type SizedVariant = Q4nxVariant & { size_bytes?: number | null };
+
+/** Size of the 4-bit weights a source converts to: its own when it packs directly, else a sibling that does, else from the parameter count. */
+export function q4nxWeights(
+  variant: SizedVariant | null,
+  siblings: readonly SizedVariant[] = [],
+  totalParams?: number | null,
+  architecture?: string | null,
+): Q4nxWeights | null {
+  if (variant?.size_bytes && packsDirectly(variant.quant, architecture)) {
+    return { bytes: variant.size_bytes, estimated: false };
+  }
+  const direct = sortQ4nxVariants(
+    siblings.filter((v) => v.size_bytes && packsDirectly(v.quant, architecture)),
+    architecture,
+  )[0];
+  if (direct?.size_bytes) return { bytes: direct.size_bytes, estimated: true };
+  if (totalParams && totalParams > 0) {
+    return { bytes: totalParams * Q4_BYTES_PER_PARAM, estimated: true };
+  }
+  return null;
+}
+
+export interface Q4nxMemory {
+  weightsGb: number;
+  neededGb: number;
+  /** null when the window is unknown. */
+  fits: boolean | null;
+  /** Share of the window the weights and the load margin take, each 0 to 100. */
+  weightsPct: number;
+  marginPct: number;
+  label: string;
+}
+
+/** A source's NPU memory need against the window this PC can give the NPU (status.memory_window_gb). */
+export function q4nxNpuMemory(
+  weights: Q4nxWeights | null,
+  windowGb: number | null | undefined,
+): Q4nxMemory | null {
+  if (!weights) return null;
+  const weightsGb = weights.bytes / GIB;
+  const neededGb = weightsGb + NPU_LOAD_MARGIN_GB;
+  const need = `${weights.estimated ? "~" : ""}${neededGb.toFixed(1)}`;
+  if (!windowGb || windowGb <= 0) {
+    return { weightsGb, neededGb, fits: null, weightsPct: 0, marginPct: 0, label: `${need} GB NPU` };
+  }
+  const weightsPct = Math.min((weightsGb / windowGb) * 100, 100);
+  return {
+    weightsGb,
+    neededGb,
+    // Compared at one decimal, like the backend and the label.
+    fits: Number(neededGb.toFixed(1)) <= windowGb,
+    weightsPct,
+    marginPct: Math.min((NPU_LOAD_MARGIN_GB / windowGb) * 100, 100 - weightsPct),
+    label: `${need} of ${windowGb.toFixed(1)} GB NPU`,
+  };
+}
+
+/** The warning for a source larger than the window, or null. It only warns: the window is an estimate. */
+export function q4nxMemoryWarning(
+  memory: Q4nxMemory | null,
+  windowGb: number | null | undefined,
+): string | null {
+  if (memory?.fits !== false || windowGb == null) return null;
+  return `Needs about ${memory.neededGb.toFixed(1)} GB of NPU memory; this PC can give the NPU about ${windowGb.toFixed(1)} GB.`;
+}
+
+/** The quant alone ("Q4_K_M") out of a variant key or a file stem such as "Qwen3-0.6B-Q4_K_M". */
+export function q4nxQuantName(quant: string): string {
+  const label = q4nxQuantLabel(quant);
+  const match = /(?:^|[-_.])((?:UD-)?I?Q\d\w*|BF16|F16|F32)$/i.exec(label);
+  return match ? match[1].toUpperCase() : label;
+}
+
+export const Q4NX_GUIDE_STEPS = [
+  "Pick a GGUF model from Hugging Face or from this device",
+  "Choose its GGUF file: Q4_0 and Q4_1 pack directly, Q4_K_M for Qwen3.5",
+  "Check the original model and save directory in the convert settings",
+  "Click Convert to write the Q4NX files",
+] as const;
+
+export const Q4NX_PACKING_TEXT: Record<Q4nxPacking, string> = {
+  direct: "packs directly",
+  "by-architecture": "packs directly for Qwen3.5 only",
+  requantized: "re-quantized to 4-bit",
+};
+
+export interface Q4nxSummaryInput {
+  model: string | null;
+  /** The picked GGUF file's name and quant key; null until one is picked. */
+  file: string | null;
+  quant: string | null;
+  packing: Q4nxPacking | null;
+  baseModel: string;
+  saveDirectory: string;
+  /** Formatted size of the converted weights. */
+  size: string | null;
+  memory: Pick<Q4nxMemory, "fits" | "label"> | null;
+  archFit: Q4nxArchFit | null;
+}
+
+/** The export page's summary rows while the Q4NX card is in use. */
+export function q4nxSummaryRows(
+  input: Q4nxSummaryInput,
+): { label: string; value: string; mono?: boolean }[] {
+  const { archFit, memory, quant } = input;
+  const dash = "\u2014";
+  return [
+    { label: "Model", value: input.model || dash },
+    { label: "GGUF file", value: input.file || dash },
+    {
+      label: "Quant",
+      value:
+        quant && input.packing
+          ? `${q4nxQuantName(quant)}, ${Q4NX_PACKING_TEXT[input.packing]}`
+          : dash,
+    },
+    { label: "Original model", value: input.baseModel.trim() || dash },
+    { label: "Save directory", value: input.saveDirectory.trim() || dash },
+    { label: "Est. Q4NX size", value: input.size ?? dash },
+    {
+      label: "NPU memory",
+      value: memory
+        ? memory.fits === false
+          ? `May not fit: ${memory.label}`
+          : memory.label
+        : dash,
+    },
+    {
+      label: "Convertible",
+      value: !archFit
+        ? dash
+        : archFit.status === "unsupported"
+          ? "No"
+          : archFit.status === "unknown"
+            ? "Checked during conversion"
+            : (archFit.note ?? "Yes"),
+    },
+  ];
 }
 
 /** A local row's file: the row itself when it is a .gguf, else the variant inside its folder. */
