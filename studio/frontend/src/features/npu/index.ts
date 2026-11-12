@@ -9,12 +9,17 @@ export {
   type NpuStatus,
   npuCapabilities,
   npuContextLabel,
+  type NpuLocalModel,
+  npuDeleteDescription,
   npuDownloadLabel,
   npuReadmeNote,
   npuMemoryTag,
   npuMemoryWarning,
   npuResumeLabel,
+  npuRowDetails,
+  npuRowLabel,
   npuRowsFor,
+  npuRowTooltip,
   npuSizeLabel,
 } from "./api";
 export { refreshNpuModels, useNpuCatalogStore } from "./npu-catalog-store";
