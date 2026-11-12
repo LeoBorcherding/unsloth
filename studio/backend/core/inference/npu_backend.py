@@ -889,9 +889,7 @@ class LemonadeNpuBackend:
                         "POST", "/v1/unload", json_body = {"model_name": model.id}, timeout = 60.0
                     )
                     if _failed(response):
-                        raise NpuError(
-                            f"Reloading {model.id} failed: {_error_message(response)}"
-                        )
+                        raise NpuError(f"Reloading {model.id} failed: {_error_message(response)}")
                     self._raise_if_load_cancelled(model_id)
                 server.note(f"Loading {model.id} with a {ctx}-token context")
                 window = server.open_window()
