@@ -7845,7 +7845,7 @@ export function HubModelPicker({
     const settings =
       onConfigure && model.downloaded && !downloading && !problem ? (
         <ModelLoadSettingsAction
-          ariaLabel={`Inference settings for ${model.id}`}
+          ariaLabel={`Inference settings for ${name}`}
           onConfigure={() => onConfigure(model.model_path, configMeta)}
           savedFor={modelConfigTarget(model.model_path, configMeta)}
         />

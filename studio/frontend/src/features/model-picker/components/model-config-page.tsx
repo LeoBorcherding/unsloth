@@ -249,6 +249,7 @@ import {
   isNpuModelId,
   refreshNpuModels,
   useNpuCatalogStore,
+  useNpuDisplayName,
   useNpuStatus,
 } from "../../npu";
 import {
@@ -2752,6 +2753,7 @@ export function ModelConfigPage({
       void refreshNpuModels();
     }
   }, [targetIsNpu, npuCatalogListed, npuStatus?.ready]);
+  const npuName = useNpuDisplayName(targetIsNpu ? target.id : null);
   const gpuDevices = useGpuDevices();
   const resolveInitial = () => {
     const resolved = resolveInitialConfig(configId, target.ggufVariant);
@@ -4325,7 +4327,7 @@ export function ModelConfigPage({
               Run settings
             </div>
             <div className="mt-1.5 truncate text-ui-14 font-semibold leading-tight text-foreground">
-              {target.displayName}
+              {npuName ?? target.displayName}
             </div>
             <div
               className="mt-1 truncate text-ui-11 leading-tight text-muted-foreground"

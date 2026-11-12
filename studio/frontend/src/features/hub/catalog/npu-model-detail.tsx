@@ -6,6 +6,7 @@ import {
   type NpuModel,
   npuCapabilities,
   npuContextLabel,
+  npuDisplayName,
   npuMemoryWarning,
   npuReadmeNote,
   npuResumeLabel,
@@ -74,7 +75,7 @@ export function NpuModelDetail({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-1.5">
               <h2 className="truncate text-ui-25 font-semibold leading-ui-31 tracking-normal text-foreground">
-                {model.id}
+                {npuDisplayName(model)}
               </h2>
               {repo && (
                 <div className="flex shrink-0 items-center gap-0.5">

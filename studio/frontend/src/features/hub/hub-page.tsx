@@ -30,6 +30,7 @@ import { taskForMediaPick } from "@/features/model-picker/components/model-selec
 import {
   type NpuModel,
   type NpuPickerSource,
+  npuDisplayName,
   useNpuCatalog,
   useNpuStatus,
 } from "@/features/npu";
@@ -1806,7 +1807,7 @@ export function ModelsPage() {
       openRunSettingsInChat({
         requestId: createModelConfigHandoffRequestId(),
         id: model.model_path,
-        displayName: model.id,
+        displayName: npuDisplayName(model),
         meta: {
           source: "local",
           isLora: false,
