@@ -24,10 +24,14 @@ test("the export page does not read NPU status", () => {
 });
 
 test("the Q4NX convert card renders unconditionally", () => {
-  const cards = page.match(/^.*<Q4nxConvertCard \/>.*$/gm) ?? [];
+  const cards = page.match(/^.*<Q4nxConvertCard\b.*$/gm) ?? [];
   assert.equal(cards.length, 2);
+  // No guard in front of either: the line is the element alone.
   for (const line of cards) {
-    assert.equal(line.trim(), "<Q4nxConvertCard />");
+    assert.match(
+      line.trim(),
+      /^<Q4nxConvertCard( onSummary=\{setQ4nxSummary\})? \/>$/,
+    );
   }
 });
 
