@@ -17,6 +17,11 @@ export {
   npuRowsFor,
   npuSizeLabel,
 } from "./api";
+export {
+  npuDisplayName,
+  npuDisplayNameOf,
+  npuRepoLabel,
+} from "./display-name";
 export { refreshNpuModels, useNpuCatalogStore } from "./npu-catalog-store";
 export { NpuSetupNotice } from "./npu-setup-notice";
 export {
@@ -24,4 +29,9 @@ export {
   type NpuPickerSource,
   useNpuCatalog,
 } from "./use-npu-catalog";
+export {
+  npuDisplayNameNow,
+  useNpuDisplayName,
+  useNpuDisplayNames,
+} from "./use-npu-display-name";
 export { useNpuStatus } from "./use-npu-status";
