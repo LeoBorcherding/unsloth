@@ -4,6 +4,7 @@
 import { authFetch } from "@/features/auth/api";
 import { readFastApiError } from "@/lib/format-fastapi-error";
 import { readSseJsonEvents } from "@/lib/sse-json-events";
+import { npuDisplayName, npuSearchText } from "./display-name";
 
 export const NPU_MODEL_PREFIX = "lemonade:";
 
@@ -92,10 +93,7 @@ export function npuRowsFor(
     .filter(
       (model) =>
         (!onDevice || model.downloaded) &&
-        (!needle ||
-          `${model.id} ${model.checkpoint} ${model.local?.folder ?? ""}`
-            .toLowerCase()
-            .includes(needle)),
+        (!needle || npuSearchText(model).toLowerCase().includes(needle)),
     )
     .sort((a, b) => npuRank(a.checkpoint) - npuRank(b.checkpoint));
 }
@@ -189,7 +187,7 @@ export function npuResumeLabel(model: NpuModel): string | null {
 /** Rehashing kept files before a resume, or Lemonade registering the files after the download. */
 export type NpuDownloadPhase = "verifying" | "finishing";
 export function npuRowLabel(model: NpuModel): string {
-  return model.local ? model.local.folder.split("/").pop() || model.id : model.id;
+  return npuDisplayName(model);
 }
 
 export function npuRowDetails(model: NpuModel): string[] {
