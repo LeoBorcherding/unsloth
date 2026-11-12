@@ -96,25 +96,28 @@ _deleting: list[Optional[frozenset[str]]] = []
 
 @contextmanager
 def downloads_held(model_ids: Optional[Iterable[str]] = None):
-    """Keeps new pulls of model_ids (every model when None) out while a delete runs. The lock
-    is held only to check and mark, so a pull asked for meanwhile is refused, not blocked.
-    Raises NpuBusy if one of them is already pulling."""
+    """Keeps pulls of model_ids (every model when None) out while a delete runs, in this process
+    and in any other Studio process on this home. _downloads_lock is held only to check and
+    mark, so a pull asked for meanwhile is refused, not blocked. Raises NpuBusy if one of them
+    is already pulling; yields what downloads_locked yields."""
     ids = None if model_ids is None else frozenset(model_ids)
-    # Another Studio process on this home has its own _downloads, but takes the same OS lock.
-    # Checked outside _downloads_lock: it may ask lemond which model a folder is.
-    elsewhere = get_npu_backend().downloading_elsewhere(ids)
     with _downloads_lock:
         for model_id, job in _downloads.items():
             if not job.finished and (ids is None or model_id in ids):
                 raise NpuBusy(f"Cancel the download of {model_id} before deleting it.")
-        if elsewhere is not None:
-            raise NpuBusy(f"Cancel the download of {elsewhere} before deleting it.")
         _deleting.append(ids)
     try:
-        yield
+        # Other Studio processes have their own _downloads, but take the same OS lock.
+        with get_npu_backend().downloads_locked(ids) as held:
+            yield held
     finally:
         with _downloads_lock:
             _deleting.remove(ids)
+
+
+def _delete_model(model_id: str) -> None:
+    with downloads_held([model_id]):
+        get_npu_backend().delete(model_id)
 
 
 def _delete_checkpoint(checkpoint: str) -> str:
@@ -258,7 +261,7 @@ async def cancel_npu_download(model_id: str):
 @router.delete("/models/{model_id}", dependencies = [Depends(_require_installation_owner)])
 async def delete_npu_model(model_id: str):
     try:
-        await asyncio.to_thread(get_npu_backend().delete, model_id)
+        await asyncio.to_thread(_delete_model, model_id)
     except NpuError as exc:
         raise HTTPException(status_code = 409, detail = str(exc)) from None
     finally:

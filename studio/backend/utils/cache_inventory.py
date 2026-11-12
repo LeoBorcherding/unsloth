@@ -418,8 +418,8 @@ def _purge_npu_models() -> PurgeOutcome:
     roots = _npu_model_dirs()
     before = sum(_measure_root(root)[0] for root in roots)
     try:
-        with downloads_held():
-            deleted, errors = get_npu_backend().delete_downloaded()
+        with downloads_held() as held:
+            deleted, errors = get_npu_backend().delete_downloaded(held)
     except NpuBusy:
         return PurgeOutcome(errors = [_PURGE_BUSY])
     after = sum(_measure_root(root)[0] for root in roots)

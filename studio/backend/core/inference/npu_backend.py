@@ -12,7 +12,7 @@ import re
 import subprocess
 import sys
 import threading
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Optional
@@ -24,10 +24,10 @@ from core.inference.flm_files import (
     FlmDownloadError,
     FlmModelFiles,
     download_files,
-    download_lock_held,
     model_folder_checkpoints,
     read_model_files,
     read_model_repo,
+    take_download_lock,
 )
 from core.inference.lemonade_server import LemonadeServer, LemonadeUnavailable, OutputWindow
 from core.inference.npu_context import DEFAULT_CONTEXT_LENGTH, plan_context
@@ -905,27 +905,53 @@ class LemonadeNpuBackend:
             logger.debug("Could not list %s: %s", base, exc)
         return rows
 
-    def downloading_elsewhere(self, model_ids: Optional[frozenset[str]] = None) -> Optional[str]:
-        """A model of model_ids (any when None) another Studio process is downloading, so a delete
-        cannot pull its files out from under that download."""
-        held = [
-            (folder, checkpoint)
-            for folder, checkpoint in self.model_folders()
-            if folder.is_dir() and download_lock_held(folder)
-        ]
-        if not held:
-            return None
+    @contextmanager
+    def downloads_locked(
+        self, model_ids: Optional[frozenset[str]] = None
+    ) -> Iterator[Optional[frozenset[str]]]:
+        """Holds the download lock every Studio process on this home takes, for each model a delete
+        touches (every model folder on disk when None), until the delete ends. Yields the
+        checkpoints held when None, so Clear leaves a folder that appears meanwhile alone.
+        Raises NpuBusy if one of them is downloading."""
+        subfolder, names = model_folder_checkpoints(self._flm_binary())
+        models = self._flm_model_dir / subfolder if subfolder else None
+        if models is None or not models.is_dir():
+            yield None if model_ids is None else frozenset()
+            return
+        folders = {checkpoint: models / name for name, checkpoint in names.items()}
         try:
-            ids = {str(row.get("checkpoint")): str(row.get("id")) for row in self._flm_rows()}
+            rows = self._flm_rows() if model_ids is not None else []
+        except LemonadeUnavailable as exc:
+            raise NpuError(str(exc)) from exc
+        if model_ids is None:
+            targets = {c: f for c, f in folders.items() if f.is_dir()}
+        else:
+            wanted = {str(row.get("checkpoint")) for row in rows if row.get("id") in model_ids}
+            targets = {c: folders[c] for c in wanted if c in folders}
+        held = []
+        try:
+            for checkpoint, folder in sorted(targets.items()):
+                handle = take_download_lock(folder)
+                if handle is None:
+                    raise NpuBusy(
+                        f"Cancel the download of {self._model_id_for(checkpoint, rows)} "
+                        "before deleting it."
+                    )
+                held.append(handle)
+            yield frozenset(targets) if model_ids is None else frozenset()
+        finally:
+            for handle in held:
+                handle.close()
+
+    def _model_id_for(self, checkpoint: str, rows: list[dict[str, Any]]) -> str:
+        try:
+            rows = rows or self._flm_rows()
         except (NpuError, LemonadeUnavailable):
-            ids = {}
-        for folder, checkpoint in held:
-            model_id = ids.get(checkpoint) if checkpoint else None
-            if model_ids is None:
-                return model_id or folder.name
-            if model_id in model_ids:
-                return model_id
-        return None
+            rows = []
+        for row in rows:
+            if row.get("checkpoint") == checkpoint:
+                return str(row.get("id"))
+        return checkpoint
 
     def delete_checkpoint(
         self,
@@ -949,15 +975,21 @@ class LemonadeNpuBackend:
                 self.delete(model_id)
         return model_ids[0]
 
-    def delete_downloaded(self) -> tuple[int, list[str]]:
-        """Delete every downloaded model through lemond, so its registry matches the disk."""
+    def delete_downloaded(self, only: Optional[frozenset[str]] = None) -> tuple[int, list[str]]:
+        """Delete every downloaded model through lemond, so its registry matches the disk.
+        only, when given, limits the partial pulls taken to those checkpoints (the ones
+        downloads_locked holds), so a pull that started after the locks were taken is left alone."""
         # A failed pull keeps its files to resume, but lemond calls that model not downloaded.
         on_disk = {checkpoint for _, checkpoint in self.model_folders() if checkpoint is not None}
         try:
             model_ids = [
                 str(row.get("id"))
                 for row in self._flm_rows()
-                if row.get("downloaded") or row.get("checkpoint") in on_disk
+                if row.get("downloaded")
+                or (
+                    row.get("checkpoint") in on_disk
+                    and (only is None or row.get("checkpoint") in only)
+                )
             ]
         except (NpuError, LemonadeUnavailable) as exc:
             return 0, [str(exc)]

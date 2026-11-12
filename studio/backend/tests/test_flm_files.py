@@ -456,23 +456,26 @@ def test_one_process_cannot_run_the_same_model_twice(files, tmp_path):
     list(ff.download_files(model))
 
 
-def test_download_lock_held_sees_another_process_and_creates_nothing(tmp_path):
+def test_take_download_lock_is_refused_while_another_process_holds_it(tmp_path):
     folder = tmp_path / "Qwen3-4B-NPU2"
-    assert not ff.download_lock_held(folder)
-    assert not ff._lock_path(folder).exists()
     holder = _hold_lock_in_another_process(folder)
     try:
-        assert ff.download_lock_held(folder)
+        assert ff.take_download_lock(folder) is None
     finally:
         # EOF ends the holder; kill() would only stop a venv's python.exe launcher on Windows.
         holder.stdin.close()
         holder.wait(timeout = 30)
-    assert not ff.download_lock_held(folder)
+    held = ff.take_download_lock(folder)
+    assert held is not None
+    held.close()
 
 
-def test_download_lock_held_lets_the_lock_go(tmp_path):
+def test_a_download_is_refused_while_a_delete_holds_the_lock(tmp_path):
     folder = tmp_path / "Qwen3-4B-NPU2"
-    ff._acquire_lock(ff.FlmModelFiles(folder, ())).close()
-    assert not ff.download_lock_held(folder)
-    # the probe released it, so a download can still take it
+    held = ff.take_download_lock(folder)
+    try:
+        with pytest.raises(ff.FlmDownloadError, match = r"another Unsloth Studio process\.$"):
+            ff._acquire_lock(ff.FlmModelFiles(folder, ()))
+    finally:
+        held.close()
     ff._acquire_lock(ff.FlmModelFiles(folder, ())).close()

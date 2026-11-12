@@ -205,48 +205,40 @@ def _lock_path(folder: Path) -> Path:
     return folder.with_name(folder.name + ".unsloth-download.lock")
 
 
-def download_lock_held(folder: Path) -> bool:
-    """True while any Unsloth Studio process on this home is downloading into folder."""
+def take_download_lock(folder: Path, downloading: bool = False) -> Optional[BinaryIO]:
+    """The model's download lock, shared by every Studio process on this home, or None while
+    someone else holds it. A downloader writes its PID in it; a delete leaves it empty. Close
+    the handle to release it."""
+    # Unbuffered: a buffered read would reach the locked byte.
+    handle = open(_lock_path(folder), "a+b", buffering = 0)
     try:
-        handle = open(_lock_path(folder), "r+b", buffering = 0)
-    except FileNotFoundError:
-        return False
-    with handle:
-        try:
-            _try_lock(handle)
-        except OSError:
-            return True
-        if os.name == "nt":
-            import msvcrt
-            handle.seek(_LOCK_OFFSET)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    return False
+        _try_lock(handle)
+    except OSError:
+        handle.close()
+        return None
+    handle.seek(0)
+    handle.truncate()
+    if downloading:
+        handle.write(str(os.getpid()).encode("ascii"))
+        handle.flush()
+    return handle
 
 
 def _acquire_lock(model: FlmModelFiles) -> BinaryIO:
     """One downloader per model across processes on this home. An OS lock, so a process that dies
     releases it and no stale-lock cleanup can race a live owner."""
-    # Unbuffered: a buffered read would reach the locked byte.
-    path = _lock_path(model.folder)
-    handle = open(path, "a+b", buffering = 0)
+    handle = take_download_lock(model.folder, downloading = True)
+    if handle is not None:
+        return handle
     try:
-        _try_lock(handle)
+        with open(_lock_path(model.folder), "rb", buffering = 0) as held:
+            owner = held.read(32).decode("ascii", "ignore").strip()
     except OSError:
-        handle.seek(0)
-        owner = handle.read(32).decode("ascii", "ignore").strip()
-        handle.close()
-        owner = f" (PID {owner})" if owner.isdigit() else ""
-        raise FlmDownloadError(
-            f"This model is already downloading in another Unsloth Studio process{owner}."
-        ) from None
-    handle.seek(0)
-    handle.truncate()
-    handle.write(str(os.getpid()).encode("ascii"))
-    handle.flush()
-    return handle
+        owner = ""
+    owner = f" (PID {owner})" if owner.isdigit() else ""
+    raise FlmDownloadError(
+        f"This model is already downloading in another Unsloth Studio process{owner}."
+    )
 
 
 def _gb(size: int) -> str:
