@@ -65,3 +65,11 @@ test("an NPU pin above the load's free-memory estimate warns", () => {
   assert.match(warning, /maxSeqLengthValue > loadedMaxContextLength/);
   assert.match(warning, /free-memory estimate/);
 });
+
+test("under Auto the prefill chunk is bounded by the model's limit, not the 8192 fallback", () => {
+  const npuAdvanced = configPage.slice(configPage.indexOf("<NpuAdvancedSettings"));
+  assert.match(
+    npuAdvanced,
+    /contextLength=\{\s*savedContextPin\(config\) != null \? maxSeqLengthValue : nativeMaxSeqLength\s*\}/,
+  );
+});
