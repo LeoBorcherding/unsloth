@@ -1020,7 +1020,7 @@ export function ResourcesTab() {
                   <span className="block normal-case">
                     {inferenceDisplay.sharedAvailableGb === null
                       ? t("settings.resources.gpu.sharedWithSystemRam")
-                      : t("settings.resources.gpu.sharedEstimatedAvailable", {
+                      : t("settings.resources.gpu.estimatedAvailable", {
                           value: formatGiB(inferenceDisplay.sharedAvailableGb),
                         })}
                   </span>
