@@ -18846,7 +18846,11 @@ async def _managed_engine_options(request, config, hf_token) -> dict:
         raise HTTPException(status_code = 400, detail = str(exc)) from exc
 
 
-def _npu_load_response(resident, status: str, flm_args: Optional[str]) -> LoadResponse:
+def _npu_load_response(
+    resident,
+    status: str,
+    flm_args: Optional[str] = None,
+) -> LoadResponse:
     from core.inference.npu_flm_args import flm_args_status
     model = resident.model
     return LoadResponse(
@@ -18882,9 +18886,9 @@ async def _unload_npu_before_local_load() -> None:
         await asyncio.to_thread(npu.unload)
 
 
-def _npu_flm_args(request: LoadRequest, model) -> Optional[str]:
-    """The ``flm_args`` this load sends; a bad value is the client's 400. npu.load holds the
-    prefill chunk to the context it resolves, which Auto only knows there."""
+def _npu_flm_args(request: LoadRequest, model, requested_ctx: Optional[int]) -> Optional[str]:
+    """The ``flm_args`` this load asks for; a bad value is the client's 400. npu.load holds the
+    prefill chunk to the context it resolves, which under Auto only the load knows."""
     from core.inference.npu_flm_args import NPU_FLM_FIELDS, build_flm_args
 
     if all(getattr(request, field) is None for field in NPU_FLM_FIELDS):
@@ -18894,7 +18898,6 @@ def _npu_flm_args(request: LoadRequest, model) -> Optional[str]:
             power_mode = request.npu_power_mode,
             prefill_chunk_len = request.npu_prefill_chunk_len,
             img_pre_resize = request.npu_img_pre_resize if model.vision else None,
-            ctx_size = model.max_context_length,
         )
     except ValueError as exc:
         raise HTTPException(status_code = 400, detail = str(exc)) from None
@@ -18941,8 +18944,10 @@ async def _load_npu_model(
         and not request.force_reload
         # Exact: Auto after a pin, or a pin after Auto, is a different load.
         and requested_ctx == resident.requested_context_length
-        # What a reload would send, held to the context the resident load resolved.
-        and clamp_prefill_chunk(_npu_flm_args(request, resident.model), resident.context_length)
+        # What the resident would run this request's settings with, held to its context as a load would.
+        and clamp_prefill_chunk(
+            _npu_flm_args(request, resident.model, requested_ctx), resident.context_length
+        )
         == _npu_loaded_flm_args(npu)
     ):
         account_access.join_resident("chat")
@@ -18951,7 +18956,7 @@ async def _load_npu_model(
         model = await asyncio.to_thread(npu.loadable_model, model_id)
     except NpuError as exc:
         raise HTTPException(status_code = 400, detail = str(exc)) from None
-    flm_args = _npu_flm_args(request, model)
+    flm_args = _npu_flm_args(request, model, requested_ctx)
     # The NPU model replaces the primary: under Always only the one already serving may reload.
     # After the checks above, so a request that can only fail never asks to unload a model.
     if routed_slot.get() is None:
