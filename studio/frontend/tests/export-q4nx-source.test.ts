@@ -23,7 +23,8 @@ import {
   q4nxVariantLookup,
   q4nxWeights,
   q4nxConvertibleFiles,
-  q4nxIsRefusal,
+  q4nxHasSplitFiles,
+  q4nxIsSplitFile,
   sortQ4nxVariants,
 } from "../src/features/export/lib/q4nx-source.ts";
 
@@ -444,13 +445,25 @@ test("an empty leftover quant folder and a split GGUF are not offered as a file 
   );
 });
 
-test("only a 4xx answer counts as a refusal; server faults and network drops stay retryable", () => {
-  const failed = (status: number | null) => Object.assign(new Error("x"), { status });
-  assert.equal(q4nxIsRefusal(failed(400)), true);
-  assert.equal(q4nxIsRefusal(failed(422)), true);
-  for (const status of [500, 501, 502, 524, null]) {
-    assert.equal(q4nxIsRefusal(failed(status)), false, String(status));
-  }
-  assert.equal(q4nxIsRefusal(new TypeError("Failed to fetch")), false);
-  assert.equal(q4nxIsRefusal(null), false);
+test("a quant shipped whole and split converts from its whole file; split-only is left out", () => {
+  // Qwen/Qwen2.5-Coder-7B-Instruct-GGUF: the listing keeps only the shard family for Q4_K_M.
+  const shard = "qwen2.5-coder-7b-instruct-q4_k_m-00001-of-00002.gguf";
+  const whole = "qwen2.5-coder-7b-instruct-q4_k_m.gguf";
+  const files = [{ filename: shard, quant: "Q4_K_M", size_bytes: 4 }];
+  assert.equal(q4nxHasSplitFiles(files), true);
+  assert.deepEqual(
+    q4nxConvertibleFiles(files, new Set([shard, whole])).map((v) => [
+      v.filename,
+      v.size_bytes,
+    ]),
+    [[whole, 4]],
+  );
+  assert.deepEqual(q4nxConvertibleFiles(files, new Set([shard])), []);
+  assert.deepEqual(q4nxConvertibleFiles(files), []);
+});
+
+test("a shard of a split GGUF is never a standalone source", () => {
+  assert.equal(q4nxIsSplitFile("/models/Q4_K_M-00001-of-00002.gguf"), true);
+  assert.equal(q4nxIsSplitFile("C:\\m\\Q4_K_M-00002-of-00002.gguf "), true);
+  assert.equal(q4nxIsSplitFile("/models/Qwen3-0.6B-Q4_K_M.gguf"), false);
 });

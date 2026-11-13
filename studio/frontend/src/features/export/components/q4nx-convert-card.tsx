@@ -61,7 +61,8 @@ import {
   q4nxBaseModel,
   q4nxIsExpanded,
   q4nxConvertibleFiles,
-  q4nxIsRefusal,
+  q4nxHasSplitFiles,
+  q4nxIsSplitFile,
   q4nxMemoryWarning,
   q4nxNpuMemory,
   q4nxPacking,
@@ -99,7 +100,6 @@ const LOCAL_SOURCE_HINT: Record<string, string> = {
 };
 const DEFAULT_SAVE_DIRECTORY = "q4nx";
 
-/** The card's data-tour value, which the export page uses to tell the card is in use. */
 export const Q4NX_CARD_MARK = "export-q4nx";
 
 export interface Q4nxSummary {
@@ -131,11 +131,30 @@ function isGgufRow(row: LocalModelInfo): boolean {
   );
 }
 
+async function hubRepoFiles(
+  repoId: string,
+  accessToken: string | undefined,
+): Promise<Set<string> | undefined> {
+  try {
+    const info = await modelInfo({
+      name: repoId,
+      accessToken,
+      hubUrl: getHfEndpoint(),
+      fetch: hubFetch,
+      // Forwarded to expand= as is, like Q4NX_INFO_FIELDS.
+      additionalFields: ["siblings"] as unknown as "tags"[],
+    });
+    const { siblings } = info as { siblings?: { rfilename: string }[] };
+    return new Set((siblings ?? []).map((s) => s.rfilename));
+  } catch {
+    return undefined;
+  }
+}
+
 function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-/** The chat picker's memory bar over the NPU window: weights, then the load margin. */
 function NpuMemoryBar({
   memory,
   windowGb,
@@ -206,7 +225,6 @@ export function Q4nxConvertCard({
   // Reported by the backend from #17531 on; without it rows show the need alone.
   const windowGb = npuStatus?.memory_window_gb ?? null;
   const [open, setOpen] = useState(false);
-  // The popover's second page, like the chat picker's run settings.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [source, setSource] = useState<Source>("hub");
   const [hubQuery, setHubQuery] = useState("");
@@ -239,8 +257,6 @@ export function Q4nxConvertCard({
   const [result, setResult] = useState<{
     ok: boolean;
     text: string;
-    /** The request the backend refused; asking again would get the same answer. */
-    refused?: string;
   } | null>(null);
 
   const debouncedHubQuery = useDebouncedValue(hubQuery);
@@ -326,15 +342,16 @@ export function Q4nxConvertCard({
       .filter(
         (row) =>
           isGgufRow(row) &&
+          !q4nxIsSplitFile(row.path) &&
           (!q ||
             row.id.toLowerCase().includes(q) ||
             row.display_name.toLowerCase().includes(q) ||
             row.path.toLowerCase().includes(q)),
       )
       .map(toRow);
-    // A typed path that is not a known row is used as the file itself.
     const typed = localQuery.trim();
-    for (const id of [GGUF_FILE_RE.test(typed) ? typed : "", localId]) {
+    const typedFile = GGUF_FILE_RE.test(typed) && !q4nxIsSplitFile(typed);
+    for (const id of [typedFile ? typed : "", localId]) {
       if (!id || rows.some((row) => row.id === id)) continue;
       const known = localById.get(id);
       rows.unshift(
@@ -400,7 +417,6 @@ export function Q4nxConvertCard({
         : listGgufVariants(row.id, accessToken);
       const settle = (listing: Listing) => {
         inFlight.current.delete(flight);
-        // An answer for a replaced token is dropped.
         if (liveToken.current !== accessToken) return;
         setListed((prev) => ({
           token: accessToken,
@@ -411,9 +427,16 @@ export function Q4nxConvertCard({
         }));
       };
       request
-        .then((response) =>
-          settle({ list: q4nxConvertibleFiles(response.variants), error: null }),
-        )
+        .then(async (response) => {
+          const repoFiles =
+            !row.folder && q4nxHasSplitFiles(response.variants)
+              ? await hubRepoFiles(row.id, accessToken)
+              : undefined;
+          settle({
+            list: q4nxConvertibleFiles(response.variants, repoFiles),
+            error: null,
+          });
+        })
         .catch((error: unknown) =>
           settle({
             list: [],
@@ -423,7 +446,6 @@ export function Q4nxConvertCard({
     }
   }, [open, source, rows, repoId, selectedId, expansion, listings, accessToken]);
 
-  /** A model's files, the ones its converter packs directly first. */
   const filesOf = (row: SourceRow): GgufVariantDetail[] =>
     row.listingKey
       ? sortQ4nxVariants(
@@ -500,16 +522,9 @@ export function Q4nxConvertCard({
         : null;
   const sourceReady =
     source === "hub" ? !!(repoId && selectedVariant) : !!ggufPath;
-  const request = JSON.stringify([
-    source === "hub" ? [repoId, filename] : ggufPath,
-    effectiveBase.trim(),
-    saveDirectory.trim(),
-    accessToken ?? null,
-  ]);
   const canConvert =
     !running &&
     sourceReady &&
-    result?.refused !== request &&
     archFit?.status !== "unsupported" &&
     !!effectiveBase.trim() &&
     !!saveDirectory.trim();
@@ -522,7 +537,6 @@ export function Q4nxConvertCard({
     setResult(null);
   }
 
-  /** A one-file row is its own variant, named by its file stem. */
   function ownVariant(row: SourceRow): GgufVariantDetail {
     const path = localById.get(row.id)?.path ?? row.id;
     return {
@@ -541,7 +555,6 @@ export function Q4nxConvertCard({
     );
   }
 
-  /** A model row's need is its picked file's, else its default file's. */
   function rowMemory(row: SourceRow): Q4nxMemory | null {
     const variant =
       (row.id === selectedId ? selectedVariant : null) ??
@@ -607,8 +620,6 @@ export function Q4nxConvertCard({
       setResult({
         ok: false,
         text: error instanceof Error ? error.message : String(error),
-        // A server fault or dropped connection can be retried as is; a refusal needs a different file or setting.
-        refused: q4nxIsRefusal(error) ? request : undefined,
       });
     } finally {
       setRunning(false);
@@ -699,7 +710,6 @@ export function Q4nxConvertCard({
     });
   };
 
-  // The chat picker's list page: search, section tabs, then the rows.
   const listPage = (
     <div className="relative space-y-2">
       <div className="flex items-center gap-2 pb-1 pr-2">
@@ -866,7 +876,6 @@ export function Q4nxConvertCard({
     </div>
   );
 
-  // The popover's second page, laid out like the chat picker's run settings.
   const settingsPage = (
     <div className="min-h-0 w-full overflow-y-auto pt-4.5 pr-[calc(var(--spacing)*5+min(var(--overlay-scrollbar-gutter,0px),var(--spacing)*2))] pb-4.5 pl-7 [scrollbar-gutter:stable]">
       <div className="flex flex-col" data-testid="q4nx-convert-settings">
