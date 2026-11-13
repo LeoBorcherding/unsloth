@@ -3790,9 +3790,10 @@ def _rocm_windows_perf_counter_gpu_util_pct(luid: Optional[int] = None) -> Optio
 
 # The NPU is an MCDM adapter: Task Manager's NPU graph reads the same GPU Engine counters, keyed by
 # the LUID its PnP node carries as DEVPKEY_GPU_LUID. Linux amdxdna has no busy counter in sysfs.
+# Get-PnpDevice's -InstanceId takes no wildcards, so filter the present devices with -like.
 _NPU_LUID_PS = (
-    "$d=Get-PnpDevice -InstanceId 'PCI\\VEN_1022&DEV_17F0*' -PresentOnly"
-    " -ErrorAction SilentlyContinue|Select-Object -First 1;"
+    "$d=Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue"
+    "|Where-Object{$_.InstanceId -like 'PCI\\VEN_1022&DEV_17F0*'}|Select-Object -First 1;"
     "if($d){(Get-PnpDeviceProperty -InstanceId $d.InstanceId"
     " -KeyName '{60b193cb-5276-4d0f-96fc-f173abad3ec6} 2' -ErrorAction SilentlyContinue).Data}"
 )
