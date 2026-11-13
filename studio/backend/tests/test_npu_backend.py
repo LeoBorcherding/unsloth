@@ -1015,11 +1015,13 @@ def test_reloading_the_resident_model_restarts_it_in_lemond(npu):
     assert npu.is_loaded
 
 
-def test_a_failed_reload_unload_leaves_nothing_recorded(npu, monkeypatch):
+def test_a_failed_reload_unload_restarts_lemond_and_loads_fresh(npu, monkeypatch):
     monkeypatch.setenv("FAKE_LEMOND_UNLOAD_FAILS", "1")
     monkeypatch.setenv("FAKE_LEMOND_DOWNLOADED", '["qwen3-0.6b-FLM"]')
     npu.enable()
     npu.load("qwen3-0.6b-FLM")
-    with pytest.raises(nb.NpuError, match = "Reloading qwen3-0.6b-FLM failed"):
-        npu.load("qwen3-0.6b-FLM")
-    assert not npu.is_loaded
+    process = npu._server._process
+    npu.load("qwen3-0.6b-FLM")
+    assert process.poll() is not None
+    assert npu._server._process is not process
+    assert npu.is_loaded
