@@ -261,6 +261,18 @@ test("glass gives the chat header's icon buttons the model picker's glass, not a
 	assert.match(page, /data-wallpaper-chrome-controls="" data-chat-header-actions="" className="pointer-events-auto ml-auto/);
 });
 
+test("the narrow window's Run settings sheet takes the docked panel's glass", () => {
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	const sheet = readFileSync(new URL("../src/features/chat/chat-settings-sheet.tsx", import.meta.url), "utf8");
+	const compact = sheet.slice(sheet.indexOf("if (isCompact) {"), sheet.indexOf("</Sheet>"));
+	assert.match(compact, /<SheetContent side="right" data-chat-settings-sheet=""/);
+	assert.match(compact, /data-slot="chat-settings-panel" className="relative flex h-full flex-col"/);
+	assert.match(css, /html\[data-glass\]\[data-chat-wallpaper-workspace-ready\] \[data-chat-settings-sheet\],\nhtml\[data-glass="macos"\] \[data-chat-settings-sheet\] \{\n  background-color: transparent;/);
+	// The floating monitor docks beside the docked column only, never the overlay sheet.
+	const monitor = readFileSync(new URL("../src/components/floating-monitor.tsx", import.meta.url), "utf8");
+	assert.match(monitor, /document\.querySelector\('aside\[data-slot="chat-settings-panel"\]'\)/);
+});
+
 test("glass frosts sticky bars in panels and popups, floating buttons, and softens shared shadows", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	assert.match(css, /html\[data-glass\] :is\(\[data-slot="chat-settings-panel"\], \[data-slot\$="popover-content"\][^)]*\) \.sticky \{\n  -webkit-backdrop-filter: blur\(12px\)/);

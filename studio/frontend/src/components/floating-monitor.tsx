@@ -678,7 +678,7 @@ export function FloatingMonitor() {
       setPaintedSettingsWidth(0);
       return;
     }
-    const panel = document.querySelector('[data-slot="chat-settings-panel"]');
+    const panel = document.querySelector('aside[data-slot="chat-settings-panel"]');
     if (!panel) {
       setPaintedSettingsWidth(0);
       return;
