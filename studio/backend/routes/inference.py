@@ -8511,6 +8511,7 @@ def _llama_runtime_fields(llama_backend: LlamaCppBackend) -> dict:
         npu_power_mode = None,
         npu_prefill_chunk_len = None,
         npu_img_pre_resize = None,
+        npu_context_fit = None,
         speaks = False,
         mlx_kv_quant = None,
         mlx_kv_quant_requested = None,
@@ -18858,7 +18859,8 @@ def _npu_load_response(resident, status: str, flm_args: Optional[str]) -> LoadRe
         context_length = resident.context_length,
         **flm_args_status(flm_args),
         # The free-RAM estimate where one was made, as llama.cpp reports its fit.
-        max_context_length = resident.fitted_context_length or model.max_context_length,
+        max_context_length = resident.max_context_length,
+        npu_context_fit = resident.fitted_context_length,
         native_context_length = model.max_context_length,
         context_length_enforced = True,
         context_length_fitted = None,
@@ -22745,9 +22747,8 @@ async def _slot_status(current_subject: str):
                 context_length = _npu_resident.context_length,
                 requested_context_length = _npu_resident.requested_context_length,
                 **flm_args_status(_npu_loaded_flm_args(_npu)),
-                max_context_length = (
-                    _npu_resident.fitted_context_length or _npu_model.max_context_length
-                ),
+                max_context_length = _npu_resident.max_context_length,
+                npu_context_fit = _npu_resident.fitted_context_length,
                 native_context_length = _npu_model.max_context_length,
                 context_length_enforced = True,
                 context_length_fitted = None,
@@ -30591,7 +30592,7 @@ async def _npu_chat_completions(payload, request: Request, current_subject: str)
         ]
     upstream_payload = payload.model_copy(update = update)
     # After validation: a window marks any load window it overlaps as shared for good.
-    output_mark = npu.output_mark()
+    output_mark = npu.output_mark(upstream)
     response = await _proxy_to_external_provider(
         upstream_payload,
         request,

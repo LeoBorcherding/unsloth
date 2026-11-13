@@ -93,12 +93,12 @@ QWEN38_DFLASH2 = ("qwen3.8-dflash2-27b-FLM", "qwen3.8-dflash2:27b", 18.1)
 )
 def test_kv_counts_only_full_attention_layers_in_bf16(tmp_path, config, expected):
     # FastFlowLM logs "a saved row costs 32 KiB" for qwen3.5:4b: 8 full-attention layers, 4 KV heads.
-    assert nc.kv_bytes_per_token(_files(tmp_path, config).folder / "config.json") == expected
+    assert nc._kv_layout(_files(tmp_path, config).folder / "config.json").full_row_bytes == expected
 
 
 def test_kv_reads_the_interval_or_every_layer_when_types_are_absent(tmp_path):
     hybrid = {k: v for k, v in _QWEN36_35B.items() if k != "layer_types"}
-    assert nc.kv_bytes_per_token(_files(tmp_path, hybrid).folder / "config.json") == 20480
+    assert nc._kv_layout(_files(tmp_path, hybrid).folder / "config.json").full_row_bytes == 20480
     dense = {
         "text_config": {
             "num_hidden_layers": 28,
@@ -109,7 +109,7 @@ def test_kv_reads_the_interval_or_every_layer_when_types_are_absent(tmp_path):
     }
     path = tmp_path / "dense.json"
     path.write_text(json.dumps(dense), encoding = "utf-8")
-    assert nc.kv_bytes_per_token(path) == 28 * 2 * 8 * 128 * 2
+    assert nc._kv_layout(path).full_row_bytes == 28 * 2 * 8 * 128 * 2
 
 
 @pytest.mark.parametrize("text", [None, "not json", "[]", '{"num_hidden_layers": 0}'])
@@ -117,7 +117,7 @@ def test_kv_is_unknown_for_a_missing_or_unreadable_config(tmp_path, text):
     path = tmp_path / "config.json"
     if text is not None:
         path.write_text(text, encoding = "utf-8")
-    assert nc.kv_bytes_per_token(path) is None
+    assert nc._kv_layout(path) is None
 
 
 def test_a_9b_on_a_roomy_laptop_gets_far_more_than_8k(tmp_path, free_ram):
@@ -141,7 +141,10 @@ def test_the_35b_on_a_32gb_laptop_is_not_sized_to_32k(tmp_path, free_ram, free_g
     model = _model(*QWEN36_35B, 262144)
     plan = nc.plan_context(model, _files(tmp_path, _QWEN36_35B), None)
     assert plan.context_length == 8192
-    assert plan.fits == 8192
+    if free_gib == 20.0:
+        assert plan.fits == 0
+    else:
+        assert 0 < plan.fits < 8192
 
 
 def test_the_35b_grows_once_the_ram_is_there(tmp_path, free_ram):
@@ -149,6 +152,89 @@ def test_the_35b_grows_once_the_ram_is_there(tmp_path, free_ram):
     model = _model(*QWEN36_35B, 262144)
     plan = nc.plan_context(model, _files(tmp_path, _QWEN36_35B), None)
     assert plan.context_length == 65536
+
+
+def test_rounding_prices_the_active_allocation_for_auto_and_pins(tmp_path, free_ram, caplog):
+    # Qwen3 0.6B: 112 KiB per token. 17,408 rows would cost exactly 6,000 MiB
+    # including the prefix cache, but the active allocation jumps to 32,768.
+    config = {
+        "num_hidden_layers": 28,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+    }
+    model = _model("qwen3-0.6b-FLM", "qwen3:0.6b", 1, 40960)
+    files = _files(tmp_path, config)
+    free_ram["mib"] = 1024 + 2048 + 6000
+    assert nc.plan_context(model, files, None) == nc.ContextPlan(16384, 16384)
+    with caplog.at_level(logging.WARNING, logger = nc.__name__):
+        assert nc.plan_context(model, files, 16385) == nc.ContextPlan(16385, 16384)
+    assert "above the 16384 tokens" in caplog.text
+
+
+@pytest.mark.parametrize("tag,reported", [("qwen3:0.6b", 40960), ("lfm2.5-tk:1.2b", 128000)])
+def test_roomy_machine_and_explicit_pin_respect_the_engine_limit(tmp_path, free_ram, tag, reported):
+    model = _model("model-FLM", tag, 1, reported)
+    files = _files(tmp_path, _QWEN35_9B)
+    free_ram["mib"] = 100 * _GIB
+    for request in (None, 65536):
+        assert nc.plan_context(model, files, request) == nc.ContextPlan(32768, 32768)
+    assert nb._max_context_length(tag, 16384) == 16384
+
+
+@pytest.mark.parametrize("explicit_types", [False, True])
+def test_gemma_sliding_window_stops_growing(tmp_path, free_ram, explicit_types):
+    config = {
+        "num_hidden_layers": 34,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 4,
+        "head_dim": 256,
+        "sliding_window": 1024,
+        "sliding_window_pattern": 6,
+    }
+    if explicit_types:
+        config["layer_types"] = [
+            "full_attention" if (i + 1) % 6 == 0 else "sliding_attention" for i in range(34)
+        ]
+    files = _files(tmp_path, config)
+    kv = nc._kv_layout(files.folder / "config.json")
+    assert kv.bytes_for(65536) == 20 * 1024 * 65536 + 116 * 1024**2
+    assert nc._cost(65536, kv) == kv.bytes_for(65536) + 4096 * 1024**2
+    model = _model("gemma3-4b-FLM", "gemma3:4b", 3, 131072)
+    free_ram["mib"] = (8 + 3 + 2) * _GIB
+    assert nc.plan_context(model, files, None).context_length == 65536
+
+
+def test_gemma4_shared_layers_reuse_kv_and_global_heads_can_be_wider(tmp_path):
+    # Gemma 4 E2B: three global and twelve sliding layers own buffers; twenty reuse them.
+    config = {
+        "model_type": "gemma4_text",
+        "num_hidden_layers": 35,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 1,
+        "head_dim": 256,
+        "global_head_dim": 512,
+        "num_kv_shared_layers": 20,
+        "sliding_window": 512,
+        "layer_types": (["sliding_attention"] * 4 + ["full_attention"]) * 7,
+    }
+    kv = nc._kv_layout(_files(tmp_path, config).folder / "config.json")
+    assert kv.full_row_bytes == 6 * 1024
+    assert kv.bytes_for(65536) == 65536 * 6 * 1024 + 6 * 1024**2
+    assert nc._cost(1024, kv) == kv.bytes_for(4096) + 8 * kv.bytes_for(1024)
+
+
+def test_lfm_only_charges_its_explicit_attention_layers(tmp_path):
+    config = {
+        "num_hidden_layers": 16,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "head_dim": 64,
+        "full_attn_idxs": [2, 5, 8, 10, 12, 14],
+    }
+    assert (
+        nc._kv_layout(_files(tmp_path, config).folder / "config.json").full_row_bytes == 12 * 1024
+    )
 
 
 def test_a_missing_config_keeps_8192_without_reading_ram(tmp_path, free_ram):
@@ -177,20 +263,14 @@ def test_the_qwen38_engine_cap_holds(tmp_path, free_ram, free_gib, entry):
     assert nc.plan_context(model, files, 16384).context_length == 8192
 
 
-def _files_again(tmp_path: Path, config) -> FlmModelFiles:
-    sub = tmp_path / "again"
-    sub.mkdir(exist_ok = True)
-    return _files(sub, config)
-
-
 def test_a_pin_wins_and_a_pin_that_will_not_fit_is_logged(tmp_path, free_ram, caplog):
     free_ram["mib"] = int(23.9 * _GIB)
     model = _model(*QWEN36_35B, 262144)
     with caplog.at_level(logging.WARNING, logger = nc.__name__):
         plan = nc.plan_context(model, _files(tmp_path, _QWEN36_35B), 32768)
     assert plan.context_length == 32768
-    assert plan.fits == 8192
-    assert "32768" in caplog.text and "8192" in caplog.text
+    assert 0 < plan.fits < 8192
+    assert f"above the {plan.fits} tokens" in caplog.text
 
 
 def test_a_pin_that_fits_is_not_logged_and_is_capped_at_the_limit(tmp_path, free_ram, caplog):
@@ -202,36 +282,36 @@ def test_a_pin_that_fits_is_not_logged_and_is_capped_at_the_limit(tmp_path, free
     assert caplog.text == ""
 
 
-def test_the_resident_models_weights_count_as_free(tmp_path, free_ram):
-    # Loading over a resident NPU model: lemond frees it first, so its weights are not lost to the budget.
-    free_ram["mib"] = int((23.9 - 7.6) * _GIB)
-    model = _model(*QWEN35_9B, 262144)
-    previous = _model(*QWEN35_9B, 262144)
-    alone = nc.plan_context(model, _files(tmp_path, _QWEN35_9B), None)
-    swapped = nc.plan_context(model, _files_again(tmp_path, _QWEN35_9B), None, previous)
-    assert swapped.fits > alone.fits
-    assert swapped.context_length == 65536
+def _files_again(tmp_path: Path, config) -> FlmModelFiles:
+    sub = tmp_path / "again"
+    sub.mkdir(exist_ok = True)
+    return _files(sub, config)
 
 
 @pytest.mark.parametrize(
-    "entry, config, total_gib, free_gib, expected",
+    "entry, config, total_gib, free_gib, fits, expected",
     [
         # 24 GB window less 21.6 GB of weights and load margin.
-        (QWEN36_35B, _QWEN36_35B, 48, 40.0, 13312),
+        (QWEN36_35B, _QWEN36_35B, 48, 40.0, 13680, 13312),
         # 12 GB window less 8.6 GB.
-        (QWEN35_9B, _QWEN35_9B, 24, 18.0, 12288),
+        (QWEN35_9B, _QWEN35_9B, 24, 18.0, 11878, 11264),
     ],
 )
 def test_windows_auto_fits_the_npu_window_not_all_free_ram(
-    tmp_path, free_ram, entry, config, total_gib, free_gib, expected
+    tmp_path, free_ram, entry, config, total_gib, free_gib, fits, expected
 ):
     # Windows maps about half of RAM to the NPU (lemonade-sdk/lemonade#839), as the fit warning prices it.
     free_ram["mib"] = int(free_gib * _GIB)
     model = _model(*entry, 262144)
     assert nc.plan_context(model, _files(tmp_path, config), None).context_length == 65536
     free_ram["window_gb"] = nb.npu_memory_window_gb(total_gib, "win32")
-    plan = nc.plan_context(model, _files_again(tmp_path, config), None)
-    assert plan == nc.ContextPlan(context_length = expected, fits = expected)
+    files = _files_again(tmp_path, config)
+    plan = nc.plan_context(model, files, None)
+    assert plan == nc.ContextPlan(context_length = expected, fits = fits)
+    # The window is priced with FastFlowLM's own allocation: power-of-two KV capacity plus prefix.
+    budget = nc._npu_window_bytes(int(entry[2] * nc._GIB))
+    kv = nc._kv_layout(files.folder / "config.json")
+    assert nc._cost(fits, kv) <= budget < nc._cost(fits + 1, kv)
 
 
 def test_strix_halo_linux_keeps_the_65536_ceiling(tmp_path, free_ram):
@@ -258,6 +338,9 @@ class _Server:
     def __init__(self):
         self.loads: list[dict] = []
         self.ctx = None
+
+    def is_alive(self):
+        return True
 
     def note(self, message):
         pass
@@ -287,6 +370,9 @@ class _Server:
         json_body = None,
         timeout = None,
     ):
+        if path == "/v1/unload":
+            self.ctx = None
+            return _Response({"status": "success"})
         if path == "/v1/load":
             self.loads.append(json_body)
             self.ctx = json_body["ctx_size"]
@@ -312,7 +398,7 @@ def backend(tmp_path, monkeypatch):
     server = _Server()
     monkeypatch.setattr(npu, "_ensure_running", lambda: server)
     monkeypatch.setattr(npu, "_flm_binary", lambda: None)
-    npu.server = server
+    npu._server = server
     return npu
 
 
@@ -328,23 +414,52 @@ def test_load_sends_the_auto_context_and_records_the_fit(backend, monkeypatch, t
     free_ram["mib"] = int(23.9 * _GIB)
     _serve(backend, monkeypatch, tmp_path, QWEN35_9B, 262144, _QWEN35_9B)
     backend.load("qwen3.5-9b-FLM")
-    assert backend.server.loads[-1]["ctx_size"] == 65536
+    assert backend._server.loads[-1]["ctx_size"] == 65536
     assert backend._loaded.context_length == 65536
     assert backend._loaded.requested_context_length is None
     assert backend._loaded.fitted_context_length == 262144
 
 
+def test_auto_reload_samples_free_ram_after_releasing_weights_and_caches(
+    backend, monkeypatch, tmp_path
+):
+    model = _serve(backend, monkeypatch, tmp_path, QWEN36_35B, 262144, _QWEN36_35B)
+    # With an active 64k KV buffer and a populated prefix cache the same host has
+    # only 3.15 GiB available until Lemonade unloads this 20.6 GiB model.
+    monkeypatch.setattr(
+        nc, "_available_mib", lambda: int((29 if backend._server.ctx is None else 3.15) * _GIB)
+    )
+    monkeypatch.setattr(nc, "_npu_window_gb", lambda: None)
+    backend.load(model.id)
+    backend.load(model.id)
+    assert [load["ctx_size"] for load in backend._server.loads] == [65536, 65536]
+
+
+def test_a_windows_reload_releases_the_resident_and_still_caps_to_the_npu_window(
+    backend, monkeypatch, tmp_path
+):
+    # Both apply: RAM is sampled after the resident is unloaded, then held to the Windows window.
+    model = _serve(backend, monkeypatch, tmp_path, QWEN36_35B, 262144, _QWEN36_35B)
+    monkeypatch.setattr(
+        nc, "_available_mib", lambda: int((29 if backend._server.ctx is None else 3.15) * _GIB)
+    )
+    monkeypatch.setattr(nc, "_npu_window_gb", lambda: nb.npu_memory_window_gb(48, "win32"))
+    backend.load(model.id)
+    backend.load(model.id)
+    assert [load["ctx_size"] for load in backend._server.loads] == [13312, 13312]
+
+
 def test_load_keeps_a_pin_and_8192_without_a_config(backend, monkeypatch, tmp_path, free_ram):
     _serve(backend, monkeypatch, tmp_path, QWEN36_35B, 262144, None)
     backend.load("qwen3.6-moe-35b-a3b-FLM")
-    assert backend.server.loads[-1]["ctx_size"] == 8192
+    assert backend._server.loads[-1]["ctx_size"] == 8192
     backend.load("qwen3.6-moe-35b-a3b-FLM", 16384)
-    assert backend.server.loads[-1]["ctx_size"] == 16384
+    assert backend._server.loads[-1]["ctx_size"] == 16384
     assert backend._loaded.requested_context_length == 16384
     assert free_ram["reads"] == 0
 
 
-@pytest.mark.parametrize("fitted, expected", [(8192, 8192), (None, 262144)])
+@pytest.mark.parametrize("fitted, expected", [(0, 0), (4096, 4096), (None, 262144)])
 def test_the_load_response_reports_the_fit_as_the_ceiling(fitted, expected):
     from routes import inference as routes
 
@@ -359,5 +474,6 @@ def test_the_load_response_reports_the_fit_as_the_ceiling(fitted, expected):
     )
     response = routes._npu_load_response(resident, "loaded", None)
     assert response.context_length == 8192
+    assert response.npu_context_fit == fitted
     assert response.max_context_length == expected
     assert response.native_context_length == 262144

@@ -256,6 +256,7 @@ export function loadedContextFields(resp: {
   is_npu?: boolean;
   context_length?: number | null;
   native_context_length?: number | null;
+  npu_context_fit?: number | null;
   max_context_length?: number | null;
   context_length_enforced?: boolean | null;
   context_unbounded_when_batched?: boolean;
@@ -270,6 +271,7 @@ export function loadedContextFields(resp: {
   loadedContextEnforced: boolean | null;
   loadedContextUnboundedWhenBatched: boolean;
   loadedParallelSlots: number | null;
+  loadedNpuContextFit: number | null;
   loadedContextBudget: number | null;
 } {
   if (!resp) {
@@ -282,6 +284,7 @@ export function loadedContextFields(resp: {
       loadedContextEnforced: null,
       loadedContextUnboundedWhenBatched: false,
       loadedParallelSlots: null,
+      loadedNpuContextFit: null,
       loadedContextBudget: null,
     };
   }
@@ -304,6 +307,7 @@ export function loadedContextFields(resp: {
       loadedContextEnforced: null,
       loadedContextUnboundedWhenBatched: false,
       loadedParallelSlots: null,
+      loadedNpuContextFit: null,
       loadedContextBudget: null,
     };
   }
@@ -321,6 +325,7 @@ export function loadedContextFields(resp: {
       ? false
       : (resp.context_unbounded_when_batched ?? false),
     loadedParallelSlots: resp.parallel_slots ?? null,
+    loadedNpuContextFit: resp.is_npu ? (resp.npu_context_fit ?? null) : null,
     loadedContextBudget: isGguf ? null : (resp.mlx_context_budget ?? null),
   };
 }
