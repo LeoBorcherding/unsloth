@@ -5192,6 +5192,7 @@ export function createOpenAIStreamAdapter(
         supportsTools: supportsStudioToolsForThisTurn,
         localImageModelReady: runtime.localImageModelReady,
         localVideoModelReady: runtime.localVideoModelReady,
+        localImageSwapReady: runtime.localImageSwapReady,
       });
       // Per-model Search/Code allowances live in providerSupportsBuiltin*; this flag only signals image-mode.
       const geminiImageModeForThisTurn =

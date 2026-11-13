@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-MEDIA_CHAT_TOOLS = frozenset({"generate_image", "generate_video"})
+MEDIA_CHAT_TOOLS = frozenset({"generate_image", "generate_video", "use_library_model"})
 
 _TOOL_TASKS = (("generate_image", "text-to-image"), ("generate_video", "text-to-video"))
 
@@ -50,8 +50,16 @@ def offered_media_chat_tools(enabled_tools) -> list[dict]:
     """Schemas for the media tools the caller asked for whose model is loaded and visible."""
     from core.inference.generate_image_tool import generate_image_schema, offers_txt2img
     from core.inference.generate_video_tool import generate_video_schema
+    from core.inference.library_model_tool import (
+        USE_LIBRARY_MODEL_TOOL_NAME,
+        offers_use_library_model,
+        use_library_model_schema,
+    )
 
     tools: list[dict] = []
+    # Needs no resident model: it loads the one it names.
+    if USE_LIBRARY_MODEL_TOOL_NAME in enabled_tools and offers_use_library_model():
+        tools.append(use_library_model_schema())
     for name, task in _TOOL_TASKS:
         if name not in enabled_tools:
             continue

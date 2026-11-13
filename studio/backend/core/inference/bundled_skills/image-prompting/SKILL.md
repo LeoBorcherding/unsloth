@@ -1,7 +1,7 @@
 ---
 name: image-prompting
-description: Write detailed prompts for the loaded image or video model when the user asks to generate one.
-allowed-tools: generate_image generate_video
+description: Write detailed prompts for an image or video model when the user asks to generate one.
+allowed-tools: generate_image generate_video use_library_model
 ---
 
 # Write an image or video prompt
@@ -16,5 +16,15 @@ Use this skill when the user asks for an image or a video and their request is s
 6. Set the composition: framing and camera angle, and for a video how the camera and the subject move.
 7. Put any words that must appear in the picture in quotes.
 8. For more shots of the same character, repeat the subject's details word for word.
+
+## Picking a model that is not loaded
+
+use_library_model loads a downloaded image model for one image, then puts the chat model back.
+Each call reloads both models, so it is slow.
+
+- Use generate_image when it is offered and the user did not name another model.
+- Use use_library_model when the user names an image model, or no image model is loaded.
+- Call it without a model first if you do not know the downloaded ids, then pick one by name.
+- Ask for several images in one prompt only if the model supports it; otherwise each image is a full swap.
 
 Keep the user's own words and intent. Add no people, brands or text they did not ask for, and leave steps and guidance out unless the user asks, so the model's own defaults apply.

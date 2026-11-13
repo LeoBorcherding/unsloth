@@ -8186,6 +8186,7 @@ const ASSISTANT_PART_COMPONENTS = {
       code_execution: CodeExecutionToolUIConfirmable,
       image_generation: ImageGenerationToolUIConfirmable,
       generate_image: ImageGenerationToolUIConfirmable,
+      use_library_model: ImageGenerationToolUIConfirmable,
       generate_video: VideoGenerationToolUIConfirmable,
       render_html: RenderHtmlToolUIConfirmable,
     },
