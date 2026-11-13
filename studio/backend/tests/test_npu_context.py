@@ -291,12 +291,14 @@ class _Server:
             self.loads.append(json_body)
             self.ctx = json_body["ctx_size"]
             return _Response({"status": "success"})
+        # Nothing is resident until the first load, which a Reload check asks about first.
         rows = [
             {
-                "model_name": self.loads[-1]["model_name"],
+                "model_name": load["model_name"],
                 "device": "npu",
                 "recipe_options": {"ctx_size": self.ctx},
             }
+            for load in self.loads[-1:]
         ]
         return _Response({"all_models_loaded": rows})
 
