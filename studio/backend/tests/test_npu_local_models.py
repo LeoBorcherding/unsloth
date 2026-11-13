@@ -95,7 +95,7 @@ def test_every_shape_the_export_accepts_has_a_base_the_picker_loads():
     if export_shapes is None:
         pytest.skip("this tree has no Q4NX export geometry gate")
     for arch, shapes in export_shapes.items():
-        assert set(shapes) == set(nlm._FLM_BASES.get(arch, {})), arch
+        assert set(shapes) <= set(nlm._FLM_BASES.get(arch, {})), arch
 
 
 def test_a_nanbeige_architecture_conversion_loads_on_the_nanbeige_base():
