@@ -14,7 +14,7 @@ function client(response: () => Response) {
   const api = loadWithStubs<typeof NpuApi>(
     new URL("../src/features/npu/api.ts", import.meta.url),
     {
-      "@/features/auth": {
+      "@/features/auth/api": {
         authFetch: async (path: string, init?: RequestInit) => {
           requests.push({ path, init });
           return response();
@@ -157,6 +157,37 @@ test("NPU rows: downloaded ones on device, all of them to browse, by query", () 
   assert.deepEqual(ids(false, " GEMMA "), ["gemma3-4b-FLM"]);
   assert.deepEqual(ids(true, "gemma"), []);
   assert.deepEqual(api.npuRowsFor(null, { onDevice: false, query: "" }), []);
+
+  // Lemonade's order, with real FastFlowLM checkpoints.
+  const backendOrder = [
+    ["d3-edge-FLM", "d3:edge"],
+    ["gemma3-4b-FLM", "gemma3:4b"],
+    ["lfm3-1.7b-FLM", "lfm3:1.7b"],
+    ["qwen3-4b-FLM", "qwen3:4b"],
+    ["qwen3.5-0.8b-FLM", "qwen3.5:0.8b"],
+    ["qwen3.5-4b-FLM", "qwen3.5:4b"],
+    ["qwen3.5-9b-FLM", "qwen3.5:9b"],
+    ["qwen3.6-moe-35b-a3b-FLM", "qwen3.6-moe:35b-a3b"],
+    ["qwen3.8-dflash2-27b-FLM", "qwen3.8-dflash2:27b"],
+    ["qwen3.8-mtp-27b-FLM", "qwen3.8-mtp:27b"],
+  ].map(([id, checkpoint]) => ({ ...model(id, false), checkpoint }));
+  assert.deepEqual(
+    api
+      .npuRowsFor(backendOrder, { onDevice: false, query: "" })
+      .map((m) => m.id),
+    [
+      "qwen3.6-moe-35b-a3b-FLM",
+      "qwen3.8-mtp-27b-FLM",
+      "qwen3.8-dflash2-27b-FLM",
+      "qwen3.5-9b-FLM",
+      "qwen3.5-4b-FLM",
+      "lfm3-1.7b-FLM",
+      "qwen3.5-0.8b-FLM",
+      "d3-edge-FLM",
+      "gemma3-4b-FLM",
+      "qwen3-4b-FLM",
+    ],
+  );
 });
 
 test("an interrupted NPU download says how much it kept", () => {
@@ -183,5 +214,34 @@ test("the picker's NPU format holds no Hub repo", () => {
   ] as const) {
     assert.equal(matchesFormatFilter(id, gguf, "npu"), false);
     assert.equal(matchesFormatFilter(id, gguf, "all"), true);
+  }
+});
+
+test("a model larger than the NPU memory window gets a warning naming both figures", () => {
+  const { api } = client(() => Response.json({}));
+  const model = (
+    fits_memory: boolean | null | undefined,
+    memory_needed_gb: number | null = 19,
+  ) =>
+    ({ fits_memory, memory_needed_gb }) as Parameters<
+      typeof api.npuMemoryWarning
+    >[0];
+  assert.equal(
+    api.npuMemoryWarning(model(false), { memory_window_gb: 15.6 }),
+    "Needs about 19 GB of NPU memory; this PC can give the NPU about 16 GB.",
+  );
+  assert.equal(api.npuMemoryTag(model(false)), "May not fit NPU memory");
+  // Flagged with a figure missing still warns, without inventing a number.
+  assert.match(
+    api.npuMemoryWarning(model(false, null), { memory_window_gb: 16 }) ?? "",
+    /may need more NPU memory/,
+  );
+  // Fits, unknown, or a backend that predates the field: no warning.
+  for (const fits of [true, null, undefined]) {
+    assert.equal(
+      api.npuMemoryWarning(model(fits), { memory_window_gb: 16 }),
+      null,
+    );
+    assert.equal(api.npuMemoryTag(model(fits)), null);
   }
 });
