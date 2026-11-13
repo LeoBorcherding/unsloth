@@ -88,9 +88,13 @@ test("the original model comes from the card's base_model, else the repo without
 });
 
 test("architectures the pinned converter accepts are supported, with size caveats", () => {
-  assert.deepEqual(q4nxArchFit("qwen3"), { status: "supported", note: null });
-  assert.deepEqual(q4nxArchFit("LLAMA"), { status: "supported", note: null });
+  // With no size in the name, the sizes FastFlowLM runs stay a caveat for the backend's check.
+  const qwen3 = q4nxArchFit("qwen3");
+  assert.equal(qwen3.status, "supported");
+  assert.match(qwen3.note ?? "", /Qwen3 0\.6B, 1\.7B, 4B and 8B/);
+  assert.equal(q4nxArchFit("LLAMA").status, "supported");
   assert.equal(q4nxArchFit("gpt-oss").status, "supported");
+  assert.deepEqual(q4nxArchFit("qwen3", "unsloth/Qwen3-4B-GGUF"), { status: "supported", note: null });
   const qwen35 = q4nxArchFit("qwen35");
   assert.equal(qwen35.status, "supported");
   assert.match(qwen35.note ?? "", /0\.8B, 2B, 4B and 9B/);
@@ -98,9 +102,8 @@ test("architectures the pinned converter accepts are supported, with size caveat
 
 test("qwen2vl is Qwen2.5-VL only; a Qwen2-VL name is refused", () => {
   // The converter would send Qwen2-VL to the dense qwen2 converter by basename.
-  const vl25 = q4nxArchFit("qwen2vl", "unsloth/Qwen2.5-VL-7B-Instruct-GGUF");
-  assert.equal(vl25.status, "supported");
-  assert.match(vl25.note ?? "", /Only Qwen2\.5-VL/);
+  const vl25 = q4nxArchFit("qwen2vl", "unsloth/Qwen2.5-VL-3B-Instruct-GGUF");
+  assert.deepEqual(vl25, { status: "supported", note: null });
   assert.equal(q4nxArchFit("qwen2vl").status, "supported");
   for (const name of [
     "unsloth/Qwen2-VL-7B-Instruct-GGUF",
@@ -333,8 +336,22 @@ test("a size the converter has no model for is refused by name, before any downl
     note: null,
   });
   assert.equal(q4nxArchFit("qwen35moe", "acme/Qwen3.5-122B-A10B-GGUF").status, "unsupported");
-  // An architecture with no size list is never refused by size.
-  assert.equal(q4nxArchFit("llama", "meta/Llama-3.3-70B-GGUF").status, "supported");
+  // One-size vision architectures and Llama 3.3 70B: FastFlowLM has no kernels, so no download.
+  for (const [arch, name] of [
+    ["qwen2vl", "unsloth/Qwen2.5-VL-7B-Instruct-GGUF"],
+    ["qwen3vl", "unsloth/Qwen3-VL-8B-Instruct-GGUF"],
+    ["llama", "meta/Llama-3.3-70B-GGUF"],
+    ["nanbeige", "acme/Nanbeige-16B-GGUF"],
+  ]) {
+    const fit = q4nxArchFit(arch, name);
+    assert.equal(fit.status === "unsupported" && fit.sized, true, name);
+  }
+  assert.deepEqual(q4nxArchFit("qwen3vl", "unsloth/Qwen3-VL-4B-Instruct-GGUF"), {
+    status: "supported",
+    note: null,
+  });
+  // Gemma 4's E-sizes carry no count to read, so they stay a caveat rather than a refusal.
+  assert.equal(q4nxArchFit("gemma4", "unsloth/gemma-4-E4B-it-GGUF").status, "supported");
   // An unsupported architecture is not a size refusal.
   const arch = q4nxArchFit("qwen3moe", "acme/x-30B-GGUF");
   assert.equal(arch.status === "unsupported" && arch.sized, undefined);
@@ -392,7 +409,11 @@ test("the export summary describes the conversion: source, file and quant, outpu
   assert.equal(over["NPU memory"], "May not fit: ~16.5 of 16.0 GB NPU");
   assert.equal(over.Convertible, "No");
 
-  assert.equal(rows({ ...picked, archFit: q4nxArchFit("llama") }).Convertible, "Yes");
+  assert.equal(
+    rows({ ...picked, archFit: q4nxArchFit("llama", "unsloth/Llama-3.2-1B-Instruct-GGUF") })
+      .Convertible,
+    "Yes",
+  );
   assert.equal(rows({ ...picked, archFit: q4nxArchFit(null) }).Convertible, "Checked during conversion");
 
   const empty = rows({

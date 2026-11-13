@@ -11,25 +11,37 @@ const Q4K_ARCHITECTURES = ["qwen35", "qwen35moe"];
 // with the caveat when it only takes some models of that architecture. Some (qwen35, qwen2vl) it
 // matches by general.basename prefix rather than by architecture.
 const Q4NX_ARCHITECTURES: Record<string, string | null> = {
-  llama: null,
-  qwen2: null,
-  qwen2vl: "Only Qwen2.5-VL converts.",
-  qwen3: null,
-  qwen3vl: null,
+  llama: "Only Llama 3.2 1B and 3B, Llama 3.1 8B and Nanbeige4.1 3B convert.",
+  qwen2: "Only Qwen2.5 3B converts.",
+  qwen2vl: "Only Qwen2.5-VL 3B converts.",
+  qwen3: "Only Qwen3 0.6B, 1.7B, 4B and 8B convert.",
+  qwen3vl: "Only Qwen3-VL 4B converts.",
   qwen35: "Only Qwen3.5 0.8B, 2B, 4B and 9B convert.",
   qwen35moe: "Only Qwen3.5 35B-A3B converts.",
-  gemma3: null,
-  gemma4: null,
-  lfm2: null,
+  gemma3: "Only Gemma 3 1B and 4B convert.",
+  gemma4: "Only Gemma 4 E2B, E4B and 12B convert.",
+  lfm2: "Only LFM2 1.2B and 2.6B convert.",
   phi3: "Only Phi-4 mini converts.",
-  "gpt-oss": null,
-  nanbeige: null,
+  "gpt-oss": "Only gpt-oss 20B converts.",
+  nanbeige: "Only Nanbeige4.1 3B converts.",
 };
 
-// Parameter counts, in billions, behind the size caveats above.
+// Parameter counts, in billions, behind the size caveats above: the sizes _NPU_SHAPES in backend
+// core/export/q4nx.py has FastFlowLM kernels for. Gemma 4's E2B / E4B and Phi-4 mini carry no
+// count a name can be read for, so those stay a caveat for the backend's geometry check.
 const Q4NX_SIZES: Record<string, readonly number[]> = {
+  llama: [1, 3, 8],
+  qwen2: [3],
+  qwen2vl: [3],
+  qwen3: [0.6, 1.7, 4, 8],
+  qwen3vl: [4],
   qwen35: [0.8, 2, 4, 9],
   qwen35moe: [35],
+  gemma3: [1, 4],
+  gemma4: [12],
+  lfm2: [1.2, 2.6],
+  "gpt-oss": [20],
+  nanbeige: [3],
 };
 
 // modelInfo fields for a typed repo. "gguf" is outside the SDK's expandable-key type but is forwarded to expand= as is.
