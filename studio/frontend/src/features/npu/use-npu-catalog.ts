@@ -13,6 +13,7 @@ import {
   listNpuDownloads,
   npuMemoryWarning,
 } from "./api";
+import { npuDisplayName } from "./display-name";
 import {
   cancelNpuDownload,
   followNpuDownload,
@@ -102,7 +103,7 @@ export function useNpuCatalog(
         memory_window_gb: memoryWindowGb,
       });
       if (warning) {
-        toast.warning(`${model.id} may not load on the NPU`, {
+        toast.warning(`${npuDisplayName(model)} may not load on the NPU`, {
           description: warning,
         });
       }

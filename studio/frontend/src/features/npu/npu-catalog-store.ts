@@ -15,6 +15,7 @@ import {
   listNpuDownloads,
   listNpuModels,
 } from "./api";
+import { npuDisplayNameOf } from "./display-name";
 
 interface NpuCatalogState {
   models: NpuModel[] | null;
@@ -97,7 +98,9 @@ export async function cancelNpuDownload(id: string): Promise<void> {
   try {
     await cancelNpuModelDownload(id);
   } catch (error) {
-    toast.error(`Could not cancel ${id}`, {
+    const name =
+      npuDisplayNameOf(useNpuCatalogStore.getState().models, id) ?? id;
+    toast.error(`Could not cancel ${name}`, {
       description: error instanceof Error ? error.message : String(error),
     });
   }
@@ -163,7 +166,9 @@ export function followNpuDownload(
       if (advance(event.percent)) streamed = true;
     };
     const fail = (description: string): false => {
-      toast.error(`Could not download ${id}`, { description });
+      const name =
+        npuDisplayNameOf(useNpuCatalogStore.getState().models, id) ?? id;
+      toast.error(`Could not download ${name}`, { description });
       return false;
     };
     let stalledReconnects = 0;

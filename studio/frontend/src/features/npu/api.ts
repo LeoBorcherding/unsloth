@@ -4,6 +4,7 @@
 import { authFetch } from "@/features/auth/api";
 import { readFastApiError } from "@/lib/format-fastapi-error";
 import { readSseJsonEvents } from "@/lib/sse-json-events";
+import { npuSearchText } from "./display-name";
 
 export const NPU_MODEL_PREFIX = "lemonade:";
 
@@ -57,6 +58,9 @@ export interface NpuModel {
   supports_tools: boolean;
   max_context_length: number | null;
   resume_percent: number | null;
+  /** FastFlowLM's Hugging Face repo (owner/name) and revision; absent from older servers. */
+  hf_repo?: string | null;
+  hf_revision?: string | null;
   /** Size plus load overhead, in GB. */
   memory_needed_gb?: number | null;
   /** false when the model is larger than the NPU memory window; null when unknown. */
@@ -78,8 +82,7 @@ export function npuRowsFor(
     .filter(
       (model) =>
         (!onDevice || model.downloaded) &&
-        (!needle ||
-          `${model.id} ${model.checkpoint}`.toLowerCase().includes(needle)),
+        (!needle || npuSearchText(model).toLowerCase().includes(needle)),
     )
     .sort((a, b) => npuRank(a.checkpoint) - npuRank(b.checkpoint));
 }
@@ -109,11 +112,40 @@ function npuRank(checkpoint: string): number {
   return rank === -1 ? NPU_RECOMMENDED.length : rank;
 }
 
+export interface NpuCapability {
+  key: "vision" | "reasoning" | "tools";
+  label: string;
+}
+
+export function npuCapabilities(model: NpuModel): NpuCapability[] {
+  const out: NpuCapability[] = [];
+  if (model.supports_vision) out.push({ key: "vision", label: "Vision" });
+  if (model.supports_reasoning)
+    out.push({ key: "reasoning", label: "Reasoning" });
+  if (model.supports_tools) out.push({ key: "tools", label: "Tools" });
+  return out;
+}
+
+/** "32K context", or null when the server did not report one. */
+export function npuContextLabel(tokens: number | null): string | null {
+  if (tokens == null || tokens <= 0) return null;
+  return tokens >= 1024 && tokens % 1024 === 0
+    ? `${tokens / 1024}K context`
+    : `${tokens.toLocaleString("en-US")} context`;
+}
+
 export function npuSizeLabel(sizeGb: number | null): string | null {
   if (sizeGb == null) return null;
   return sizeGb < 1
     ? `${Math.round(sizeGb * 1000)} MB`
     : `${sizeGb.toFixed(1)} GB`;
+}
+
+/** FastFlowLM pins repos by branch, which moves; only a commit revision matches the hash-checked files. */
+export function npuReadmeNote(model: NpuModel): string | null {
+  return model.hf_repo && !/^[0-9a-f]{40}$/i.test(model.hf_revision ?? "")
+    ? "Latest on Hugging Face (may be newer than the installed files)"
+    : null;
 }
 
 /** Row tag for a model the backend says is larger than the NPU memory window. */
@@ -238,6 +270,22 @@ export async function cancelNpuModelDownload(id: string): Promise<void> {
       await readFastApiError(response, "Could not cancel the download"),
     );
   }
+}
+
+/** Settings > Storage names NPU folders by FastFlowLM checkpoint; the backend maps it to lemond's id. */
+export async function deleteNpuModelByCheckpoint(
+  checkpoint: string,
+): Promise<string> {
+  const response = await authFetch(
+    `/api/npu/checkpoints/${encodeURIComponent(checkpoint)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readFastApiError(response, "Could not delete the model"),
+    );
+  }
+  return ((await response.json()) as { model: string }).model;
 }
 
 export async function downloadNpuModel(
