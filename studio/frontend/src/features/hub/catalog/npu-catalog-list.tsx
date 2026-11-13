@@ -4,9 +4,9 @@
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  type NpuDownloadPhase,
   type NpuModel,
   type NpuPickerSource,
-  NpuRuntimeVersions,
   NpuSetupNotice,
   npuDownloadLabel,
   npuMemoryWarning,
@@ -60,7 +60,9 @@ export function NpuCatalogList({
         progress={catalog.downloads[model.id]}
         downloading={model.id in catalog.downloads}
         reconnecting={model.id in catalog.reconnecting}
+        phase={catalog.phases[model.id]}
         onDownload={() => void catalog.download(model)}
+        onCancel={() => void catalog.cancel(model)}
         onRun={() => {
           catalog.warnMemory(model);
           onRun(model);
@@ -76,7 +78,6 @@ export function NpuCatalogList({
       className="mx-auto flex min-h-0 w-full max-w-[var(--hub-measure)] flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-3"
     >
       {body()}
-      <NpuRuntimeVersions catalog={catalog} className="mt-auto px-3 pt-4" />
     </div>
   );
 }
@@ -87,7 +88,9 @@ function NpuCatalogRow({
   progress,
   downloading,
   reconnecting,
+  phase,
   onDownload,
+  onCancel,
   onRun,
   onRemove,
 }: {
@@ -96,7 +99,9 @@ function NpuCatalogRow({
   progress: number | null | undefined;
   downloading: boolean;
   reconnecting: boolean;
+  phase: NpuDownloadPhase | undefined;
   onDownload: () => void;
+  onCancel: () => void;
   onRun: () => void;
   onRemove: () => Promise<void>;
 }) {
@@ -153,9 +158,14 @@ function NpuCatalogRow({
         ) : null}
       </div>
       {downloading ? (
-        <span className="shrink-0 text-ui-12 tabular-nums text-muted-foreground">
-          {npuDownloadLabel(progress, reconnecting)}
-        </span>
+        <>
+          <span className="shrink-0 text-ui-12 tabular-nums text-muted-foreground">
+            {npuDownloadLabel(progress, reconnecting, phase)}
+          </span>
+          <Button size="sm" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        </>
       ) : model.downloaded ? (
         <>
           <span className="flex shrink-0 items-center gap-1.5 text-ui-12 text-muted-foreground">

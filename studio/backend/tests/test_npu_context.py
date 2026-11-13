@@ -377,12 +377,14 @@ class _Server:
             self.loads.append(json_body)
             self.ctx = json_body["ctx_size"]
             return _Response({"status": "success"})
+        # Nothing is resident until the first load, which a Reload check asks about first.
         rows = [
             {
-                "model_name": self.loads[-1]["model_name"],
+                "model_name": load["model_name"],
                 "device": "npu",
                 "recipe_options": {"ctx_size": self.ctx},
             }
+            for load in self.loads[-1:]
         ]
         return _Response({"all_models_loaded": rows})
 
@@ -470,7 +472,7 @@ def test_the_load_response_reports_the_fit_as_the_ceiling(fitted, expected):
         api_key = "key",
         fitted_context_length = fitted,
     )
-    response = routes._npu_load_response(resident, "loaded")
+    response = routes._npu_load_response(resident, "loaded", None)
     assert response.context_length == 8192
     assert response.npu_context_fit == fitted
     assert response.max_context_length == expected

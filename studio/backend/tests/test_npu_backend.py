@@ -253,6 +253,8 @@ def test_studio_downloads_the_files_and_lemond_only_registers_them(npu, flm_mani
     percents = [event["percent"] for event in events]
     assert percents == sorted(percents) and percents[-1] == 100
     assert events[-1] == {"event": "complete", "model": "qwen3-0.6b-FLM", "percent": 100}
+    # lemond's register step sends nothing Studio relays, so the bar says it is finishing
+    assert events[-2] == {"event": "finishing", "percent": 99}
     pulls = [r for r in _requests(npu) if r["path"] in ("/v1/delete", "/v1/pull")]
     assert pulls == [
         {
@@ -261,6 +263,24 @@ def test_studio_downloads_the_files_and_lemond_only_registers_them(npu, flm_mani
         }
     ]
     assert {m.id: m.downloaded for m in npu.catalog()}["qwen3-0.6b-FLM"] is True
+
+
+def test_a_cancelled_download_keeps_its_partial_and_never_registers(npu, flm_manifest):
+    import threading
+
+    from .test_flm_files import CONFIG
+
+    cancel = threading.Event()
+    with pytest.raises(nb.NpuDownloadCancelled, match = "was cancelled"):
+        for event in npu.download("qwen3-0.6b-FLM", cancel = cancel):
+            # Once the weights have bytes on disk: a cancel before the first byte leaves no partial.
+            if event.get("file") == "model.q4nx" and event["bytes_downloaded"] > len(CONFIG):
+                cancel.set()
+    folder = npu.root / "flm" / "models" / "Qwen3-0.6B-NPU2"
+    assert (folder / "model.q4nx.partial").stat().st_size > 0
+    assert not any(r["path"] == "/v1/pull" for r in _requests(npu))
+    assert {m.id: m.resume_percent for m in npu.catalog()}["qwen3-0.6b-FLM"] > 0
+    assert (folder / "config.json").read_bytes() == CONFIG
 
 
 def test_the_catalog_offers_to_resume_an_interrupted_download(npu, flm_manifest):
@@ -1002,3 +1022,28 @@ def test_model_id_from_path_rejects_non_ids(path):
 def test_other_model_paths_are_not_npu():
     assert not nb.is_npu_model_path("unsloth/Qwen3-0.6B-GGUF")
     assert not nb.is_npu_model_path(None)
+
+
+def test_reloading_the_resident_model_restarts_it_in_lemond(npu):
+    # lemond treats a load of what it already holds as done, so Reload model must unload first.
+    npu.enable()
+    list(npu.download("qwen3-0.6b-FLM"))
+    npu.load("qwen3-0.6b-FLM")
+    assert not [r for r in _requests(npu) if r["path"] == "/v1/unload"]
+    npu.load("qwen3-0.6b-FLM")
+    paths = [r["path"] for r in _requests(npu) if r["path"] in ("/v1/load", "/v1/unload")]
+    assert paths == ["/v1/load", "/v1/unload", "/v1/load"]
+    assert npu.is_loaded
+
+
+def test_a_failed_reload_unload_restarts_lemond(npu, monkeypatch):
+    # The resident is released before sizing; an unload lemond refuses stops it, so the reload
+    # still lands on a fresh FastFlowLM rather than the old process.
+    monkeypatch.setenv("FAKE_LEMOND_UNLOAD_FAILS", "1")
+    monkeypatch.setenv("FAKE_LEMOND_DOWNLOADED", '["qwen3-0.6b-FLM"]')
+    npu.enable()
+    npu.load("qwen3-0.6b-FLM")
+    first = npu._server.pid
+    npu.load("qwen3-0.6b-FLM")
+    assert npu.is_loaded
+    assert npu._server.pid != first

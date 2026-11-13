@@ -8508,6 +8508,9 @@ def _llama_runtime_fields(llama_backend: LlamaCppBackend) -> dict:
         # Not MLX, so the MLX runtime fields report as absent.
         is_mlx = False,
         is_npu = False,
+        npu_power_mode = None,
+        npu_prefill_chunk_len = None,
+        npu_img_pre_resize = None,
         npu_context_fit = None,
         speaks = False,
         mlx_kv_quant = None,
@@ -11167,12 +11170,15 @@ async def _auto_switch_npu_model(
     """
     from core.inference.gpu_arbiter import MultiModelAlwaysRefusal, require_no_foreign_generations
     from core.inference.llama_keepwarm import inference_lifecycle_gate, model_load_gate
+    from core.inference.npu_flm_args import NPU_FLM_FIELDS
     from utils.openai_auto_switch_settings import get_model_override, resolve_fit_max_seq_length
 
     if await asyncio.to_thread(_loaded_satisfies, named_model):
         return
-    # The context length saved in the model's settings, as a picker load sends it.
-    max_seq_length = resolve_fit_max_seq_length(get_model_override(named_model), is_gguf = False)
+    # The context length and FastFlowLM settings saved for the model, as a picker load sends them.
+    override = get_model_override(named_model)
+    max_seq_length = resolve_fit_max_seq_length(override, is_gguf = False)
+    flm_fields = {key: override[key] for key in NPU_FLM_FIELDS if override.get(key) is not None}
     cancel_event = getattr(getattr(fastapi_request, "state", None), "generation_cancel_event", None)
 
     def _raise_if_cancelled() -> None:
@@ -11199,7 +11205,11 @@ async def _auto_switch_npu_model(
                     loaded_ok = False
                     try:
                         await _load_model_impl(
-                            LoadRequest(model_path = named_model, max_seq_length = max_seq_length or 0),
+                            LoadRequest(
+                                model_path = named_model,
+                                max_seq_length = max_seq_length or 0,
+                                **flm_fields,
+                            ),
                             fastapi_request,
                             current_subject,
                             current_request_counted = True,
@@ -18836,7 +18846,12 @@ async def _managed_engine_options(request, config, hf_token) -> dict:
         raise HTTPException(status_code = 400, detail = str(exc)) from exc
 
 
-def _npu_load_response(resident, status: str) -> LoadResponse:
+def _npu_load_response(
+    resident,
+    status: str,
+    flm_args: Optional[str] = None,
+) -> LoadResponse:
+    from core.inference.npu_flm_args import flm_args_status
     model = resident.model
     return LoadResponse(
         status = status,
@@ -18846,6 +18861,7 @@ def _npu_load_response(resident, status: str) -> LoadResponse:
         is_vision = model.vision,
         inference = load_inference_config(model.id),
         context_length = resident.context_length,
+        **flm_args_status(flm_args),
         # The free-RAM estimate where one was made, as llama.cpp reports its fit.
         max_context_length = resident.max_context_length,
         npu_context_fit = resident.fitted_context_length,
@@ -18870,6 +18886,27 @@ async def _unload_npu_before_local_load() -> None:
         await asyncio.to_thread(npu.unload)
 
 
+def _npu_flm_args(request: LoadRequest, model, requested_ctx: Optional[int]) -> Optional[str]:
+    """The ``flm_args`` this load asks for; a bad value is the client's 400. npu.load holds the
+    prefill chunk to the context it resolves, which under Auto only the load knows."""
+    from core.inference.npu_flm_args import NPU_FLM_FIELDS, build_flm_args
+
+    if all(getattr(request, field) is None for field in NPU_FLM_FIELDS):
+        return None
+    try:
+        return build_flm_args(
+            power_mode = request.npu_power_mode,
+            prefill_chunk_len = request.npu_prefill_chunk_len,
+            img_pre_resize = request.npu_img_pre_resize if model.vision else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code = 400, detail = str(exc)) from None
+
+
+def _npu_loaded_flm_args(npu) -> Optional[str]:
+    return getattr(getattr(npu, "_loaded", None), "flm_args", None)
+
+
 async def _load_npu_model(
     request: LoadRequest,
     *,
@@ -18885,6 +18922,7 @@ async def _load_npu_model(
         model_id_from_path,
     )
     from core.inference.llama_keepwarm import note_model_unloaded
+    from core.inference.npu_flm_args import clamp_prefill_chunk
 
     if account_access.managed_account():
         raise HTTPException(
@@ -18906,13 +18944,19 @@ async def _load_npu_model(
         and not request.force_reload
         # Exact: Auto after a pin, or a pin after Auto, is a different load.
         and requested_ctx == resident.requested_context_length
+        # What the resident would run this request's settings with, held to its context as a load would.
+        and clamp_prefill_chunk(
+            _npu_flm_args(request, resident.model, requested_ctx), resident.context_length
+        )
+        == _npu_loaded_flm_args(npu)
     ):
         account_access.join_resident("chat")
-        return _npu_load_response(resident, "already_loaded")
+        return _npu_load_response(resident, "already_loaded", _npu_loaded_flm_args(npu))
     try:
-        await asyncio.to_thread(npu.loadable_model, model_id)
+        model = await asyncio.to_thread(npu.loadable_model, model_id)
     except NpuError as exc:
         raise HTTPException(status_code = 400, detail = str(exc)) from None
+    flm_args = _npu_flm_args(request, model, requested_ctx)
     # The NPU model replaces the primary: under Always only the one already serving may reload.
     # After the checks above, so a request that can only fail never asks to unload a model.
     if routed_slot.get() is None:
@@ -18961,7 +19005,11 @@ async def _load_npu_model(
     await asyncio.to_thread(release_chat_gpu_claim)
     if load_cancel_event is not None and load_cancel_event.is_set():
         raise HTTPException(status_code = 409, detail = "Model load cancelled")
-    load = asyncio.ensure_future(asyncio.to_thread(npu.load, model_id, requested_ctx))
+    load = asyncio.ensure_future(
+        asyncio.to_thread(
+            npu.load, model_id, requested_ctx, **({"flm_args": flm_args} if flm_args else {})
+        )
+    )
     if load_cancel_event is not None:
         # Stop the load mid-way, as a GGUF load polls its cancel event.
         while not load.done():
@@ -18985,7 +19033,7 @@ async def _load_npu_model(
         raise HTTPException(status_code = 409, detail = "Model load cancelled")
     account_access.publish_resident("chat", request.model_path)
     api_monitor.record_lifecycle(event = "load", model = request.model_path)
-    return _npu_load_response(resident, "loaded")
+    return _npu_load_response(resident, "loaded", _npu_loaded_flm_args(npu))
 
 
 async def _load_model_impl(
@@ -22687,6 +22735,7 @@ async def _slot_status(current_subject: str):
         backend = _peek_inference_backend()
 
         from core.inference.npu_backend import peek_npu_backend
+        from core.inference.npu_flm_args import flm_args_status
 
         _npu = peek_npu_backend()
         _npu_resident = _npu.resident() if _npu is not None and routed_slot.get() is None else None
@@ -22702,6 +22751,7 @@ async def _slot_status(current_subject: str):
                 inference = load_inference_config(_npu_model.id),
                 context_length = _npu_resident.context_length,
                 requested_context_length = _npu_resident.requested_context_length,
+                **flm_args_status(_npu_loaded_flm_args(_npu)),
                 max_context_length = _npu_resident.max_context_length,
                 npu_context_fit = _npu_resident.fitted_context_length,
                 native_context_length = _npu_model.max_context_length,
@@ -28933,9 +28983,11 @@ def _fit_external_context(
     tools: Optional[list[dict]] = None,
     branch: Optional[list[dict]] = None,
     tool_loop: bool = False,
+    can_reset: bool = False,
 ) -> tuple[list[dict], Optional[dict], Optional[int]]:
     """``branch`` is the client's request when ``messages`` is a tool loop's conversation: recall
-    queries the user's turn, not a controller re-prompt, and still filters on the loop's turns."""
+    queries the user's turn, not a controller re-prompt, and still filters on the loop's turns.
+    ``can_reset`` lets a tool loop start a checkpoint epoch, which /compact needs."""
     from core.inference.context_window import (
         estimate_message_tokens_without_unpriced_media,
         estimate_messages_tokens_conservative,
@@ -28946,11 +28998,13 @@ def _fit_external_context(
     from core.inference.llama_cpp import (
         _archive_and_recall,
         _boundary_metadata,
+        _can_reset_epoch,
         _compaction_fit_kwargs,
         _conversation_recall_reserve,
         _fit_with_instruction_pins,
         _keeps_compaction_boundary,
         _records_boundary,
+        _sticky_compaction_details,
         _sticky_compaction_state,
     )
 
@@ -28983,19 +29037,37 @@ def _fit_external_context(
             max_tokens = min(max_tokens, window - room - margin)
             # The largest context whose prompt_budget stays within room.
             context_length = min(context_length, room + max_tokens, room * 4 // 3)
-    if prompt_tokens <= prompt_budget(context_length, max_tokens):
-        return messages, None, max_tokens
     policy = _request_context_policy(payload)
     ratio = _request_compaction_headroom_ratio(payload)
     thread_id = payload.thread_id
-    # Recall below is inline and rolling (every evicting fit), so a checkpoint reset may not start.
-    sticky, sticky_is_checkpoint = _sticky_compaction_state(
-        thread_id,
-        messages,
-        context_policy = policy,
-        can_reset = False,
-        compaction_headroom_ratio = ratio,
-    )
+    # A reset strands the evicted turns unless the loop can offer search_conversation afterwards.
+    can_reset = can_reset and tool_loop and _can_reset_epoch(thread_id, True)
+    force_reset = can_reset and getattr(payload, "compact_context", None) is True
+    sticky = sticky_is_checkpoint = sticky_manual = None
+    if can_reset:
+        # Read before the fits check: a /compact epoch replays while the chat still fits.
+        sticky, sticky_is_checkpoint, sticky_manual = _sticky_compaction_details(
+            thread_id,
+            messages,
+            context_policy = policy,
+            can_reset = True,
+            compaction_headroom_ratio = ratio,
+        )
+    if (
+        prompt_tokens <= prompt_budget(context_length, max_tokens)
+        and not force_reset
+        and not sticky_manual
+    ):
+        return messages, None, max_tokens
+    if not can_reset:
+        # Recall below is inline and rolling (every evicting fit), so a checkpoint reset may not start.
+        sticky, sticky_is_checkpoint = _sticky_compaction_state(
+            thread_id,
+            messages,
+            context_policy = policy,
+            can_reset = False,
+            compaction_headroom_ratio = ratio,
+        )
     fitted, truncation = _fit_with_instruction_pins(
         messages,
         context_length = context_length,
@@ -29006,6 +29078,9 @@ def _fit_external_context(
         reserve_tokens = _conversation_recall_reserve(thread_id),
         sticky_dropped = sticky,
         sticky_is_checkpoint = sticky_is_checkpoint,
+        sticky_manual = bool(sticky_manual),
+        force_reset = force_reset,
+        can_reset = can_reset,
         estimate_message = estimate_message_tokens_without_unpriced_media,
         **_compaction_fit_kwargs(policy, ratio),
     )
@@ -29025,6 +29100,8 @@ def _fit_external_context(
             query_messages = branch,
             thread_id = str(thread_id) if thread_id else None,
             style = "inline",
+            # A replayed epoch was recalled when it started; search_conversation covers it since.
+            force_recall = not can_reset or bool(truncation.get("checkpoint_started", True)),
             recall_done = not truncation.get("fits", True),
             recall_budget_tokens = retrieval_budget(
                 context_length,
@@ -29833,6 +29910,8 @@ async def _proxy_to_external_provider(
                 tools = _external_fit_tools,
                 branch = _request_branch,
                 tool_loop = run_studio_tool_loop and not _tool_calls_are_disabled(payload),
+                # The NPU has no compaction of its own, so /compact resets here as on GGUF.
+                can_reset = managed is not None,
             )
             fitted = _date_a_fitted_system_turn(fitted, request, run_studio_tool_loop)
             if truncation and truncation.get("dropped_messages"):
@@ -30501,6 +30580,15 @@ async def _npu_chat_completions(payload, request: Request, current_subject: str)
     wants_stream = bool(payload.stream)
     relay = _NpuStreamRelay(upstream.public_model, _normalize_stop_sequences(payload.stop))
     update: dict = {"stream": True}
+    if upstream.context_length and _rolling_context_policy(payload) is not None:
+        # Lemonade does not compact, so fit the chat to the loaded window as managed engines do.
+        window = min(filter(None, (payload.context_window, upstream.context_length)))
+        threshold = min(
+            _EXTERNAL_COMPACTION_THRESHOLD_MAX,
+            int(window * (1 - _EXTERNAL_COMPACTION_HEADROOM)),
+        )
+        update["context_window"] = window
+        update["compaction_threshold"] = min(payload.compaction_threshold or threshold, threshold)
     if _legacy_image_is_distinct(payload):
         # The proxy reads messages only, so splice a top-level image in as GGUF chat does.
         update["messages"] = [

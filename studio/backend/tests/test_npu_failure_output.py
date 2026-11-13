@@ -344,6 +344,8 @@ def test_load_disconnect_uses_the_request_output(tmp_path, monkeypatch, log):
     server = _server(tmp_path)
 
     def disconnect(path):
+        if path == "/v1/health":  # the Reload check before the load: nothing resident
+            return [], httpx.Response(200, json = {"all_models_loaded": []})
         assert path == "/v1/load"
         _prints(server, _line("Error", "Router", "model allocation failed"))
         raise nb.LemonadeUnavailable("connection closed")
@@ -542,7 +544,8 @@ def test_lemond_is_at_debug_for_the_load_and_back_at_info_after(tmp_path, monkey
     with pytest.raises(nb.NpuError):
         backend.load(_MODEL, 32768)
 
-    assert calls == ["debug", "/v1/load", "info"]
+    # The Reload check asks /v1/health before debug goes up, so it runs at info.
+    assert calls == ["/v1/health", "debug", "/v1/load", "info"]
 
 
 def test_a_restart_never_inherits_debug_from_the_saved_config(tmp_path):

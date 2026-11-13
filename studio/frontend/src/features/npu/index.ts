@@ -4,6 +4,7 @@
 export {
   isNpuModelId,
   NPU_MODEL_PREFIX,
+  type NpuDownloadPhase,
   type NpuModel,
   type NpuStatus,
   npuDownloadLabel,
@@ -13,7 +14,8 @@ export {
   npuRowsFor,
   npuSizeLabel,
 } from "./api";
-export { NpuRuntimeVersions, NpuSetupNotice } from "./npu-setup-notice";
+export { refreshNpuModels, useNpuCatalogStore } from "./npu-catalog-store";
+export { NpuSetupNotice } from "./npu-setup-notice";
 export {
   type NpuCatalog,
   type NpuPickerSource,
