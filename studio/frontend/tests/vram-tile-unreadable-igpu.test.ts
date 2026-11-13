@@ -91,3 +91,18 @@ test("an unreadable discrete card or an iGPU alone stays Unknown", () => {
   assert.deepEqual(apuOnly.sharedDevices, []);
   assert.equal(resolveGpuVramUsedGb(apuOnly.usageGpu), null);
 });
+
+test("an unreadable APU whose memory is all carve-out stays on the VRAM tile", () => {
+  // Linux ROCm APU: unified_memory with a measured host-backed share of 0, so its total is dedicated.
+  const apu: GpuDevice = {
+    index: 2,
+    name: "AMD Radeon(TM) Graphics",
+    memory_total_gb: 64,
+    shared_memory: false,
+    unified_memory: true,
+    shared_memory_host_backed_gb: 0,
+  };
+  const display = gpuMemoryDisplay({ ...gpu, devices: [r9700(0, 21.75), apu] });
+  assert.deepEqual(display.sharedDevices, []);
+  assert.equal(gpuMemoryTotalsGb(display.usageDevices).dedicated, 95.86);
+});

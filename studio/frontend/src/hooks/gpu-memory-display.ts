@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { sharesHostMemoryDevice } from "./gpu-vram.ts";
+import { gpuMemoryTotalsGb, sharesHostMemoryDevice } from "./gpu-vram.ts";
 import type { GpuDevice, SystemGpuInfo } from "./use-system";
 
 export function hasSharedMemoryHeadroom(device: GpuDevice): boolean {
@@ -56,7 +56,8 @@ function parkedSharedDevices(
   const rest = devices.filter((device) => !hasSharedMemoryHeadroom(device));
   const unread = rest.filter((device) => !Number.isFinite(device.vram_used_gb));
   return unread.length > 0 &&
-    unread.every(sharesHostMemoryDevice) &&
+    // A measured-zero host-backed share is a carve-out, which the totals count as dedicated VRAM.
+    unread.every((device) => gpuMemoryTotalsGb([device]).shared > 0) &&
     rest.some((device) => !sharesHostMemoryDevice(device))
     ? unread
     : [];
