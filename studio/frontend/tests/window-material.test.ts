@@ -273,6 +273,19 @@ test("the narrow window's Run settings sheet takes the docked panel's glass", ()
 	assert.match(monitor, /document\.querySelector\('aside\[data-slot="chat-settings-panel"\]'\)/);
 });
 
+test("glass tints the user's bubble and thread code blocks like the composer, with no blur", () => {
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	const host = String.raw`html\[data-glass\] :is\(\[data-wallpaper-workspace\], \[data-chat-content-root\]\)\[data-wallpaper-ready\]\[data-wallpaper-ready\]`;
+	const rule = (target: string) => new RegExp(`${host} ${target} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+	const bubble = rule(String.raw`\.aui-user-message-content`);
+	const code = rule(String.raw`\.aui-thread-root \[data-streamdown="code-block"\]`);
+	assert.match(bubble, /var\(--glass-composer-fill\)[^;]*var\(--glass-composer-floor\)\) \+ 9%\)/);
+	// Code reads at the panes' floor, a step darker than the bubble.
+	assert.match(code, /var\(--glass-composer-fill\)[^;]*var\(--glass-pane-floor\)\) \+ 9%\)/);
+	// The thread viewport's mask is a backdrop root, so a blur here would frost only the wash.
+	for (const block of [bubble, code]) assert.doesNotMatch(block, /backdrop-filter/);
+});
+
 test("glass frosts sticky bars in panels and popups, floating buttons, and softens shared shadows", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	assert.match(css, /html\[data-glass\] :is\(\[data-slot="chat-settings-panel"\], \[data-slot\$="popover-content"\][^)]*\) \.sticky \{\n  -webkit-backdrop-filter: blur\(12px\)/);
