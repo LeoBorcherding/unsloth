@@ -141,3 +141,59 @@ def test_q4nx_export_is_allowed_by_an_npu_or_the_setting(monkeypatch):
         monkeypatch.setattr(s, "npu_supported", lambda: npu)
         monkeypatch.setattr(s, "get_q4nx_export_setting", lambda: setting)
         assert s.q4nx_export_allowed() is allowed
+
+
+def _hub_error(status):
+    import httpx
+    from huggingface_hub.errors import HfHubHTTPError
+
+    request = httpx.Request("GET", "https://huggingface.co/org/r/resolve/main/m.gguf")
+    return HfHubHTTPError(f"{status}", response = httpx.Response(status, request = request))
+
+
+def _transient_and_permanent_failures():
+    import httpx
+    from huggingface_hub.errors import LocalEntryNotFoundError
+    return [
+        (_hub_error(429), 503),
+        (_hub_error(502), 503),
+        (httpx.ConnectError("connection reset"), 503),
+        (LocalEntryNotFoundError("offline and not cached"), 503),
+        (_hub_error(404), 400),
+        (RuntimeError("unsupported architecture"), 400),
+        (ValueError("not a .gguf file"), 400),
+    ]
+
+
+@pytest.mark.parametrize("error, status", _transient_and_permanent_failures())
+def test_a_hub_or_network_failure_is_retryable_and_a_refusal_is_not(
+    monkeypatch, authorized, error, status
+):
+    async def to_thread(fn, *args, **kwargs):
+        if fn is export_routes.account_access.authorize_download:
+            return None
+        raise error
+
+    monkeypatch.setattr(export_routes.asyncio, "to_thread", to_thread)
+    with pytest.raises(HTTPException) as exc:
+        _convert(OWNER, repo_id = "org/r-GGUF", filename = "m.Q4_1.gguf")
+    assert exc.value.status_code == status
+
+
+def test_an_offline_base_file_is_raised_not_read_as_missing(monkeypatch):
+    import huggingface_hub
+    from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
+    from core.export import q4nx
+
+    def offline(*_a, **_k):
+        raise LocalEntryNotFoundError("offline")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", offline)
+    with pytest.raises(LocalEntryNotFoundError):
+        q4nx._fetch_base_file("unsloth/Qwen3-0.6B", "tokenizer_config.json", None)
+
+    def missing(*_a, **_k):
+        raise EntryNotFoundError("no such file")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", missing)
+    assert q4nx._fetch_base_file("unsloth/Qwen3-0.6B", "chat_template.jinja", None) is None

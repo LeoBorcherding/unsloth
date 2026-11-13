@@ -710,6 +710,30 @@ async def export_gguf(
         )
 
 
+def _q4nx_failure_status(exc: BaseException) -> int:
+    """503 for a Hub or network failure that can pass, so Convert stays retryable; 400 otherwise."""
+    from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
+
+    transient: tuple = (ConnectionError, TimeoutError, LocalEntryNotFoundError)
+    try:
+        import httpx
+        transient += (httpx.TransportError,)
+    except ImportError:
+        pass
+    try:
+        import requests
+        transient += (requests.ConnectionError, requests.Timeout)
+    except ImportError:
+        pass
+    if isinstance(exc, transient):
+        return 503
+    if isinstance(exc, HfHubHTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 429 or (isinstance(status, int) and status >= 500):
+            return 503
+    return 400
+
+
 @router.post("/convert/q4nx", response_model = ExportOperationResponse)
 async def convert_q4nx(
     request: ConvertQ4NXRequest,
@@ -766,7 +790,9 @@ async def convert_q4nx(
         output_path = await asyncio.to_thread(run)
     except Exception as e:
         logger.error(f"Q4NX conversion failed: {e}", exc_info = True)
-        raise HTTPException(status_code = 400, detail = f"Q4NX conversion failed: {e}")
+        raise HTTPException(
+            status_code = _q4nx_failure_status(e), detail = f"Q4NX conversion failed: {e}"
+        )
     return ExportOperationResponse(
         success = True,
         message = "Converted to Q4NX for the AMD NPU",

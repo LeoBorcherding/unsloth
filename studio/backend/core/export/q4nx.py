@@ -284,10 +284,12 @@ def _fetch_base_file(base_model: str, name: str, token) -> Optional[Path]:
         account_path(candidate)
         return candidate
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import EntryNotFoundError
+    from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
 
     try:
         return Path(hf_hub_download(base_model, name, token = token))
+    except LocalEntryNotFoundError:
+        raise  # offline, not missing: it subclasses EntryNotFoundError
     except EntryNotFoundError:
         return None
 
