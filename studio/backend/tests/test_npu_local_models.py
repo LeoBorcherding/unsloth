@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -105,6 +106,23 @@ def test_a_link_out_of_the_exports_is_not_followed(tmp_path):
     exports_root().mkdir(parents = True, exist_ok = True)
     (exports_root() / "linked").symlink_to(outside.parent, target_is_directory = True)
     assert nlm.account_local_models() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason = "symlinks need privileges on Windows")
+def test_a_linked_weights_file_from_another_account_is_neither_listed_nor_staged(tmp_path):
+    theirs = run_as(BOB, _converted)
+    folder = run_as(ALICE, _converted)
+    (folder / "model.q4nx").unlink()
+    (folder / "model.q4nx").symlink_to(theirs / "model.q4nx")
+    [local] = run_as(ALICE, nlm.account_local_models)
+    assert "model.q4nx" not in local.files
+    assert "model.q4nx is missing" in local.problem
+    # A folder swapped after listing is refused at staging time too.
+    listed = run_as(ALICE, lambda: nlm._describe(folder, exports_root()))
+    stale = dataclasses.replace(listed, files = ("model.q4nx", *listed.files))
+    with pytest.raises(OSError, match = "model.q4nx is a link"):
+        run_as(ALICE, lambda: nlm.link_files(stale, tmp_path / "staged"))
+    assert not (tmp_path / "staged" / "model.q4nx").exists()
 
 
 def test_the_registered_entry_runs_on_the_base_kernels_and_cannot_be_pulled():
