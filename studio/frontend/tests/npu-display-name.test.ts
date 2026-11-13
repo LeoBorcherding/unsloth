@@ -50,10 +50,13 @@ test("a loaded model is named by its id or its lemonade: path", () => {
 });
 
 test("NPU search finds a model by its old id, its tag and its repo", () => {
+  const auth = { authFetch: async () => new Response(null) };
   const api = loadWithStubs<typeof NpuApi>(
     new URL("../src/features/npu/api.ts", import.meta.url),
     {
-      "@/features/auth": { authFetch: async () => new Response(null) },
+      // api.ts imports authFetch from either path, depending on which NPU PRs are in.
+      "@/features/auth": auth,
+      "@/features/auth/api": auth,
       "@/lib/format-fastapi-error": formatFastApiError,
       "@/lib/sse-json-events": sseJsonEvents,
       "./display-name": displayName,
