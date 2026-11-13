@@ -534,6 +534,8 @@ _EXPERTS = "{arch}.expert_count"
         ("gemma4", 60, 5376, {}, "Gemma 4 12B"),  # Gemma 4 31B
         ("qwen35moe", 48, 3072, {_EXPERTS: 256}, "Qwen3.5 / 3.6 35B-A3B"),  # 122B-A10B
         ("qwen35", 64, 5120, {"general.basename": "Qwen3.5-27B"}, "Qwen3.5 9B"),
+        # Omni off the standard shapes: FastFlowLM ships no base the NPU picker could load it on.
+        ("qwen35", 40, 3072, {"general.basename": "Qwen3.5-Omni"}, "Qwen3.5 4B"),
     ],
 )
 def test_unsupported_geometry_is_refused_before_installing(
@@ -556,7 +558,6 @@ def test_unsupported_geometry_is_refused_before_installing(
     [
         ("qwen35", 32, 4096, {}, "q4k"),  # Qwen3.5 9B
         ("qwen35", 33, 4096, {"{arch}.nextn_predict_layers": 1}, "q4k"),  # 9B with its MTP block
-        ("qwen35", 40, 3072, {"general.basename": "Qwen3.5-Omni"}, "q4k"),
         ("qwen35moe", 40, 2048, {_EXPERTS: 256}, "q4k"),  # Qwen3.6 35B-A3B
         ("llama", 32, 4096, {}, "q4nx"),  # Llama 3.1 8B
         ("gpt-oss", 24, 2880, {_EXPERTS: 32}, "q4nx"),
