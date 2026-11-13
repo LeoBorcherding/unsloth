@@ -30453,7 +30453,6 @@ async def _npu_chat_completions(payload, request: Request, current_subject: str)
         upstream = await asyncio.to_thread(npu.upstream)
     except NpuError as exc:
         raise HTTPException(status_code = 400, detail = str(exc)) from None
-    output_mark = npu.output_mark()
     _refuse_npu_chat_request(
         payload,
         supports_vision = upstream.supports_vision,
@@ -30494,6 +30493,9 @@ async def _npu_chat_completions(payload, request: Request, current_subject: str)
 
     async def _lines():
         body = response.body_iterator
+        # A window marks any load window it overlaps as shared for good, so it opens only once
+        # every refusal (ours and the proxy's preflight) has passed; the first read sends upstream.
+        output_mark = npu.output_mark()
         try:
             async for piece in body:
                 text = piece.decode("utf-8") if isinstance(piece, bytes) else piece
