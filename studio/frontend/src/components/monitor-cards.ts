@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import {
+  carveOutUsedGb,
   carveOutVramGb,
   gpuMemoryTotalsGb,
   resolveGpuVramUsedGb,
@@ -43,6 +44,11 @@ function vramTotalGb(cards: GpuDevice[]): number {
   );
 }
 
+// Same memory as the total above: a carve-out's spill past it is RAM.
+function vramUsedInCapacity(cards: GpuDevice[], usedGb: number | null): number | null {
+  return carveOutUsedGb(usedGb, carveOutVramGb(cards, usedGb, null));
+}
+
 /** Dedicated cards only: an iGPU borrows system RAM, and its missing reading would blank the total. */
 export function vramCards(
   devices: GpuDevice[],
@@ -62,13 +68,17 @@ export function vramCards(
           label: `GPU ${card.visible_ordinal ?? card.index ?? position}`,
           name: shortCardName(card.name),
           title: card.name ?? "GPU",
-          usedGb: Number.isFinite(card.vram_used_gb) ? (card.vram_used_gb as number) : null,
+          usedGb: vramUsedInCapacity(
+            [card],
+            Number.isFinite(card.vram_used_gb) ? (card.vram_used_gb as number) : null,
+          ),
           totalGb: vramTotalGb([card]),
         }))
       : [];
+  const shownUsedGb = vramUsedInCapacity(cards, usedGb);
   const showTotal =
-    rows.length === 0 || (usedGb !== null && rows.some((row) => row.usedGb === null));
-  return { cards, totalGb: vramTotalGb(cards), usedGb, rows, showTotal };
+    rows.length === 0 || (shownUsedGb !== null && rows.some((row) => row.usedGb === null));
+  return { cards, totalGb: vramTotalGb(cards), usedGb: shownUsedGb, rows, showTotal };
 }
 
 export function holdsModelsInVram(cards: readonly GpuDevice[]): boolean {

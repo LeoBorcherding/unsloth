@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { vramCards } from "../src/components/monitor-cards.ts";
 import {
+  carveOutUsedGb,
   carveOutVramGb,
   gpuMemoryTotalsGb,
 } from "../src/hooks/gpu-vram.ts";
@@ -36,6 +37,7 @@ test("Strix Halo: VRAM is the 95.8 GiB carve-out, and the shared part is RAM it 
     freeGb: 94.66,
     // Capped by free RAM: the 12.1 GiB shared pool comes out of the RAM tile's 31.8 GiB.
     borrowableGb: 11.3,
+    spilledGb: 0,
   });
   // The device row reads the same carve-out.
   assert.equal(
@@ -54,11 +56,13 @@ test("usage past the carve-out leaves less RAM to borrow, and free stops at zero
     totalGb: 95.82,
     freeGb: 0,
     borrowableGb: 7.92,
+    spilledGb: 4.18,
   });
   assert.deepEqual(carveOutVramGb([{ ...strixHalo, vram_used_gb: undefined }], null, 50), {
     totalGb: 95.82,
     freeGb: null,
     borrowableGb: 12.1,
+    spilledGb: null,
   });
 });
 
@@ -69,6 +73,7 @@ test("beside a discrete card, spill and free come from each device's own usage",
     totalGb: 119.82,
     freeGb: 24,
     borrowableGb: 7.92,
+    spilledGb: 4.18,
   });
   // An aggregate reading can't say whose usage it is, so free stays unknown.
   const unread = [
@@ -81,7 +86,25 @@ test("beside a discrete card, spill and free come from each device's own usage",
     totalGb: 119.82,
     freeGb: null,
     borrowableGb: 6.92,
+    spilledGb: 5.18,
   });
+});
+
+test("usage spilled past the carve-out stays out of the VRAM numerator", () => {
+  // 100 GiB used on a 95.82 GiB carve-out: 4.18 GiB of it sits in shared RAM, which the RAM tile counts.
+  const spilled = { ...strixHalo, vram_used_gb: 100 } as GpuDevice;
+  const carveOut = carveOutVramGb([spilled], 100, null);
+  assert.equal(carveOutUsedGb(100, carveOut), 95.82);
+  assert.equal(carveOutUsedGb(1.16, carveOutVramGb([strixHalo], 1.16, null)), 1.16);
+  assert.equal(carveOutUsedGb(null, carveOut), null);
+  // Not a carve-out: the reading is shown as is.
+  assert.equal(carveOutUsedGb(5, null), 5);
+  const vram = vramCards([spilled], { devices: [spilled] });
+  assert.equal(vram.usedGb, 95.82);
+  assert.ok((vram.usedGb as number) <= vram.totalGb, "the floating monitor never reads used > total");
+  const tab = readSrc("features/settings/tabs/resources-tab.tsx");
+  assert.match(tab, /vramUsed: vramUsedInCapacity/);
+  assert.match(tab, /const used = carveOutUsedGb\(reading, carveOut\)/);
 });
 
 test("no carve-out reading for discrete cards, unified pools, or a small UMA slice under a big shared pool", () => {

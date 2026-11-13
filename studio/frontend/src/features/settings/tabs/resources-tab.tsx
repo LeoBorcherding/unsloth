@@ -24,6 +24,7 @@ import {
   sharedMemoryAvailableGb,
 } from "@/hooks/gpu-memory-display";
 import {
+  carveOutUsedGb,
   carveOutVramGb,
   deviceSharedMemorySplitGb,
   gpuMemoryTotalsGb,
@@ -450,9 +451,11 @@ export function ResourcesTab() {
           ? Math.max(0, vramTotal - vramUsed)
           : null;
     const vramCapacity = vramCarveOut?.totalGb ?? vramTotal;
+    // Numerator and capacity cover the same memory: a carve-out's spill is RAM.
+    const vramUsedInCapacity = carveOutUsedGb(vramUsed, vramCarveOut);
     const vramPercent =
-      vramUsageKnown && isFiniteNumber(vramUsed) && vramCapacity > 0
-        ? (vramUsed / vramCapacity) * 100
+      vramUsageKnown && isFiniteNumber(vramUsedInCapacity) && vramCapacity > 0
+        ? (vramUsedInCapacity / vramCapacity) * 100
         : 0;
 
     return {
@@ -470,7 +473,7 @@ export function ResourcesTab() {
       vramDedicated: gpuMemoryTotals.dedicated,
       vramShared: gpuMemoryTotals.shared,
       vramCarveOut,
-      vramUsed,
+      vramUsed: vramUsedInCapacity,
       vramFree,
       vramPercent,
       vramUsageKnown,
@@ -1046,12 +1049,13 @@ export function ResourcesTab() {
           metrics.devices.map((device, index) => {
             const ordinal = deviceOrdinal(device);
             // Preserve null (unknown); 0 would render a fabricated reading.
-            const used = device.vram_used_gb ?? null;
+            const reading = device.vram_used_gb ?? null;
             // Its total is mostly system RAM, so "VRAM" beside it overstates the card (#8942).
             const sharedSplit = deviceSharedMemorySplitGb(device);
             const carveOut = sharedSplit
-              ? carveOutVramGb([device], used, null)
+              ? carveOutVramGb([device], reading, null)
               : null;
+            const used = carveOutUsedGb(reading, carveOut);
             const total = carveOut?.totalGb ?? device.memory_total_gb ?? null;
             const free = carveOut
               ? carveOut.freeGb
