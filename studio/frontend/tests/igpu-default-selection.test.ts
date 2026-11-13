@@ -3,8 +3,8 @@
 
 /**
  * 2x R9700 (32 GiB) plus a Ryzen 9950X iGPU whose 36 GiB is shared system RAM: the Train page read
- * "VRAM 100 GiB" and the chat GPU picker ticked the iGPU by default. Device rows are pinned here,
- * never read from the host.
+ * "VRAM 100 GiB" and the chat GPU picker offered and ticked the iGPU, which neither the installed
+ * llama.cpp nor torch has kernels for. Device rows are pinned here, never read from the host.
  */
 
 import assert from "node:assert/strict";
@@ -95,10 +95,6 @@ test("an untouched picker ticks only the discrete cards", () => {
       device(1),
       device(2, { sharedMemory: true, unifiedMemory: true }),
     ]),
-    [0, 1],
-  );
-  assert.deepEqual(
-    defaultGpuIds([device(0), device(1), device(2, { noTorchKernels: true })]),
     [0, 1],
   );
 });
@@ -301,4 +297,61 @@ test("an unclassifiable GGUF keeps Automatic unpinned", () => {
     const source = readFileSync(new URL(file, import.meta.url), "utf8");
     assert.equal(source.match(new RegExp(pattern.source, "g"))?.length ?? 0, count, `${file} ${pattern}`);
   }
+});
+
+test("a GPU the engine has no kernels for is never offered", () => {
+  const gpu = {
+    available: true,
+    backend: "rocm",
+    devices: [
+      { index: 0, index_kind: "physical", ...R9700 },
+      { index: 1, index_kind: "physical", ...R9700 },
+      {
+        index: 2,
+        index_kind: "physical",
+        ...IGPU_SHARED,
+        no_llama_kernels: true,
+        no_torch_kernels: true,
+      },
+    ],
+  };
+  snapshot = { status: "ready", device_backend: "rocm", gpu, inference_gpu: gpu };
+  assert.deepEqual(hooks.cachedPinnableGpuIndices(), [0, 1]);
+  assert.deepEqual(hooks.cachedPinnableGpuIndices(true), [0, 1]);
+  // A pick saved before the card was flagged loses it instead of failing the load.
+  assert.deepEqual(hooks.reconcileCachedGpuSelection([0, 2], "physical", false, true), {
+    ids: [0],
+    indexKind: "physical",
+  });
+});
+
+test("each picker drops only the cards its own engine cannot run", () => {
+  const gpu = {
+    available: true,
+    backend: "rocm",
+    devices: [
+      { index: 0, index_kind: "physical", ...R9700 },
+      { index: 1, index_kind: "physical", ...R9700, no_llama_kernels: true },
+      { index: 2, index_kind: "physical", ...R9700, no_torch_kernels: true },
+    ],
+  };
+  snapshot = { status: "ready", device_backend: "rocm", gpu, inference_gpu: gpu };
+  // GGUF runs on llama.cpp; diffusion and the optional engines run on torch.
+  assert.deepEqual(hooks.cachedPinnableGpuIndices(), [0, 2]);
+  assert.deepEqual(hooks.cachedPinnableGpuIndices(true), [0, 1]);
+});
+
+test("a shared-memory GPU llama.cpp can run stays offered, unticked", () => {
+  const gpu = {
+    available: true,
+    backend: "rocm",
+    devices: [
+      { index: 0, index_kind: "physical", ...R9700 },
+      { index: 1, index_kind: "physical", ...R9700 },
+      { index: 2, index_kind: "physical", ...IGPU_SHARED },
+    ],
+  };
+  snapshot = { status: "ready", device_backend: "rocm", gpu, inference_gpu: gpu };
+  assert.deepEqual(hooks.cachedPinnableGpuIndices(), [0, 1, 2]);
+  assert.deepEqual(hooks.reconcileCachedGpuSelection(null, null, false, true).ids, [0, 1]);
 });

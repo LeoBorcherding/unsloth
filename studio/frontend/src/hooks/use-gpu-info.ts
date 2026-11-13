@@ -289,15 +289,17 @@ function toGpuDevices(
       sharedMemory: d.shared_memory === true,
       sharedMemoryHostBackedGb: d.shared_memory_host_backed_gb,
       unifiedMemory: d.unified_memory === true,
-      noTorchKernels: d.no_torch_kernels === true,
-      // The XPU ban covers torch-xpu ordinals, not Vulkan ones.
+      // The XPU ban covers torch-xpu ordinals, not Vulkan ones. A card the engine has no kernels for is
+      // never offered (llama.cpp here, torch for diffusion): the load would skip it anyway.
       pinnable:
         pinnableBackend &&
+        d.no_llama_kernels !== true &&
         (d.index_kind === "vulkan" ||
           (data?.device_backend !== "xpu" &&
             (d.index_kind === "physical" || d.index_kind === "cuda_device"))),
       diffusionPinnable:
         diffusionBackend &&
+        d.no_torch_kernels !== true &&
         (d.index_kind === "physical" || d.index_kind === "cuda_device"),
     }));
 }

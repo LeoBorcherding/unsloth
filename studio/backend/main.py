@@ -2380,6 +2380,27 @@ def _schedule_shutdown(request: Request) -> dict:
     return {"status": "shutting_down"}
 
 
+def _flag_rocm_gpus_without_llama_kernels(devices: list) -> None:
+    """Marks ROCm rows the installed llama.cpp prebuilt has no kernels for, the same check the GGUF load
+    skips them by, so the picker never offers them. Fails open when the prebuilt's targets are unknown."""
+    try:
+        from core.inference.llama_cpp import LlamaCppBackend
+
+        archs = LlamaCppBackend._installed_llama_gfx_archs()
+        if archs is None:
+            return
+        arch_by_id = LlamaCppBackend._rocm_arch_by_physical_id()
+    except Exception as e:
+        logger.debug(f"Could not read llama.cpp GPU arch coverage: {e}")
+        return
+    for dev in devices:
+        if dev.get("index_kind") != "physical":
+            continue
+        arch = arch_by_id.get(dev.get("index"))
+        if arch and arch not in archs:
+            dev["no_llama_kernels"] = True
+
+
 def _get_cached_system_gpu_info(
     logger, *, refresh_memory: bool = False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2483,6 +2504,8 @@ def _get_cached_system_gpu_info(
             logger.debug(f"Could not resolve gpu_ids support: {e}")
             llama_uses_vulkan = False
             gpu_ids_supported = True
+        if not llama_uses_vulkan and visibility_backend == "rocm":
+            _flag_rocm_gpus_without_llama_kernels(enriched_devices)
         # physical_devices and mismatch hold GPUs the OS sees but PyTorch cannot open; devices is usable.
         gpu_info = {
             **visibility_info,

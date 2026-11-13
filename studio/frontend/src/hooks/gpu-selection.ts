@@ -18,8 +18,6 @@ export interface SystemGpuDevice {
   sharedMemoryHostBackedGb?: number | null;
   /** Device and host are ONE pool (Apple Silicon, ROCm APU). Per device, like sharedMemory. */
   unifiedMemory?: boolean;
-  /** ROCm: the installed PyTorch has no kernels for this GPU. */
-  noTorchKernels?: boolean;
   pinnable: boolean;
   diffusionPinnable: boolean;
 }
@@ -92,17 +90,12 @@ export function resolveGpuSelectionContext(
   return pinnableGpuContext(devices, forDiffusion);
 }
 
-/** An iGPU (its "VRAM" is system RAM) or a card the installed PyTorch cannot run. */
+/** An iGPU: its "VRAM" is system RAM. Cards nothing can run never reach the picker. */
 export function isFallbackGpu(device: {
   sharedMemory?: boolean;
   unifiedMemory?: boolean;
-  noTorchKernels?: boolean;
 }): boolean {
-  return (
-    device.sharedMemory === true ||
-    device.unifiedMemory === true ||
-    device.noTorchKernels === true
-  );
+  return device.sharedMemory === true || device.unifiedMemory === true;
 }
 
 /** What an untouched picker selects: every GPU except fallback ones sitting beside a
