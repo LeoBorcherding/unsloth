@@ -513,6 +513,8 @@ def test_geometry_header_read_skips_the_vocab_without_gguf_reader(monkeypatch, t
         ("gemma4", 60, 5376, {}, "Gemma 4 12B"),  # Gemma 4 31B
         ("qwen35moe", 48, 3072, {_EXPERTS: 256}, "Qwen3.5 / 3.6 35B-A3B"),  # 122B-A10B
         ("qwen35", 64, 5120, {"general.basename": "Qwen3.5-27B"}, "Qwen3.5 9B"),
+        # A Nanbeige off its one shape: FastFlowLM has no base the picker could load it on.
+        ("nanbeige", 40, 4096, {}, "Nanbeige4.1 3B"),
         # Omni off the standard shapes: FastFlowLM ships no base the NPU picker could load it on.
         ("qwen35", 40, 3072, {"general.basename": "Qwen3.5-Omni"}, "Qwen3.5 4B"),
     ],
@@ -540,7 +542,7 @@ def test_unsupported_geometry_is_refused_before_installing(
         ("qwen35moe", 40, 2048, {_EXPERTS: 256}, "q4k"),  # Qwen3.6 35B-A3B
         ("llama", 32, 4096, {}, "q4nx"),  # Llama 3.1 8B
         ("gpt-oss", 24, 2880, {_EXPERTS: 32}, "q4nx"),
-        ("nanbeige", 99, 999, {}, "q4nx"),  # not in the table: the converter decides
+        ("nanbeige", 32, 2560, {}, "q4nx"),  # Nanbeige4.1 3B under its own architecture name
     ],
 )
 def test_supported_geometry_converts(monkeypatch, tmp_path, arch, layers, hidden, extra, converter):
