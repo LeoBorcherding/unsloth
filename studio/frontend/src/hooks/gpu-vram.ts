@@ -111,6 +111,8 @@ export interface CarveOutVramGb {
   freeGb: number | null;
   /** RAM the GPU can still borrow: what is left of the shared pool, capped by RAM's own free reading. */
   borrowableGb: number;
+  /** Usage already in shared RAM, past the carve-out; null when usage is unknown. */
+  spilledGb: number | null;
 }
 
 /** A carve-out APU (Strix Halo with a large VGM) read as VRAM = the carve-out alone, since its shared part is RAM the
@@ -135,7 +137,9 @@ export function carveOutVramGb(
   const aggregate = usedGb !== null && Number.isFinite(usedGb) ? usedGb : null;
   let freeGb: number | null = null;
   let spilled = 0;
+  let spillKnown = false;
   if (perDevice) {
+    spillKnown = true;
     freeGb = 0;
     for (const device of devices) {
       const own = gpuMemoryTotalsGb([device]).dedicated;
@@ -146,6 +150,7 @@ export function carveOutVramGb(
   } else if (aggregate !== null) {
     // Past every card's dedicated memory it has spilled at least that much; free is only known with no discrete card.
     spilled = Math.max(0, aggregate - totals.dedicated);
+    spillKnown = true;
     if (apu.dedicated === totals.dedicated) {
       freeGb = Math.max(0, totals.dedicated - aggregate);
     }
@@ -156,6 +161,7 @@ export function carveOutVramGb(
     borrowableGb: roundToDevicePrecision(
       Math.max(0, Math.min(apu.shared - spilled, ram)),
     ),
+    spilledGb: spillKnown ? roundToDevicePrecision(spilled) : null,
   };
 }
 
@@ -621,4 +627,13 @@ export function aggregateUsableFreeVramGb(
         100,
     ) / 100
   );
+}
+
+/** Used memory that sits inside a carve-out's capacity: the spill past it is shared RAM, counted by the RAM tile. */
+export function carveOutUsedGb(
+  usedGb: number | null,
+  carveOut: CarveOutVramGb | null,
+): number | null {
+  if (usedGb === null || !carveOut || carveOut.spilledGb === null) return usedGb;
+  return roundToDevicePrecision(Math.max(0, usedGb - carveOut.spilledGb));
 }
