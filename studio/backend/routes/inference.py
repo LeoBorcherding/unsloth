@@ -30508,7 +30508,7 @@ async def _npu_chat_completions(payload, request: Request, current_subject: str)
         ]
     upstream_payload = payload.model_copy(update = update)
     # After validation: a window marks any load window it overlaps as shared for good.
-    output_mark = npu.output_mark()
+    output_mark = npu.output_mark(upstream)
     response = await _proxy_to_external_provider(
         upstream_payload,
         request,

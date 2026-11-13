@@ -16,7 +16,7 @@ import threading
 import time
 import weakref
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Optional
 
@@ -87,9 +87,10 @@ def _kill_with_the_parent() -> None:
 
 
 class OutputWindow:
-    __slots__ = ("start", "shared", "__weakref__")
+    __slots__ = ("server", "start", "shared", "__weakref__")
 
-    def __init__(self, start: int) -> None:
+    def __init__(self, server: LemonadeServer, start: int) -> None:
+        self.server = server
         self.start = start
         self.shared = False
 
@@ -122,6 +123,7 @@ class LemonadeServer:
         self._tail_lock = threading.Lock()
         self._windows: weakref.WeakSet[OutputWindow] = weakref.WeakSet()
         self._load_window: Optional[OutputWindow] = None
+        self._record_kept = True
         # Set once a load is over, until lemond is seen back at info.
         self._filter_until: Optional[float] = None
         self._drain_thread: Optional[threading.Thread] = None
@@ -153,13 +155,23 @@ class LemonadeServer:
         another request's is ``shared`` and its output can't be pinned on either. Released when
         the caller drops it."""
         with self._tail_lock:
-            window = OutputWindow(self._lines_seen)
+            window = OutputWindow(self, self._lines_seen)
             others = list(self._windows)
             for other in others:
                 other.shared = True
             window.shared = bool(others)
             self._windows.add(window)
         return window
+
+    @contextmanager
+    def _other_operation(self):
+        """Keep overlapping loads and chats from claiming this operation's console output."""
+        window = self.open_window()
+        try:
+            yield
+        finally:
+            with self._tail_lock:
+                self._windows.discard(window)
 
     def output_since(
         self,
@@ -215,12 +227,16 @@ class LemonadeServer:
                     self._filter_until = time.monotonic() + 5.0
 
     def _keeps(self, line: str) -> bool:
+        match = _LEMOND_LINE.match(line)
+        if match:
+            severity, tag = match.groups()
+            own = self._record_kept = tag != "Process" and severity not in ("Trace", "Debug")
+        else:
+            # A request preview can continue across unprefixed lines: they follow their record.
+            own = self._record_kept
         window = self._load_window
         if window is not None and not window.shared:
             return True
-        match = _LEMOND_LINE.match(line)
-        severity, tag = match.groups() if match else ("", "")
-        own = tag != "Process" and severity not in ("Trace", "Debug")
         until = self._filter_until
         if window is None and until is None:
             return own
@@ -308,6 +324,8 @@ class LemonadeServer:
         port = self._find_free_port()
         api_key = secrets.token_urlsafe(32)
         env = child_env_without_native_path_secret()
+        # Lemonade CI mode forces debug even when config.json specifies info.
+        env.pop("LEMONADE_CI_MODE", None)
         env["LEMONADE_API_KEY"] = api_key
         env["FLM_MODEL_PATH"] = str(self.flm_model_dir)
         env["FLM_DISABLE_UPDATE_CHECK"] = "1"
@@ -470,19 +488,25 @@ class LemonadeServer:
         if not self.is_alive():
             raise LemonadeUnavailable("Lemonade is not running.")
         try:
-            return self._client.request(
-                method,
-                f"{self.base_url}{path}",
-                json = json_body,
-                headers = self.headers(),
-                timeout = timeout,
-            )
+            # The load caller already owns its window. Reads do not mutate the runtime.
+            other = method == "POST" and path != "/v1/load"
+            with self._other_operation() if other else nullcontext():
+                return self._client.request(
+                    method,
+                    f"{self.base_url}{path}",
+                    json = json_body,
+                    headers = self.headers(),
+                    timeout = timeout,
+                )
         except (*_TRANSPORT_ERRORS, httpx.TimeoutException) as exc:
-            detail = (
-                "" if self.is_alive() else f" (process exited). Last output:\n{self.log_tail()}"
-            )
+            detail = ""
+            if not self.is_alive():
+                detail = " (process exited)"
+                if path != "/v1/load":
+                    detail += f". Last output:\n{self.log_tail()}"
             raise LemonadeUnavailable(f"Lemonade request {path} failed: {exc}{detail}") from exc
 
+    @contextmanager
     def stream(
         self,
         method: str,
@@ -494,13 +518,17 @@ class LemonadeServer:
         """``httpx.Client.stream`` against lemond, for server-sent progress."""
         if not self.is_alive():
             raise LemonadeUnavailable("Lemonade is not running.")
-        return self._client.stream(
-            method,
-            f"{self.base_url}{path}",
-            json = json_body,
-            headers = self.headers(),
-            timeout = httpx.Timeout(timeout, connect = 10.0, read = timeout),
-        )
+        with (
+            self._other_operation(),
+            self._client.stream(
+                method,
+                f"{self.base_url}{path}",
+                json = json_body,
+                headers = self.headers(),
+                timeout = httpx.Timeout(timeout, connect = 10.0, read = timeout),
+            ) as response,
+        ):
+            yield response
 
     def stop(self) -> None:
         """Unload, then stop lemond and every process under it. Idempotent."""
@@ -508,12 +536,7 @@ class LemonadeServer:
         with self._lock:
             if self.is_alive():
                 try:
-                    self._client.post(
-                        f"{self.base_url}/v1/unload",
-                        json = {},
-                        headers = self.headers(),
-                        timeout = 10.0,
-                    )
+                    self.request("POST", "/v1/unload", json_body = {}, timeout = 10.0)
                 except Exception:  # noqa: BLE001 -- the kill below still runs
                     pass
             self._kill_locked()
