@@ -151,6 +151,8 @@ _NPU_SHAPES = {
     "lfm2": {(16, 2048, 0): "LFM2 1.2B", (30, 2048, 0): "LFM2 2.6B"},
     "phi3": {(32, 3072, 0): "Phi-4 mini"},
     "gpt-oss": {(24, 2880, 32): "gpt-oss 20B"},
+    # Some Nanbeige GGUFs name their own architecture; the kernels are the llama-format 3B's.
+    "nanbeige": {(32, 2560, 0): "Nanbeige4.1 3B"},
 }
 
 

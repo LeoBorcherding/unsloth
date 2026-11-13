@@ -65,6 +65,7 @@ _FLM_BASES: dict[str, dict[tuple[int, int, int], str]] = {
     "lfm2": {(16, 2048, 0): "lfm2:1.2b", (30, 2048, 0): "lfm2:2.6b"},
     "phi3": {(32, 3072, 0): "phi4-mini-it:4b"},
     "gpt-oss": {(24, 2880, 32): "gpt-oss:20b"},
+    "nanbeige": {(32, 2560, 0): "nanbeige4.1:3b"},
 }
 
 
