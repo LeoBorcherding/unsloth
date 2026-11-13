@@ -102,15 +102,6 @@ def staged_output(out_dir: Path):
         shutil.rmtree(staging, ignore_errors = True)
 
 
-def write_source_record(gguf_path: str, out_dir: Path, architecture: str) -> None:
-    from utils.models.gguf_metadata import _parse_gguf_arch_uints
-
-    keys = frozenset({"block_count", "embedding_length", "expert_count", "nextn_predict_layers"})
-    geometry = _parse_gguf_arch_uints(gguf_path, keys) or {}
-    record = {"architecture": architecture, "gguf": os.path.basename(gguf_path), **geometry}
-    (out_dir / SOURCE_FILE).write_text(json.dumps(record, indent = 2) + "\n", encoding = "utf-8")
-
-
 def convert_gguf_to_q4nx(gguf_path: str, out_dir: Path) -> None:
     from utils.paths.storage_roots import studio_root
 
@@ -151,6 +142,15 @@ def convert_gguf_to_q4nx(gguf_path: str, out_dir: Path) -> None:
     if not (out_dir / "model.q4nx").is_file():
         raise RuntimeError(f"The Q4NX converter wrote no model.q4nx to {out_dir}")
     write_source_record(gguf_path, out_dir, architecture)
+
+
+def write_source_record(gguf_path: str, out_dir: Path, architecture: str) -> None:
+    from utils.models.gguf_metadata import _parse_gguf_arch_uints
+
+    keys = frozenset({"block_count", "embedding_length", "expert_count", "nextn_predict_layers"})
+    geometry = _parse_gguf_arch_uints(gguf_path, keys) or {}
+    record = {"architecture": architecture, "gguf": os.path.basename(gguf_path), **geometry}
+    (out_dir / SOURCE_FILE).write_text(json.dumps(record, indent = 2) + "\n", encoding = "utf-8")
 
 
 def _fetch_base_file(base_model: str, name: str, token) -> Optional[Path]:

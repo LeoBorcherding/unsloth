@@ -76,6 +76,7 @@ def test_converted_folders_are_listed_with_their_kernel_base():
     [
         (("tokenizer_config.json",), _QWEN3_06B, "tokenizer_config.json is missing"),
         ((), None, "Convert the GGUF to Q4NX again"),
+        ((), [], "conversion record is not readable"),
         (
             (),
             {"architecture": "qwen3", "block_count": 30, "embedding_length": 999},
@@ -123,6 +124,11 @@ def test_a_conversion_saved_outside_or_deep_in_the_exports_is_listed_once_regist
     listed = nlm.account_local_models()
     assert sorted(m.folder for m in listed) == sorted(folders)
     assert all(m.base == "qwen3:0.6b" and m.problem is None for m in listed)
+    # Inside exports the row names its exports path; outside it names the full path.
+    assert {m.folder: m.display for m in listed} == {
+        folders[0]: "a/b/c/d/Qwen3-0.6B-ft.Q4_0-q4nx",
+        folders[1]: folders[1].as_posix(),
+    }
 
 
 def test_a_registered_folder_inside_the_walk_is_listed_once(monkeypatch):

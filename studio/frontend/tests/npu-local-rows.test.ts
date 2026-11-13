@@ -69,6 +69,21 @@ test("catalog rows keep their id and details", () => {
   assert.equal(api.npuRowTooltip(catalog), null);
 });
 
+test("a conversion saved outside the exports folder shows its full path", () => {
+  for (const folder of ["/mnt/models/Qwen3-q4nx", "D:/models/Qwen3-q4nx"]) {
+    const external = model("local-qwen3-q4nx-9c8d7e6f-q4nx-FLM", {
+      folder,
+      base: "qwen3:0.6b",
+      problem: null,
+    });
+    assert.equal(api.npuRowLabel(external), "Qwen3-q4nx");
+    assert.equal(
+      api.npuRowTooltip(external),
+      `Converted on the Export page, from ${folder}`,
+    );
+  }
+});
+
 test("an unloadable folder says why on hover", () => {
   assert.equal(
     api.npuRowTooltip(broken),

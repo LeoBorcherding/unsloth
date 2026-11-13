@@ -133,6 +133,8 @@ def _base_for(folder: Path) -> tuple[Optional[str], Optional[str]]:
             "This folder was converted before Unsloth Studio recorded its source model. "
             "Convert the GGUF to Q4NX again to load it on the NPU."
         )
+    if not isinstance(source, dict):
+        return None, "The conversion record is not readable. Convert it again."
     arch = str(source.get("architecture") or "").lower()
     try:
         layers = int(source["block_count"]) - int(source.get("nextn_predict_layers") or 0)
@@ -169,7 +171,8 @@ def _describe(folder: Path, root: Path) -> LocalQ4nx:
     try:
         display = folder.relative_to(root).as_posix()
     except ValueError:
-        display = folder.name
+        # Saved outside the exports root: the full path, so same-named folders stay apart.
+        display = folder.as_posix()
     return LocalQ4nx(
         folder = folder,
         display = display,
@@ -231,7 +234,7 @@ def account_local_models() -> list[LocalQ4nx]:
             and within_account(folder)
         ):
             seen.add(key)
-            found.append(_describe(folder, folder.parent))
+            found.append(_describe(folder, exports_root()))
     return sorted(found, key = lambda model: model.display.lower())
 
 

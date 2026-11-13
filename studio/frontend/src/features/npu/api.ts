@@ -135,9 +135,11 @@ export function npuRowDetails(model: NpuModel): string[] {
 export function npuRowTooltip(model: NpuModel): string | null {
   if (!model.local) return null;
   const { folder, problem } = model.local;
+  // A folder saved outside the exports root comes as its full path.
+  const where = /^(\/|[A-Za-z]:\/)/.test(folder) ? folder : `exports/${folder}`;
   return problem
     ? `Can't load ${folder}: ${problem}`
-    : `Converted on the Export page, from exports/${folder}`;
+    : `Converted on the Export page, from ${where}`;
 }
 
 export function npuDeleteDescription(model: NpuModel): string {
