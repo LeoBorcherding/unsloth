@@ -135,4 +135,3 @@ def test_managed_account_and_owner_reach_the_converter_for_allowed_paths(convert
             _convert(account, path)
         assert exc.value.status_code == 400 and "stop before converting" in exc.value.detail
     assert len(converted) == 2
-
