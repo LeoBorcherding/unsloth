@@ -7852,7 +7852,7 @@ export function HubModelPicker({
     const settings =
       onConfigure && model.downloaded && !downloading && !problem ? (
         <ModelLoadSettingsAction
-          ariaLabel={`Inference settings for ${name}`}
+          ariaLabel={`Inference settings for ${npuRowLabel(model)}`}
           onConfigure={() => onConfigure(model.model_path, configMeta)}
           savedFor={modelConfigTarget(model.model_path, configMeta)}
         />
