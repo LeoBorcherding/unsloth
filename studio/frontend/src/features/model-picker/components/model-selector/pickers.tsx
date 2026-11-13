@@ -95,6 +95,7 @@ import {
   type NpuModel,
   type NpuPickerSource,
   NpuSetupNotice,
+  isNpuModelId,
   npuDeleteDescription,
   npuDownloadLabel,
   npuMemoryTag,
@@ -104,6 +105,7 @@ import {
   npuRowsFor,
   npuRowTooltip,
   useNpuCatalog,
+  useNpuDisplayNames,
 } from "@/features/npu";
 import {
   useDebouncedValue,
@@ -3982,6 +3984,9 @@ export function HubModelPicker({
   const selectedCheckpoint = useChatRuntimeStore((s) => s.params.checkpoint);
   const residentCheckpoint = useChatRuntimeStore((s) => s.residentCheckpoint);
   const loadedModels = useChatRuntimeStore((s) => s.loadedModels);
+  const npuName = useNpuDisplayNames(
+    loadedModels.some((m) => isNpuModelId(m.checkpoint ?? m.id)),
+  );
   const isChatPicker = task === undefined;
   const chatLoadedModelId = chatModelLoaded({
     checkpoint: selectedCheckpoint,
@@ -7185,6 +7190,8 @@ export function HubModelPicker({
         ? publicModelId(checkpoint)
         : null;
     // Its curated row is hidden while loaded, so this row must open the quant list instead.
+    // An NPU row shows its Hugging Face name; the Lemonade id stays the key.
+    const label = npuName(checkpoint) ?? npuName(entry.id) ?? entry.id;
     const expandable = Boolean(quant) && !isLocal && isKnownGgufRepo(entry.id);
     const expanded = expandable && expandedGguf === entry.id;
     return (
@@ -7192,8 +7199,8 @@ export function HubModelPicker({
         <div className={downloadedRowShellClassName(isSelected)}>
           <div className="min-w-0 flex-1">
             <ModelRow
-              label={entry.id}
-              tooltipText={entry.id}
+              label={label}
+              tooltipText={label}
               hideOwner={isUnslothOwned(entry.id)}
               alignMeta="hub"
               meta={quant ? "GGUF" : extractParamLabel(entry.id)}
@@ -7218,13 +7225,13 @@ export function HubModelPicker({
           <span className={ROW_ACTIONS_VISIBLE_CLASS}>
             {onConfigure && (
               <ModelLoadSettingsAction
-                ariaLabel={`Inference settings for ${entry.id}`}
+                ariaLabel={`Inference settings for ${label}`}
                 onConfigure={() => onConfigure(...configureArgs)}
                 savedFor={configTarget}
               />
             )}
             <ModelRowMenu
-              ariaLabel={`More options for ${entry.id}`}
+              ariaLabel={`More options for ${label}`}
               runSettings={configTarget}
               cachePath={
                 pinRepoId === null ? undefined : { repoId: pinRepoId, variant: quant ?? undefined }
@@ -7845,7 +7852,7 @@ export function HubModelPicker({
     const settings =
       onConfigure && model.downloaded && !downloading && !problem ? (
         <ModelLoadSettingsAction
-          ariaLabel={`Inference settings for ${name}`}
+          ariaLabel={`Inference settings for ${npuRowLabel(model)}`}
           onConfigure={() => onConfigure(model.model_path, configMeta)}
           savedFor={modelConfigTarget(model.model_path, configMeta)}
         />
