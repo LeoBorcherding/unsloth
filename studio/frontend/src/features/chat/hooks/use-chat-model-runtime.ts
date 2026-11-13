@@ -1506,9 +1506,15 @@ export function useChatModelRuntime() {
           getInferenceStatus(undefined, modelId).catch(() => null);
         const residentStatus = await readPickStatus();
         // Warm the GPU cache first: a cold cache passes the pick through unvalidated, or drops a GGUF's Automatic default.
+        // The status falls back to the resident slot, so its is_gguf only speaks for the pick when it is the pick.
         if (
           residentStatus &&
-          (residentStatus.is_gguf === true ||
+          ((residentStatus.is_gguf === true &&
+            residentModelMatchesPick(residentStatus, {
+              id: modelId,
+              loadPath,
+              ggufVariant,
+            })) ||
             pendingConfig?.selectedGpuIds !== undefined)
         ) {
           await ensureGpuDeviceCache().catch(() => {});

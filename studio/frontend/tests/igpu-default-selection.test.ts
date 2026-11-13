@@ -217,7 +217,7 @@ test("GGUF load paths warm the device cache even for an Automatic pick", () => {
     ],
     [
       "../src/features/chat/hooks/use-chat-model-runtime.ts",
-      /residentStatus\.is_gguf === true \|\|\s*pendingConfig\?\.selectedGpuIds !== undefined\)\s*\) \{\s*await ensureGpuDeviceCache\(/,
+      /residentStatus\.is_gguf === true &&\s*residentModelMatchesPick\(residentStatus, \{\s*id: modelId,\s*loadPath,\s*ggufVariant,\s*\}\)\) \|\|\s*pendingConfig\?\.selectedGpuIds !== undefined\)\s*\) \{\s*await ensureGpuDeviceCache\(/,
     ],
     [
       "../src/features/chat/shared-composer.tsx",
