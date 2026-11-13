@@ -39,6 +39,18 @@ test("a core build's repo drops only its owner", () => {
   assert.equal(npuDisplayName(core), "Qwen3.5-9B-Q4_G128-GGUF");
 });
 
+test("a converted Q4NX model is named by its folder, in search too", () => {
+  const local = {
+    id: "local-q4nx-1a2b-FLM",
+    checkpoint: "local-q4nx:1a2b",
+    hf_repo: null,
+    local: { folder: "exports/my-finetune-q4nx" },
+  };
+  assert.equal(npuDisplayName(local), "my-finetune-q4nx");
+  assert.equal(npuDisplayNameOf([local], local.id), "my-finetune-q4nx");
+  assert.match(displayName.npuSearchText(local), /exports\/my-finetune-q4nx/);
+});
+
 test("a loaded model is named by its id or its lemonade: path", () => {
   assert.equal(
     npuDisplayNameOf([qwen], qwen.model_path),

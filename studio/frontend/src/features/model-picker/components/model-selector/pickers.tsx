@@ -96,12 +96,14 @@ import {
   type NpuPickerSource,
   NpuSetupNotice,
   isNpuModelId,
-  npuDisplayName,
+  npuDeleteDescription,
   npuDownloadLabel,
   npuMemoryTag,
   npuResumeLabel,
+  npuRowDetails,
+  npuRowLabel,
   npuRowsFor,
-  npuSizeLabel,
+  npuRowTooltip,
   useNpuCatalog,
   useNpuDisplayNames,
 } from "@/features/npu";
@@ -571,7 +573,7 @@ function npuFooterHint(
   return count ? `${count} available` : "";
 }
 
-function ListLabel({
+export function ListLabel({
   children,
   icon,
   action,
@@ -1284,7 +1286,7 @@ function ConnectedGroupHeading({
   );
 }
 
-function ModelRow({
+export function ModelRow({
   label,
   meta,
   selected,
@@ -7786,13 +7788,8 @@ export function HubModelPicker({
     const progress = npuCatalog.downloads[model.id];
     const reconnecting = model.id in npuCatalog.reconnecting;
     const phase = npuCatalog.phases[model.id];
-    const name = npuDisplayName(model);
-    const details = [
-      "NPU",
-      npuSizeLabel(model.size_gb),
-      npuMemoryTag(model),
-      npuResumeLabel(model),
-    ].filter(Boolean);
+    const details = npuRowDetails(model);
+    const problem = model.local?.problem ?? null;
     const meta = {
       source: "local",
       isLora: false,
@@ -7801,7 +7798,8 @@ export function HubModelPicker({
     const pick = () => onSelect(model.model_path, meta);
     const row = (
       <ModelRow
-        label={name}
+        label={npuRowLabel(model)}
+        tooltipText={npuRowTooltip(model) ?? undefined}
         meta={
           downloading
             ? `NPU · ${npuDownloadLabel(progress, reconnecting, phase)}`
@@ -7821,6 +7819,12 @@ export function HubModelPicker({
         optionProps={hubModelList.getOptionProps(optionKey, isSelected)}
         onClick={() => {
           if (downloading) return;
+          if (problem) {
+            toast.error("Can't load this model on the NPU", {
+              description: problem,
+            });
+            return;
+          }
           if (model.downloaded) {
             npuCatalog.warnMemory(model);
             pick();
@@ -7846,9 +7850,9 @@ export function HubModelPicker({
       isVision: model.supports_vision,
     };
     const settings =
-      onConfigure && model.downloaded && !downloading ? (
+      onConfigure && model.downloaded && !downloading && !problem ? (
         <ModelLoadSettingsAction
-          ariaLabel={`Inference settings for ${name}`}
+          ariaLabel={`Inference settings for ${npuRowLabel(model)}`}
           onConfigure={() => onConfigure(model.model_path, configMeta)}
           savedFor={modelConfigTarget(model.model_path, configMeta)}
         />
@@ -7864,10 +7868,10 @@ export function HubModelPicker({
           {settings}
           {onDevice && (
             <ModelDeleteAction
-              ariaLabel={`Delete ${name}`}
-              title={`Delete ${name}?`}
-              description="This removes the model's NPU files from this device."
-              successMessage={`Deleted ${name}`}
+              ariaLabel={`Delete ${npuRowLabel(model)}`}
+              title={`Delete ${npuRowLabel(model)}?`}
+              description={npuDeleteDescription(model)}
+              successMessage={`Deleted ${npuRowLabel(model)}`}
               disabled={isLoaded}
               onConfirm={() => npuCatalog.remove(model)}
             />

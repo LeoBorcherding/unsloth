@@ -654,6 +654,11 @@ async def export_gguf(
     Wraps ExportBackend.export_gguf.
     """
     validate_job_paths(request.model_dump())
+    if request.npu_q4nx:
+        from starlette.concurrency import run_in_threadpool
+        from utils.q4nx_export_settings import Q4NX_EXPORT_DISABLED_DETAIL, q4nx_export_allowed
+        if not await run_in_threadpool(q4nx_export_allowed):
+            raise HTTPException(status_code = 403, detail = Q4NX_EXPORT_DISABLED_DETAIL)
     if request.reap and request.reap.dataset:
         validate_job_paths({"hf_dataset": request.reap.dataset, "hf_token": request.hf_token})
     try:
@@ -705,6 +710,30 @@ async def export_gguf(
         )
 
 
+def _q4nx_failure_status(exc: BaseException) -> int:
+    """503 for a Hub or network failure that can pass, so Convert stays retryable; 400 otherwise."""
+    from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
+
+    transient: tuple = (ConnectionError, TimeoutError, LocalEntryNotFoundError)
+    try:
+        import httpx
+        transient += (httpx.TransportError,)
+    except ImportError:
+        pass
+    try:
+        import requests
+        transient += (requests.ConnectionError, requests.Timeout)
+    except ImportError:
+        pass
+    if isinstance(exc, transient):
+        return 503
+    if isinstance(exc, HfHubHTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 429 or (isinstance(status, int) and status >= 500):
+            return 503
+    return 400
+
+
 @router.post("/convert/q4nx", response_model = ExportOperationResponse)
 async def convert_q4nx(
     request: ConvertQ4NXRequest,
@@ -716,6 +745,11 @@ async def convert_q4nx(
     Needs no loaded checkpoint or GPU, so it runs here rather than in the export worker.
     """
     validate_job_paths(request.model_dump())
+    from starlette.concurrency import run_in_threadpool
+    from utils.q4nx_export_settings import Q4NX_EXPORT_DISABLED_DETAIL, q4nx_export_allowed
+
+    if not await run_in_threadpool(q4nx_export_allowed):
+        raise HTTPException(status_code = 403, detail = Q4NX_EXPORT_DISABLED_DETAIL)
     # A managed account may only read a GGUF inside its own workspace.
     account_path(request.gguf_path)
     if bool(request.gguf_path) == bool(request.repo_id and request.filename):
@@ -756,7 +790,14 @@ async def convert_q4nx(
         output_path = await asyncio.to_thread(run)
     except Exception as e:
         logger.error(f"Q4NX conversion failed: {e}", exc_info = True)
-        raise HTTPException(status_code = 400, detail = f"Q4NX conversion failed: {e}")
+        raise HTTPException(
+            status_code = _q4nx_failure_status(e), detail = f"Q4NX conversion failed: {e}"
+        )
+    from core.inference.npu_local_models import hidden_in_exports
+
+    # The NPU picker lists registered folders too; _export_details registers one outside exports.
+    if hidden_in_exports(Path(output_path)):
+        await asyncio.to_thread(_try_register_external_export, Path(output_path))
     return ExportOperationResponse(
         success = True,
         message = "Converted to Q4NX for the AMD NPU",

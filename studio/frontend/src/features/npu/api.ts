@@ -4,7 +4,7 @@
 import { authFetch } from "@/features/auth/api";
 import { readFastApiError } from "@/lib/format-fastapi-error";
 import { readSseJsonEvents } from "@/lib/sse-json-events";
-import { npuSearchText } from "./display-name";
+import { npuDisplayName, npuSearchText } from "./display-name";
 
 export const NPU_MODEL_PREFIX = "lemonade:";
 
@@ -65,6 +65,17 @@ export interface NpuModel {
   memory_needed_gb?: number | null;
   /** false when the model is larger than the NPU memory window; null when unknown. */
   fits_memory?: boolean | null;
+  /** A Q4NX folder converted on the Export page; absent from servers that predate them. */
+  local?: NpuLocalModel | null;
+}
+
+export interface NpuLocalModel {
+  /** Path under the account's exports folder. */
+  folder: string;
+  /** FastFlowLM catalog tag whose NPU kernels run it. */
+  base: string | null;
+  /** Why it cannot load, e.g. a missing tokenizer file. */
+  problem: string | null;
 }
 
 export function npuRowsFor(
@@ -175,6 +186,33 @@ export function npuResumeLabel(model: NpuModel): string | null {
 
 /** Rehashing kept files before a resume, or Lemonade registering the files after the download. */
 export type NpuDownloadPhase = "verifying" | "finishing";
+export function npuRowLabel(model: NpuModel): string {
+  return npuDisplayName(model);
+}
+
+export function npuRowDetails(model: NpuModel): string[] {
+  return [
+    "NPU",
+    model.local ? "Converted" : null,
+    npuSizeLabel(model.size_gb),
+    npuMemoryTag(model),
+    npuResumeLabel(model),
+  ].filter((part): part is string => Boolean(part));
+}
+
+export function npuRowTooltip(model: NpuModel): string | null {
+  if (!model.local) return null;
+  const { folder, problem } = model.local;
+  return problem
+    ? `Can't load ${folder}: ${problem}`
+    : `Converted on the Export page, from exports/${folder}`;
+}
+
+export function npuDeleteDescription(model: NpuModel): string {
+  return model.local
+    ? "This removes the model from the NPU list. Your exported folder stays on disk."
+    : "This removes the model's NPU files from this device.";
+}
 
 export function npuDownloadLabel(
   percent: number | null | undefined,

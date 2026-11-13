@@ -5,6 +5,7 @@ type NpuNamed = {
   id: string;
   model_path?: string;
   hf_repo?: string | null;
+  local?: { folder: string } | null;
 };
 
 /** The Hugging Face repo id (owner/name), or the Lemonade id when the server sent no repo. */
@@ -12,8 +13,10 @@ export function npuRepoLabel(model: NpuNamed): string {
   return model.hf_repo?.trim() || model.id;
 }
 
-/** The repo name without its owner, as GGUF rows show theirs; the Lemonade id when there is no repo. */
+/** The repo name without its owner, as GGUF rows show theirs; a converted model's folder name; else the Lemonade id. */
 export function npuDisplayName(model: NpuNamed): string {
+  const folder = model.local?.folder.split("/").pop();
+  if (folder) return folder;
   const repo = model.hf_repo?.trim();
   return (repo && repo.slice(repo.lastIndexOf("/") + 1)) || model.id;
 }
@@ -33,5 +36,5 @@ export function npuDisplayNameOf(
 export function npuSearchText(
   model: NpuNamed & { checkpoint: string },
 ): string {
-  return `${model.id} ${model.checkpoint} ${npuRepoLabel(model)}`;
+  return `${model.id} ${model.checkpoint} ${npuRepoLabel(model)} ${model.local?.folder ?? ""}`;
 }

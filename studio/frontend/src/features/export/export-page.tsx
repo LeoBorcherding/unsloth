@@ -46,7 +46,10 @@ import { usePlatformStore } from "@/config/env";
 import { prepareHfTokenForUse } from "@/features/hf-auth";
 import { hfApiToken, useHfTokenStore, useHubModelSearch } from "@/features/hub";
 import { confirmRemoteCodeIfNeeded } from "@/features/security";
-import { useNpuStatus } from "@/features/npu";
+import {
+  loadQ4nxExportSettings,
+  useQ4nxExportStore,
+} from "@/features/settings";
 import { GuidedTour, useGuidedTourController } from "@/features/tour";
 import type { LocalModelInfo } from "@/features/training";
 import { useDebouncedValue, useHfTokenValidation } from "@/hooks";
@@ -84,7 +87,11 @@ import {
 } from "./components/export-summary-card";
 import { ImageLoraExportCard } from "./components/image-lora-export-card";
 import { MethodPicker } from "./components/method-picker";
-import { Q4nxConvertCard } from "./components/q4nx-convert-card";
+import {
+  Q4NX_CARD_MARK,
+  Q4nxConvertCard,
+  type Q4nxSummary,
+} from "./components/q4nx-convert-card";
 import { QuantPicker } from "./components/quant-picker";
 import { ReapCard } from "./components/reap-card";
 import {
@@ -117,6 +124,7 @@ import {
   reapRequest,
   reapSummaryLabel,
 } from "./lib/reap";
+import { Q4NX_GUIDE_STEPS } from "./lib/q4nx-source";
 import { exportRemoteCodeConsent } from "./lib/remote-code-consent";
 import {
   type SourceMode,
@@ -297,10 +305,23 @@ export function ExportPage() {
 
   const [destination, setDestination] = useState<"local" | "hub">("local");
   // The converter writes beside the GGUFs, so a Hub-only export has nowhere to put it.
-  const [npuStatus] = useNpuStatus();
-  const hasNpu = !!npuStatus?.supported;
+  // Conversion runs on the CPU: an NPU machine always gets it, any other once opted in (Settings).
+  const q4nxSettings = useQ4nxExportStore((s) => s.settings);
+  useEffect(() => {
+    void loadQ4nxExportSettings().catch(() => {});
+  }, []);
+  const showQ4nx = !!q4nxSettings?.npuSupported || !!q4nxSettings?.enabled;
+  const [q4nxSummary, setQ4nxSummary] = useState<Q4nxSummary | null>(null);
+  // The summary panel follows the card the user last worked in.
+  const [q4nxInUse, setQ4nxInUse] = useState(false);
+  const trackCardInUse = (event: { target: EventTarget }) =>
+    setQ4nxInUse(
+      event.target instanceof Element &&
+        !!event.target.closest(`[data-tour="${Q4NX_CARD_MARK}"]`),
+    );
+  const summarizeQ4nx = q4nxInUse ? q4nxSummary : null;
   const effectiveNpuQ4nx =
-    hasNpu && npuQ4nx && q4nxSourceSelected && destination === "local";
+    showQ4nx && npuQ4nx && q4nxSourceSelected && destination === "local";
   const [customSaveDirectory, setCustomSaveDirectory] = useState<string | null>(
     null,
   );
@@ -1173,14 +1194,18 @@ export function ExportPage() {
         {(loadingCheckpoints || !!checkpointError) && (
           <>
             <ImageLoraExportCard preselect={preselectImageLora} />
-            {hasNpu && <Q4nxConvertCard />}
+            {showQ4nx && <Q4nxConvertCard />}
           </>
         )}
 
         {!loadingCheckpoints && !checkpointError && (
           <div className="@container/export-configure">
             <div className="grid grid-cols-1 gap-8 @4xl/export-configure:grid-cols-[minmax(0,1fr)_320px] @5xl/export-configure:gap-10">
-              <div className="flex min-w-0 flex-col gap-6">
+              <div
+                className="flex min-w-0 flex-col gap-6"
+                onPointerDownCapture={trackCardInUse}
+                onFocusCapture={trackCardInUse}
+              >
                 <SectionBox
                   title="Source"
                   description="A local model, a fine-tuned checkpoint, or a Hugging Face model"
@@ -2071,7 +2096,7 @@ export function ExportPage() {
                                   </p>
                                 </div>
                               )}
-                              {hasNpu && (
+                              {showQ4nx && (
                                 <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
                                   <div className="space-y-0.5">
                                     <div className="text-sm font-medium">
@@ -2081,7 +2106,7 @@ export function ExportPage() {
                                       {destination !== "local"
                                         ? "Local destination only."
                                         : q4nxSourceSelected
-                                          ? "Adds a Q4NX copy next to the GGUFs. Only supported on AMD NPUs."
+                                          ? "Adds a Q4NX copy next to the GGUFs. Runs on AMD Ryzen AI NPUs; converting works on any machine."
                                           : "Needs Q4_0, Q4_1 or Q4_K_M."}
                                     </div>
                                   </div>
@@ -2229,15 +2254,16 @@ export function ExportPage() {
                   </button>
                 )}
                 <ImageLoraExportCard preselect={preselectImageLora} />
-                {hasNpu && <Q4nxConvertCard />}
+                {showQ4nx && <Q4nxConvertCard onSummary={setQ4nxSummary} />}
               </div>
               <div className="@4xl/export-configure:sticky @4xl/export-configure:top-6 @4xl/export-configure:self-start">
                 <ExportSummaryCard
-                  ready={canExport}
-                  rows={summaryRows}
-                  steps={exportGuideSteps}
+                  ready={summarizeQ4nx ? summarizeQ4nx.ready : canExport}
+                  rows={summarizeQ4nx ? summarizeQ4nx.rows : summaryRows}
+                  steps={summarizeQ4nx ? Q4NX_GUIDE_STEPS : exportGuideSteps}
                   cta={
-                    showPanel ? undefined : (
+                    // The Q4NX card converts with its own button.
+                    showPanel || summarizeQ4nx ? undefined : (
                       <Button
                         size="lg"
                         data-tour="export-cta"
