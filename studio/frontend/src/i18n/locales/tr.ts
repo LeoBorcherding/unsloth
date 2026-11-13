@@ -2107,6 +2107,9 @@ export const tr = {
       developerMode: {
         sectionTitle: "Geliştirici modu",
         videoCpu: "CPU'da video üretimine izin ver (deneysel)",
+        q4nxExport: "AMD NPU'lar için Q4NX dışa aktarma",
+        q4nxExportDescription: "AMD Ryzen AI NPU bulunmayan bir makinede Dışa Aktar sayfasında Q4NX dönüştürmeyi gösterir; böylece NPU'su olan bir makine için model oluşturabilirsiniz. Varsayılan olarak kapalıdır; dönüştürücü ilk kullanımda indirilir.",
+        q4nxExportNpuPresent: "Bu makinede AMD NPU olduğu için Q4NX dışa aktarma her zaman açıktır.",
         videoCpuDescription:
           "Video sayfasının desteklenen GPU'su olmayan bir ana makinede çalışmasına izin verir. Varsayılan olarak kapalıdır; desteklenmez ve çok yavaştır.",
         notApplicable:

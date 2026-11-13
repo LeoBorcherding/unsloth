@@ -17,6 +17,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Optional
+from urllib.parse import quote
 
 import structlog
 
@@ -32,7 +33,7 @@ from core.inference.flm_files import (
 )
 from core.inference.lemonade_server import LemonadeServer, LemonadeUnavailable, OutputWindow
 from core.inference.npu_context import DEFAULT_CONTEXT_LENGTH, plan_context
-from core.inference.npu_flm_args import clamp_prefill_chunk
+from core.inference.npu_flm_args import clamp_prefill_chunk, merge_flm_args
 from utils.hardware.npu import detect_amd_npu
 from utils.native_path_leases import child_env_without_native_path_secret
 from utils.process_lifetime import (
@@ -59,7 +60,17 @@ _EXCLUDED_LABELS = frozenset({"embeddings", "transcription", "single-turn"})
 # Lemonade reports config.json max_position_embeddings, but FastFlowLM engines can fail above a lower
 # limit (FastFlowLM 1.0.9; recheck on pin bumps). https://fastflowlm.com/docs/models/qwen/#-model-card-qwen38-27b
 # DFlash2 shares the 27B xclbin and fails the same way: https://github.com/ROCm/FastFlowLM/issues/1001
-_FLM_CONTEXT_LIMITS = {"qwen3.8-mtp:27b": 8192, "qwen3.8-dflash2:27b": 8192}
+_FLM_CONTEXT_LIMITS = {
+    "qwen3.8-mtp:27b": 8192,
+    "qwen3.8-dflash2:27b": 8192,
+    # FastFlowLM 1.0.12 model cards specify 32k for these exact tags, below checkpoint metadata.
+    # https://github.com/ROCm/FastFlowLM/tree/v1.0.12/docs/docs/models (qwen.md and lfm.md)
+    "qwen3:0.6b": 32768,
+    "qwen3:1.7b": 32768,
+    "qwen3:4b": 32768,
+    "qwen3:8b": 32768,
+    "lfm2.5-tk:1.2b": 32768,
+}
 # lemond's console format: "<date> <time> [Error] (Router) <message>".
 _LEMOND_ERROR = re.compile(r"\[(?:Error|Fatal)\]\s*\([^)]*\)\s*(.+)")
 # FastFlowLM failures a user can act on, by what flm or lemond prints. First match wins.
@@ -221,6 +232,12 @@ class NpuResident:
     # Largest context free RAM held at load time; None when it could not be priced.
     fitted_context_length: Optional[int] = None
 
+    @property
+    def max_context_length(self) -> Optional[int]:
+        if self.fitted_context_length is not None:
+            return self.fitted_context_length
+        return self.model.max_context_length
+
 
 def _total_ram_gb() -> Optional[float]:
     try:
@@ -339,15 +356,14 @@ def _explain(server: Optional[LemonadeServer], window: Optional[OutputWindow], m
     log_name = server.log_path.name if server is not None and server.log_path else None
     if server is not None:
         server.note(f"Request failed: {explained}")
-    if not lines:
-        return f"{message} {advice}".rstrip()
-    _events.warning(
-        "Lemonade output before the NPU error",
-        error = message,
-        lemonade_log = log_name,
-        lemonade_output = lines,
-        overlapped_another_request = shared,
-    )
+    if lines:
+        _events.warning(
+            "Lemonade output before the NPU error",
+            error = message,
+            lemonade_log = log_name,
+            lemonade_output = lines,
+            overlapped_another_request = shared,
+        )
     if explained == message and log_name:
         explained = f"{message} (Lemonade's output is on the Logs page.)"
     return f"{explained} {advice}".rstrip()
@@ -1044,8 +1060,9 @@ class LemonadeNpuBackend:
                 if isinstance(data, dict) and data.get("status") == "error":
                     raise NpuError(f"Downloading {model.id} failed: {data.get('message') or data}")
                 completed = completed or event == "complete"
-                # lemond's per-file percent would move the bar backwards after Studio's download.
-                if isinstance(data, dict) and (files is None or event == "complete"):
+                # After Studio's own download lemond only registers the files: relay nothing, its
+                # per-file percent would move the bar backwards and its complete precedes Studio's.
+                if isinstance(data, dict) and files is None:
                     yield {"event": event, **data}
                 event = "progress"
         if not completed:
@@ -1077,7 +1094,10 @@ class LemonadeNpuBackend:
             for child in children:
                 if models is not None and child == models and child.is_dir():
                     rows.extend(
-                        (entry, checkpoints.get(entry.name)) for entry in sorted(child.iterdir())
+                        (entry, checkpoints.get(entry.name))
+                        for entry in sorted(child.iterdir())
+                        # Studio's per-model download locks (flm_files), not models.
+                        if not entry.name.endswith(".unsloth-download.lock")
                     )
                 else:
                     rows.append((child, None))
@@ -1143,6 +1163,7 @@ class LemonadeNpuBackend:
             with self._commit_lock:
                 self._load_cancelled.clear()
                 self._loading = model_id
+            window = None
             replaced = False
             loaded = False
             try:
@@ -1158,14 +1179,18 @@ class LemonadeNpuBackend:
                 if not model.downloaded:
                     raise NpuError(f"{model.id} is not downloaded yet.")
                 files = self._model_files(model.checkpoint, self._flm_binary())
-                previous = self._loaded.model if self._loaded is not None else None
-                plan = plan_context(model, files, context_length, previous)
+                # Release the resident weights, active KV and any populated prefix slots
+                # before taking the free-RAM sample. unload() also handles a failed unload.
+                if self._loaded is not None:
+                    replaced = True
+                    self.unload()
+                    self._raise_if_load_cancelled(model_id)
+                server = self._ensure_running()
+                plan = plan_context(model, files, context_length)
                 ctx = plan.context_length
                 # Lemonade refuses a prefill chunk longer than the context, which Auto only knows now.
                 flm_args = clamp_prefill_chunk(flm_args, ctx)
-                server = self._ensure_running()
                 replaced = True
-                self._loaded = None
                 self._raise_if_load_cancelled(model_id)
                 # lemond answers a load of the model it holds with the same options without
                 # restarting FastFlowLM, so a Reload model would leave the old process serving.
@@ -1180,7 +1205,9 @@ class LemonadeNpuBackend:
                 window = server.open_window()
                 json_body = {"model_name": model.id, "ctx_size": ctx, "save_options": False}
                 if flm_args:
-                    json_body["flm_args"] = flm_args
+                    json_body["flm_args"] = clamp_prefill_chunk(
+                        merge_flm_args(self._saved_flm_args(server, model.id), flm_args), ctx
+                    )
                 with server.backend_output(window):
                     response = server.request(
                         "POST",
@@ -1213,11 +1240,12 @@ class LemonadeNpuBackend:
                 return model
             except LemonadeUnavailable as exc:
                 self._raise_if_load_cancelled(model_id)
-                raise NpuError(f"Loading {model_id} failed: {exc}") from exc
+                reason = self.explain_failure(window, str(exc))
+                raise NpuError(f"Loading {model_id} failed: {reason}") from exc
             finally:
                 self._loading = None
                 if replaced and not loaded and self._server is not None:
-                    # lemond may still hold the previous model, which Studio no longer records.
+                    # lemond may have loaded the replacement before failing its health check.
                     self._server.stop()
 
     def _raise_if_load_cancelled(self, model_id: str) -> None:
@@ -1235,6 +1263,21 @@ class LemonadeNpuBackend:
         if server is not None:
             server.stop()
         return True
+
+    @staticmethod
+    def _saved_flm_args(server: LemonadeServer, model_id: str) -> str:
+        """The model's ``flm_args`` from its saved, architecture and server-wide layers."""
+        response = server.request(
+            "GET", f"/v1/models/{quote(model_id, safe = '')}/options", timeout = 30.0
+        )
+        if response.status_code != 200:
+            return ""
+        try:
+            effective = response.json().get("effective") or {}
+        except ValueError:
+            return ""
+        value = effective.get("flm_args") if isinstance(effective, dict) else None
+        return value if isinstance(value, str) else ""
 
     @staticmethod
     def _resident_context(server: LemonadeServer, model_id: str) -> Optional[int]:
@@ -1278,13 +1321,16 @@ class LemonadeNpuBackend:
                     server.stop()
             return loaded.model.model_path
 
-    def output_mark(self) -> Optional[OutputWindow]:
+    def output_mark(self, upstream: ManagedUpstream) -> Optional[OutputWindow]:
         server = self._server
-        return server.open_window() if server is not None else None
+        # Each daemon start gets a fresh key. A restart after routing must not claim this chat.
+        if server is None or server.api_key != upstream.api_key:
+            return None
+        return server.open_window()
 
     def explain_failure(self, window: Optional[OutputWindow], message: str) -> str:
         """An NPU chat error ``message`` with the reason lemond printed in ``window``."""
-        return _explain(self._server, window, message)
+        return _explain(window.server, window, message) if window is not None else message
 
     def upstream(self) -> ManagedUpstream:
         # Lock-free: a chat must not wait behind an enable() or delete() holding the lock.

@@ -73,7 +73,6 @@ def require_converter_deps() -> None:
         )
 
 
-_GEOMETRY_KEYS = ("block_count", "embedding_length", "expert_count", "nextn_predict_layers")
 _GGUF_INTS = {4: "<I", 5: "<i", 10: "<Q", 11: "<q"}
 
 
@@ -161,10 +160,6 @@ def require_npu_geometry(header: dict) -> None:
     arch = raw_arch.lower()
     shapes = _NPU_SHAPES.get(arch)
     if shapes is None:
-        return
-    # Omni is matched by name in the converter; its catalog config is not published.
-    names = [str(header.get(k, "")).lower() for k in ("general.basename", "general.name")]
-    if arch == "qwen35" and any("omni" in n for n in names):
         return
     layers = header.get(f"{raw_arch}.block_count")
     hidden = header.get(f"{raw_arch}.embedding_length")

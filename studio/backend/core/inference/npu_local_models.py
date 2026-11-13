@@ -148,11 +148,17 @@ def _base_for(folder: Path) -> tuple[Optional[str], Optional[str]]:
     return base, None
 
 
+def _own_file(path: Path) -> bool:
+    """A plain file inside the acting account: a link could hand over another account's weights."""
+    from utils.paths.storage_roots import within_account
+    return path.is_file() and not path.is_symlink() and within_account(path)
+
+
 def _describe(folder: Path, root: Path) -> LocalQ4nx:
     present = tuple(
         name
         for name in (*REQUIRED_FILES, *OPTIONAL_FILES, *VISION_FILES)
-        if (folder / name).is_file()
+        if _own_file(folder / name)
     )
     size = sum((folder / name).stat().st_size for name in present)
     missing = [name for name in REQUIRED_FILES if name not in present]
@@ -242,6 +248,9 @@ def link_files(model: LocalQ4nx, staged: Path) -> None:
                 child.unlink(missing_ok = True)
     for name in model.files:
         source, target = model.folder / name, staged / name
+        # Checked again here: the folder can change between listing and load.
+        if not _own_file(source):
+            raise OSError(f"{name} is a link or outside this account")
         try:
             if target.exists() and os.path.samefile(source, target):
                 continue
