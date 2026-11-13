@@ -83,7 +83,7 @@ import {
   npuCard,
   vramCards,
 } from "@/components/monitor-cards";
-import { useNpuStatus } from "@/features/npu/use-npu-status";
+import { useNpuStatus } from "@/features/npu";
 import {
   Select,
   SelectContent,
