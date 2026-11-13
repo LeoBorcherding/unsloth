@@ -89,6 +89,18 @@ def test_an_unloadable_folder_is_listed_with_the_reason(skip, source, problem):
     assert problem in local.problem
 
 
+def test_every_shape_the_export_accepts_has_a_base_the_picker_loads():
+    # A shape that converts but has no FastFlowLM base would list as unloadable.
+    for arch, shapes in q4nx._NPU_SHAPES.items():
+        assert set(shapes) == set(nlm._FLM_BASES.get(arch, {})), arch
+
+
+def test_a_nanbeige_architecture_conversion_loads_on_the_nanbeige_base():
+    _converted(source = {"architecture": "nanbeige", "block_count": 32, "embedding_length": 2560})
+    [local] = nlm.account_local_models()
+    assert local.base == "nanbeige4.1:3b" and local.problem is None
+
+
 def test_an_account_sees_only_its_own_exports():
     run_as(ALICE, _converted)
     assert [m.folder.name for m in run_as(ALICE, nlm.account_local_models)] == [
