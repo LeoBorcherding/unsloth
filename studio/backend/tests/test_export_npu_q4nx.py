@@ -161,9 +161,7 @@ def _stub_installer(
             return script
 
     monkeypatch.setattr(export_mod.q4nx, "_installer", lambda: _Installer)
-    monkeypatch.setattr(
-        export_mod.q4nx, "_gguf_header", lambda _p: {"general.architecture": architecture}
-    )
+    monkeypatch.setattr(export_mod.q4nx, "_gguf_architecture", lambda _p: architecture)
     monkeypatch.setattr(export_mod.q4nx, "require_converter_deps", lambda: None)
     return installed
 
@@ -545,9 +543,9 @@ def test_unsupported_geometry_is_refused_before_installing(
 )
 def test_supported_geometry_converts(monkeypatch, tmp_path, arch, layers, hidden, extra, converter):
     export_mod, _b, _s, _c = _backend(monkeypatch, tmp_path, object())
-    read_header = export_mod.q4nx._gguf_header
+    read_architecture = export_mod.q4nx._gguf_architecture
     installed = _stub_installer(export_mod, monkeypatch, tmp_path)
-    monkeypatch.setattr(export_mod.q4nx, "_gguf_header", read_header)
+    monkeypatch.setattr(export_mod.q4nx, "_gguf_architecture", read_architecture)
     _fake_popen(export_mod, monkeypatch)
     source = _gguf_with(tmp_path / "m.gguf", arch, layers, hidden, **extra)
 

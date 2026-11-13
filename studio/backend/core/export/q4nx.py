@@ -60,6 +60,12 @@ def require_converter_deps() -> None:
         )
 
 
+def _gguf_architecture(gguf_path: str) -> str:
+    import gguf
+    field = gguf.GGUFReader(gguf_path).fields.get("general.architecture")
+    return field.contents() if field is not None else ""
+
+
 # Header walks that skip the vocab arrays: gguf.GGUFReader parses them all (~7 s on a 9B).
 def _gguf_header(gguf_path: str) -> dict:
     from utils.models.gguf_metadata import _parse_gguf_arch_uints, read_gguf_architecture
@@ -176,7 +182,7 @@ def convert_gguf_to_q4nx(gguf_path: str, out_dir: Path) -> None:
     header = _gguf_header(gguf_path)
     require_npu_geometry(header)
     installer = _installer()
-    name = installer.converter_for_architecture(header["general.architecture"])
+    name = installer.converter_for_architecture(_gguf_architecture(gguf_path))
     script = installer.install(studio_root() / "q4nx_converter", name = name)
     out_dir.mkdir(parents = True, exist_ok = True)
     logger.info(
