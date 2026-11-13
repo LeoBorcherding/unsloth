@@ -749,7 +749,9 @@ class LemonadeNpuBackend:
                     if _failed(response):
                         # As unload() does: a fresh lemond holds nothing, so the load starts clean.
                         logger.warning(
-                            "Unloading %s for a reload failed: %s", model.id, _error_message(response)
+                            "Unloading %s for a reload failed: %s",
+                            model.id,
+                            _error_message(response),
                         )
                         server.stop()
                         server = self._ensure_running()
