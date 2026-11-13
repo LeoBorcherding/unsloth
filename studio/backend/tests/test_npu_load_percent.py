@@ -37,7 +37,7 @@ def host(monkeypatch):
     monkeypatch.setattr(hw.platform, "system", lambda: "Windows")
     monkeypatch.setattr(hw, "_npu_load_cache", None, raising = False)
     monkeypatch.setattr(hw, "_npu_luid", None, raising = False)
-    monkeypatch.setattr(hw, "_npu_luid_at", 0.0, raising = False)
+    monkeypatch.setattr(hw, "_npu_luid_at", None, raising = False)
     monkeypatch.setattr(hw, "_npu_hardware", {"present": True, "supported": True}, raising = False)
     clock = _Clock()
     monkeypatch.setattr(hw, "time", clock)
@@ -99,6 +99,13 @@ def test_a_missing_luid_is_looked_up_once_a_minute(host):
     host["clock"].now += 60.0
     hw.npu_load_percent()
     assert sum("Get-PnpDeviceProperty" in ps for ps in host["calls"]) == 2
+
+
+def test_the_first_sample_looks_up_the_luid_even_right_after_boot(host):
+    # Windows' monotonic clock counts from boot, so a Studio started in the first minute reads < 60.
+    host["clock"].now = 5.0
+    assert hw.npu_load_percent() == 42.5
+    assert sum("Get-PnpDeviceProperty" in ps for ps in host["calls"]) == 1
 
 
 def test_an_idle_npu_reads_zero(host):

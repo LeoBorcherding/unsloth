@@ -3802,7 +3802,8 @@ _NPU_LUID_TTL_S = 60.0
 _npu_load_lock = threading.Lock()
 _npu_hardware: Optional[Dict[str, Any]] = None
 _npu_luid: Optional[int] = None
-_npu_luid_at = 0.0
+# None: never looked up. Windows' monotonic clock starts at boot, so 0.0 is not long ago.
+_npu_luid_at: Optional[float] = None
 # (completed_at, spawn seconds, load)
 _npu_load_cache: Optional[tuple[float, float, Optional[float]]] = None
 
@@ -3851,7 +3852,9 @@ def npu_load_percent() -> Optional[float]:
                 return cached[2]
             try:
                 # Once a minute: a host whose NPU reports no LUID would otherwise ask every sample.
-                if _npu_luid is None and now - _npu_luid_at >= _NPU_LUID_TTL_S:
+                if _npu_luid is None and (
+                    _npu_luid_at is None or now - _npu_luid_at >= _NPU_LUID_TTL_S
+                ):
                     raw = (_rocm_windows_counter_stdout_uncached(_NPU_LUID_PS) or "").strip()
                     _npu_luid = int(raw) if raw.isdigit() and int(raw) else None
                     _npu_luid_at = now
@@ -3859,9 +3862,9 @@ def npu_load_percent() -> Optional[float]:
             except Exception:  # a hung PowerShell is cached as unknown, not retried every poll
                 # Windows reassigns LUIDs on a driver restart: look it up again next time.
                 load = _npu_luid = None
-                _npu_luid_at = 0.0
+                _npu_luid_at = None
             # An idle NPU lists no counters either, so a stale LUID is only rechecked now and then.
-            if load is None and now - _npu_luid_at >= _NPU_LUID_TTL_S:
+            if load is None and (_npu_luid_at is None or now - _npu_luid_at >= _NPU_LUID_TTL_S):
                 _npu_luid = None
             done = time.monotonic()
             _npu_load_cache = (done, done - now, load)
