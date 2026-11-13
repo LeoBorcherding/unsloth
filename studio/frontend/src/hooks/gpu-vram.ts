@@ -150,8 +150,9 @@ export function carveOutVramGb(
   } else if (aggregate !== null) {
     // Past every card's dedicated memory it has spilled at least that much; free is only known with no discrete card.
     spilled = Math.max(0, aggregate - totals.dedicated);
-    spillKnown = true;
+    // Beside a discrete card that is only a lower bound: the APU can spill while the card has room.
     if (apu.dedicated === totals.dedicated) {
+      spillKnown = true;
       freeGb = Math.max(0, totals.dedicated - aggregate);
     }
   }
