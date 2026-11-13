@@ -185,6 +185,21 @@ export async function deleteNpuModel(id: string): Promise<void> {
   }
 }
 
+export async function deleteNpuModelByCheckpoint(
+  checkpoint: string,
+): Promise<string> {
+  const response = await authFetch(
+    `/api/npu/checkpoints/${encodeURIComponent(checkpoint)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readFastApiError(response, "Could not delete the model"),
+    );
+  }
+  return ((await response.json()) as { model: string }).model;
+}
+
 export async function downloadNpuModel(
   id: string,
   onProgress: (event: NpuDownloadEvent) => void,
