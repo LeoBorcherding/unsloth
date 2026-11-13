@@ -723,7 +723,7 @@ class LemonadeNpuBackend:
                 f"This FastFlowLM version does not ship {local.base}, which this model needs."
             )
         staged = local_q4nx.staged_folder(self._flm_model_dir, listing, local)
-        config = self._base_config(binary, listing, local.base or "", base)
+        config = self._base_config(binary, listing_path.parent, listing, local.base or "", base)
         try:
             local_q4nx.link_files(local, staged)
             config = local_q4nx.local_config(config, local)
@@ -750,7 +750,12 @@ class LemonadeNpuBackend:
         return True
 
     def _base_config(
-        self, binary: Path, listing: dict[str, Any], tag: str, base: dict[str, Any]
+        self,
+        binary: Path,
+        manifests: Path,
+        listing: dict[str, Any],
+        tag: str,
+        base: dict[str, Any],
     ) -> dict[str, Any]:
         """The base model's config.json: from its download, else fetched alone and kept."""
         models = self._flm_model_dir / str(listing.get("model_path") or "models")
@@ -762,7 +767,8 @@ class LemonadeNpuBackend:
                 continue
             if isinstance(config, dict) and config.get("flm_version"):
                 return config
-        files = read_model_files(binary, self._flm_model_dir, tag)
+        # read_model_files reads the manifests beside the path it is given, which may be share/flm.
+        files = read_model_files(manifests / binary.name, self._flm_model_dir, tag)
         wanted = [f for f in files.files if f.name == "config.json"] if files else []
         if not wanted:
             raise NpuError(f"FastFlowLM's file list has no config.json for {tag}.")

@@ -232,6 +232,31 @@ def runtime(tmp_path, monkeypatch):
     backend.shutdown()
 
 
+def test_the_base_config_is_fetched_from_the_manifests_fastflowlm_reads(tmp_path, monkeypatch):
+    # Installs that keep model_list.json and model_info.json in share/flm, not beside the binary.
+    binary = tmp_path / "bin" / "flm"
+    binary.parent.mkdir(parents = True)
+    share = tmp_path / "share" / "flm"
+    share.mkdir(parents = True)
+    listing = {"model_path": "models", "models": {"qwen3": {"0.6b": _BASE_ENTRY}}}
+    (share / "model_list.json").write_text(json.dumps(listing), encoding = "utf-8")
+    info = {"qwen3:0.6b": [{"path": "config.json", "size": 2, "oid": "x"}]}
+    (share / "model_info.json").write_text(json.dumps(info), encoding = "utf-8")
+    fetched = []
+
+    def download(model):
+        fetched.extend(f.name for f in model.files)
+        model.folder.mkdir(parents = True, exist_ok = True)
+        (model.folder / "config.json").write_text('{"flm_version": "1.0.12"}', encoding = "utf-8")
+        yield from ()
+
+    monkeypatch.setattr(nb, "download_files", download)
+    backend = nb.LemonadeNpuBackend(root = tmp_path / "lemonade")
+    assert nlm.find_flm_list(binary) == share / "model_list.json"
+    config = backend._base_config(binary, share, listing, "qwen3:0.6b", _BASE_ENTRY)
+    assert fetched == ["config.json"] and config == {"flm_version": "1.0.12"}
+
+
 def _requests(backend) -> list[dict]:
     path = backend.root / "cache" / "requests.jsonl"
     return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
