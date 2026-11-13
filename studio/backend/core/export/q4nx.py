@@ -118,10 +118,6 @@ def require_npu_geometry(header: dict) -> None:
     shapes = _NPU_SHAPES.get(arch)
     if shapes is None:
         return
-    # Omni is matched by name in the converter; its catalog config is not published.
-    names = [str(header.get(k, "")).lower() for k in ("general.basename", "general.name")]
-    if arch == "qwen35" and any("omni" in n for n in names):
-        return
     layers = header.get(f"{raw_arch}.block_count")
     hidden = header.get(f"{raw_arch}.embedding_length")
     if layers is None or hidden is None:
