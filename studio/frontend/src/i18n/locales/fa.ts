@@ -1024,7 +1024,7 @@ export const fa = {
       showMore: "نمایش بیشتر",
       showLess: "نمایش کمتر",
       settings: "تنظیمات",
-      api: "API",
+      api: "پایش API",
       lightMode: "حالت روشن",
       darkMode: "حالت تیره",
       guidedTour: "تور راهنما",
@@ -2104,8 +2104,8 @@ export const fa = {
         sectionTitle: "حالت توسعه‌دهنده",
         videoCpu: "اجازهٔ تولید ویدیو روی CPU (آزمایشی)",
         q4nxExport: "خروجی Q4NX برای NPUهای AMD",
-        q4nxExportDescription: "تبدیل Q4NX را در صفحه خروجی روی دستگاهی بدون NPU از AMD Ryzen AI نشان می‌دهد تا برای دستگاهی که آن را دارد مدل بسازید. به‌طور پیش‌فرض خاموش است؛ مبدل در اولین استفاده دانلود می‌شود.",
-        q4nxExportNpuPresent: "این دستگاه NPU از AMD دارد، بنابراین خروجی Q4NX همیشه روشن است.",
+        q4nxExportDescription: "تبدیل Q4NX را در صفحهٔ خروجی روی دستگاهی بدون AMD Ryzen AI NPU نشان می‌دهد تا برای دستگاهی که آن را دارد مدل بسازید. به‌طور پیش‌فرض خاموش است؛ مبدل در اولین استفاده بارگیری می‌شود.",
+        q4nxExportNpuPresent: "این دستگاه AMD NPU دارد، بنابراین خروجی Q4NX همیشه روشن است.",
         videoCpuDescription:
           "اجازه می‌دهد صفحهٔ ویدیو روی میزبانی بدون GPU پشتیبانی‌شده اجرا شود. به‌طور پیش‌فرض خاموش است؛ پشتیبانی نمی‌شود و بسیار کند است.",
         notApplicable:

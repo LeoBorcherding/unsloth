@@ -1037,7 +1037,7 @@ export const pl = {
       showMore: "Pokaż więcej",
       showLess: "Pokaż mniej",
       settings: "Ustawienia",
-      api: "API",
+      api: "Monitor API",
       lightMode: "Tryb jasny",
       darkMode: "Tryb ciemny",
       guidedTour: "Przewodnik",
@@ -2134,7 +2134,7 @@ export const pl = {
         sectionTitle: "Tryb programisty",
         videoCpu: "Zezwalaj na generowanie wideo na CPU (eksperymentalne)",
         q4nxExport: "Eksport Q4NX dla NPU AMD",
-        q4nxExportDescription: "Pokazuje konwersję Q4NX na stronie Eksport na komputerze bez NPU AMD Ryzen AI, aby budować modele dla komputera, który ją ma. Domyślnie wyłączone; konwerter jest pobierany przy pierwszym użyciu.",
+        q4nxExportDescription: "Pokazuje konwersję do Q4NX na stronie Eksport na komputerze bez NPU AMD Ryzen AI, aby przygotować modele dla komputera, który ją ma. Domyślnie wyłączone; konwerter jest pobierany przy pierwszym użyciu.",
         q4nxExportNpuPresent: "Ten komputer ma NPU AMD, więc eksport Q4NX jest zawsze włączony.",
         videoCpuDescription:
           "Pozwala uruchamiać stronę Wideo na hoście bez obsługiwanego GPU. Domyślnie wyłączone; nieobsługiwane i bardzo wolne.",

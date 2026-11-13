@@ -1026,7 +1026,7 @@ export const tr = {
       showMore: "Daha fazla göster",
       showLess: "Daha az göster",
       settings: "Ayarlar",
-      api: "API",
+      api: "API İzleyicisi",
       lightMode: "Açık Mod",
       darkMode: "Koyu Mod",
       guidedTour: "Rehberli Tur",
@@ -2108,8 +2108,8 @@ export const tr = {
         sectionTitle: "Geliştirici modu",
         videoCpu: "CPU'da video üretimine izin ver (deneysel)",
         q4nxExport: "AMD NPU'lar için Q4NX dışa aktarma",
-        q4nxExportDescription: "AMD Ryzen AI NPU'su olmayan bir makinede Dışa Aktar sayfasında Q4NX dönüştürmeyi gösterir; böylece NPU'su olan bir makine için model oluşturabilirsiniz. Varsayılan olarak kapalıdır; dönüştürücü ilk kullanımda indirilir.",
-        q4nxExportNpuPresent: "Bu makinede AMD NPU var, bu yüzden Q4NX dışa aktarma her zaman açıktır.",
+        q4nxExportDescription: "AMD Ryzen AI NPU'su olmayan bir makinede de Dışa Aktar sayfasında Q4NX dönüştürmesini gösterir; böylece NPU'lu bir makine için model hazırlayabilirsiniz. Varsayılan olarak kapalı; dönüştürücü ilk kullanımda indirilir.",
+        q4nxExportNpuPresent: "Bu makinede AMD NPU var, bu yüzden Q4NX dışa aktarma her zaman açık.",
         videoCpuDescription:
           "Video sayfasının desteklenen GPU'su olmayan bir ana makinede çalışmasına izin verir. Varsayılan olarak kapalıdır; desteklenmez ve çok yavaştır.",
         notApplicable:
