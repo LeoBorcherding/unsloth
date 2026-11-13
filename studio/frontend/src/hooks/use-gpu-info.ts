@@ -12,12 +12,14 @@ import {
   type PinnableGpuContext,
   type ReconciledGpuSelection,
   type SystemGpuDevice,
+  defaultGpuIds,
   pickLoadDevice,
   pinnableGpuContext,
   reconcileGpuSelection,
   resolveGpuSelectionContext,
 } from "./gpu-selection";
 import {
+  defaultGpuMemoryTotalGb,
   gpuMemoryTotalsGb,
   gpuSharedHostMemoryGb,
   sharesHostMemory,
@@ -32,6 +34,7 @@ import {
 } from "./use-system";
 
 export {
+  defaultGpuIds,
   pinnableGpuContext,
   reconcileGpuSelection,
   type GpuIndexKind,
@@ -64,6 +67,8 @@ export interface GpuInfo {
   memorySharedGb: number;
   /** Without shared-memory devices: VRAM beside system RAM, not a view of it. */
   dedicatedMemoryTotalGb: number;
+  /** VRAM of the GPUs a run gets by default: no iGPU or kernel-less card beside a discrete one. */
+  defaultMemoryTotalGb: number;
   /** Image/video loads live on ONE device, so their fit math must not use the multi-GPU sum. */
   maxDeviceMemoryGb: number;
   /** Lowest visible ordinal, where a bare "cuda" diffusion load lands; NOT maxDeviceMemoryGb on a
@@ -148,6 +153,7 @@ const DEFAULT_GPU: GpuInfo = {
   memoryTotalGb: 0,
   memorySharedGb: 0,
   dedicatedMemoryTotalGb: 0,
+  defaultMemoryTotalGb: 0,
   maxDeviceMemoryGb: 0,
   loadDeviceMemoryGb: 0,
   loadDeviceSharedMemory: false,
@@ -212,6 +218,7 @@ function toGpuInfo(
     name: devices[0]?.name ?? "Unknown",
     memoryTotalGb: memoryTotals.total,
     dedicatedMemoryTotalGb: memoryTotals.dedicated,
+    defaultMemoryTotalGb: defaultGpuMemoryTotalGb(devices),
     memorySharedGb: memoryTotals.shared,
     maxDeviceMemoryGb: devices.reduce(
       (max, d) => Math.max(max, d.memory_total_gb ?? 0),
@@ -282,14 +289,17 @@ function toGpuDevices(
       sharedMemory: d.shared_memory === true,
       sharedMemoryHostBackedGb: d.shared_memory_host_backed_gb,
       unifiedMemory: d.unified_memory === true,
-      // The XPU ban covers torch-xpu ordinals, not Vulkan ones.
+      // The XPU ban covers torch-xpu ordinals, not Vulkan ones. A card the engine has no kernels for is
+      // never offered (llama.cpp here, torch for diffusion): the load would skip it anyway.
       pinnable:
         pinnableBackend &&
+        d.no_llama_kernels !== true &&
         (d.index_kind === "vulkan" ||
           (data?.device_backend !== "xpu" &&
             (d.index_kind === "physical" || d.index_kind === "cuda_device"))),
       diffusionPinnable:
         diffusionBackend &&
+        d.no_torch_kernels !== true &&
         (d.index_kind === "physical" || d.index_kind === "cuda_device"),
     }));
 }
@@ -439,7 +449,10 @@ export function gpuDeviceCacheReady(): boolean {
 }
 
 export async function ensureGpuDeviceCache(): Promise<void> {
-  await fetchSystemInfo();
+  // A failed fetch, or Vulkan discovery still pending, leaves Automatic loading with no default pick.
+  if ((await fetchSystemInfo()) === null || !gpuDeviceCacheReady()) {
+    await fetchSystemInfo({ force: true });
+  }
 }
 
 /** null before fetch, [] when pinning is unavailable. */
@@ -476,6 +489,7 @@ export function reconcileCachedGpuSelection(
   ids: number[] | null,
   savedIndexKind?: GpuIndexKind | null,
   forDiffusion = false,
+  forGguf = false,
 ): ReconciledGpuSelection {
   const context = cachedPinnableGpuContext(forDiffusion);
   return reconcileGpuSelection(
@@ -483,5 +497,8 @@ export function reconcileCachedGpuSelection(
     savedIndexKind,
     context.indexKind,
     context.ids,
+    // The GGUF picker shows these ticked when untouched, so that is what its /load sends. Diffusion takes
+    // one card, and other engines keep their own default device.
+    forGguf && !forDiffusion ? defaultGpuIds(context.devices) : null,
   );
 }
