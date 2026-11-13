@@ -750,12 +750,7 @@ class LemonadeNpuBackend:
         return True
 
     def _base_config(
-        self,
-        binary: Path,
-        manifests: Path,
-        listing: dict[str, Any],
-        tag: str,
-        base: dict[str, Any],
+        self, binary: Path, manifests: Path, listing: dict[str, Any], tag: str, base: dict[str, Any]
     ) -> dict[str, Any]:
         """The base model's config.json: from its download, else fetched alone and kept."""
         models = self._flm_model_dir / str(listing.get("model_path") or "models")
