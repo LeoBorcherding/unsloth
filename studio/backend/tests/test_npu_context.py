@@ -282,25 +282,36 @@ def test_a_pin_that_fits_is_not_logged_and_is_capped_at_the_limit(tmp_path, free
     assert caplog.text == ""
 
 
+def _files_again(tmp_path: Path, config) -> FlmModelFiles:
+    sub = tmp_path / "again"
+    sub.mkdir(exist_ok = True)
+    return _files(sub, config)
+
+
 @pytest.mark.parametrize(
-    "entry, config, total_gib, free_gib, expected",
+    "entry, config, total_gib, free_gib, fits, expected",
     [
         # 24 GB window less 21.6 GB of weights and load margin.
-        (QWEN36_35B, _QWEN36_35B, 48, 40.0, 13312),
+        (QWEN36_35B, _QWEN36_35B, 48, 40.0, 13680, 13312),
         # 12 GB window less 8.6 GB.
-        (QWEN35_9B, _QWEN35_9B, 24, 18.0, 12288),
+        (QWEN35_9B, _QWEN35_9B, 24, 18.0, 11878, 11264),
     ],
 )
 def test_windows_auto_fits_the_npu_window_not_all_free_ram(
-    tmp_path, free_ram, entry, config, total_gib, free_gib, expected
+    tmp_path, free_ram, entry, config, total_gib, free_gib, fits, expected
 ):
     # Windows maps about half of RAM to the NPU (lemonade-sdk/lemonade#839), as the fit warning prices it.
     free_ram["mib"] = int(free_gib * _GIB)
     model = _model(*entry, 262144)
     assert nc.plan_context(model, _files(tmp_path, config), None).context_length == 65536
     free_ram["window_gb"] = nb.npu_memory_window_gb(total_gib, "win32")
-    plan = nc.plan_context(model, _files_again(tmp_path, config), None)
-    assert plan == nc.ContextPlan(context_length = expected, fits = expected)
+    files = _files_again(tmp_path, config)
+    plan = nc.plan_context(model, files, None)
+    assert plan == nc.ContextPlan(context_length = expected, fits = fits)
+    # The window is priced with FastFlowLM's own allocation: power-of-two KV capacity plus prefix.
+    budget = nc._npu_window_bytes(int(entry[2] * nc._GIB))
+    kv = nc._kv_layout(files.folder / "config.json")
+    assert nc._cost(fits, kv) <= budget < nc._cost(fits + 1, kv)
 
 
 def test_strix_halo_linux_keeps_the_65536_ceiling(tmp_path, free_ram):
@@ -416,9 +427,24 @@ def test_auto_reload_samples_free_ram_after_releasing_weights_and_caches(
     monkeypatch.setattr(
         nc, "_available_mib", lambda: int((29 if backend._server.ctx is None else 3.15) * _GIB)
     )
+    monkeypatch.setattr(nc, "_npu_window_gb", lambda: None)
     backend.load(model.id)
     backend.load(model.id)
     assert [load["ctx_size"] for load in backend._server.loads] == [65536, 65536]
+
+
+def test_a_windows_reload_releases_the_resident_and_still_caps_to_the_npu_window(
+    backend, monkeypatch, tmp_path
+):
+    # Both apply: RAM is sampled after the resident is unloaded, then held to the Windows window.
+    model = _serve(backend, monkeypatch, tmp_path, QWEN36_35B, 262144, _QWEN36_35B)
+    monkeypatch.setattr(
+        nc, "_available_mib", lambda: int((29 if backend._server.ctx is None else 3.15) * _GIB)
+    )
+    monkeypatch.setattr(nc, "_npu_window_gb", lambda: nb.npu_memory_window_gb(48, "win32"))
+    backend.load(model.id)
+    backend.load(model.id)
+    assert [load["ctx_size"] for load in backend._server.loads] == [13312, 13312]
 
 
 def test_load_keeps_a_pin_and_8192_without_a_config(backend, monkeypatch, tmp_path, free_ram):
