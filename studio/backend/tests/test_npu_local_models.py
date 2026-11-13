@@ -91,7 +91,10 @@ def test_an_unloadable_folder_is_listed_with_the_reason(skip, source, problem):
 
 def test_every_shape_the_export_accepts_has_a_base_the_picker_loads():
     # A shape that converts but has no FastFlowLM base would list as unloadable.
-    for arch, shapes in q4nx._NPU_SHAPES.items():
+    export_shapes = getattr(q4nx, "_NPU_SHAPES", None)
+    if export_shapes is None:
+        pytest.skip("this tree has no Q4NX export geometry gate")
+    for arch, shapes in export_shapes.items():
         assert set(shapes) == set(nlm._FLM_BASES.get(arch, {})), arch
 
 
