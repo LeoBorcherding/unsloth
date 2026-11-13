@@ -16,7 +16,7 @@ const Q4NX_ARCHITECTURES: Record<string, string | null> = {
   qwen2vl: "Only Qwen2.5-VL converts.",
   qwen3: null,
   qwen3vl: null,
-  qwen35: "Only Qwen3.5 0.8B, 2B, 4B, 9B and Omni convert.",
+  qwen35: "Only Qwen3.5 0.8B, 2B, 4B and 9B convert.",
   qwen35moe: "Only Qwen3.5 35B-A3B converts.",
   gemma3: null,
   gemma4: null,
@@ -26,7 +26,7 @@ const Q4NX_ARCHITECTURES: Record<string, string | null> = {
   nanbeige: null,
 };
 
-// Parameter counts, in billions, behind the size caveats above. Qwen3.5 Omni is matched by name.
+// Parameter counts, in billions, behind the size caveats above.
 const Q4NX_SIZES: Record<string, readonly number[]> = {
   qwen35: [0.8, 2, 4, 9],
   qwen35moe: [35],
@@ -161,7 +161,7 @@ export function q4nxArchFit(
   if (!sizes) return { status: "supported", note: caveat };
   // A size named in the repo or file settles the caveat up front, not after the download.
   const billions = (q4nxParamsFromName(name ?? "") ?? 0) / 1e9;
-  if (/omni/i.test(name ?? "") || sizes.includes(billions)) {
+  if (sizes.includes(billions)) {
     return { status: "supported", note: null };
   }
   if (billions) {

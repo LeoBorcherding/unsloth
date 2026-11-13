@@ -93,7 +93,7 @@ test("architectures the pinned converter accepts are supported, with size caveat
   assert.equal(q4nxArchFit("gpt-oss").status, "supported");
   const qwen35 = q4nxArchFit("qwen35");
   assert.equal(qwen35.status, "supported");
-  assert.match(qwen35.note ?? "", /0\.8B, 2B, 4B, 9B/);
+  assert.match(qwen35.note ?? "", /0\.8B, 2B, 4B and 9B/);
 });
 
 test("qwen2vl is Qwen2.5-VL only; a Qwen2-VL name is refused", () => {
@@ -315,15 +315,19 @@ test("a size the converter has no model for is refused by name, before any downl
   const big = q4nxArchFit("qwen35", "unsloth/Qwen3.8-27B-GGUF Qwen3.8-27B-Q4_0.gguf");
   assert.equal(big.status, "unsupported");
   assert.equal(big.status === "unsupported" && big.sized, true);
-  assert.match(big.note ?? "", /27B model\. Only Qwen3\.5 0\.8B, 2B, 4B, 9B and Omni convert\./);
+  assert.match(big.note ?? "", /27B model\. Only Qwen3\.5 0\.8B, 2B, 4B and 9B convert\./);
   // A size on the list needs no caveat.
-  for (const name of ["unsloth/Qwen3.5-4B-GGUF", "unsloth/Qwen3.5-0.8B-GGUF", "acme/Qwen3.5-Omni-GGUF"]) {
+  for (const name of ["unsloth/Qwen3.5-4B-GGUF", "unsloth/Qwen3.5-0.8B-GGUF"]) {
     assert.deepEqual(q4nxArchFit("qwen35", name), { status: "supported", note: null }, name);
   }
   // No size in the name: the caveat stays a note.
   const unnamed = q4nxArchFit("qwen35", "acme/my-finetune-GGUF");
   assert.equal(unnamed.status, "supported");
-  assert.match(unnamed.note ?? "", /0\.8B, 2B, 4B, 9B/);
+  assert.match(unnamed.note ?? "", /0\.8B, 2B, 4B and 9B/);
+  // Omni is no exception: off those shapes the backend refuses it, so its name alone is not a pass.
+  const omni = q4nxArchFit("qwen35", "acme/Qwen3.5-Omni-GGUF");
+  assert.equal(omni.status, "supported");
+  assert.match(omni.note ?? "", /0\.8B, 2B, 4B and 9B/);
   assert.deepEqual(q4nxArchFit("qwen35moe", "unsloth/Qwen3.6-35B-A3B-GGUF"), {
     status: "supported",
     note: null,
