@@ -1485,8 +1485,9 @@ function NpuAdvancedSettings({
               update({ npuPrefillChunkLen: null });
               return;
             }
-            const parsed = Number.parseInt(raw, 10);
-            if (Number.isFinite(parsed)) {
+            // Number, not parseInt: a number input can hand over "1e3".
+            const parsed = Number(raw);
+            if (Number.isInteger(parsed)) {
               update({ npuPrefillChunkLen: Math.max(1, Math.min(contextLength, parsed)) });
             }
           }}
@@ -4449,7 +4450,12 @@ export function ModelConfigPage({
                 <NpuAdvancedSettings
                   config={config}
                   update={update}
-                  contextLength={maxSeqLengthValue}
+                  // An unpinned window nothing has resolved yet can load up to the model's limit.
+                  contextLength={
+                    savedContextPin(config) != null || npuServedWindow != null
+                      ? maxSeqLengthValue
+                      : nativeMaxSeqLength
+                  }
                   showImagePreResize={target.meta.isVision === true || npuCatalogVision}
                 />
               ) : (

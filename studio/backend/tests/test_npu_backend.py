@@ -1009,17 +1009,22 @@ def test_reloading_the_resident_model_restarts_it_in_lemond(npu):
     list(npu.download("qwen3-0.6b-FLM"))
     npu.load("qwen3-0.6b-FLM")
     assert not [r for r in _requests(npu) if r["path"] == "/v1/unload"]
+    # A first load has nothing resident to restart, so it asks nothing before loading.
+    first = [r["path"] for r in _requests(npu) if r["path"] in ("/v1/health", "/v1/load")]
+    assert first[0] == "/v1/load"
     npu.load("qwen3-0.6b-FLM")
     paths = [r["path"] for r in _requests(npu) if r["path"] in ("/v1/load", "/v1/unload")]
     assert paths == ["/v1/load", "/v1/unload", "/v1/load"]
     assert npu.is_loaded
 
 
-def test_a_failed_reload_unload_leaves_nothing_recorded(npu, monkeypatch):
+def test_a_failed_reload_unload_restarts_lemond_and_loads_fresh(npu, monkeypatch):
     monkeypatch.setenv("FAKE_LEMOND_UNLOAD_FAILS", "1")
     monkeypatch.setenv("FAKE_LEMOND_DOWNLOADED", '["qwen3-0.6b-FLM"]')
     npu.enable()
     npu.load("qwen3-0.6b-FLM")
-    with pytest.raises(nb.NpuError, match = "Reloading qwen3-0.6b-FLM failed"):
-        npu.load("qwen3-0.6b-FLM")
-    assert not npu.is_loaded
+    process = npu._server._process
+    npu.load("qwen3-0.6b-FLM")
+    assert process.poll() is not None
+    assert npu._server._process is not process
+    assert npu.is_loaded
