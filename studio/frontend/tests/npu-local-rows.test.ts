@@ -61,7 +61,7 @@ test("a converted folder is named after the folder and marked Converted", () => 
   ]);
   assert.equal(
     api.npuRowTooltip(converted),
-    "Converted in Unsloth Studio, from exports/q4nx/Qwen3-0.6B-ft.Q4_0-q4nx",
+    "Converted on the Export page, from exports/q4nx/Qwen3-0.6B-ft.Q4_0-q4nx",
   );
 });
 
