@@ -131,9 +131,7 @@ def test_a_conversion_saved_outside_or_deep_in_the_exports_is_listed_once_regist
     }
 
 
-def test_a_gguf_exports_q4nx_folder_under_a_registered_save_folder_is_listed(
-    monkeypatch, tmp_path
-):
+def test_a_gguf_exports_q4nx_folder_under_a_registered_save_folder_is_listed(monkeypatch, tmp_path):
     # export.py writes the conversion to <save folder>/npu-q4nx and registers the save folder.
     save = tmp_path / "elsewhere" / "Qwen3-0.6B-ft"
     save.mkdir(parents = True)
