@@ -95,3 +95,9 @@ test("the loaded-models list asks for the catalog while an NPU chat model is loa
     /useNpuDisplayNames\(\s*polled\.some\(\(entry\) => entry\.source === "chat" && isNpuModelId\(entry\.name\)\),?\s*\)/,
   );
 });
+
+test("a failed NPU catalog listing re-renders the lookup when it may retry", () => {
+  const hook = readText("../src/features/npu/use-npu-display-name.ts");
+  assert.match(hook, /listed = false;\s*setRetry\(\(n\) => n \+ 1\);\s*\}, 30_000\)/);
+  assert.match(hook, /\}, \[wantsListing, status\?\.ready, retry\]\);/);
+});

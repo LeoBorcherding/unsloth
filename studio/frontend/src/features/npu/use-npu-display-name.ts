@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { isNpuModelId } from "./api";
 import { npuDisplayNameOf } from "./display-name";
 import { refreshNpuModels, useNpuCatalogStore } from "./npu-catalog-store";
@@ -16,16 +16,22 @@ export function useNpuDisplayNames(
   const models = useNpuCatalogStore((state) => state.models);
   const wantsListing = npuInUse && models === null && !listed;
   const [status] = useNpuStatus(wantsListing);
+  // Bumped when a failed listing may retry, since `models` stays null and nothing else re-renders.
+  const [retry, setRetry] = useState(0);
   useEffect(() => {
     // A model loaded on an earlier visit is named before any picker lists the catalog.
     // Listing starts lemond, so only on a validated runtime.
     if (!wantsListing || status?.ready !== true) return;
     listed = true;
     void refreshNpuModels().then((ok) => {
-      // A failed listing may retry on a later render, spaced out so a down server is not hammered.
-      if (!ok) setTimeout(() => (listed = false), 30_000);
+      // Spaced out so a down server is not hammered.
+      if (!ok)
+        setTimeout(() => {
+          listed = false;
+          setRetry((n) => n + 1);
+        }, 30_000);
     });
-  }, [wantsListing, status?.ready]);
+  }, [wantsListing, status?.ready, retry]);
   return useCallback(
     (idOrPath: string | null | undefined) => npuDisplayNameOf(models, idOrPath),
     [models],
