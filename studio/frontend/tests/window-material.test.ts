@@ -244,6 +244,23 @@ test("glass frosts the chat model controls and gives the account row the row hov
 	assert.match(page, /data-wallpaper-chrome-controls="" data-chat-model-controls=""/);
 });
 
+test("glass gives the chat header's icon buttons the model picker's glass, not a new style", () => {
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	const model = String.raw`\[data-chat-model-controls\] > :is\(\.unsloth-model-selector-trigger, \[data-chat-model-notice\]\)`;
+	const actions = String.raw`\[data-chat-header-actions\] > button`;
+	// Listed beside the picker in each of its rules, so the buttons share its fill, rim, edge and hover.
+	for (const glass of [String.raw`\[data-glass\]`, String.raw`\[data-glass\^="liquid"\]`, String.raw`\[data-glass="liquid-3d"\]`]) {
+		const after = glass.includes("3d") ? "::before" : "";
+		assert.match(css, new RegExp(String.raw`html${glass}\[data-chat-wallpaper-ready\] ${actions}${after},\nhtml${glass}\[data-chat-wallpaper-ready\] ${model}${after},\n`));
+	}
+	assert.match(css, new RegExp(String.raw`${actions}:is\(:hover, \[aria-expanded="true"\], \[aria-pressed="true"\]\),\nhtml\[data-glass\]\[data-chat-wallpaper-ready\] ${model}:is\(:hover`));
+	assert.match(css, new RegExp(String.raw`html:not\(\.dark\)\[data-glass\]\[data-chat-wallpaper-ready\] ${actions},\nhtml:not\(\.dark\)\[data-glass\]\[data-chat-wallpaper-ready\] ${model} \{\n  box-shadow: var\(--glass-light-edge\)`));
+	// The glass edge is a box-shadow, so the focus ring has to win over it.
+	assert.match(css, new RegExp(String.raw`${actions}:focus-visible,\n[^{]*:focus-visible:is\(\[class\*="focus-visible:ring"\]\) \{\n  box-shadow: var\(--tw-inset-shadow[^;]*!important;`));
+	const page = readFileSync(new URL("../src/features/chat/chat-page.tsx", import.meta.url), "utf8");
+	assert.match(page, /data-wallpaper-chrome-controls="" data-chat-header-actions="" className="pointer-events-auto ml-auto/);
+});
+
 test("glass frosts sticky bars in panels and popups, floating buttons, and softens shared shadows", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	assert.match(css, /html\[data-glass\] :is\(\[data-slot="chat-settings-panel"\], \[data-slot\$="popover-content"\][^)]*\) \.sticky \{\n  -webkit-backdrop-filter: blur\(12px\)/);
