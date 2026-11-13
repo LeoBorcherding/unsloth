@@ -1999,6 +1999,9 @@ export const he = {
       developerMode: {
         sectionTitle: "מצב מפתחים",
         videoCpu: "אפשר יצירת וידאו על CPU (ניסיוני)",
+        q4nxExport: "ייצוא Q4NX למעבדי NPU של AMD",
+        q4nxExportDescription: "מציג המרת Q4NX בדף הייצוא במחשב ללא NPU של AMD Ryzen AI, כדי לבנות מודלים למחשב שיש לו כזה. כבוי כברירת מחדל; הממיר יורד בשימוש הראשון.",
+        q4nxExportNpuPresent: "במחשב הזה יש NPU של AMD, ולכן ייצוא Q4NX תמיד פעיל.",
         videoCpuDescription: "מאפשר להפעיל את דף הווידאו במחשב ללא GPU נתמך. כבוי כברירת מחדל; לא נתמך ואיטי מאוד.",
         notApplicable: "אין לכך השפעה במחשב זה: הווידאו כבר רץ על ה-GPU שלו, או שהוא חסום בגלל משהו שה-CPU לא יכול לעקוף.",
         forcedOnByEnv: "הופעל על ידי UNSLOTH_VIDEO_ALLOW_CPU בסביבת ה-backend.",
