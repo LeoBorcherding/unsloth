@@ -737,12 +737,18 @@ class LemonadeNpuBackend:
                 if limit:
                     ctx = min(ctx, limit)
                 server = self._ensure_running()
+                previous = self._loaded
                 replaced = True
                 self._loaded = None
                 self._raise_if_load_cancelled(model_id)
                 # lemond answers a load of the model it holds with the same options without
                 # restarting FastFlowLM, so a Reload model would leave the old process serving.
-                if self._resident_context(server, model.id) is not None:
+                # Only the model recorded as resident can be held: a fresh lemond holds nothing.
+                if (
+                    previous is not None
+                    and previous.model.id == model.id
+                    and self._resident_context(server, model.id) is not None
+                ):
                     response = server.request(
                         "POST", "/v1/unload", json_body = {"model_name": model.id}, timeout = 60.0
                     )

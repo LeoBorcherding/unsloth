@@ -9413,6 +9413,15 @@ def test_mlx_offload_is_stored_unless_auto_and_survives_a_client_that_omits_it(m
     assert "m" not in _put("m", mlx_ple_offload = "auto").overrides
 
 
+def test_clearing_one_npu_setting_keeps_the_others(monkeypatch):
+    # null drops out of the saved fields, so naming an NPU knob must not read as a whole-row remove.
+    _mock_override_store(monkeypatch)
+    _put("m", npu_power_mode = "turbo", npu_prefill_chunk_len = 2048)
+    row = _put("m", npu_power_mode = None).overrides["m"]
+    assert row == {"npu_prefill_chunk_len": 2048}
+    assert _put("m", npu_prefill_chunk_len = None).overrides.get("m") in (None, {})
+
+
 def _idle_backend(kw, monkeypatch, *, user_loaded):
     """A loaded, long-idle GGUF backend wired into the idle loop."""
     _reset_keepwarm()

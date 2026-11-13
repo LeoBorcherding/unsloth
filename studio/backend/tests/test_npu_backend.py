@@ -1009,6 +1009,9 @@ def test_reloading_the_resident_model_restarts_it_in_lemond(npu):
     list(npu.download("qwen3-0.6b-FLM"))
     npu.load("qwen3-0.6b-FLM")
     assert not [r for r in _requests(npu) if r["path"] == "/v1/unload"]
+    # A first load has nothing resident to restart, so it asks nothing before loading.
+    first = [r["path"] for r in _requests(npu) if r["path"] in ("/v1/health", "/v1/load")]
+    assert first[0] == "/v1/load"
     npu.load("qwen3-0.6b-FLM")
     paths = [r["path"] for r in _requests(npu) if r["path"] in ("/v1/load", "/v1/unload")]
     assert paths == ["/v1/load", "/v1/unload", "/v1/load"]
