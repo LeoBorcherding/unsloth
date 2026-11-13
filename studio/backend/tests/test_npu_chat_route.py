@@ -175,11 +175,13 @@ class _FakeNpu:
     def __init__(self, upstream) -> None:
         self._upstream = upstream
         self.is_loaded = True
+        self.marks = 0
 
     def upstream(self):
         return self._upstream
 
-    def output_mark(self) -> int:
+    def output_mark(self, upstream) -> int:
+        self.marks += 1
         return 0
 
     def explain_failure(self, mark: int, message: str) -> str:
@@ -206,7 +208,8 @@ def flm(monkeypatch):
             supports_reasoning = caps.get("reasoning", False),
             context_length = 8192,
         )
-        monkeypatch.setattr(nb, "get_npu_backend", lambda: _FakeNpu(upstream))
+        fake = _FakeNpu(upstream)
+        monkeypatch.setattr(nb, "get_npu_backend", lambda: fake)
         return httpd.recorded
 
     yield install
@@ -574,6 +577,7 @@ def test_a_failed_npu_chat_names_the_reason_lemonade_printed(flm, monkeypatch, t
         SimpleNamespace(stdout = ["2026-11-11 04:19:00.000 [Info] (Server) started on port 1\n"])
     )
     backend = nb.LemonadeNpuBackend(root = tmp_path / "lemonade")
+    server.api_key = upstream.api_key
     backend._server = server
     monkeypatch.setattr(backend, "upstream", lambda: upstream)
     monkeypatch.setattr(nb, "get_npu_backend", lambda: backend)
@@ -666,6 +670,8 @@ def test_what_fastflowlm_would_drop_is_refused(flm, fields, message):
     assert caught.value.status_code == 400
     assert message in json.dumps(caught.value.detail)
     assert recorded == []
+    # A refused request opens no output window, which would mark a running load's as shared.
+    assert nb.get_npu_backend().marks == 0
 
 
 def test_a_saved_connection_cannot_name_the_managed_type():

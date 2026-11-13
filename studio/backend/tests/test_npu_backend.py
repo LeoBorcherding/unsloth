@@ -297,7 +297,8 @@ def test_a_cancelled_download_keeps_its_partial_and_never_registers(npu, flm_man
     cancel = threading.Event()
     with pytest.raises(nb.NpuDownloadCancelled, match = "was cancelled"):
         for event in npu.download("qwen3-0.6b-FLM", cancel = cancel):
-            if event.get("file") == "model.q4nx":
+            # Once the weights have bytes on disk: a cancel before the first byte leaves no partial.
+            if event.get("file") == "model.q4nx" and event["bytes_downloaded"] > len(CONFIG):
                 cancel.set()
     folder = npu.root / "flm" / "models" / "Qwen3-0.6B-NPU2"
     assert (folder / "model.q4nx.partial").stat().st_size > 0
@@ -356,7 +357,7 @@ def test_load_reports_the_context_lemond_started_with(npu, monkeypatch):
     assert load == {"model_name": "qwen3-0.6b-FLM", "ctx_size": 8192, "save_options": False}
 
     npu.load("qwen3-0.6b-FLM", 100_000)
-    assert npu.loaded_context_length == 40960
+    assert npu.loaded_context_length == 32768
     upstream = npu.upstream()
     assert upstream.model == "qwen3-0.6b-FLM"
     assert upstream.public_model == "lemonade:qwen3-0.6b-FLM"
@@ -370,7 +371,7 @@ def test_qwen38_is_held_to_its_engine_limit_not_its_checkpoint_metadata(npu, mon
     npu.enable()
     by_id = {model.id: model for model in npu.catalog()}
     assert by_id["qwen3.8-mtp-27b-FLM"].max_context_length == 8192
-    assert by_id["qwen3-0.6b-FLM"].max_context_length == 40960
+    assert by_id["qwen3-0.6b-FLM"].max_context_length == 32768
 
     npu.load("qwen3.8-mtp-27b-FLM", 16384)
     load = [r["body"] for r in _requests(npu) if r["path"] == "/v1/load"][-1]
@@ -385,7 +386,7 @@ def test_qwen38_is_held_to_its_engine_limit_not_its_checkpoint_metadata(npu, mon
 def test_a_runtime_limit_caps_whatever_lemond_reports(reported, expected):
     assert nb._max_context_length("qwen3.8-mtp:27b", reported) == expected
     assert nb._max_context_length("qwen3.8-dflash2:27b", reported) == expected
-    assert nb._max_context_length("qwen3:0.6b", reported) == (reported or None)
+    assert nb._max_context_length("unlisted:tag", reported) == (reported or None)
 
 
 def test_the_resident_reports_what_its_load_asked_for(npu):
@@ -1059,11 +1060,14 @@ def test_reloading_the_resident_model_restarts_it_in_lemond(npu):
     assert npu.is_loaded
 
 
-def test_a_failed_reload_unload_leaves_nothing_recorded(npu, monkeypatch):
+def test_a_failed_reload_unload_restarts_lemond(npu, monkeypatch):
+    # The resident is released before sizing; an unload lemond refuses stops it, so the reload
+    # still lands on a fresh FastFlowLM rather than the old process.
     monkeypatch.setenv("FAKE_LEMOND_UNLOAD_FAILS", "1")
     monkeypatch.setenv("FAKE_LEMOND_DOWNLOADED", '["qwen3-0.6b-FLM"]')
     npu.enable()
     npu.load("qwen3-0.6b-FLM")
-    with pytest.raises(nb.NpuError, match = "Reloading qwen3-0.6b-FLM failed"):
-        npu.load("qwen3-0.6b-FLM")
-    assert not npu.is_loaded
+    first = npu._server.pid
+    npu.load("qwen3-0.6b-FLM")
+    assert npu.is_loaded
+    assert npu._server.pid != first
