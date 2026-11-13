@@ -62,14 +62,12 @@ def require_converter_deps() -> None:
 
 # Header walks that skip the vocab arrays: gguf.GGUFReader parses them all (~7 s on a 9B).
 def _gguf_header(gguf_path: str) -> dict:
-    from utils.models.gguf_metadata import _parse_gguf_arch_uints, read_gguf_general_metadata
+    from utils.models.gguf_metadata import _parse_gguf_arch_uints, read_gguf_architecture
 
-    general = read_gguf_general_metadata(str(gguf_path)) or {}
-    arch = general.get("general.architecture", "")
+    arch = read_gguf_architecture(str(gguf_path)) or ""
     geometry = ("block_count", "embedding_length", "expert_count", "nextn_predict_layers")
     sizes = _parse_gguf_arch_uints(str(gguf_path), frozenset(geometry)) or {}
-    names = {k: general[k] for k in ("general.basename", "general.name") if k in general}
-    return {"general.architecture": arch, **names, **{f"{arch}.{k}": v for k, v in sizes.items()}}
+    return {"general.architecture": arch, **{f"{arch}.{k}": v for k, v in sizes.items()}}
 
 
 # (layers, hidden size, experts) of the models FastFlowLM ships AIE2P kernels for

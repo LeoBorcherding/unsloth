@@ -482,7 +482,6 @@ def test_geometry_header_read_skips_the_vocab_without_gguf_reader(monkeypatch, t
     writer.add_block_count(33)
     writer.add_embedding_length(4096)
     writer.add_uint32("qwen35.nextn_predict_layers", 1)
-    writer.add_string("general.basename", "Qwen3.5-9B")
     writer.write_header_to_file()
     writer.write_kv_data_to_file()
     writer.write_tensors_to_file()
@@ -494,7 +493,6 @@ def test_geometry_header_read_skips_the_vocab_without_gguf_reader(monkeypatch, t
     monkeypatch.setattr(gguf, "GGUFReader", _no_full_parse)
     assert export_mod.q4nx._gguf_header(str(tmp_path / "m.gguf")) == {
         "general.architecture": "qwen35",
-        "general.basename": "Qwen3.5-9B",
         "qwen35.block_count": 33,
         "qwen35.embedding_length": 4096,
         "qwen35.nextn_predict_layers": 1,
