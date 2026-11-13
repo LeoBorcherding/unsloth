@@ -66,6 +66,81 @@ def _gguf_architecture(gguf_path: str) -> str:
     return field.contents() if field is not None else ""
 
 
+# Header walks that skip the vocab arrays: gguf.GGUFReader parses them all (~7 s on a 9B).
+def _gguf_header(gguf_path: str) -> dict:
+    from utils.models.gguf_metadata import _parse_gguf_arch_uints, read_gguf_architecture
+
+    arch = read_gguf_architecture(str(gguf_path)) or ""
+    geometry = ("block_count", "embedding_length", "expert_count", "nextn_predict_layers")
+    sizes = _parse_gguf_arch_uints(str(gguf_path), frozenset(geometry)) or {}
+    return {"general.architecture": arch, **{f"{arch}.{k}": v for k, v in sizes.items()}}
+
+
+# (layers, hidden size, experts) of the models FastFlowLM ships AIE2P kernels for
+# (src/xclbins/*-NPU2, geometry from each catalog model's config.json), by GGUF architecture.
+# The architecture alone is not enough: FLM has no kernels for Llama 3.3 70B or Gemma 4 31B,
+# and the converter applies the 35B-A3B config to any qwen35moe.
+_NPU_SHAPES = {
+    "llama": {
+        (16, 2048, 0): "Llama 3.2 1B",
+        (28, 3072, 0): "Llama 3.2 3B",
+        (32, 2560, 0): "Nanbeige4.1 3B",
+        (32, 4096, 0): "Llama 3.1 8B",
+    },
+    "qwen2": {(36, 2048, 0): "Qwen2.5 3B"},
+    "qwen2vl": {(36, 2048, 0): "Qwen2.5-VL 3B"},
+    "qwen3": {
+        (28, 1024, 0): "Qwen3 0.6B",
+        (28, 2048, 0): "Qwen3 1.7B",
+        (36, 2560, 0): "Qwen3 4B",
+        (36, 4096, 0): "Qwen3 8B",
+    },
+    "qwen3vl": {(36, 2560, 0): "Qwen3-VL 4B"},
+    "qwen35": {
+        (24, 1024, 0): "Qwen3.5 0.8B",
+        (24, 2048, 0): "Qwen3.5 2B",
+        (32, 2560, 0): "Qwen3.5 4B",
+        (32, 4096, 0): "Qwen3.5 9B",
+    },
+    "qwen35moe": {(40, 2048, 256): "Qwen3.5 / 3.6 35B-A3B"},
+    "gemma3": {(26, 1152, 0): "Gemma 3 1B", (34, 2560, 0): "Gemma 3 4B"},
+    "gemma4": {
+        (35, 1536, 0): "Gemma 4 E2B",
+        (42, 2560, 0): "Gemma 4 E4B",
+        (48, 3840, 0): "Gemma 4 12B",
+    },
+    "lfm2": {(16, 2048, 0): "LFM2 1.2B", (30, 2048, 0): "LFM2 2.6B"},
+    "phi3": {(32, 3072, 0): "Phi-4 mini"},
+    "gpt-oss": {(24, 2880, 32): "gpt-oss 20B"},
+    # Some Nanbeige GGUFs name their own architecture; the kernels are the llama-format 3B's.
+    "nanbeige": {(32, 2560, 0): "Nanbeige4.1 3B"},
+}
+
+
+def require_npu_geometry(header: dict) -> None:
+    """Refuse a GGUF whose size FastFlowLM has no NPU kernels for, before converting it."""
+    raw_arch = header.get("general.architecture") or ""
+    arch = raw_arch.lower()
+    shapes = _NPU_SHAPES.get(arch)
+    if shapes is None:
+        return
+    layers = header.get(f"{raw_arch}.block_count")
+    hidden = header.get(f"{raw_arch}.embedding_length")
+    if layers is None or hidden is None:
+        return
+    # The MTP block is not a decoder layer FLM runs (the converter subtracts it too).
+    layers -= header.get(f"{raw_arch}.nextn_predict_layers") or 0
+    experts = header.get(f"{raw_arch}.expert_count") or 0
+    if (layers, hidden, experts) in shapes:
+        return
+    nearest = sorted(shapes, key = lambda s: (abs(s[1] - hidden), abs(s[0] - layers)))
+    shape = f"{layers} layers, hidden size {hidden}" + (f", {experts} experts" if experts else "")
+    raise RuntimeError(
+        f"FastFlowLM has no AMD NPU kernels for this {arch} model ({shape}). "
+        f"The {arch} sizes it runs, nearest first: {', '.join(shapes[s] for s in nearest)}."
+    )
+
+
 # convert.py's __main__ overwrites sys.argv and importing it first is circular.
 _RUN_CONVERTER = (
     "import sys; from q4nx import create_converter; "
@@ -104,6 +179,8 @@ def convert_gguf_to_q4nx(gguf_path: str, out_dir: Path) -> None:
     from utils.paths.storage_roots import studio_root
 
     require_converter_deps()
+    header = _gguf_header(gguf_path)
+    require_npu_geometry(header)
     installer = _installer()
     name = installer.converter_for_architecture(_gguf_architecture(gguf_path))
     script = installer.install(studio_root() / "q4nx_converter", name = name)

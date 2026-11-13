@@ -448,3 +448,106 @@ def test_q4nx_folder_carries_the_current_reap_report(monkeypatch, tmp_path, prun
     assert report.is_file() is pruned
     if pruned:
         assert json.loads(report.read_text())["kept_experts"] == {"model.layers.0.mlp": [0, 2]}
+
+
+def _gguf_with(path: Path, arch: str, layers: int, hidden: int, **extra) -> str:
+    import gguf
+
+    writer = gguf.GGUFWriter(str(path), arch)
+    writer.add_block_count(layers)
+    writer.add_embedding_length(hidden)
+    for key, value in extra.items():
+        if isinstance(value, str):
+            writer.add_string(key.format(arch = arch), value)
+        else:
+            writer.add_uint32(key.format(arch = arch), value)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+    return str(path)
+
+
+_EXPERTS = "{arch}.expert_count"
+
+
+def test_geometry_header_read_skips_the_vocab_without_gguf_reader(monkeypatch, tmp_path):
+    import gguf
+
+    export_mod, _b, _s, _c = _backend(monkeypatch, tmp_path, object())
+    writer = gguf.GGUFWriter(str(tmp_path / "m.gguf"), "qwen35")
+    writer.add_token_list([f"t{i}" for i in range(5000)])
+    writer.add_block_count(33)
+    writer.add_embedding_length(4096)
+    writer.add_uint32("qwen35.nextn_predict_layers", 1)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+
+    def _no_full_parse(*_a, **_k):
+        raise AssertionError("GGUFReader parses every vocab array")
+
+    monkeypatch.setattr(gguf, "GGUFReader", _no_full_parse)
+    assert export_mod.q4nx._gguf_header(str(tmp_path / "m.gguf")) == {
+        "general.architecture": "qwen35",
+        "qwen35.block_count": 33,
+        "qwen35.embedding_length": 4096,
+        "qwen35.nextn_predict_layers": 1,
+    }
+    assert export_mod.q4nx._gguf_header(str(tmp_path / "missing.gguf")) == {
+        "general.architecture": ""
+    }
+
+
+@pytest.mark.parametrize(
+    "arch, layers, hidden, extra, nearest",
+    [
+        ("llama", 80, 8192, {}, "Llama 3.1 8B"),  # Llama 3.3 70B
+        ("llama", 40, 5120, {}, "Llama 3.1 8B"),  # phi-4 14B, Llama-format GGUF
+        ("gemma4", 30, 2816, {_EXPERTS: 128}, "Gemma 4 E4B"),  # Gemma 4 26B-A4B
+        ("gemma4", 60, 5376, {}, "Gemma 4 12B"),  # Gemma 4 31B
+        ("qwen35moe", 48, 3072, {_EXPERTS: 256}, "Qwen3.5 / 3.6 35B-A3B"),  # 122B-A10B
+        ("qwen35", 64, 5120, {"general.basename": "Qwen3.5-27B"}, "Qwen3.5 9B"),
+        # A Nanbeige off its one shape: FastFlowLM has no base the picker could load it on.
+        ("nanbeige", 40, 4096, {}, "Nanbeige4.1 3B"),
+        # Omni off the standard shapes: FastFlowLM ships no base the NPU picker could load it on.
+        ("qwen35", 40, 3072, {"general.basename": "Qwen3.5-Omni"}, "Qwen3.5 4B"),
+    ],
+)
+def test_unsupported_geometry_is_refused_before_installing(
+    monkeypatch, tmp_path, arch, layers, hidden, extra, nearest
+):
+    export_mod, _b, _s, _c = _backend(monkeypatch, tmp_path, object())
+    q4nx = export_mod.q4nx
+    monkeypatch.setattr(q4nx, "require_converter_deps", lambda: None)
+    monkeypatch.setattr(q4nx, "_installer", lambda: pytest.fail("installer must not run"))
+    source = _gguf_with(tmp_path / "m.gguf", arch, layers, hidden, **extra)
+
+    with pytest.raises(RuntimeError, match = "no AMD NPU kernels") as refused:
+        q4nx.convert_gguf_to_q4nx(source, tmp_path / "out")
+    assert f"nearest first: {nearest}" in str(refused.value)
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize(
+    "arch, layers, hidden, extra, converter",
+    [
+        ("qwen35", 32, 4096, {}, "q4k"),  # Qwen3.5 9B
+        ("qwen35", 33, 4096, {"{arch}.nextn_predict_layers": 1}, "q4k"),  # 9B with its MTP block
+        ("qwen35moe", 40, 2048, {_EXPERTS: 256}, "q4k"),  # Qwen3.6 35B-A3B
+        ("llama", 32, 4096, {}, "q4nx"),  # Llama 3.1 8B
+        ("gpt-oss", 24, 2880, {_EXPERTS: 32}, "q4nx"),
+        ("nanbeige", 32, 2560, {}, "q4nx"),  # Nanbeige4.1 3B under its own architecture name
+    ],
+)
+def test_supported_geometry_converts(monkeypatch, tmp_path, arch, layers, hidden, extra, converter):
+    export_mod, _b, _s, _c = _backend(monkeypatch, tmp_path, object())
+    read_architecture = export_mod.q4nx._gguf_architecture
+    installed = _stub_installer(export_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(export_mod.q4nx, "_gguf_architecture", read_architecture)
+    _fake_popen(export_mod, monkeypatch)
+    source = _gguf_with(tmp_path / "m.gguf", arch, layers, hidden, **extra)
+
+    export_mod.q4nx.convert_gguf_to_q4nx(source, tmp_path / "out")
+    assert installed == [converter]
