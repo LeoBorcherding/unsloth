@@ -101,6 +101,39 @@ def test_a_nanbeige_architecture_conversion_loads_on_the_nanbeige_base():
     assert local.base == "nanbeige4.1:3b" and local.problem is None
 
 
+def test_a_conversion_saved_outside_or_deep_in_the_exports_is_listed_once_registered(
+    monkeypatch, tmp_path
+):
+    deep = exports_root() / "a" / "b" / "c" / "d"
+    deep.mkdir(parents = True)
+    outside = tmp_path / "other-drive"
+    outside.mkdir()
+    folders = []
+    for parent in (deep, outside):
+        folder = _converted()
+        folders.append(folder.rename(parent / folder.name))
+    assert nlm.account_local_models() == []
+    assert nlm.hidden_in_exports(folders[0]) and not nlm.hidden_in_exports(folders[1])
+    assert not nlm.hidden_in_exports(exports_root() / "q4nx" / "m-q4nx")
+
+    monkeypatch.setattr(nlm, "_registered_folders", lambda: [*folders, tmp_path])
+    listed = nlm.account_local_models()
+    assert sorted(m.folder for m in listed) == sorted(folders)
+    assert all(m.base == "qwen3:0.6b" and m.problem is None for m in listed)
+
+
+def test_a_registered_folder_inside_the_walk_is_listed_once(monkeypatch):
+    folder = _converted()
+    monkeypatch.setattr(nlm, "_registered_folders", lambda: [folder])
+    assert [m.folder for m in nlm.account_local_models()] == [folder]
+
+
+def test_another_accounts_registered_conversion_is_not_listed(monkeypatch):
+    folder = run_as(BOB, _converted)
+    monkeypatch.setattr(nlm, "_registered_folders", lambda: [folder])
+    assert run_as(ALICE, nlm.account_local_models) == []
+
+
 def test_an_account_sees_only_its_own_exports():
     run_as(ALICE, _converted)
     assert [m.folder.name for m in run_as(ALICE, nlm.account_local_models)] == [

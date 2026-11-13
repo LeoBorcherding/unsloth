@@ -197,3 +197,28 @@ def test_an_offline_base_file_is_raised_not_read_as_missing(monkeypatch):
 
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", missing)
     assert q4nx._fetch_base_file("unsloth/Qwen3-0.6B", "chat_template.jinja", None) is None
+
+
+@pytest.mark.parametrize("depth, registered", [(("q4nx",), False), (("a", "b", "c", "d"), True)])
+def test_a_conversion_deeper_than_the_npu_scan_is_registered(
+    monkeypatch, authorized, depth, registered
+):
+    from utils.paths.storage_roots import exports_root
+
+    out = exports_root().joinpath(*depth, "m.Q4_1-q4nx")
+    calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def to_thread(fn, *args, **kwargs):
+        if fn is export_routes.account_access.authorize_download:
+            return None
+        if fn is export_routes._try_register_external_export:
+            calls.append(args[0])
+            return True, str(args[0])
+        if fn is export_routes._export_details:
+            return {"output_path": str(args[0])}
+        return str(out)
+
+    monkeypatch.setattr(export_routes.asyncio, "to_thread", to_thread)
+    _convert(OWNER, repo_id = "org/r-GGUF", filename = "m.Q4_1.gguf")
+    assert calls == ([out] if registered else [])
