@@ -137,7 +137,7 @@ export function npuRowTooltip(model: NpuModel): string | null {
   const { folder, problem } = model.local;
   return problem
     ? `Can't load ${folder}: ${problem}`
-    : `Converted in Unsloth Studio, from exports/${folder}`;
+    : `Converted on the Export page, from exports/${folder}`;
 }
 
 export function npuDeleteDescription(model: NpuModel): string {
