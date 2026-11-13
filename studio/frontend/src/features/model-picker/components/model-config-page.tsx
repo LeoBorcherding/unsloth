@@ -4504,7 +4504,12 @@ export function ModelConfigPage({
                 <NpuAdvancedSettings
                   config={config}
                   update={update}
-                  contextLength={maxSeqLengthValue}
+                  // An unpinned window nothing has resolved yet can load up to the model's limit.
+                  contextLength={
+                    savedContextPin(config) != null || npuServedWindow != null
+                      ? maxSeqLengthValue
+                      : nativeMaxSeqLength
+                  }
                   showImagePreResize={target.meta.isVision === true || npuCatalogVision}
                 />
               ) : (
