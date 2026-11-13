@@ -116,3 +116,22 @@ def test_managed_account_and_owner_reach_the_converter_for_allowed_paths(convert
             _convert(account, path)
         assert exc.value.status_code == 400 and "stop before converting" in exc.value.detail
     assert len(converted) == 2
+
+
+def test_an_offline_base_file_is_raised_not_read_as_missing(monkeypatch):
+    import huggingface_hub
+    from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
+    from core.export import q4nx
+
+    def offline(*_a, **_k):
+        raise LocalEntryNotFoundError("offline")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", offline)
+    with pytest.raises(LocalEntryNotFoundError):
+        q4nx._fetch_base_file("unsloth/Qwen3-0.6B", "tokenizer_config.json", None)
+
+    def missing(*_a, **_k):
+        raise EntryNotFoundError("no such file")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", missing)
+    assert q4nx._fetch_base_file("unsloth/Qwen3-0.6B", "chat_template.jinja", None) is None
