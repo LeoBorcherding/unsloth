@@ -793,6 +793,11 @@ async def convert_q4nx(
         raise HTTPException(
             status_code = _q4nx_failure_status(e), detail = f"Q4NX conversion failed: {e}"
         )
+    from core.inference.npu_local_models import hidden_in_exports
+
+    # The NPU picker lists registered folders too; _export_details registers one outside exports.
+    if hidden_in_exports(Path(output_path)):
+        await asyncio.to_thread(_try_register_external_export, Path(output_path))
     return ExportOperationResponse(
         success = True,
         message = "Converted to Q4NX for the AMD NPU",

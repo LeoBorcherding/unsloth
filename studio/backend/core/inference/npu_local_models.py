@@ -211,9 +211,46 @@ def _is_junction(path: Path) -> bool:
 
 
 def account_local_models() -> list[LocalQ4nx]:
-    """The acting account's converted folders; another account's exports root is never read."""
+    """The acting account's converted folders; another account's exports root is never read.
+
+    Also lists registered folders that hold a model.q4nx themselves: a conversion saved
+    outside the exports root, or deeper than the walk reaches, is registered there.
+    """
+    from utils.paths.storage_roots import exports_root, within_account
+
+    found = find_local_models(exports_root())
+    seen = {os.path.normcase(str(model.folder.resolve())) for model in found}
+    for folder in _registered_folders():
+        key = os.path.normcase(str(folder.resolve()))
+        if (
+            key not in seen
+            and not folder.is_symlink()
+            and not _is_junction(folder)
+            and (folder / "model.q4nx").is_file()
+            and within_account(folder)
+        ):
+            seen.add(key)
+            found.append(_describe(folder, folder.parent))
+    return sorted(found, key = lambda model: model.display.lower())
+
+
+def _registered_folders() -> list[Path]:
+    try:
+        from storage.studio_db import list_scan_folders
+        return [Path(row["path"]) for row in list_scan_folders()]
+    except Exception:
+        return []
+
+
+def hidden_in_exports(folder: Path) -> bool:
+    """Inside the exports root but out of find_local_models' reach (too deep, or under a dot folder)."""
     from utils.paths.storage_roots import exports_root
-    return find_local_models(exports_root())
+
+    try:
+        rel = folder.resolve().relative_to(exports_root().resolve())
+    except ValueError:
+        return False
+    return len(rel.parts) > _MAX_DEPTH or any(part.startswith(".") for part in rel.parts)
 
 
 def find_flm_list(flm_binary: Path) -> Optional[Path]:
