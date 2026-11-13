@@ -120,7 +120,11 @@ export function npuResumeLabel(model: NpuModel): string | null {
 }
 
 export function npuRowLabel(model: NpuModel): string {
-  return model.local ? model.local.folder.split("/").pop() || model.id : model.id;
+  if (!model.local) return model.id;
+  const parts = model.local.folder.split("/").filter(Boolean);
+  const last = parts.pop();
+  // A GGUF export with Q4NX on writes into <save folder>/npu-q4nx: name it by the save folder.
+  return (last === "npu-q4nx" ? parts.pop() : last) || model.id;
 }
 
 export function npuRowDetails(model: NpuModel): string[] {

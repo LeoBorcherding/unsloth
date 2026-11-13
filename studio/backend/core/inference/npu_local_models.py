@@ -31,6 +31,8 @@ VISION_FILES = ("vision_weight.q4nx", "vision_weights.q4nx")
 # A pull of a local tag must fail rather than overwrite linked files; .invalid never resolves.
 _UNREACHABLE_URL = "https://unsloth-local.invalid/q4nx"
 _MAX_DEPTH = 4
+# Where a GGUF export with Q4NX on writes the conversion, under its save folder (export.py).
+EXPORT_SUBFOLDER = "npu-q4nx"
 
 # (layers, hidden size, experts) -> the FastFlowLM 1.0.12 tag whose kernels and config.json run it.
 _FLM_BASES: dict[str, dict[tuple[int, int, int], str]] = {
@@ -224,7 +226,9 @@ def account_local_models() -> list[LocalQ4nx]:
 
     found = find_local_models(exports_root())
     seen = {os.path.normcase(str(model.folder.resolve())) for model in found}
-    for folder in _registered_folders():
+    # A GGUF export with Q4NX on registers its save folder; the conversion sits in npu-q4nx under it.
+    candidates = (c for f in _registered_folders() for c in (f, f / EXPORT_SUBFOLDER))
+    for folder in candidates:
         key = os.path.normcase(str(folder.resolve()))
         if (
             key not in seen

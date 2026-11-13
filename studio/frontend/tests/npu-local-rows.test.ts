@@ -84,6 +84,20 @@ test("a conversion saved outside the exports folder shows its full path", () => 
   }
 });
 
+test("a GGUF export's Q4NX folder is named after its save folder", () => {
+  for (const folder of [
+    "Qwen3-0.6B-ft/npu-q4nx",
+    "/mnt/models/Qwen3-0.6B-ft/npu-q4nx",
+  ]) {
+    const exported = model("local-npu-q4nx-0a1b2c3d-q4nx-FLM", {
+      folder,
+      base: "qwen3:0.6b",
+      problem: null,
+    });
+    assert.equal(api.npuRowLabel(exported), "Qwen3-0.6B-ft");
+  }
+});
+
 test("an unloadable folder says why on hover", () => {
   assert.equal(
     api.npuRowTooltip(broken),

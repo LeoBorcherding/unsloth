@@ -131,6 +131,19 @@ def test_a_conversion_saved_outside_or_deep_in_the_exports_is_listed_once_regist
     }
 
 
+def test_a_gguf_exports_q4nx_folder_under_a_registered_save_folder_is_listed(
+    monkeypatch, tmp_path
+):
+    # export.py writes the conversion to <save folder>/npu-q4nx and registers the save folder.
+    save = tmp_path / "elsewhere" / "Qwen3-0.6B-ft"
+    save.mkdir(parents = True)
+    folder = _converted().rename(save / nlm.EXPORT_SUBFOLDER)
+    monkeypatch.setattr(nlm, "_registered_folders", lambda: [save])
+    [local] = nlm.account_local_models()
+    assert local.folder == folder and local.display == folder.as_posix()
+    assert local.base == "qwen3:0.6b" and local.problem is None
+
+
 def test_a_registered_folder_inside_the_walk_is_listed_once(monkeypatch):
     folder = _converted()
     monkeypatch.setattr(nlm, "_registered_folders", lambda: [folder])
