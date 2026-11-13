@@ -137,6 +137,26 @@ def test_another_accounts_registered_conversion_is_not_listed(monkeypatch):
     assert run_as(ALICE, nlm.account_local_models) == []
 
 
+def test_a_junction_is_skipped_on_a_python_without_isjunction(monkeypatch):
+    import types
+
+    from utils import cache_inventory
+
+    junction = exports_root() / "q4nx" / "junction"
+    junction.mkdir(parents = True)
+    _converted().rename(junction / "elsewhere-q4nx")
+    kept = _converted()
+
+    def lstat(path):
+        tag = 0xA0000003 if Path(path) == junction else 0  # IO_REPARSE_TAG_MOUNT_POINT
+        return types.SimpleNamespace(st_reparse_tag = tag)
+
+    # Windows on Python 3.9-3.11: no os.path.isjunction, a mount-point reparse tag.
+    pre312 = types.SimpleNamespace(path = types.SimpleNamespace(), name = "nt", lstat = lstat)
+    monkeypatch.setattr(cache_inventory, "os", pre312)
+    assert [m.folder for m in nlm.account_local_models()] == [kept]
+
+
 def test_an_account_sees_only_its_own_exports():
     run_as(ALICE, _converted)
     assert [m.folder.name for m in run_as(ALICE, nlm.account_local_models)] == [

@@ -206,8 +206,9 @@ def find_local_models(root: Path) -> list[LocalQ4nx]:
 
 
 def _is_junction(path: Path) -> bool:
-    is_junction = getattr(os.path, "isjunction", None)
-    return bool(is_junction and is_junction(path))
+    # Before 3.12 os.path has no isjunction and os.walk descends junctions: read the reparse tag.
+    from utils.cache_inventory import _is_junction as is_junction
+    return is_junction(path)
 
 
 def account_local_models() -> list[LocalQ4nx]:
