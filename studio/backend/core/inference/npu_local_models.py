@@ -151,7 +151,6 @@ def _base_for(folder: Path) -> tuple[Optional[str], Optional[str]]:
 def _own_file(path: Path) -> bool:
     """A plain file inside the acting account: a link could hand over another account's weights."""
     from utils.paths.storage_roots import within_account
-
     return path.is_file() and not path.is_symlink() and within_account(path)
 
 
