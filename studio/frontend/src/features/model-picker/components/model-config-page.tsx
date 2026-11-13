@@ -1711,8 +1711,9 @@ function NpuAdvancedSettings({
               update({ npuPrefillChunkLen: null });
               return;
             }
-            const parsed = Number.parseInt(raw, 10);
-            if (Number.isFinite(parsed)) {
+            // Number, not parseInt: a number input can hand over "1e3".
+            const parsed = Number(raw);
+            if (Number.isInteger(parsed)) {
               update({ npuPrefillChunkLen: Math.max(1, Math.min(contextLength, parsed)) });
             }
           }}

@@ -51,6 +51,13 @@ test("the prefill chunk is bounded by the window the load resolves, or the model
   );
 });
 
+test("the prefill chunk input reads the whole number, not parseInt's prefix", () => {
+  const npuAdvanced = configPage.slice(configPage.indexOf("function NpuAdvancedSettings("));
+  const chunk = npuAdvanced.slice(npuAdvanced.indexOf("npuPrefillChunkLen: null"));
+  assert.match(chunk, /const parsed = Number\(raw\);\s+if \(Number\.isInteger\(parsed\)\)/);
+  assert.equal(Number("1e3"), 1000);
+});
+
 test("the NPU footer's setup path keeps the setup notice while a search is active", () => {
   const browse = pickers.slice(pickers.indexOf("const showNpuBrowse ="));
   assert.match(browse, /\(!showHfSection \|\| !npuCatalog\.ready \|\| npuBrowseRows\.length > 0\)/);
