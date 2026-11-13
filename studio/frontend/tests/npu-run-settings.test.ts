@@ -34,13 +34,28 @@ test("a downloaded NPU row opens run settings with the model's context limit", (
 test("NPU run settings pin customContextLength and offer nothing FastFlowLM ignores", () => {
   assert.match(configPage, /const targetIsNpu = isNpuModelId\(target\.id\);/);
   assert.match(configPage, /const pinsContextLength = targetIsMlx \|\| targetIsNpu;/);
-  assert.match(configPage, /contextPinPatch\(value, pinsContextLength\)/);
+  assert.match(configPage, /contextPinPatch\(value, pinsContextLength[,)]/);
   const writers = configPage.match(/contextPinPatch\(/g) ?? [];
-  const npuAware = configPage.match(/contextPinPatch\(\w+, pinsContextLength\)/g) ?? [];
+  const npuAware = configPage.match(/contextPinPatch\(\w+, pinsContextLength[,)]/g) ?? [];
   assert.ok(writers.length > 0);
   assert.equal(npuAware.length, writers.length);
   assert.match(configPage, /!target\.isGguf && !targetIsMlx && !targetIsNpu && /);
   assert.match(configPage, /target\.isGguf \|\| pinsContextLength\s+\? effectiveRuntimeConfig/);
+});
+
+test("the prefill chunk is bounded by the window the load resolves, or the model's limit before one", () => {
+  const npuAdvanced = configPage.slice(configPage.indexOf("<NpuAdvancedSettings"));
+  assert.match(
+    npuAdvanced,
+    /contextLength=\{\s*savedContextPin\(config\) != null \|\| npuServedWindow != null\s*\? maxSeqLengthValue\s*: nativeMaxSeqLength\s*\}/,
+  );
+});
+
+test("the prefill chunk input reads the whole number, not parseInt's prefix", () => {
+  const npuAdvanced = configPage.slice(configPage.indexOf("function NpuAdvancedSettings("));
+  const chunk = npuAdvanced.slice(npuAdvanced.indexOf("npuPrefillChunkLen: null"));
+  assert.match(chunk, /const parsed = Number\(raw\);\s+if \(Number\.isInteger\(parsed\)\)/);
+  assert.equal(Number("1e3"), 1000);
 });
 
 test("the NPU footer's setup path keeps the setup notice while a search is active", () => {
