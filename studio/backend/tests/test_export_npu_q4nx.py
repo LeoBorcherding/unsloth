@@ -473,6 +473,37 @@ def _gguf_with(path: Path, arch: str, layers: int, hidden: int, **extra) -> str:
 _EXPERTS = "{arch}.expert_count"
 
 
+def test_geometry_header_read_skips_the_vocab_without_gguf_reader(monkeypatch, tmp_path):
+    import gguf
+
+    export_mod, _b, _s, _c = _backend(monkeypatch, tmp_path, object())
+    writer = gguf.GGUFWriter(str(tmp_path / "m.gguf"), "qwen35")
+    writer.add_token_list([f"t{i}" for i in range(5000)])
+    writer.add_block_count(33)
+    writer.add_embedding_length(4096)
+    writer.add_uint32("qwen35.nextn_predict_layers", 1)
+    writer.add_string("general.basename", "Qwen3.5-9B")
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_tensors_to_file()
+    writer.close()
+
+    def _no_full_parse(*_a, **_k):
+        raise AssertionError("GGUFReader parses every vocab array")
+
+    monkeypatch.setattr(gguf, "GGUFReader", _no_full_parse)
+    assert export_mod.q4nx._gguf_header(str(tmp_path / "m.gguf")) == {
+        "general.architecture": "qwen35",
+        "general.basename": "Qwen3.5-9B",
+        "qwen35.block_count": 33,
+        "qwen35.embedding_length": 4096,
+        "qwen35.nextn_predict_layers": 1,
+    }
+    assert export_mod.q4nx._gguf_header(str(tmp_path / "missing.gguf")) == {
+        "general.architecture": ""
+    }
+
+
 @pytest.mark.parametrize(
     "arch, layers, hidden, extra, nearest",
     [
