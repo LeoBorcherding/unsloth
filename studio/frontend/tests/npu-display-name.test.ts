@@ -7,6 +7,7 @@ import type * as NpuApi from "../src/features/npu/api.ts";
 import * as displayName from "../src/features/npu/display-name.ts";
 import * as formatFastApiError from "../src/lib/format-fastapi-error.ts";
 import * as sseJsonEvents from "../src/lib/sse-json-events.ts";
+import { readText } from "./helpers/kit.ts";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
 
 const { npuDisplayName, npuDisplayNameOf, npuRepoLabel } = displayName;
@@ -85,4 +86,12 @@ test("NPU search finds a model by its old id, its tag and its repo", () => {
     assert.deepEqual(found(query), [qwen.id], query);
   }
   assert.deepEqual(found("gemma"), []);
+});
+
+test("the loaded-models list asks for the catalog while an NPU chat model is loaded", () => {
+  const hook = readText("../src/features/loaded-models/use-loaded-models.ts");
+  assert.match(
+    hook,
+    /useNpuDisplayNames\(\s*polled\.some\(\(entry\) => entry\.source === "chat" && isNpuModelId\(entry\.name\)\),?\s*\)/,
+  );
 });

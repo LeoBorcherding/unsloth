@@ -11,6 +11,8 @@ import {
 } from "@/lib/model-lifecycle-events";
 // eslint-disable-next-line no-restricted-imports -- Leaf module; the npu index pulls in its React views.
 import { useNpuDisplayNames } from "@/features/npu/use-npu-display-name";
+// eslint-disable-next-line no-restricted-imports -- Leaf module, as above.
+import { isNpuModelId } from "@/features/npu/api";
 import { ejectLoadedModel, readLoadedModels } from "./loaded-models-api";
 import {
   type LoadedModelEntry,
@@ -66,7 +68,10 @@ export function useLoadedModels(
   const [pending, setPending] = useState<Map<LoadedModelSource, string | null>>(
     () => new Map(),
   );
-  const npuName = useNpuDisplayNames(false);
+  // A model loaded on an earlier visit is named before any picker lists the catalog.
+  const npuName = useNpuDisplayNames(
+    polled.some((entry) => entry.source === "chat" && isNpuModelId(entry.name)),
+  );
   // Labels only: eject and reload still route on the Lemonade id in `name`.
   const named = useMemo(() => {
     let changed = false;
