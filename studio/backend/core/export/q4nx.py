@@ -73,7 +73,6 @@ def require_converter_deps() -> None:
         )
 
 
-_GEOMETRY_KEYS = ("block_count", "embedding_length", "expert_count", "nextn_predict_layers")
 _GGUF_INTS = {4: "<I", 5: "<i", 10: "<Q", 11: "<q"}
 
 
