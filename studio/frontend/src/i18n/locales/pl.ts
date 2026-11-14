@@ -4007,14 +4007,19 @@ export const pl = {
     cpuTrainingNotice:
       "Nie znaleziono GPU, więc trenowanie odbywa się na CPU. Jest znacznie wolniejsze niż na GPU i obsługuje tylko modele tekstowe (LoRA lub pełny finetuning).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Ustawienia",
+      review: "Przegląd",
+      back: "Wstecz",
+      continue: "Dalej",
+      stepProgress: "Krok {current} z {total}",
+      setupNavigation: "Konfiguracja treningu",
       modelTitle: "Model",
       modelDescription: "Wybierz model i metodę trenowania",
       datasetTitle: "Zbiór danych",
       datasetDescription: "Wybierz lub prześlij dane treningowe",
       paramsTitle: "Parametry",
       paramsDescription: "Skonfiguruj parametry trenowania",
-      configTitle: "Konfiguracja",
-      configDescription: "Zapisuj i wczytuj konfiguracje",
       modelLabel: "Model",
       modelTooltip: "Model bazowy, który chcesz dostroić.",
       methodLabel: "Metoda",
@@ -4290,6 +4295,7 @@ export const pl = {
             "Ten zbiór danych wygląda na obrazy, których nie można strumieniować.",
           audioDataset:
             "Ten zbiór danych wygląda na audio, którego nie można strumieniować.",
+          rlObjective: "Streaming nie jest jeszcze obsługiwany dla DPO, ORPO ani GRPO.",
         },
         options: {
           trainOnCompletions: "tylko odpowiedzi asystenta",

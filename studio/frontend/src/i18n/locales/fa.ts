@@ -3946,14 +3946,19 @@ export const fa = {
     cpuTrainingNotice:
       "هیچ GPU پیدا نشد، بنابراین آموزش روی CPU اجرا می‌شود. این کار بسیار کندتر از آموزش روی GPU است و فقط از مدل‌های متنی پشتیبانی می‌کند (LoRA یا تنظیم دقیق کامل).",
     wizard: {
+      promptStep: "پرامپت",
+      settingsStep: "تنظیمات",
+      review: "بازبینی",
+      back: "قبلی",
+      continue: "ادامه",
+      stepProgress: "مرحله {current} از {total}",
+      setupNavigation: "تنظیم آموزش",
       modelTitle: "مدل",
       modelDescription: "انتخاب مدل و روش آموزش",
       datasetTitle: "مجموعه‌داده",
       datasetDescription: "انتخاب یا آپلود دادهٔ آموزشی",
       paramsTitle: "پارامترها",
       paramsDescription: "پیکربندی پارامترهای آموزش",
-      configTitle: "پیکربندی",
-      configDescription: "ذخیره و بارگذاری پیکربندی‌ها",
       modelLabel: "مدل",
       modelTooltip: "مدل پایه‌ای که می‌خواهید تنظیم دقیق کنید.",
       methodLabel: "روش",
@@ -4226,6 +4231,7 @@ export const fa = {
             "به نظر می‌رسد این مجموعه‌داده شامل تصویر است که قابل جریان‌دهی نیست.",
           audioDataset:
             "به نظر می‌رسد این مجموعه‌داده شامل صدا است که قابل جریان‌دهی نیست.",
+          rlObjective: "استریم هنوز برای DPO، ORPO و GRPO پشتیبانی نمی‌شود.",
         },
         options: {
           trainOnCompletions: "فقط تکمیل‌های دستیار",

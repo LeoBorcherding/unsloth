@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { NewBadge } from "@/components/new-badge";
+import { Button } from "@/components/ui/button";
 import { PICKER_TRIGGER_CLASS } from "@/components/resource-picker/picker-focus";
 import { SectionBox, SectionField } from "@/components/section-box";
 import { SegmentedTabsList } from "@/components/segmented-tabs";
@@ -27,22 +29,36 @@ import {
   TRAINING_METHOD_META,
   TRAINING_METHOD_ORDER,
   useTrainingConfigStore,
+  effectiveTrainingObjective,
 } from "@/features/training";
-import { useT } from "@/i18n";
+import { type TranslationKey, useT } from "@/i18n";
 import { ChipIcon, Settings01Icon } from "@/lib/hugeicons-derived";
 import { cn } from "@/lib/utils";
 import type { TrainingMethod } from "@/types/training";
 import {
+  BubbleChatEditIcon,
   Database02Icon,
-  Edit03Icon,
 } from "@hugeicons/core-free-icons";
-import type { ReactNode } from "react";
+import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { DatasetPanel } from "../sections/dataset-section";
 import { DatasetSourceToggleAction } from "../sections/dataset-source-toggle";
 import { FieldHint } from "../sections/field-hint";
 import { ParamsSection } from "../sections/params-section";
+import { ObjectiveSelect } from "../sections/rl/objective-select";
+import { PromptFormatSection } from "../sections/rl/prompt-format-section";
+import { RewardsSection } from "../sections/rl/rewards-section";
+import { RlDatasetRoles } from "../sections/rl/rl-dataset-roles";
+import { RlParamsSection } from "../sections/rl/rl-params-section";
 import { ConfigActions } from "./config-actions";
 import type { ParamMode } from "./training-param-mode";
+import { RunPreviewCard } from "./run-preview-card";
+import { StartTrainingCta } from "./start-training-cta";
+import {
+  resolveTrainingStep,
+  trainingSteps,
+  type TrainingStep,
+} from "./training-steps";
 
 function ParamModeToggle({
   mode,
@@ -77,16 +93,25 @@ function ParamModeToggle({
 function SetupField({
   label,
   hint,
+  badge,
   children,
 }: {
   label: string;
   hint?: string;
+  badge?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <SectionField
       label={label}
-      hint={hint ? <FieldHint text={hint} label={label} /> : null}
+      hint={
+        hint || badge ? (
+          <>
+            {hint ? <FieldHint text={hint} label={label} /> : null}
+            {badge}
+          </>
+        ) : null
+      }
     >
       {children}
     </SectionField>
@@ -275,6 +300,9 @@ function ModelPanel() {
   const decisionCheckpoints = useTrainingConfigStore((s) =>
     s.modelType === "decision" ? s.decisionCheckpoints : null,
   );
+  const isDecisionModel = useTrainingConfigStore(
+    (s) => s.modelType === "decision",
+  );
   // Text and vision LLMs can also train as decision models; Laya, Clef, audio and embeddings cannot.
   const canTrainAsDecision = useTrainingConfigStore(
     (s) =>
@@ -324,20 +352,67 @@ function ModelPanel() {
           <CheckpointSelect checkpoints={decisionCheckpoints} />
         </SetupField>
       ) : null}
+      {isDecisionModel ? null : (
+        <div className="@md/train-section:col-span-2 @2xl/train-section:col-span-3">
+          <SetupField
+            label={t("rl.objective.label")}
+            hint={t("rl.objective.tooltip")}
+            badge={<NewBadge />}
+          >
+            <ObjectiveSelect />
+          </SetupField>
+        </div>
+      )}
     </div>
   );
 }
 
+const STEP_LABELS = {
+  model: "studio.wizard.modelTitle",
+  dataset: "studio.wizard.datasetTitle",
+  prompt: "studio.wizard.promptStep",
+  rewards: "rl.rewards.title",
+  parameters: "studio.wizard.settingsStep",
+  review: "studio.wizard.review",
+} as const satisfies Record<TrainingStep, TranslationKey>;
+
 export function TrainingWizard({
   paramMode,
   onParamModeChange,
+  step,
+  onStepChange,
 }: {
   paramMode: ParamMode;
   onParamModeChange: (next: ParamMode) => void;
+  step: TrainingStep;
+  onStepChange: (next: TrainingStep) => void;
 }) {
   const t = useT();
-  return (
-    <div className="flex flex-col gap-6">
+  const objective = useTrainingConfigStore((s) => effectiveTrainingObjective(s));
+  const steps = trainingSteps(objective);
+  const activeStep = resolveTrainingStep(step, objective);
+  const index = steps.indexOf(activeStep);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const focusOnChange = useRef(false);
+
+  useEffect(() => {
+    if (activeStep !== step) onStepChange(activeStep);
+    if (!focusOnChange.current) return;
+    focusOnChange.current = false;
+    document
+      .getElementById(`training-panel-${activeStep}`)
+      ?.focus({ preventScroll: true });
+    containerRef.current?.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [activeStep, step, onStepChange]);
+
+  function goTo(next: TrainingStep) {
+    if (next === activeStep) return;
+    focusOnChange.current = true;
+    onStepChange(next);
+  }
+
+  const panels: Record<TrainingStep, ReactNode> = {
+    model: (
       <SectionBox
         title={t("studio.wizard.modelTitle")}
         description={t("studio.wizard.modelDescription")}
@@ -346,7 +421,8 @@ export function TrainingWizard({
       >
         <ModelPanel />
       </SectionBox>
-
+    ),
+    dataset: (
       <SectionBox
         title={t("studio.wizard.datasetTitle")}
         description={t("studio.wizard.datasetDescription")}
@@ -356,8 +432,26 @@ export function TrainingWizard({
         titleAction={<DatasetSourceToggleAction />}
       >
         <DatasetPanel />
+        {objective !== "sft" && (
+          <div className="mt-5">
+            <RlDatasetRoles objective={objective} />
+          </div>
+        )}
       </SectionBox>
-
+    ),
+    prompt: (
+      <SectionBox
+        title={t("rl.prompt.title")}
+        titleBadge={<NewBadge />}
+        description={t("rl.prompt.description")}
+        icon={BubbleChatEditIcon}
+        chipTint="var(--chart-1)"
+      >
+        <PromptFormatSection />
+      </SectionBox>
+    ),
+    rewards: <RewardsSection />,
+    parameters: (
       <SectionBox
         title={t("studio.wizard.paramsTitle")}
         description={t("studio.wizard.paramsDescription")}
@@ -369,16 +463,133 @@ export function TrainingWizard({
         }
       >
         <ParamsSection mode={paramMode} />
+        {objective !== "sft" && paramMode === "simple" && (
+          <div className="mt-5">
+            <RlParamsSection objective={objective} />
+          </div>
+        )}
       </SectionBox>
+    ),
+    review: <RunPreviewCard paramMode={paramMode} />,
+  };
 
-      <SectionBox
-        title={t("studio.wizard.configTitle")}
-        description={t("studio.wizard.configDescription")}
-        icon={Edit03Icon}
-        chipTint="var(--chart-1)"
-      >
+  return (
+    <div
+      ref={containerRef}
+      className="@container/training-wizard flex min-w-0 scroll-mt-6 flex-col gap-5"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p
+          aria-live="polite"
+          aria-atomic="true"
+          className="text-sm tabular-nums text-muted-foreground"
+        >
+          {t("studio.wizard.stepProgress", {
+            current: index + 1,
+            total: steps.length,
+          })}
+        </p>
         <ConfigActions />
-      </SectionBox>
+      </div>
+      <nav aria-label={t("studio.wizard.setupNavigation")}>
+        <ol
+          className={cn(
+            "grid gap-1",
+            steps.length === 6
+              ? "grid-cols-3 @3xl/training-wizard:grid-cols-6"
+              : "grid-cols-2 @xl/training-wizard:grid-cols-4",
+          )}
+        >
+          {steps.map((item, position) => {
+            const active = item === activeStep;
+            return (
+              <li key={item} className="min-w-0">
+                <Button
+                  id={`training-step-${item}`}
+                  type="button"
+                  variant="ghost"
+                  className={cn(
+                    "h-auto min-h-10 w-full justify-start gap-2 whitespace-nowrap px-2 py-2 text-start text-ui-12",
+                    active ? "bg-muted text-foreground" : "text-muted-foreground",
+                  )}
+                  aria-current={active ? "step" : undefined}
+                  aria-controls={`training-panel-${item}`}
+                  onClick={() => goTo(item)}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "flex size-6 shrink-0 items-center justify-center rounded-full text-xs tabular-nums",
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {position + 1}
+                  </span>
+                  <span className="min-w-0 truncate">{t(STEP_LABELS[item])}</span>
+                </Button>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      {/* Panels stay mounted so back/forward keeps local drafts and test results. */}
+      {steps.map((item) => (
+        <div
+          key={item}
+          id={`training-panel-${item}`}
+          role="region"
+          aria-labelledby={`training-step-${item}`}
+          tabIndex={-1}
+          hidden={item !== activeStep}
+          className="min-w-0 outline-none duration-200 animate-in fade-in-0 motion-reduce:animate-none"
+        >
+          {panels[item]}
+        </div>
+      ))}
+
+      <div className="sticky bottom-0 z-10 flex items-start justify-between gap-3 border-t border-border/60 bg-background py-4">
+        <Tooltip>
+          <TooltipTrigger asChild={true}>
+            <span className="inline-flex shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-lg"
+                className="size-11 rounded-full"
+                aria-label={t("studio.wizard.back")}
+                disabled={index === 0}
+                onClick={() => goTo(steps[index - 1])}
+              >
+                <ArrowLeftIcon className="size-5 rtl:rotate-180" strokeWidth={1.75} />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{t("studio.wizard.back")}</TooltipContent>
+        </Tooltip>
+        {activeStep === "review" ? (
+          <div className="min-w-0 flex-1">
+            <StartTrainingCta />
+          </div>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild={true}>
+              <Button
+                type="button"
+                size="icon-lg"
+                className="size-11 rounded-full"
+                aria-label={t("studio.wizard.continue")}
+                onClick={() => goTo(steps[index + 1])}
+              >
+                <ArrowRightIcon className="size-5 rtl:rotate-180" strokeWidth={1.75} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t("studio.wizard.continue")}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
     </div>
   );
 }

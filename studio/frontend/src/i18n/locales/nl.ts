@@ -4006,14 +4006,19 @@ export const nl = {
     cpuTrainingNotice:
       "Er is geen GPU gevonden, dus training draait op de CPU. Dit is veel trager dan training op een GPU en ondersteunt alleen tekstmodellen (LoRA of volledige finetuning).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Instellingen",
+      review: "Controleren",
+      back: "Terug",
+      continue: "Doorgaan",
+      stepProgress: "Stap {current} van {total}",
+      setupNavigation: "Training instellen",
       modelTitle: "Model",
       modelDescription: "Selecteer model en trainingsmethode",
       datasetTitle: "Dataset",
       datasetDescription: "Selecteer of upload trainingsgegevens",
       paramsTitle: "Parameters",
       paramsDescription: "Trainingsparameters configureren",
-      configTitle: "Configuratie",
-      configDescription: "Configuraties opslaan en laden",
       modelLabel: "Model",
       modelTooltip: "Het basismodel dat je wilt finetunen.",
       methodLabel: "Methode",
@@ -4291,6 +4296,7 @@ export const nl = {
             "Deze dataset lijkt uit afbeeldingen te bestaan, die niet kunnen worden gestreamd.",
           audioDataset:
             "Deze dataset lijkt uit audio te bestaan, die niet kan worden gestreamd.",
+          rlObjective: "Streaming wordt nog niet ondersteund voor DPO, ORPO of GRPO.",
         },
         options: {
           trainOnCompletions: "alleen assistentaanvullingen",

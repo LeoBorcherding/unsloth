@@ -3958,14 +3958,19 @@ export const id = {
     cpuTrainingNotice:
       "Tidak ditemukan GPU, jadi pelatihan berjalan di CPU. Pelatihan ini jauh lebih lambat daripada di GPU dan hanya mendukung model teks (LoRA atau finetuning penuh).",
     wizard: {
+      promptStep: "Prompt",
+      settingsStep: "Pengaturan",
+      review: "Tinjau",
+      back: "Kembali",
+      continue: "Lanjutkan",
+      stepProgress: "Langkah {current} dari {total}",
+      setupNavigation: "Penyiapan pelatihan",
       modelTitle: "Model",
       modelDescription: "Pilih model dan metode pelatihan",
       datasetTitle: "Dataset",
       datasetDescription: "Pilih atau unggah data pelatihan",
       paramsTitle: "Parameter",
       paramsDescription: "Konfigurasikan parameter pelatihan",
-      configTitle: "Konfigurasi",
-      configDescription: "Simpan dan muat konfigurasi",
       modelLabel: "Model",
       modelTooltip: "Model dasar yang ingin Anda fine-tune.",
       methodLabel: "Metode",
@@ -4238,6 +4243,7 @@ export const id = {
             "Dataset ini tampaknya berupa gambar, yang tidak dapat di-streaming.",
           audioDataset:
             "Dataset ini tampaknya berupa audio, yang tidak dapat di-streaming.",
+          rlObjective: "Streaming belum didukung untuk DPO, ORPO, atau GRPO.",
         },
         options: {
           trainOnCompletions: "hanya completion asisten",

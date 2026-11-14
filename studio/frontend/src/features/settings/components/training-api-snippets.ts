@@ -102,6 +102,19 @@ export const TRAINING_FIELD_ROUTE: Record<keyof TrainingStartRequest, "openai" |
   tensorboard_dir: "host",
   resume_from_checkpoint: "host",
   drafter: "host",
+  // The OpenAI jobs route takes method "supervised" only, so RL settings stay out of the example.
+  objective: "host",
+  rl_beta: "host",
+  rl_max_prompt_length: "host",
+  grpo_num_generations: "host",
+  grpo_max_completion_length: "host",
+  grpo_temperature: "host",
+  rl_system_prompt: "host",
+  grpo_enable_thinking: "host",
+  grpo_variant: "host",
+  grpo_mask_truncated_completions: "host",
+  grpo_epsilon_high: "host",
+  grpo_rewards: "host",
 };
 
 /** Extras sent only where they differ from the route's defaults (null = sent whenever set). */
