@@ -25,7 +25,8 @@ BASELINE_DIR = BACKEND_ROOT / "tests" / "data" / "refactor_guard"
 GUARDED_MODULES = {
     "core.tool_healing": BACKEND_ROOT / "core" / "tool_healing.py",
     "core.inference.tool_call_parser": BACKEND_ROOT / "core" / "inference" / "tool_call_parser.py",
-    "core.inference.llama_cpp": BACKEND_ROOT / "core" / "inference" / "llama_cpp.py",
+    # A package: its inventory is the union of its modules' top-level symbols.
+    "core.inference.llama_cpp": BACKEND_ROOT / "core" / "inference" / "llama_cpp",
     "core.inference.inference": BACKEND_ROOT / "core" / "inference" / "inference.py",
     "core.inference.safetensors_agentic": (
         BACKEND_ROOT / "core" / "inference" / "safetensors_agentic.py"
@@ -73,14 +74,30 @@ def _pattern_literals(tree: ast.Module) -> dict:
     return counts
 
 
+def _top_level_nodes(path: Path) -> list:
+    """The top-level statements of a module, or of every module in a package.
+
+    Package modules are read in name order, so the inventory is the same on every machine.
+    ``__init__`` re-exports with ``from .x import y``, which the inventory never counted, so a
+    symbol is recorded once, where it is defined.
+    """
+    if path.is_dir():
+        files = sorted(path.glob("*.py"))
+    else:
+        files = [path]
+    nodes = []
+    for file in files:
+        nodes.extend(ast.parse(file.read_text(encoding = "utf-8")).body)
+    return nodes
+
+
 def ast_inventory() -> dict:
     """Only two restructured modules pin signatures; the rest pin name and kind, to avoid churn."""
     inventory = {}
     for mod_name, path in GUARDED_MODULES.items():
         detailed = mod_name in BEHAVIOUR_MODULES
-        tree = ast.parse(path.read_text(encoding = "utf-8"))
         symbols = {}
-        for node in tree.body:
+        for node in _top_level_nodes(path):
             if not detailed:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     symbols[node.name] = {
@@ -122,7 +139,7 @@ def ast_inventory() -> dict:
                 symbols[node.target.id] = {"kind": "assign"}
         entry = {"symbols": symbols}
         if detailed:
-            entry["regexes"] = _pattern_literals(tree)
+            entry["regexes"] = _pattern_literals(ast.parse(path.read_text(encoding = "utf-8")))
             entry["compiled"] = _compiled_patterns(mod_name)
         inventory[mod_name] = entry
     return inventory

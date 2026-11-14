@@ -83,6 +83,7 @@ from core.inference.llama_cpp import (
     hf_gguf_load_in_flight,
 )
 from core.inference.openai_auto_download import _DISK_RESERVE_BYTES
+from llama_cpp_source import package_source
 
 from ._fake_llama_server import fake_llama_server
 
@@ -1480,14 +1481,12 @@ class TestLoadHubDownloadExclusion:
             < gguf_branch.index("enter_context(chat_load_in_flight")
             < gguf_branch.index("unsloth_backend.unload_model")
         )
-        llama_source = (
-            Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-        ).read_text(encoding = "utf-8")
+        llama_source = package_source()
         # Any position in the stack (#14546 put @holds_inference under it); the marker must wrap load_model.
         loads = [
             node
             for cls in ast.parse(llama_source).body
-            if isinstance(cls, ast.ClassDef) and cls.name == "LlamaCppBackend"
+            if isinstance(cls, ast.ClassDef)
             for node in cls.body
             if isinstance(node, ast.FunctionDef) and node.name == "load_model"
         ]

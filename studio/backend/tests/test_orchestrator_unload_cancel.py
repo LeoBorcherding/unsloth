@@ -10,6 +10,7 @@ import pytest
 
 from core.inference import orchestrator as orch_mod
 from core.inference.orchestrator import InferenceOrchestrator
+from llama_cpp_source import package_source
 
 
 class _Llama:
@@ -3167,9 +3168,7 @@ def test_a_llama_server_spawned_as_shutdown_began_is_reaped():
     import textwrap
     from pathlib import Path
 
-    src = (
-        Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-    ).read_text(encoding = "utf-8")
+    src = package_source()
     fn = next(
         n
         for n in ast.walk(ast.parse(src))
@@ -3253,9 +3252,7 @@ def test_the_primary_llama_launch_rechecks_after_recording_the_pid():
     import ast
     from pathlib import Path
 
-    src = (
-        Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-    ).read_text(encoding = "utf-8")
+    src = package_source()
     fn = _fn_named(src, "_spawn_and_wait")
     record = [
         n.lineno
@@ -3468,6 +3465,12 @@ def test_the_latch_is_set_before_the_atexit_sweep():
     )
 
 
+def _spawner_unit(rel: str) -> str:
+    """A module's path, or its package's for the llama_cpp package."""
+    prefix = "core/inference/llama_cpp/"
+    return prefix.rstrip("/") if rel.startswith(prefix) else rel
+
+
 def test_every_long_lived_spawner_consults_the_shutdown_latch():
     """Every long-lived spawner must consult the shutdown latch, or it is a hole in the guarantee."""
     import ast
@@ -3481,7 +3484,9 @@ def test_every_long_lived_spawner_consults_the_shutdown_latch():
         "core/inference/engine_install.py",
         "core/inference/flux3_prompt_upsampler.py",
         "core/inference/lemonade_server.py",
-        "core/inference/llama_cpp.py",
+        # The package is one unit here, as the module it replaced was: the diffusion runner is
+        # adopted in one module and the latch is consulted in another.
+        "core/inference/llama_cpp",
         "core/inference/managed_engine.py",
         "core/inference/npu_backend.py",
         "core/inference/orchestrator.py",
@@ -3512,7 +3517,7 @@ def test_every_long_lived_spawner_consults_the_shutdown_latch():
         "utils/torch_device_probe.py",
     }
     adopters = {
-        str(path.relative_to(backend)).replace("\\", "/")
+        _spawner_unit(str(path.relative_to(backend)).replace("\\", "/"))
         for path in backend.rglob("*.py")
         if "adopt_pid(" in path.read_text(encoding = "utf-8")
         and not str(path.relative_to(backend)).replace("\\", "/").startswith("tests/")
@@ -3523,7 +3528,12 @@ def test_every_long_lived_spawner_consults_the_shutdown_latch():
         f"shutdown gate and put it in one of them: {adopters ^ (guarded | not_gated_here)}"
     )
     for rel in sorted(guarded):
-        src = (backend / rel).read_text(encoding = "utf-8")
+        if (backend / rel).is_dir():
+            src = "\n".join(
+                p.read_text(encoding = "utf-8") for p in sorted((backend / rel).glob("*.py"))
+            )
+        else:
+            src = (backend / rel).read_text(encoding = "utf-8")
         tree = ast.parse(src)
         adopts = [
             n.lineno

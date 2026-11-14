@@ -10,7 +10,6 @@ import itertools
 import sqlite3
 import threading
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -952,7 +951,9 @@ def test_gguf_chat_sizing_keeps_an_idle_image_headroom_when_another_process_uses
     sized = llama_cpp._net_of_other_models_vram(probed, held, unallocated)
     # 44 GB is free, but 8 GB of it is the image's generation budget.
     assert sized == [(0, 36 * GIB, 80 * GIB)]
-    launch = " ".join(Path(llama_cpp.__file__).read_text(encoding = "utf-8").split())
+    from llama_cpp_source import package_source
+
+    launch = " ".join(package_source().split())
     assert (
         "_gpu_mem = _net_of_other_models_vram( _gpu_mem, _held_by_others, self._media_unallocated_vram_mib() )"
         in launch

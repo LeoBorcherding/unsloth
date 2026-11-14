@@ -28,6 +28,7 @@ import httpx  # noqa: E402
 
 from core.inference.llama_cpp import LlamaCppBackend  # noqa: E402
 from core.inference.llama_cpp import GgufLoadIntent
+from llama_cpp_source import class_tree, package_source
 
 from ._fake_llama_server import fake_llama_server
 
@@ -613,9 +614,7 @@ class TestRetryLogFilenameUnique:
     crash log."""
 
     def test_log_name_includes_attempt_index(self):
-        src = (
-            Path(__file__).resolve().parent.parent / "core" / "inference" / "llama_cpp.py"
-        ).read_text(encoding = "utf-8")
+        src = package_source()
         assert "-try{_spawn_attempt}.log" in src
 
 
@@ -1470,7 +1469,7 @@ def test_the_lock_order_is_teardown_then_spawn():
     import ast
     import inspect
 
-    tree = ast.parse(inspect.getsource(LlamaCppBackend))
+    tree = class_tree(LlamaCppBackend)
     inversions = []
     for node in ast.walk(tree):
         if isinstance(node, ast.With) and any(
@@ -1593,7 +1592,7 @@ class TestHealthWaitMeasuresStalls:
         import contextlib
         import psutil
 
-        module = sys.modules[LlamaCppBackend.__module__]
+        module = sys.modules[LlamaCppBackend._wait_for_health.__module__]
         clock = _types.SimpleNamespace(now = 0.0)
         fake_time = _types.SimpleNamespace(monotonic = lambda: clock.now)
         monkeypatch.setattr(module, "time", fake_time)

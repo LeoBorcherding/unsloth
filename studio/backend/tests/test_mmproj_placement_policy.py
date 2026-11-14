@@ -31,6 +31,7 @@ from routes.inference import (
     _load_keeps_a_projector,
     _LoadPlacement,
 )
+from llama_cpp_source import package_source
 
 MIB = 1024 * 1024
 GIB = 1024**3
@@ -1100,7 +1101,7 @@ def test_the_recovery_retry_sees_every_environment_pin(env, expected_retry):
 
 def test_the_speculative_reserve_is_normalized_before_anything_prices_it(tmp_path):
     """Normalize CPU drafters before the projector probe prices the reserve; _mtp_bytes reads it lazily."""
-    source = Path(inspect.getsourcefile(LlamaCppBackend)).read_text()
+    source = package_source()
     normalize_at = source.index("if _draft_cpu_no_embedded and mtp_overhead_fn is not None:")
     probe_at = source.index("_mm_mtp_on_gpu = _mtp_will_engage and not _draft_cpu_no_embedded")
     assert (

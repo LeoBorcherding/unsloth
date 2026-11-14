@@ -168,11 +168,9 @@ def test_a_known_build_still_owes_the_lock(support):
 
 
 def test_no_launch_site_reads_the_raw_load_mode_cap():
-    import inspect
+    from llama_cpp_source import package_source
 
-    from core.inference import llama_cpp
-
-    source = inspect.getsource(llama_cpp)
+    source = package_source()
     assert 'server_caps.get("supports_load_mode")' not in source
     assert "server_caps['supports_load_mode']" not in source
     assert 'server_caps["supports_load_mode"]' not in source

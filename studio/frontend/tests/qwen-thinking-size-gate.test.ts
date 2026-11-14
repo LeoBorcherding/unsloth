@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { readLlamaCppPackage } from "./helpers/backend-llama-cpp-source.ts";
 
 // Mirrors the gate in use-chat-model-runtime.ts, apply-inference-status-to-store.ts and llama_cpp.py.
 const SIZE_RE = /(?:^|[-_.])(\d+\.?\d*)\s*([bm])(?:$|[-_.])/;
@@ -84,7 +85,7 @@ test("all four copies of the gate pattern stay in sync", () => {
     read("../src/features/chat/lib/apply-inference-status-to-store.ts").match(
       /const sizeRe = \/(.+?)\/;/,
     ),
-    read("../../backend/core/inference/llama_cpp.py").match(
+    readLlamaCppPackage().match(
       /size_re = r"(.+?)"\r?\n/,
     ),
   ];
