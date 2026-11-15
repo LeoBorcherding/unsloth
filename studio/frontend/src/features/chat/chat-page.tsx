@@ -355,6 +355,7 @@ import {
 } from "./prompt-storage/prompt-storage-dialog";
 import { ExportFormatItems } from "./components/export-format-items";
 import { providerModelDisplayName, useModelDisplayNamesVersion } from "./model-display-names";
+import { trackThreadScroll } from "./thread-scroll-flag";
 import { lazyWithoutSuspense, preloadWhenIdle } from "@/lib/lazy-without-suspense";
 
 // Not lazy(): a Suspense reveal is held up to 300 ms, which was most of the pane's first open.
@@ -1324,7 +1325,9 @@ function ComparePane({
       )}
     >
       {header}
-      <div className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden [&_.aui-thread-viewport]:px-6 lg:[&_.aui-thread-viewport]:px-10">
+      <div
+        ref={trackThreadScroll}
+        className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden [&_.aui-thread-viewport]:px-6 lg:[&_.aui-thread-viewport]:px-10">
         <div
           aria-hidden={true}
           className="compare-pane-fade pointer-events-none absolute top-0 left-0 right-[var(--thread-scrollbar-gutter,10px)] z-20 h-6 bg-gradient-to-b from-background to-transparent"
@@ -4923,6 +4926,7 @@ export function ChatPage({
       {/* Mounted always: its chord must work before MCP is on, and it closes itself on route change. */}
       <McpServersDialogMount />
       <div
+        ref={trackThreadScroll}
         data-chat-content-root=""
         className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
       >
