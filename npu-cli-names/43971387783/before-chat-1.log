@@ -1,0 +1,19 @@
+$ printf 'Reply with one word: hello /no_think\n' | unsloth chat Qwen3-0.6B-NPU2
+2026-11-16 22:44:03 [warning  ] Could not read config.json for 'unsloth/Qwen3-0.6B-NPU2': 404 Client Error.
+
+Repository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/unsloth/Qwen3-0.6B-NPU2/resolve/main/config.json.
+Please make sure you specified the correct `repo_id` and `repo_type`.
+If you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.
+For more details, see https://huggingface.co/docs/huggingface_hub/authentication
+2026-11-16 22:44:05 [warning  ] Could not determine if unsloth/Qwen3-0.6B-NPU2 is vision model: unsloth/Qwen3-0.6B-NPU2 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`
+Loading Qwen3-0.6B-NPU2 on the Unsloth server
+Model load failed: HTTP Error 500: Failed to load model: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.
+
+AutoConfig error: unsloth/Qwen3-0.6B-NPU2 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`
+
+PeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU2'
+
+
+[exit: 1]

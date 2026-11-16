@@ -1,0 +1,78 @@
+$ unsloth run --model unsloth/Qwen3-0.6B-GGUF --port PORT --api-only
+{"timestamp": "2026-11-16T22:43:06.277630Z", "level": "info", "event": "run_server startup begin api_only=True host=127.0.0.1 port=19397 log_level=INFO studio_home=/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio python=3.13.17 pid=1389335"}
+HF_ENDPOINT is set to https://mirror-lax.techaccelerator.com/repository/huggingface but HF_DATASETS_SERVER is unset; datasets-server calls will still go to https://datasets-server.huggingface.co. Set HF_DATASETS_SERVER to override.
+{"timestamp": "2026-11-16T22:43:07.447201Z", "level": "info", "event": "Imported FastAPI app in 1167.2ms"}
+{"timestamp": "2026-11-16T22:43:07.448280Z", "level": "info", "event": "Ensured Unsloth directories in 1199.2ms"}
+{"timestamp": "2026-11-16T22:43:07.448581Z", "level": "info", "event": "run_server pre-uvicorn setup completed in 1199.5ms"}
+INFO:     Started server process [1389335]
+INFO:     Waiting for application startup.
+{"timestamp": "2026-11-16T22:43:07.552520Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/compiled_cache"}
+{"timestamp": "2026-11-16T22:43:07.617173Z", "level": "info", "event": "lifespan pre-auth setup completed in 66.1ms"}
+{"timestamp": "2026-11-16T22:43:07.617908Z", "level": "info", "event": "lifespan startup completed in 66.8ms"}
+INFO:     Application startup complete.
+INFO:     Unsloth Studio running on http://127.0.0.1:19397 (To stop: press Ctrl+C -- on macOS, Control+C not Command+C)
+{"timestamp": "2026-11-16T22:43:07.625417Z", "level": "info", "event": "Uvicorn startup hook completed in 1376.3ms"}
+{"timestamp": "2026-11-16T22:43:07.625547Z", "level": "info", "event": "run_server uvicorn ready after 1376.5ms"}
+Starting Unsloth Studio...
+{"timestamp": "2026-11-16T22:43:07.635622Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/health", "status_code": 200, "process_time_ms": 6.01}
+UNSLOTH_START_PORT: 19397
+UNSLOTH_START_API_KEY: REDACTED
+Loading model: unsloth/Qwen3-0.6B-GGUF...
+{"timestamp": "2026-11-16T22:43:08.698674Z", "level": "info", "event": "ROCm RDNA: enabled MIOpen search cutoff (MIOPEN_SEARCH_CUTOFF=1)"}
+Hardware detected: ROCm (HIP 7.13.99004) -- Radeon 8060S Graphics
+{"timestamp": "2026-11-16T22:43:08.698849Z", "level": "info", "event": "InferenceOrchestrator initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:43:08.841759Z", "level": "info", "event": "TrainingBackend initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:43:08.992800Z", "level": "info", "event": "GGUF metadata: context_length=40960"}
+{"timestamp": "2026-11-16T22:43:09.152218Z", "level": "info", "event": "GGUF download: 0.4 GB needed (0.0 GB already cached), 425.9 GB free on disk"}
+{"timestamp": "2026-11-16T22:43:09.152393Z", "level": "info", "event": "Resolving GGUF: unsloth/Qwen3-0.6B-GGUF/Qwen3-0.6B-UD-Q4_K_XL.gguf"}
+{"timestamp": "2026-11-16T22:43:13.238146Z", "level": "info", "event": "GGUF downloaded in 4.1s: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/hf/hub/models--unsloth--Qwen3-0.6B-GGUF/snapshots/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-UD-Q4_K_XL.gguf"}
+{"timestamp": "2026-11-16T22:43:13.272031Z", "level": "info", "event": "GGUF metadata: context_length=40960"}
+{"timestamp": "2026-11-16T22:43:13.272153Z", "level": "info", "event": "GGUF metadata: chat_template=4905 chars"}
+{"timestamp": "2026-11-16T22:43:13.272190Z", "level": "info", "event": "GGUF metadata: model supports reasoning (enable_thinking)"}
+{"timestamp": "2026-11-16T22:43:13.291407Z", "level": "info", "event": "GGUF metadata: model supports tool calling"}
+{"timestamp": "2026-11-16T22:43:13.440484Z", "level": "info", "event": "Vulkan device VK0 is an integrated GPU sharing system RAM; reserving 1024MiB host headroom (102680->101656MiB usable)"}
+{"timestamp": "2026-11-16T22:43:13.440679Z", "level": "info", "event": "Vulkan GPU memory detected: VK0=101656MiB"}
+{"timestamp": "2026-11-16T22:43:13.446267Z", "level": "info", "event": "GGUF size: 0.4 GB, est. KV cache: 4.4 GB, context: 40960, GPUs free: [(0, 101656)], selected: [0], --fit: off"}
+{"timestamp": "2026-11-16T22:43:13.446965Z", "level": "info", "event": "Load mode: the whole load (5.1 GB) fits without paging, using --load-mode none."}
+{"timestamp": "2026-11-16T22:43:13.506871Z", "level": "info", "event": "Reasoning model: {'enable_thinking': True} by default (launched as --reasoning on)"}
+{"timestamp": "2026-11-16T22:43:13.507696Z", "level": "info", "event": "Load mode: --load-mode none"}
+{"timestamp": "2026-11-16T22:43:13.543579Z", "level": "info", "event": "llama-server stdout/stderr -> /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/logs/llama-server/llama-1794868993-port-59021-try0.log"}
+{"timestamp": "2026-11-16T22:43:13.543666Z", "level": "info", "event": "Starting llama-server: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/llama.cpp/llama-server -m /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/hf/hub/models--unsloth--Qwen3-0.6B-GGUF/snapshots/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-UD-Q4_K_XL.gguf --port 59021 --parallel 4 --flash-attn on --no-context-shift -c 40960 --video-fps 1 --video-timestamp-interval 2000 --video-ffmpeg-dir /usr/bin --alias unsloth/Qwen3-0.6B-GGUF -ngl -1 --fit off --metrics --slot-save-path /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/cache/llama-slots --kv-unified --jinja --verbosity 4 --spec-default --reasoning on --api-key-file /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/auth/llama_api_key_5735cdf79087cef3 --device Vulkan0 --load-mode none"}
+{"timestamp": "2026-11-16T22:43:13.691106Z", "level": "info", "event": "[llama-server] 0.00.118.549 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden"}
+{"timestamp": "2026-11-16T22:43:14.375484Z", "level": "info", "event": "[llama-server] 0.00.802.868 W resolve_fused_ops: layer 0 is assigned to device Vulkan0 but Flash Attention over K/V rows is assigned to device CPU (usually due to missing support)"}
+{"timestamp": "2026-11-16T22:43:14.375710Z", "level": "info", "event": "[llama-server] 0.00.802.870 W resolve_fused_ops: Flash Attention over K/V rows not supported, set to disabled"}
+{"timestamp": "2026-11-16T22:43:14.644744Z", "level": "info", "event": "[llama-server] 0.01.072.318 I srv  server_run_i: model loaded"}
+{"timestamp": "2026-11-16T22:43:14.663155Z", "level": "info", "event": "llama-server ready on port 59021 for model 'unsloth/Qwen3-0.6B-GGUF'"}
+{"timestamp": "2026-11-16T22:43:14.667590Z", "level": "info", "event": "Loaded GGUF model via llama-server: unsloth/Qwen3-0.6B-GGUF"}
+{"timestamp": "2026-11-16T22:43:14.670537Z", "level": "info", "event": "Loaded default model defaults from /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/assets/configs/model_defaults/default.yaml"}
+{"timestamp": "2026-11-16T22:43:14.675568Z", "level": "info", "event": "request_completed", "method": "POST", "path": "/api/inference/load", "status_code": 200, "process_time_ms": 7028.5}
+
+========================================================
+  Unsloth Studio running at http://127.0.0.1:19397
+  Model loaded: unsloth/Qwen3-0.6B-GGUF
+  Context length: 40960 tokens
+  API Key:      sk-REDACTED
+
+  OpenAI / Anthropic SDK base URL:
+    http://127.0.0.1:19397/v1
+========================================================
+Server-side tools are ENABLED for loopback. Pass --disable-tools to turn off.
+
+OpenAI Chat Completions:
+  curl http://127.0.0.1:19397/v1/chat/completions \
+    -H "Authorization: Bearer sk-REDACTED" \
+    -H "Content-Type: application/json" \
+    -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+
+Anthropic Messages:
+  curl http://127.0.0.1:19397/v1/messages \
+    -H "Authorization: Bearer sk-REDACTED" \
+    -H "Content-Type: application/json" \
+    -d '{"max_tokens": 256, "messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+
+OpenAI Responses:
+  curl http://127.0.0.1:19397/v1/responses \
+    -H "Authorization: Bearer sk-REDACTED" \
+    -H "Content-Type: application/json" \
+    -d '{"input": "Hello", "stream": true}'
+

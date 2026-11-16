@@ -1,0 +1,96 @@
+$ unsloth run --model Qwen3-0.6B-NPU3 --port PORT --api-only
+{"timestamp": "2026-11-16T22:43:24.258258Z", "level": "info", "event": "run_server startup begin api_only=True host=127.0.0.1 port=19544 log_level=INFO studio_home=/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio python=3.13.17 pid=1389519"}
+HF_ENDPOINT is set to https://mirror-lax.techaccelerator.com/repository/huggingface but HF_DATASETS_SERVER is unset; datasets-server calls will still go to https://datasets-server.huggingface.co. Set HF_DATASETS_SERVER to override.
+{"timestamp": "2026-11-16T22:43:25.439198Z", "level": "info", "event": "Imported FastAPI app in 1178.5ms"}
+{"timestamp": "2026-11-16T22:43:25.440291Z", "level": "info", "event": "Ensured Unsloth directories in 1210.5ms"}
+{"timestamp": "2026-11-16T22:43:25.440591Z", "level": "info", "event": "run_server pre-uvicorn setup completed in 1210.8ms"}
+INFO:     Started server process [1389519]
+INFO:     Waiting for application startup.
+{"timestamp": "2026-11-16T22:43:25.550909Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/compiled_cache"}
+{"timestamp": "2026-11-16T22:43:25.615838Z", "level": "info", "event": "lifespan pre-auth setup completed in 66.3ms"}
+{"timestamp": "2026-11-16T22:43:25.616480Z", "level": "info", "event": "lifespan startup completed in 67.0ms"}
+INFO:     Application startup complete.
+INFO:     Unsloth Studio running on http://127.0.0.1:19544 (To stop: press Ctrl+C -- on macOS, Control+C not Command+C)
+{"timestamp": "2026-11-16T22:43:25.628262Z", "level": "info", "event": "Uvicorn startup hook completed in 1398.4ms"}
+{"timestamp": "2026-11-16T22:43:25.628425Z", "level": "info", "event": "run_server uvicorn ready after 1398.6ms"}
+Starting Unsloth Studio...
+{"timestamp": "2026-11-16T22:43:25.639025Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/health", "status_code": 200, "process_time_ms": 5.18}
+UNSLOTH_START_PORT: 19544
+UNSLOTH_START_API_KEY: REDACTED
+Loading model: Qwen3-0.6B-NPU3...
+{"timestamp": "2026-11-16T22:43:26.704480Z", "level": "info", "event": "ROCm RDNA: enabled MIOpen search cutoff (MIOPEN_SEARCH_CUTOFF=1)"}
+Hardware detected: ROCm (HIP 7.13.99004) -- Radeon 8060S Graphics
+{"timestamp": "2026-11-16T22:43:26.704673Z", "level": "info", "event": "InferenceOrchestrator initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:43:27.266640Z", "level": "warning", "event": "Could not read config.json for 'unsloth/Qwen3-0.6B-NPU3': 404 Client Error.\n\nRepository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/unsloth/Qwen3-0.6B-NPU3/resolve/main/config.json.\nPlease make sure you specified the correct `repo_id` and `repo_type`.\nIf you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.\nFor more details, see https://huggingface.co/docs/huggingface_hub/authentication"}
+{"timestamp": "2026-11-16T22:43:27.486329Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for unsloth/Qwen3-0.6B-NPU3 (no match)"}
+{"timestamp": "2026-11-16T22:43:27.946656Z", "level": "warning", "event": "Could not determine if unsloth/Qwen3-0.6B-NPU3 is vision model: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`"}
+{"timestamp": "2026-11-16T22:43:28.218701Z", "level": "info", "event": "TrainingBackend initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:43:28.225014Z", "level": "info", "event": "ExportOrchestrator initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:43:28.312142Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for unsloth/Qwen3-0.6B-NPU3 (no match)"}
+{"timestamp": "2026-11-16T22:43:28.549404Z", "level": "warning", "event": "Could not read config.json for 'unsloth/Qwen3-0.6B-NPU3': 404 Client Error.\n\nRepository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/unsloth/Qwen3-0.6B-NPU3/resolve/main/config.json.\nPlease make sure you specified the correct `repo_id` and `repo_type`.\nIf you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.\nFor more details, see https://huggingface.co/docs/huggingface_hub/authentication"}
+{"timestamp": "2026-11-16T22:43:28.645020Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for unsloth/Qwen3-0.6B-NPU3 (no match)"}
+{"timestamp": "2026-11-16T22:43:28.649175Z", "level": "warning", "event": "Could not determine if unsloth/Qwen3-0.6B-NPU3 is vision model: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`"}
+{"timestamp": "2026-11-16T22:43:28.751228Z", "level": "warning", "event": "Could not get safetensors metadata for 'unsloth/Qwen3-0.6B-NPU3': 404 Client Error. (Request ID: Root=1-6afb8710-522bb73e17d916d60b6238c7;96bf1b60-b794-429c-a843-47d368d34812)\n\nRepository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/api/models/unsloth/Qwen3-0.6B-NPU3.\nPlease make sure you specified the correct `repo_id` and `repo_type`.\nIf you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.\nFor more details, see https://huggingface.co/docs/huggingface_hub/authentication"}
+{"timestamp": "2026-11-16T22:43:28.978277Z", "level": "info", "event": "Spawning fresh inference subprocess for 'unsloth/Qwen3-0.6B-NPU3' (transformers 4.x, attempt 1/3, xet disabled)"}
+{"timestamp": "2026-11-16T22:43:28.984093Z", "level": "info", "event": "Inference subprocess started (pid=1389596)"}
+2026-11-16 22:43:29 [info     ] Xet transport disabled (HF_HUB_DISABLE_XET=1)
+{"timestamp": "2026-11-16T22:43:29.773004Z", "level": "info", "event": "Applied gpu_ids: CUDA_VISIBLE_DEVICES='0' (rocm)"}
+Hardware detected: ROCm (HIP 7.13.99004) -- Radeon 8060S Graphics
+{"timestamp": "2026-11-16T22:43:30.041143Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for unsloth/Qwen3-0.6B-NPU3 (no match)"}
+{"timestamp": "2026-11-16T22:43:30.041418Z", "level": "info", "event": "Using default transformers (5.5.4) for unsloth/Qwen3-0.6B-NPU3"}
+{"timestamp": "2026-11-16T22:43:30.359795Z", "level": "info", "event": "Subprocess status: Importing Unsloth..."}
+[bitsandbytes.cextension|WARNING]No prebuilt binary for ROCm 7.13, loading ROCm 7.2 instead. Set BNB_ROCM_VERSION to override.
+[W1116 22:43:31.365697015 Context.cpp:512] Warning: Attempting to use CK on an unsupported architecture! Cannot set backend to CK (function operator())
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+{"timestamp": "2026-11-16T22:43:37.069085Z", "level": "info", "event": "InferenceBackend initialized on cuda"}
+{"timestamp": "2026-11-16T22:43:37.069383Z", "level": "info", "event": "Subprocess loaded transformers 5.5.4"}
+{"timestamp": "2026-11-16T22:43:37.069415Z", "level": "info", "event": "InferenceBackend initialized on cuda"}
+{"timestamp": "2026-11-16T22:43:37.070690Z", "level": "info", "event": "Subprocess status: Loading model..."}
+{"timestamp": "2026-11-16T22:43:37.325759Z", "level": "warning", "event": "Could not read config.json for 'unsloth/Qwen3-0.6B-NPU3': 404 Client Error.\n\nRepository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/unsloth/Qwen3-0.6B-NPU3/resolve/main/config.json.\nPlease make sure you specified the correct `repo_id` and `repo_type`.\nIf you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.\nFor more details, see https://huggingface.co/docs/huggingface_hub/authentication"}
+{"timestamp": "2026-11-16T22:43:37.408353Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for unsloth/Qwen3-0.6B-NPU3 (no match)"}
+{"timestamp": "2026-11-16T22:43:37.412122Z", "level": "warning", "event": "Could not determine if unsloth/Qwen3-0.6B-NPU3 is vision model: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`"}
+{"timestamp": "2026-11-16T22:43:37.481330Z", "level": "info", "event": "Loaded default model defaults from /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/assets/configs/model_defaults/default.yaml"}
+{"timestamp": "2026-11-16T22:43:37.726881Z", "level": "info", "event": "Using device_map='sequential' (1 GPU(s) visible)"}
+{"timestamp": "2026-11-16T22:43:37.726973Z", "level": "info", "event": "Loading text model: unsloth/Qwen3-0.6B-NPU3"}
+{"timestamp": "2026-11-16T22:43:37.789490Z", "level": "info", "event": "GPU Memory [Before loading unsloth/Qwen3-0.6B-NPU3] ROCM (Radeon 8060S Graphics): 0.03GB/100.00GB (0.0% used, 99.76GB free)"}
+{"timestamp": "2026-11-16T22:43:38.049117Z", "level": "error", "event": "Failed to load model: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.\n\nAutoConfig error: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`\n\nPeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU3'\n\n"}
+{"timestamp": "2026-11-16T22:43:38.055849Z", "level": "info", "event": "Inference subprocess ready, entering command loop"}
+{"timestamp": "2026-11-16T22:43:38.057610Z", "level": "info", "event": "Received command: shutdown"}
+{"timestamp": "2026-11-16T22:43:38.057739Z", "level": "info", "event": "Shutdown command received, exiting"}
+{"timestamp": "2026-11-16T22:43:38.106949Z", "level": "info", "event": "Inference subprocess shut down"}
+{"timestamp": "2026-11-16T22:43:38.107518Z", "level": "error", "event": "Error loading model: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.\n\nAutoConfig error: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`\n\nPeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU3'\n\n", "exception": "Traceback (most recent call last):\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/routes/inference.py\", line 20223, in _load_model_impl\n    success = await asyncio.to_thread(\n              ^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<38 lines>...\n    )\n    ^\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/asyncio/threads.py\", line 26, in to_thread\n    return await loop.run_in_executor(None, func_call)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py\", line 59, in run\n    result = self.fn(*self.args, **self.kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/utils/gpu_memory_events.py\", line 35, in wrapper\n    return fn(*args, **kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/inference_gate.py\", line 50, in call\n    return fn(*args, **kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/orchestrator.py\", line 2622, in load_model\n    raise load_error\nException: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.\n\nAutoConfig error: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`\n\nPeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU3'\n\n"}
+| Traceback (most recent call last):
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/routes/inference.py", line 20223, in _load_model_impl
+|     success = await asyncio.to_thread(
+|               ^^^^^^^^^^^^^^^^^^^^^^^^
+|     ...<38 lines>...
+|     )
+|     ^
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/asyncio/threads.py", line 26, in to_thread
+|     return await loop.run_in_executor(None, func_call)
+|            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+|     result = self.fn(*self.args, **self.kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/utils/gpu_memory_events.py", line 35, in wrapper
+|     return fn(*args, **kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/inference_gate.py", line 50, in call
+|     return fn(*args, **kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/orchestrator.py", line 2622, in load_model
+|     raise load_error
+| Exception: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.
+| 
+| AutoConfig error: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+| If this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`
+| 
+| PeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU3'
+{"timestamp": "2026-11-16T22:43:38.111457Z", "level": "info", "event": "request_completed", "method": "POST", "path": "/api/inference/load", "status_code": 500, "process_time_ms": 12460.29}
+Error: Model load failed (HTTP 500): {"detail":"Failed to load model: Unsloth: Failed to load model. Both AutoConfig and PeftConfig loading failed.\n\nAutoConfig error: unsloth/Qwen3-0.6B-NPU3 is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'\nIf this is a private repository, make sure to pass a token having permission to this repo either by logging in with `hf auth login` or by passing `token=<your_token>`\n\nPeftConfig error: Can't find 'adapter_config.json' at 'unsloth/Qwen3-0.6B-NPU3'\n\n"}
+{"timestamp": "2026-11-16T22:43:38.112072Z", "level": "info", "event": "Graceful shutdown initiated -- cleaning up subprocesses..."}
+{"timestamp": "2026-11-16T22:43:38.113084Z", "level": "info", "event": "All subprocesses cleaned up"}
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+{"timestamp": "2026-11-16T22:43:38.273630Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/compiled_cache"}
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1389519]
+[exit: server never printed its banner]

@@ -1,0 +1,3 @@
+$ printf 'Reply with one word: hello /no_think\n' | unsloth chat Qwen3-0.6B-NPU3
+Error: No NPU model named Qwen3-0.6B-NPU3. Did you mean: Qwen3-0.6B-NPU2, Qwen3.5-0.8B-NPU2, Qwen3-1.7B-NPU2?
+[exit: 1]

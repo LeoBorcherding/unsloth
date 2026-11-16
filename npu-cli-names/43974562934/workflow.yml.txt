@@ -1,0 +1,128 @@
+name: AMD DevLab NPU, unsloth run --model Qwen3.6-35B-A3B-NPU2 on main vs branch
+
+on:
+  push:
+    branches: [amd-devlab-cli-npu-35b]
+
+permissions: {}
+
+jobs:
+  cli:
+    runs-on: [self-hosted, Linux, strix-halo, devlab-dispatch]
+    timeout-minutes: 180
+    env:
+      BEFORE_REPO: https://github.com/unslothai/unsloth.git
+      BEFORE_SHA: e73b085d61e206b96244f4c8e34a3a6001f0da42
+      AFTER_REPO: https://github.com/LeoBorcherding/unsloth.git
+      AFTER_BRANCH: studio/cli-npu-display-names
+      AFTER_SHA: 1dc36f47773b53ce155b1edc3a9adbaa6e8c0933
+    steps:
+      - name: Hardware
+        shell: bash {0}
+        run: |
+          uname -a; hostname; lscpu | grep -E 'Model name|^CPU\(s\)'; free -h; df -h "$RUNNER_TEMP" | tail -1
+          grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release
+          lspci -nn | grep -iE 'vga|display|processing accelerator|signal processing' || true
+          ls -l /dev/accel* 2>/dev/null || true
+          echo "amdxdna module version: $(cat /sys/module/amdxdna/version 2>/dev/null || echo n/a)"
+          for f in /sys/class/accel/accel*/device/{fw_version,vbnv}; do [ -r "$f" ] && echo "$f: $(cat "$f")"; done
+          true
+
+      - name: Install Unsloth Studio twice (main, branch)
+        run: |
+          set -euo pipefail
+          W="$RUNNER_TEMP/cli-npu35-$GITHUB_RUN_ID"
+          mkdir -p "$W/tmp" "$W/uv" "$W/out"
+          { echo "W=$W"; echo "TMPDIR=$W/tmp"; echo "UV_CACHE_DIR=$W/uv"; } >> "$GITHUB_ENV"
+          export TMPDIR="$W/tmp" UV_CACHE_DIR="$W/uv"
+          install_leg() {
+            local leg=$1 repo=$2 ref=$3 sha=$4
+            mkdir -p "$W/$leg/hf"
+            git clone -q --filter=blob:none --no-checkout "$repo" "$W/$leg/src"
+            git -C "$W/$leg/src" fetch -q origin "$ref"
+            git -C "$W/$leg/src" checkout -q "$sha"
+            git -C "$W/$leg/src" log -1 --format="$leg: installing %H %s"
+            ( cd "$W/$leg/src" && HF_HOME="$W/$leg/hf" UNSLOTH_STUDIO_HOME="$W/$leg/studio" UNSLOTH_SKIP_AUTOSTART=1 \
+                bash install.sh --local --no-rollback > "$W/$leg/install.log" 2>&1 ) || { tail -150 "$W/$leg/install.log"; exit 1; }
+            tail -4 "$W/$leg/install.log"
+          }
+          install_leg before "$BEFORE_REPO" main "$BEFORE_SHA"
+          install_leg after "$AFTER_REPO" "$AFTER_BRANCH" "$AFTER_SHA"
+
+      - name: CLI cases
+        timeout-minutes: 140
+        shell: bash {0}
+        run: |
+          set -uo pipefail
+          PW="$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))')"
+          echo "::add-mask::$PW"
+          export UNSLOTH_STUDIO_PASSWORD="$PW"
+          scrub() { sed -E -e "s/sk-[A-Za-z0-9_-]{8,}/sk-REDACTED/g" -e "s/(API_KEY: ).*/\1REDACTED/" -e 's/\x1b\[[0-9;]*m//g' | grep -vF "$PW"; }
+          stop_leg() {
+            pkill -TERM -f "$W/$1/" 2>/dev/null; sleep 6; pkill -KILL -f "$W/$1/" 2>/dev/null; sleep 2
+          }
+          start_run() {  # leg tag name -> PORT KEY, 0 when the banner printed
+            local leg=$1 tag=$2 name=$3 log="$W/out/$1-run-$2.log"
+            PORT=$(shuf -i 19000-19899 -n 1)
+            # The password only seeds a fresh install; passing it again is refused.
+            ( cd "$W/$leg/src" && { [ -f "$W/$leg/.pw-set" ] && unset UNSLOTH_STUDIO_PASSWORD; } ; exec timeout 5400 "$PY" -m unsloth_cli run --model "$name" --port "$PORT" --api-only --start-api-key-marker ) > "$log.raw" 2>&1 &
+            RPID=$!
+            touch "$W/$leg/.pw-set"
+            for i in $(seq 1 5400); do
+              grep -q "OpenAI Chat Completions:" "$log.raw" && break
+              kill -0 "$RPID" 2>/dev/null || break
+              sleep 1
+            done
+            KEY=$(grep -m1 '^UNSLOTH_START_API_KEY: ' "$log.raw" | cut -d' ' -f2)
+            [ -n "$KEY" ] && echo "::add-mask::$KEY"
+            grep -q "OpenAI Chat Completions:" "$log.raw"
+          }
+          for leg in before after; do
+            export HF_HOME="$W/$leg/hf" UNSLOTH_STUDIO_HOME="$W/$leg/studio"
+            PY="$UNSLOTH_STUDIO_HOME/unsloth_studio/bin/python"
+            echo "===== $leg: $(git -C "$W/$leg/src" rev-parse HEAD)"
+            name="Qwen3.6-35B-A3B-NPU2"; tag=35b
+            if start_run "$leg" "$tag" "$name"; then
+              { echo "\$ unsloth run --model $name --port PORT --api-only"; scrub < "$W/out/$leg-run-$tag.log.raw"; } > "$W/out/$leg-run-$tag.log"
+              MODELS=$(curl -s -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/v1/models")
+              MID=$(printf '%s' "$MODELS" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("data") or [{}]; print(d[0].get("id",""))' 2>/dev/null)
+              {
+                echo "\$ curl -s http://127.0.0.1:PORT/v1/models"; printf '%s\n' "$MODELS" | head -c 1500; echo
+                echo "\$ curl -s http://127.0.0.1:PORT/v1/chat/completions -d '{\"model\":\"$MID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: hello /no_think\"}],\"max_tokens\":64,\"temperature\":0}'"
+                curl -s -m 600 -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+                  "http://127.0.0.1:$PORT/v1/chat/completions" \
+                  -d "{\"model\":\"$MID\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with one word: hello /no_think\"}],\"max_tokens\":64,\"temperature\":0}" | head -c 2500; echo
+              } | scrub > "$W/out/$leg-curl-$tag.log"
+            else
+              { echo "\$ unsloth run --model $name --port PORT --api-only"; scrub < "$W/out/$leg-run-$tag.log.raw"; echo "[exit: server never printed its banner]"; } > "$W/out/$leg-run-$tag.log"
+            fi
+            rm -f "$W/out/$leg-run-$tag.log.raw"
+            tail -40 "$W/out/$leg-run-$tag.log"; [ -f "$W/out/$leg-curl-$tag.log" ] && cat "$W/out/$leg-curl-$tag.log"
+            stop_leg "$leg"
+          done
+          true
+
+      - name: Stage outputs
+        if: always()
+        shell: bash {0}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp -r "$W/out/." "$GITHUB_WORKSPACE/out/" 2>/dev/null || true
+          rm -f "$GITHUB_WORKSPACE"/out/*.raw
+          grep -rlE "sk-[A-Za-z0-9_-]{20,}" "$GITHUB_WORKSPACE/out" 2>/dev/null | while read -r f; do echo "dropping $f"; rm -f "$f"; done
+          ls -la "$GITHUB_WORKSPACE/out"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-npu-35b
+          path: out/
+          if-no-files-found: warn
+
+      - name: Clean up
+        if: always()
+        shell: bash {0}
+        run: |
+          pkill -TERM -f "$RUNNER_TEMP/cli-npu35-$GITHUB_RUN_ID" 2>/dev/null; sleep 5
+          pkill -KILL -f "$RUNNER_TEMP/cli-npu35-$GITHUB_RUN_ID" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/cli-npu35-$GITHUB_RUN_ID"

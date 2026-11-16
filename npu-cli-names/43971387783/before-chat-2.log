@@ -1,0 +1,4 @@
+$ printf 'Reply with one word: hello /no_think\n' | unsloth chat FastFlowLM/Qwen3-0.6B-NPU2
+Loading FastFlowLM/Qwen3-0.6B-NPU2 on the Unsloth server
+Model load failed: HTTP Error 500: Failed to load model: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection
+[exit: 1]

@@ -1,0 +1,94 @@
+$ unsloth run --model FastFlowLM/Qwen3-0.6B-NPU2 --port PORT --api-only
+{"timestamp": "2026-11-16T22:42:14.028498Z", "level": "info", "event": "run_server startup begin api_only=True host=127.0.0.1 port=19106 log_level=INFO studio_home=/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio python=3.13.17 pid=1388870"}
+HF_ENDPOINT is set to https://mirror-lax.techaccelerator.com/repository/huggingface but HF_DATASETS_SERVER is unset; datasets-server calls will still go to https://datasets-server.huggingface.co. Set HF_DATASETS_SERVER to override.
+{"timestamp": "2026-11-16T22:42:15.205373Z", "level": "info", "event": "Imported FastAPI app in 1174.5ms"}
+{"timestamp": "2026-11-16T22:42:15.206751Z", "level": "info", "event": "Ensured Unsloth directories in 1206.6ms"}
+{"timestamp": "2026-11-16T22:42:15.207103Z", "level": "info", "event": "run_server pre-uvicorn setup completed in 1206.9ms"}
+INFO:     Started server process [1388870]
+INFO:     Waiting for application startup.
+{"timestamp": "2026-11-16T22:42:15.315476Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/compiled_cache"}
+{"timestamp": "2026-11-16T22:42:15.377078Z", "level": "info", "event": "lifespan pre-auth setup completed in 63.5ms"}
+{"timestamp": "2026-11-16T22:42:15.377760Z", "level": "info", "event": "lifespan startup completed in 64.2ms"}
+INFO:     Application startup complete.
+INFO:     Unsloth Studio running on http://127.0.0.1:19106 (To stop: press Ctrl+C -- on macOS, Control+C not Command+C)
+{"timestamp": "2026-11-16T22:42:15.387108Z", "level": "info", "event": "Uvicorn startup hook completed in 1386.9ms"}
+{"timestamp": "2026-11-16T22:42:15.387277Z", "level": "info", "event": "run_server uvicorn ready after 1387.1ms"}
+Starting Unsloth Studio...
+{"timestamp": "2026-11-16T22:42:15.403099Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/health", "status_code": 200, "process_time_ms": 7.27}
+UNSLOTH_START_PORT: 19106
+UNSLOTH_START_API_KEY: REDACTED
+Loading model: FastFlowLM/Qwen3-0.6B-NPU2...
+{"timestamp": "2026-11-16T22:42:16.470958Z", "level": "info", "event": "ROCm RDNA: enabled MIOpen search cutoff (MIOPEN_SEARCH_CUTOFF=1)"}
+Hardware detected: ROCm (HIP 7.13.99004) -- Radeon 8060S Graphics
+{"timestamp": "2026-11-16T22:42:16.471138Z", "level": "info", "event": "InferenceOrchestrator initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:42:16.675319Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for FastFlowLM/Qwen3-0.6B-NPU2 (no match)"}
+{"timestamp": "2026-11-16T22:42:16.971332Z", "level": "info", "event": "TrainingBackend initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:42:16.977733Z", "level": "info", "event": "ExportOrchestrator initialized (subprocess mode)"}
+{"timestamp": "2026-11-16T22:42:16.983441Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for FastFlowLM/Qwen3-0.6B-NPU2 (no match)"}
+{"timestamp": "2026-11-16T22:42:17.786051Z", "level": "info", "event": "Spawning fresh inference subprocess for 'FastFlowLM/Qwen3-0.6B-NPU2' (transformers 4.x, attempt 1/3, xet disabled)"}
+{"timestamp": "2026-11-16T22:42:17.791701Z", "level": "info", "event": "Inference subprocess started (pid=1388951)"}
+2026-11-16 22:42:17 [info     ] Xet transport disabled (HF_HUB_DISABLE_XET=1)
+{"timestamp": "2026-11-16T22:42:18.579105Z", "level": "info", "event": "Applied gpu_ids: CUDA_VISIBLE_DEVICES='0' (rocm)"}
+Hardware detected: ROCm (HIP 7.13.99004) -- Radeon 8060S Graphics
+{"timestamp": "2026-11-16T22:42:18.781758Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for FastFlowLM/Qwen3-0.6B-NPU2 (no match)"}
+{"timestamp": "2026-11-16T22:42:18.782174Z", "level": "info", "event": "Using default transformers (5.5.4) for FastFlowLM/Qwen3-0.6B-NPU2"}
+{"timestamp": "2026-11-16T22:42:18.875504Z", "level": "info", "event": "SSM kernels resolved from model architecture: causal-conv1d=False mamba-ssm=False"}
+{"timestamp": "2026-11-16T22:42:18.876899Z", "level": "info", "event": "Subprocess status: Importing Unsloth..."}
+[bitsandbytes.cextension|WARNING]No prebuilt binary for ROCm 7.13, loading ROCm 7.2 instead. Set BNB_ROCM_VERSION to override.
+[W1116 22:42:19.869893240 Context.cpp:512] Warning: Attempting to use CK on an unsupported architecture! Cannot set backend to CK (function operator())
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+{"timestamp": "2026-11-16T22:42:25.504432Z", "level": "info", "event": "InferenceBackend initialized on cuda"}
+{"timestamp": "2026-11-16T22:42:25.504727Z", "level": "info", "event": "Subprocess loaded transformers 5.5.4"}
+{"timestamp": "2026-11-16T22:42:25.504757Z", "level": "info", "event": "InferenceBackend initialized on cuda"}
+{"timestamp": "2026-11-16T22:42:25.506008Z", "level": "info", "event": "Subprocess status: Loading model..."}
+{"timestamp": "2026-11-16T22:42:25.571104Z", "level": "info", "event": "Transformers tier default (5.5.4) selected for FastFlowLM/Qwen3-0.6B-NPU2 (no match)"}
+{"timestamp": "2026-11-16T22:42:25.634982Z", "level": "info", "event": "Loaded default model defaults from /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/assets/configs/model_defaults/default.yaml"}
+{"timestamp": "2026-11-16T22:42:25.639237Z", "level": "info", "event": "SSM kernels resolved from model architecture: causal-conv1d=False mamba-ssm=False"}
+{"timestamp": "2026-11-16T22:42:25.654585Z", "level": "info", "event": "Using device_map='sequential' (1 GPU(s) visible)"}
+{"timestamp": "2026-11-16T22:42:25.654702Z", "level": "info", "event": "Loading text model: FastFlowLM/Qwen3-0.6B-NPU2"}
+{"timestamp": "2026-11-16T22:42:25.716762Z", "level": "info", "event": "GPU Memory [Before loading FastFlowLM/Qwen3-0.6B-NPU2] ROCM (Radeon 8060S Graphics): 0.03GB/100.00GB (0.0% used, 99.76GB free)"}
+==((====))==  Unsloth 2026.11.5: Fast Qwen3 patching. Transformers: 5.5.4.
+   \\   /|    Radeon 8060S Graphics. Num GPUs = 1. Max memory: 100.0 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.11.0+rocm7.13.0. ROCm Toolkit: 7.13.99004. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = None. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+Unsloth: Fast downloading is enabled - ignore downloading bars which are red colored!
+{"timestamp": "2026-11-16T22:42:30.466381Z", "level": "info", "event": "Model load exceeded 15s; padding the response so a proxy cannot time it out"}
+{"timestamp": "2026-11-16T22:42:30.659010Z", "level": "info", "event": "Subprocess status: Downloading (https transport)..."}
+{"timestamp": "2026-11-16T22:42:33.584528Z", "level": "error", "event": "Failed to load model: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection"}
+{"timestamp": "2026-11-16T22:42:33.591911Z", "level": "info", "event": "Inference subprocess ready, entering command loop"}
+{"timestamp": "2026-11-16T22:42:33.593059Z", "level": "info", "event": "Received command: shutdown"}
+{"timestamp": "2026-11-16T22:42:33.593091Z", "level": "info", "event": "Shutdown command received, exiting"}
+{"timestamp": "2026-11-16T22:42:33.669657Z", "level": "info", "event": "Inference subprocess shut down"}
+{"timestamp": "2026-11-16T22:42:33.670292Z", "level": "error", "event": "Error loading model: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection", "exception": "Traceback (most recent call last):\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/routes/inference.py\", line 20223, in _load_model_impl\n    success = await asyncio.to_thread(\n              ^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<38 lines>...\n    )\n    ^\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/asyncio/threads.py\", line 26, in to_thread\n    return await loop.run_in_executor(None, func_call)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py\", line 59, in run\n    result = self.fn(*self.args, **self.kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/utils/gpu_memory_events.py\", line 35, in wrapper\n    return fn(*args, **kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/inference_gate.py\", line 50, in call\n    return fn(*args, **kwargs)\n  File \"/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/orchestrator.py\", line 2622, in load_model\n    raise load_error\nException: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection"}
+| Traceback (most recent call last):
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/routes/inference.py", line 20223, in _load_model_impl
+|     success = await asyncio.to_thread(
+|               ^^^^^^^^^^^^^^^^^^^^^^^^
+|     ...<38 lines>...
+|     )
+|     ^
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/asyncio/threads.py", line 26, in to_thread
+|     return await loop.run_in_executor(None, func_call)
+|            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/python/cpython-3.13.17-linux-x86_64-gnu/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+|     result = self.fn(*self.args, **self.kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/utils/gpu_memory_events.py", line 35, in wrapper
+|     return fn(*args, **kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/inference_gate.py", line 50, in call
+|     return fn(*args, **kwargs)
+|   File "/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/src/studio/backend/core/inference/orchestrator.py", line 2622, in load_model
+|     raise load_error
+| Exception: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection
+{"timestamp": "2026-11-16T22:42:33.695721Z", "level": "info", "event": "Model load failed with 500 after the response committed"}
+Error: Model load failed (HTTP 500): {"detail": "Failed to load model: Download for 'FastFlowLM/Qwen3-0.6B-NPU2' returned an incomplete snapshot even with HF_HUB_DISABLE_XET=1 -- missing files, check your network connection"}
+{"timestamp": "2026-11-16T22:42:33.696255Z", "level": "info", "event": "request_completed", "method": "POST", "path": "/api/inference/load", "status_code": 200, "process_time_ms": 18280.86}
+{"timestamp": "2026-11-16T22:42:33.696373Z", "level": "info", "event": "Graceful shutdown initiated -- cleaning up subprocesses..."}
+{"timestamp": "2026-11-16T22:42:33.696969Z", "level": "info", "event": "All subprocesses cleaned up"}
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+{"timestamp": "2026-11-16T22:42:33.850326Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/before/studio/compiled_cache"}
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1388870]
+[exit: server never printed its banner]

@@ -1,0 +1,14 @@
+$ printf 'Reply with one word: hello /no_think\n' | unsloth chat qwen3-0.6b-npu2
+Loading lemonade:qwen3-0.6b-FLM on the Unsloth server
+(Unsloth server connected — model stays warm after /exit)
+
+Chatting with qwen3-0.6b-npu2
+Commands: /exit (quit), /reset (clear history), /think (toggle reasoning), 
+/compare (base vs tuned), /image <path> (attach to your next message), /help
+
+You: Assistant:
+hello                                                                           
+You: 
+
+Bye.
+[exit: 0]

@@ -1,0 +1,5 @@
+$ curl /v1/models
+{"object":"list","data":[{"id":"lemonade:qwen3-0.6b-FLM","object":"model","created":1794869151,"owned_by":"unsloth-studio","device":"npu","context_length":32768,"max_context_length":32768,"loaded":true,"status":{"value":"loaded"}}]}
+
+$ curl /v1/chat/completions model=lemonade:qwen3-0.6b-FLM
+{"id":"chatcmpl-c0e4d6d8111e6762abbc19c4","object":"chat.completion","created":1794869153,"model":"lemonade:qwen3-0.6b-FLM","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop","logprobs":null}]}

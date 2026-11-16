@@ -1,0 +1,5 @@
+$ curl /v1/models
+{"object":"list","data":[{"id":"unsloth/Qwen3-0.6B-GGUF","object":"model","created":1794869171,"owned_by":"unsloth-studio","context_length":40960,"max_context_length":40960,"vram_fit_context_length":40960,"native_context_length":40960,"loaded":true,"status":{"value":"loaded"}}]}
+
+$ curl /v1/chat/completions model=unsloth/Qwen3-0.6B-GGUF
+{"id":"chatcmpl-c0e99508b8fa","object":"chat.completion","created":1794869172,"model":"unsloth/Qwen3-0.6B-GGUF","choices":[{"index":0,"message":{"role":"assistant","content":"hello","refusal":null,"reasoning_content":null,"tool_calls":null,"audio":null},"finish_reason":"stop","logprobs":null}],"usage":{"prompt_tokens":1172,"completion_tokens":6,"total_tokens":1178,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}},"system_fingerprint":null}

@@ -1,0 +1,42 @@
+$ unsloth run --model FastFlowLM/Qwen3-0.6B-NPU2 --port PORT --api-only
+{"timestamp": "2026-11-16T22:45:31.836063Z", "level": "info", "event": "run_server startup begin api_only=True host=127.0.0.1 port=19293 log_level=INFO studio_home=/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/after/studio python=3.13.17 pid=1391484"}
+HF_ENDPOINT is set to https://mirror-lax.techaccelerator.com/repository/huggingface but HF_DATASETS_SERVER is unset; datasets-server calls will still go to https://datasets-server.huggingface.co. Set HF_DATASETS_SERVER to override.
+{"timestamp": "2026-11-16T22:45:33.007257Z", "level": "info", "event": "Imported FastAPI app in 1168.7ms"}
+{"timestamp": "2026-11-16T22:45:33.008646Z", "level": "info", "event": "Ensured Unsloth directories in 1201.7ms"}
+{"timestamp": "2026-11-16T22:45:33.009001Z", "level": "info", "event": "run_server pre-uvicorn setup completed in 1202.1ms"}
+INFO:     Started server process [1391484]
+INFO:     Waiting for application startup.
+{"timestamp": "2026-11-16T22:45:33.133780Z", "level": "info", "event": "Removing unsloth compiled cache: /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/after/studio/compiled_cache"}
+{"timestamp": "2026-11-16T22:45:33.192099Z", "level": "info", "event": "lifespan pre-auth setup completed in 60.2ms"}
+{"timestamp": "2026-11-16T22:45:33.200710Z", "level": "info", "event": "lifespan startup completed in 68.8ms"}
+INFO:     Application startup complete.
+INFO:     Unsloth Studio running on http://127.0.0.1:19293 (To stop: press Ctrl+C -- on macOS, Control+C not Command+C)
+{"timestamp": "2026-11-16T22:45:33.214532Z", "level": "info", "event": "Uvicorn startup hook completed in 1407.6ms"}
+{"timestamp": "2026-11-16T22:45:33.214703Z", "level": "info", "event": "run_server uvicorn ready after 1407.8ms"}
+Starting Unsloth Studio...
+{"timestamp": "2026-11-16T22:45:33.230463Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/health", "status_code": 200, "process_time_ms": 8.36}
+UNSLOTH_START_PORT: 19293
+UNSLOTH_START_API_KEY: REDACTED
+{"timestamp": "2026-11-16T22:45:33.303032Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/npu/status", "status_code": 200, "process_time_ms": 55.42}
+{"timestamp": "2026-11-16T22:45:33.862513Z", "level": "info", "event": "request_completed", "method": "GET", "path": "/api/npu/models", "status_code": 200, "process_time_ms": 558.7}
+Loading model: lemonade:qwen3-0.6b-FLM...
+{"timestamp": "2026-11-16T22:45:35.857337Z", "level": "info", "event": "Loaded default model defaults from /mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/after/src/studio/backend/assets/configs/model_defaults/default.yaml"}
+{"timestamp": "2026-11-16T22:45:35.859230Z", "level": "info", "event": "request_completed", "method": "POST", "path": "/api/inference/load", "status_code": 200, "process_time_ms": 1993.87}
+
+========================================================
+  Unsloth Studio running at http://127.0.0.1:19293
+  Model loaded: lemonade:qwen3-0.6b-FLM
+  Context length: 32768 tokens
+  API Key:      sk-REDACTED
+
+  OpenAI SDK base URL:
+    http://127.0.0.1:19293/v1
+========================================================
+Server-side tools are ENABLED for loopback. Pass --disable-tools to turn off.
+
+OpenAI Chat Completions:
+  curl http://127.0.0.1:19293/v1/chat/completions \
+    -H "Authorization: Bearer sk-REDACTED" \
+    -H "Content-Type: application/json" \
+    -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+
