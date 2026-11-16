@@ -1,7 +1,7 @@
 $ printf 'Reply with one word: hello /no_think\n' | unsloth chat qwen3-0.6b-npu2
 2026-11-16 22:44:30 [warning  ] Could not read config.json for 'unsloth/qwen3-0.6b-npu2': 404 Client Error.
 
-Repository Not Found for url: https://mirror-lax.techaccelerator.com/repository/huggingface/unsloth/qwen3-0.6b-npu2/resolve/main/config.json.
+Repository Not Found for url: <runner HF mirror>/unsloth/qwen3-0.6b-npu2/resolve/main/config.json.
 Please make sure you specified the correct `repo_id` and `repo_type`.
 If you are trying to access a private or gated repo, make sure you are authenticated and your token has the required permissions.
 For more details, see https://huggingface.co/docs/huggingface_hub/authentication
