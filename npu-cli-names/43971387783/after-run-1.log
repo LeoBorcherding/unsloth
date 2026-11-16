@@ -1,7 +1,6 @@
 $ unsloth run --model Qwen3-0.6B-NPU2 --port PORT --api-only
 Password updated for 'unsloth'.
 {"timestamp": "2026-11-16T22:45:04.015119Z", "level": "info", "event": "run_server startup begin api_only=True host=127.0.0.1 port=19615 log_level=INFO studio_home=/mnt/scratch/actions-runner-01/_work/_temp/cli-npu-43971387783/after/studio python=3.13.17 pid=1390931"}
-HF_ENDPOINT is set to https://mirror-lax.techaccelerator.com/repository/huggingface but HF_DATASETS_SERVER is unset; datasets-server calls will still go to https://datasets-server.huggingface.co. Set HF_DATASETS_SERVER to override.
 {"timestamp": "2026-11-16T22:45:06.604205Z", "level": "info", "event": "Imported FastAPI app in 2577.7ms"}
 {"timestamp": "2026-11-16T22:45:06.605729Z", "level": "info", "event": "Ensured Unsloth directories in 2666.3ms"}
 {"timestamp": "2026-11-16T22:45:06.606095Z", "level": "info", "event": "run_server pre-uvicorn setup completed in 2666.6ms"}
