@@ -1,0 +1,27 @@
+# AMD DevLab Strix Halo (X2-LA03-S03-D01), run 43972140591, this branch 20f8381
+
+$ unsloth run --model qwen3-0.6b-FLM --context-length 16384
+Loading model: lemonade:qwen3-0.6b-FLM...
+  Unsloth Studio running at http://127.0.0.1:8888
+  Model loaded: lemonade:qwen3-0.6b-FLM
+  Context length: 16384 tokens
+  API Key:      sk-unslo...REDACTED
+
+$ curl -s http://127.0.0.1:8888/api/npu/status -H 'Authorization: Bearer $KEY'   # 2 of its fields
+{"loaded_model": "lemonade:qwen3-0.6b-FLM", "context_length": 16384}
+
+$ printf 'What is the capital of France? Answer in one sentence.\n/exit\n' | unsloth chat qwen3-0.6b-FLM
+Loading lemonade:qwen3-0.6b-FLM on the Unsloth server
+(Unsloth server connected — model stays warm after /exit)
+Chatting with qwen3-0.6b-FLM
+You: Assistant:
+The capital of France is Paris.
+You:
+Bye.
+[exit 0 after 1s]
+
+$ curl -s http://127.0.0.1:8888/api/npu/status -H 'Authorization: Bearer $KEY'   # 2 of its fields
+{"loaded_model": "lemonade:qwen3-0.6b-FLM", "context_length": 16384}
+
+# Lemonade log, every NPU load so far:
+Loading qwen3-0.6b-FLM with a 16384-token context

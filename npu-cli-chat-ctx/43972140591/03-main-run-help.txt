@@ -1,0 +1,13 @@
+# run 43972140591, upstream main 6aab357, 80 columns
+$ unsloth run --help
+...
+│ --max-seq-lengt…                          <int>             Runtime context  │
+│                                                             length in tokens │
+│                                                             (0 = model       │
+│                                                             default for      │
+│                                                             GGUF; 2048 for   │
+│                                                             hub models)      │
+│                                                             [default: 0]     │
+│ --gpu-memory-mo…                          <auto|manual>     GPU memory       │
+│                                                             strategy for     │
+...
