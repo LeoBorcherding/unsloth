@@ -1,0 +1,13 @@
+BEFORE  AMD DevLab X2-LA03-S03-D01, Ryzen AI MAX+ 395 (NPU Strix Halo), Ubuntu 24.04, kernel 7.0.0-43, run 43971387209
+
+# main e73b085, Unsloth Studio installed from upstream main
+$ unsloth list-npu-models
+Usage: unsloth [OPTIONS] COMMAND [ARGS]...
+Try 'unsloth -h' for help.
+╭─ Error ──────────────────────────────────────────────────────────────────────╮
+│ No such command 'list-npu-models'.                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+exit=2
+$ unsloth --help | grep -i -E "list-|npu"
+│ list-checkpoints  List checkpoints detected in the outputs directory.        │
+exit=0
