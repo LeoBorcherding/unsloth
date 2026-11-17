@@ -11388,12 +11388,17 @@ def _switch_loads_beside(target_speaks: Callable[[], bool]) -> bool:
 
 
 async def _npu_path_for_display_name(
-    requested_model: Optional[str], fastapi_request: Request
+    requested_model: Optional[str],
+    fastapi_request: Request,
+    *,
+    serves_npu: bool = False,
 ) -> Optional[str]:
     """``lemonade:<id>`` for the NPU model name the app shows (``Qwen3-0.6B-NPU2`` or its
     ``FastFlowLM/`` repo); any other name is returned unchanged."""
+    from core.inference.lemonade_server import LemonadeUnavailable
     from core.inference.npu_backend import (
         NpuError,
+        NpuNameAmbiguous,
         get_npu_backend,
         looks_like_npu_display_name,
     )
@@ -11406,9 +11411,11 @@ async def _npu_path_for_display_name(
     from core.inference.load_policy import owner_chat_loads_beside
     from utils.openai_auto_switch_settings import get_openai_auto_switch_enabled
 
-    # Reading the catalog starts the runtime, so only a request that could load may start it.
+    # Reading the catalog starts the runtime, so only a route that serves the NPU and a request
+    # that could load may start it.
     may_load = (
-        not account_access.managed_account()
+        serves_npu
+        and not account_access.managed_account()
         and not _auto_switch_opted_out(fastapi_request)
         and (
             get_openai_auto_switch_enabled()
@@ -11439,8 +11446,12 @@ async def _npu_path_for_display_name(
         resolved = await asyncio.to_thread(
             npu.model_path_for_name, requested_model, start_runtime = may_load
         )
-    except NpuError as exc:
+    except NpuNameAmbiguous as exc:
         raise _refuse(400, str(exc), "invalid_value") from None
+    except (NpuError, LemonadeUnavailable) as exc:
+        raise _refuse(
+            503, f"The NPU runtime is not available: {exc}", "service_unavailable"
+        ) from None
     if resolved:
         return resolved
     if not await asyncio.to_thread(npu.can_run):
@@ -11519,7 +11530,9 @@ async def _maybe_auto_switch_model(
     gguf_requires_vision = (
         (require_audio_input or require_video) if tool_images_only else require_vision
     )
-    requested_model = await _npu_path_for_display_name(requested_model, fastapi_request)
+    requested_model = await _npu_path_for_display_name(
+        requested_model, fastapi_request, serves_npu = serves_npu
+    )
     # The reload-only sentinel means an omitted model, not a name.
     named_model = requested_model if requested_model != _RELOAD_ONLY_MODEL else None
     # What a refused load asks the user to load, and on which page.
