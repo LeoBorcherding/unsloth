@@ -135,6 +135,10 @@ class NpuError(RuntimeError):
     """An NPU operation failed; the message is safe to show the user."""
 
 
+class NpuNameAmbiguous(NpuError):
+    """A display name two catalog rows share."""
+
+
 class NpuBusy(NpuError):
     """A delete and a pull of the same model would write the same folder."""
 
@@ -810,7 +814,8 @@ class LemonadeNpuBackend:
         """`lemonade:<id>` for the model whose Hugging Face repo or repo name is name, or None.
 
         The loaded model answers without I/O; the others are read from the catalog when the
-        runtime is running, or ``start_runtime`` lets it start.
+        runtime is running, or ``start_runtime`` lets it start. Raises ``NpuNameAmbiguous`` for a
+        name two models share, and ``NpuError`` / ``LemonadeUnavailable`` when the catalog can't be read.
         """
         if not looks_like_npu_display_name(name):
             return None
@@ -820,13 +825,11 @@ class LemonadeNpuBackend:
         server = self._server
         if not start_runtime and (server is None or not server.is_alive()):
             return None
-        try:
-            matches = [model for model in self.catalog() if model.answers_to(name)]
-        except (NpuError, LemonadeUnavailable):
-            return None
+        # A runtime that won't start raises, so it isn't reported as an unknown name.
+        matches = [model for model in self.catalog() if model.answers_to(name)]
         if len(matches) > 1:
             paths = ", ".join(sorted(model.model_path for model in matches))
-            raise NpuError(
+            raise NpuNameAmbiguous(
                 f"{name.strip()} names more than one NPU model: {paths}. Use one of those."
             )
         return matches[0].model_path if matches else None
