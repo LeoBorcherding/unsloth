@@ -13,6 +13,7 @@ from __future__ import annotations
 import atexit
 import collections
 import importlib
+import inspect
 import itertools
 import os
 import pickle
@@ -355,6 +356,7 @@ class DiffusionWorkerBackend:
             ),
         )
         object.__setattr__(self, "_refs", {})
+        object.__setattr__(self, "_signatures", {})
         object.__setattr__(self, "_local_lock", threading.Lock())
         object.__setattr__(self, "_in_flight", 0)
         object.__setattr__(self, "_holders", [])
@@ -366,10 +368,15 @@ class DiffusionWorkerBackend:
         return current_account()
 
     def _wrap(self, name: str, value: Any) -> Any:
-        if isinstance(value, tuple) and len(value) == 2 and value[0] == _CALLABLE:
-            return lambda *args, **kwargs: self._client.call(
-                name, *args, account = self._account(), **kwargs
-            )
+        if isinstance(value, tuple) and len(value) == 3 and value[0] == _CALLABLE:
+
+            def forward(*args: Any, **kwargs: Any) -> Any:
+                return self._client.call(name, *args, account = self._account(), **kwargs)
+
+            forward.__name__ = name
+            # The routes probe the engine's signature to decide which options it takes.
+            forward.__signature__ = _rebuild_signature(value[2])
+            return forward
         if isinstance(value, tuple) and len(value) == 3 and value[0] == _RemoteRef.__name__:
             key = (value[1], value[2])
             ref = self._refs.get(key)
@@ -403,7 +410,20 @@ class DiffusionWorkerBackend:
             with self._local_lock:
                 self._waiters.discard(cancel)
 
-    def generate(self, **kwargs: Any) -> dict[str, Any]:
+    @property
+    def generate(self) -> Callable[..., dict[str, Any]]:
+        signature = self._signatures.get("generate")
+        if signature is None:
+            remote = self._client.getattr("generate")
+            signature = self._signatures["generate"] = _rebuild_signature(remote[2])
+
+        def generate(**kwargs: Any) -> dict[str, Any]:
+            return self._generate(**kwargs)
+
+        generate.__signature__ = signature
+        return generate
+
+    def _generate(self, **kwargs: Any) -> dict[str, Any]:
         from core.inference.generation_ticket import bind_generation_cancel
 
         cancel = threading.Event()
@@ -479,9 +499,45 @@ def _load_target(spec: str) -> Any:
     return getattr(importlib.import_module(module_name), attr)()
 
 
+def _encode_signature(fn: Any) -> Optional[list]:
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return None
+    encoded = []
+    for param in params:
+        default = param.default
+        try:
+            pickle.dumps(default, protocol = _PICKLE_PROTOCOL)
+        except Exception:  # noqa: BLE001 - the name and kind are what callers read
+            default = None
+        encoded.append((param.name, int(param.kind), param.default is param.empty, default))
+    return encoded
+
+
+def _rebuild_signature(encoded: Optional[list]) -> inspect.Signature:
+    if encoded is None:
+        return inspect.Signature(
+            [
+                inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL),
+                inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD),
+            ]
+        )
+    return inspect.Signature(
+        [
+            inspect.Parameter(
+                name,
+                inspect._ParameterKind(kind),
+                default = inspect.Parameter.empty if no_default else default,
+            )
+            for name, kind, no_default, default in encoded
+        ]
+    )
+
+
 def _encode_attr(name: str, value: Any) -> Any:
     if callable(value) and not isinstance(value, type):
-        return (_CALLABLE, name)
+        return (_CALLABLE, name, _encode_signature(value))
     if value is None or isinstance(value, (bool, int, float, str, bytes)):
         return value
     try:

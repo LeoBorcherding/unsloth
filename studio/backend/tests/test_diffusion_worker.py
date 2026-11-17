@@ -66,7 +66,7 @@ _FAKE = textwrap.dedent(
         def swap_state(self):
             self._state = threading.Lock()
 
-        def generate(self, *, steps=200, **_):
+        def generate(self, *, steps=200, sampler=None, shift=None, **_):
             cancel = threading.Event()
             bind_generation_cancel(cancel)
             self._gen_cancel = cancel
@@ -185,6 +185,16 @@ def test_live_state_comes_back_as_a_stable_reference(backend):
     assert backend._state is not first
 
 
+def test_forwarded_methods_keep_the_backend_signature(backend):
+    import inspect
+
+    # routes/inference.py offers sampler, shift and friends only when the engine's signature names them.
+    params = inspect.signature(backend.generate).parameters
+    assert {"steps", "sampler", "shift"} <= set(params)
+    assert params["steps"].default == 200
+    assert list(inspect.signature(backend.cancel_generate).parameters) == ["expected_account"]
+
+
 def test_generation_runs_as_the_calling_account(backend):
     token = bind_account(AccountContext("acct-7", "seven"))
     try:
@@ -283,6 +293,11 @@ def test_get_diffusion_backend_returns_the_worker_proxy(monkeypatch):
         # The real backend answers from the worker, not this process.
         assert proxy.is_loaded is False
         assert proxy.status()["loaded"] is False
+        import inspect
+
+        assert {"sampler", "sd_controls", "shift", "live_preview", "mask_blur"} <= set(
+            inspect.signature(proxy.generate).parameters
+        )
         assert proxy._client.pid not in (None, os.getpid())
     finally:
         proxy.shutdown()
