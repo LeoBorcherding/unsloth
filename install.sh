@@ -5867,16 +5867,23 @@ _second_vendor_torch_requested() {
     esac
 }
 
-# The vendor the main venv did NOT get, from its index URL: rocm, cuda, or failure (cpu, xpu).
-_second_vendor_for_index() {
+# The vendor the main venv did NOT get: rocm, cuda, or failure (cpu, xpu). From the index leaf,
+# or, for a mirror whose leaf names no flavor, from the torch the main venv actually imports.
+_second_vendor_for_index() {  # main index URL, main venv python
     if _torch_index_url_is_rocm "${1:-}"; then
         echo cuda
         return 0
     fi
     case "$(_torch_index_url_leaf "${1:-}")" in
-        cu[0-9]*) echo rocm ;;
-        *) return 1 ;;
+        cu[0-9]*) echo rocm; return 0 ;;
+        cpu|xpu) return 1 ;;
     esac
+    [ -n "${2:-}" ] || return 1
+    _svf=$(_run_bounded --secs 120 "$2" -I -c \
+        "import torch; print('UNSLOTH_SVF=%s' % ('cuda' if torch.version.hip else 'rocm' if torch.version.cuda else ''))" \
+        2>/dev/null | sed -n 's/^UNSLOTH_SVF=//p' | tail -n 1) || _svf=""
+    [ -n "$_svf" ] || return 1
+    echo "$_svf"
 }
 
 # Index URL for the second venv, or failure when this host has no index for the other vendor.
@@ -5943,7 +5950,7 @@ _second_vendor_torch_plan() {  # vendor
 # Never fails the install: the main venv is already complete when this runs.
 _install_second_vendor_torch() {  # main venv python, main index URL
     _svt_record="$STUDIO_HOME/second_torch_venv.json"
-    if ! _svt_vendor=$(_second_vendor_for_index "$2"); then
+    if ! _svt_vendor=$(_second_vendor_for_index "$2" "$1"); then
         substep "[WARN] UNSLOTH_SECOND_VENDOR_TORCH is set, but the main venv has no CUDA or ROCm torch to pair with; skipping the second venv." "$C_WARN"
         return 0
     fi

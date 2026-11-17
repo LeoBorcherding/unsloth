@@ -93,7 +93,9 @@ _LEAF_DEFS = "\n".join(
     ],
 )
 def test_the_second_vendor_is_the_one_the_main_venv_did_not_get(main_index, expected):
-    out = _run(_LEAF_DEFS + f"\n_second_vendor_for_index '{main_index}'")
+    out = _run(
+        _fn("_run_bounded") + "\n" + _LEAF_DEFS + f"\n_second_vendor_for_index '{main_index}'"
+    )
     if expected is None:
         assert out.returncode != 0, out.stdout
     else:
@@ -281,6 +283,25 @@ def _fake_python(tmp_path: Path, version: str) -> Path:
     )
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
     return wrapper
+
+
+@pytest.mark.parametrize(
+    "main_torch, expected",
+    [("2.11.0+rocm7.0", "cuda"), ("2.11.0+cu128", "rocm"), ("2.11.0+cpu", None)],
+)
+def test_a_mirror_leaf_with_no_flavor_asks_the_main_venvs_torch(tmp_path, main_torch, expected):
+    """Fails without the probe: a mirror ending in /current read as neither vendor and skipped."""
+    python = _fake_python(tmp_path, main_torch)
+    out = _run(
+        _fn("_run_bounded")
+        + "\n"
+        + _LEAF_DEFS
+        + f"\n_second_vendor_for_index https://mirror.example/whl/current '{python}'"
+    )
+    if expected is None:
+        assert out.returncode != 0, out
+    else:
+        assert out.returncode == 0 and out.stdout.strip() == expected, out
 
 
 def _install(
