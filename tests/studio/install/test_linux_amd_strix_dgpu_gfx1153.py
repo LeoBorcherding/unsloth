@@ -59,7 +59,7 @@ def _sh_routing_leaf(
     """install.sh's routing block on a rocminfo stub; the index leaf it leaves selected."""
     source = _INSTALL_SH.read_text(encoding = "utf-8")
     start = source.find('case "$_torch_index_leaf" in\n    rocm[0-9]*)')
-    end = source.find("\nfi  # _torch_index_pinned guard", start)
+    end = source.find("\n}  # end _amd_route_rocm_torch_index", start)
     assert start >= 0 and end >= 0
     script = (
         "set -euo pipefail\n"
@@ -453,7 +453,7 @@ def test_install_sh_strix_handoff_clears_the_radeon_downloader():
     # rocminfo's "Radeon 8060S" set the flag; the dGPU's generic index must not be overridden.
     source = _INSTALL_SH.read_text(encoding = "utf-8")
     start = source.find('case "$_torch_index_leaf" in\n    rocm[0-9]*)')
-    end = source.find("\nfi  # _torch_index_pinned guard", start)
+    end = source.find("\n}  # end _amd_route_rocm_torch_index", start)
     script = (
         "set -euo pipefail\n"
         + rocm_support._extract_sh_function_body(source, "_rocm_leaf_below")

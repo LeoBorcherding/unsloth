@@ -168,6 +168,102 @@ def test_the_second_index_override_is_used_verbatim():
     assert url == "https://example.invalid/whl/rocm7.2", url
 
 
+_ROUTE_HELPERS = (
+    "_rocm_leaf_below",
+    "_rocminfo_gpu_records",
+    "_amd_smi_gpu_records",
+    "_gfx_arch_slots",
+    "_amd_smi_hip_order",
+    "_amd_prefer_discrete_gfx",
+    "_hsa_override_gfx_arch",
+    "_amd_gfx_is_shadowing_integrated",
+    "_amd_gfx_has_wheel_route",
+    "_amd_arch_index_family_for_gfx",
+    "_amd_generic_tag_carries_gfx",
+    "_amd_route_rocm_torch_index",
+)
+
+
+def _plan(
+    vendor: str,
+    host: str,
+    *,
+    routing: bool = True,
+    cu130: str = "no",
+    env: str = "",
+) -> "list[str] | None":
+    """_second_vendor_torch_plan with the index lookup stubbed to the generic pick."""
+    generic = {
+        "rocm": "https://download.pytorch.org/whl/rocm7.1",
+        "cuda": "https://download.pytorch.org/whl/cu130",
+    }
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "_TORCH_CEILING=2.12.0; _TORCHVISION_CEILING=0.27.0; _TORCHAUDIO_CEILING=2.12.0",
+            '_CU130_NEW_INSTALL_TORCH="torch>=2.13.0,<2.14.0"; SKIP_TORCH=false; VENV_DIR=/nonexistent',
+            "unset HSA_OVERRIDE_GFX_VERSION HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES",
+            "unset UNSLOTH_ROCM_GFX_ARCH UNSLOTH_PYTORCH_MIRROR UNSLOTH_AMD_ROCM_MIRROR",
+            host,
+            _LEAF_DEFS,
+            *([_fn(name) for name in _ROUTE_HELPERS] if routing else []),
+            f"_second_vendor_torch_index_url() {{ echo {generic[vendor]}; }}",
+            f"_cu130_torch213_route() {{ echo {cu130}; }}",
+            _fn("_second_vendor_torch_plan"),
+            f"{env} _second_vendor_torch_plan {vendor}",
+        ]
+    )
+    out = _run(script)
+    return out.stdout.strip().splitlines() if out.returncode == 0 else None
+
+
+def _rocminfo_gfx(gfx: str) -> str:
+    return f"rocminfo() {{ printf 'Name: {gfx}\\n'; }}"
+
+
+def test_an_rdna4_second_venv_gets_the_per_arch_index_main_would_pick():
+    """Fails without the routing: the generic rocm7.1 wheels lack RDNA 4's _grouped_mm kernel."""
+    plan = _plan("rocm", _rocminfo_gfx("gfx1201"))
+    assert plan and plan[0].rstrip("/").endswith("/gfx120X-all"), plan
+    assert plan[1] == "torch>=2.11.0,<2.12.0", plan
+
+
+def test_a_gfx906_second_venv_gets_rocm63_and_its_window():
+    plan = _plan("rocm", _rocminfo_gfx("gfx906"))
+    assert plan and plan[0].endswith("/rocm6.3") and plan[1] == "torch>=2.4,<2.11.0", plan
+
+
+def test_a_card_with_no_reroute_keeps_the_generic_index():
+    plan = _plan("rocm", _rocminfo_gfx("gfx1100"))
+    assert plan and plan[0].endswith("/rocm7.1") and plan[1] == "torch>=2.4,<2.12.0", plan
+
+
+def test_a_pinned_main_index_makes_the_rocm_plan_ask_for_an_override():
+    """The routing function is only defined when the main index is not pinned."""
+    assert _plan("rocm", _rocminfo_gfx("gfx1201"), routing = False) is None
+
+
+def test_the_override_skips_routing():
+    plan = _plan(
+        "rocm",
+        _rocminfo_gfx("gfx1201"),
+        routing = False,
+        env = "UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL=https://example.invalid/whl/rocm7.2",
+    )
+    assert plan and plan[1] == "torch>=2.4,<2.12.0", plan
+
+
+def test_a_cu130_second_venv_gets_the_cu130_window():
+    """Fails without it: torch<2.12 / torchvision<0.27 exclude the wheels main installs on cu130."""
+    plan = _plan("cuda", "", cu130 = "yes")
+    assert plan and plan[1:3] == ["torch>=2.13.0,<2.14.0", "torchvision>=0.28.0,<0.29.0"], plan
+
+
+def test_a_cuda_second_venv_off_the_cu130_route_keeps_the_default_window():
+    plan = _plan("cuda", "", cu130 = "no")
+    assert plan and plan[1:3] == ["torch>=2.4,<2.12.0", "torchvision>=0.19,<0.27.0"], plan
+
+
 def _fake_python(tmp_path: Path, version: str) -> Path:
     """A python that imports a stub torch; -I is dropped so the stub's PYTHONPATH applies."""
     pkg = tmp_path / "fake_site" / "torch"
@@ -205,7 +301,8 @@ def _install(
             '_run_bounded() { shift 2; "$@"; }',
             _fn("_strip_index_url_credentials"),
             _LEAF_DEFS,
-            "_second_vendor_torch_index_url() { echo https://download.pytorch.org/whl/rocm7.0; }",
+            "_second_vendor_torch_plan() { printf '%s\\n' https://download.pytorch.org/whl/rocm7.0 "
+            "'torch>=2.4,<2.12.0' 'torchvision>=0.19,<0.27.0' 'torchaudio>=2.4,<2.12.0'; }",
             # uv venv: lay out bin/python as the stub python; uv pip install: succeed or fail.
             "run_install_cmd() { shift; [ \"$1 $2\" = 'uv venv' ] || return 1; "
             f'eval "_d=\\${{$#}}"; mkdir -p "$_d/bin"; ln -s "{wrapper}" "$_d/bin/python"; }}',

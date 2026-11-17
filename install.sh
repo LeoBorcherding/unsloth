@@ -5907,6 +5907,39 @@ _second_vendor_torch_index_url() {  # vendor
     echo "$_svt_url"
 }
 
+# Index, then torch / torchvision / torchaudio specs, one per line: the second venv gets the
+# main venv's per-arch ROCm routing and cu130 window. An override URL is taken as is.
+_second_vendor_torch_plan() {  # vendor
+    _svp_url=$(_second_vendor_torch_index_url "$1") || return 1
+    _svp_torch="torch>=2.4,<${_TORCH_CEILING}"
+    _svp_tv="torchvision>=0.19,<${_TORCHVISION_CEILING}"
+    _svp_ta="torchaudio>=2.4,<${_TORCHAUDIO_CEILING}"
+    _svp_pin=$(printf '%s' "${UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL:-}" | tr -d '[:space:]')
+    if [ -z "$_svp_pin" ] && [ "$1" = rocm ]; then
+        # Defined inside the main venv's pin guard: a pinned main index never defines it.
+        if ! command -v _amd_route_rocm_torch_index >/dev/null 2>&1; then
+            echo "[WARN] The main torch index is pinned, so the second venv cannot route its ROCm index per GPU arch; set UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL." >&2
+            return 1
+        fi
+        (
+            TORCH_INDEX_URL="$_svp_url"
+            _torch_index_leaf=$(_torch_index_url_leaf "$_svp_url")
+            TORCH_CONSTRAINT="$_svp_torch"
+            TORCHVISION_CONSTRAINT="$_svp_tv"
+            TORCHAUDIO_CONSTRAINT="$_svp_ta"
+            _amd_gpu_radeon=false
+            _amd_route_rocm_torch_index >&2
+            printf '%s\n' "$TORCH_INDEX_URL" "$TORCH_CONSTRAINT" "$TORCHVISION_CONSTRAINT" "$TORCHAUDIO_CONSTRAINT"
+        )
+        return
+    fi
+    if [ -z "$_svp_pin" ] && [ "$1" = cuda ] && [ "$(_cu130_torch213_route "$_svp_url")" = yes ]; then
+        _svp_torch="$_CU130_NEW_INSTALL_TORCH"
+        _svp_tv="torchvision>=0.28.0,<0.29.0"
+    fi
+    printf '%s\n' "$_svp_url" "$_svp_torch" "$_svp_tv" "$_svp_ta"
+}
+
 # Never fails the install: the main venv is already complete when this runs.
 _install_second_vendor_torch() {  # main venv python, main index URL
     _svt_record="$STUDIO_HOME/second_torch_venv.json"
@@ -5914,11 +5947,15 @@ _install_second_vendor_torch() {  # main venv python, main index URL
         substep "[WARN] UNSLOTH_SECOND_VENDOR_TORCH is set, but the main venv has no CUDA or ROCm torch to pair with; skipping the second venv." "$C_WARN"
         return 0
     fi
-    if ! _svt_index=$(_second_vendor_torch_index_url "$_svt_vendor"); then
+    if ! _svt_plan=$(_second_vendor_torch_plan "$_svt_vendor") || [ -z "$_svt_plan" ]; then
         substep "[WARN] UNSLOTH_SECOND_VENDOR_TORCH is set, but no $_svt_vendor PyTorch index fits this host; skipping the second venv." "$C_WARN"
         substep "[WARN] Set UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL to choose one and re-run." "$C_WARN"
         return 0
     fi
+    _svt_index=$(printf '%s\n' "$_svt_plan" | sed -n 1p)
+    _svt_torch=$(printf '%s\n' "$_svt_plan" | sed -n 2p)
+    _svt_tv=$(printf '%s\n' "$_svt_plan" | sed -n 3p)
+    _svt_ta=$(printf '%s\n' "$_svt_plan" | sed -n 4p)
     _svt_dir="$STUDIO_HOME/unsloth_studio_$_svt_vendor"
     if [ -e "$_svt_dir" ] && [ ! -f "$_svt_dir/.unsloth-second-torch-owned" ]; then
         substep "[WARN] $_svt_dir exists and was not made by this installer; leaving it and skipping the second venv." "$C_WARN"
@@ -5933,8 +5970,7 @@ _install_second_vendor_torch() {  # main venv python, main index URL
     if ! run_install_cmd "create second venv ($_svt_vendor)" uv venv --python "$1" "$_svt_dir" \
        || ! : > "$_svt_dir/.unsloth-second-torch-owned" \
        || ! run_install_cmd_retry "install PyTorch ($_svt_vendor, second venv)" uv pip install --python "$_svt_py" \
-            "torch>=2.4,<${_TORCH_CEILING}" "torchvision>=0.19,<${_TORCHVISION_CEILING}" \
-            "torchaudio>=2.4,<${_TORCHAUDIO_CEILING}" --default-index "$_svt_index"; then
+            "$_svt_torch" "$_svt_tv" "$_svt_ta" --default-index "$_svt_index"; then
         substep "[WARN] could not build the $_svt_vendor second venv; the main install is unaffected." "$C_WARN"
         return 0
     fi
@@ -6832,6 +6868,8 @@ _venv_torch_rocm_below() {
 
 # ── Strix Halo / Strix Point: route to the AMD arch-specific index ───────────
 # gfx1151/gfx1150 need torch 2.11+rocm7.13 from repo.amd.com; older generic indexes lack the fixes (#7264).
+# A function so the second-vendor venv (#12248) routes its ROCm index the same way.
+_amd_route_rocm_torch_index() {
 case "$_torch_index_leaf" in
     rocm[0-9]*)
         # Re-declared because test_rocm_support.py lifts this arm out whole (set -u).
@@ -7080,6 +7118,8 @@ case "$_torch_index_leaf" in
         fi
         ;;
 esac
+}  # end _amd_route_rocm_torch_index
+_amd_route_rocm_torch_index
 fi  # _torch_index_pinned guard (Radeon + Strix reroute)
 # New installs on this route get 2.13; preservation keeps 2.4-2.14 installs on their release.
 _PRESERVE_TORCH_CONSTRAINT="$TORCH_CONSTRAINT"
