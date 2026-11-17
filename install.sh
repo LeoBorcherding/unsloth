@@ -5857,6 +5857,106 @@ _torch_index_url_is_rocm() {
     esac
 }
 
+# Opt-in (#12248): a second venv holding the other vendor's torch on a mixed NVIDIA+AMD host,
+# so one install can run jobs on both cards. Parsed like _rocm_torch_explicitly_requested.
+_second_vendor_torch_requested() {
+    case "$(printf '%s' "${UNSLOTH_SECOND_VENDOR_TORCH:-}" \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# The vendor the main venv did NOT get, from its index URL: rocm, cuda, or failure (cpu, xpu).
+_second_vendor_for_index() {
+    if _torch_index_url_is_rocm "${1:-}"; then
+        echo cuda
+        return 0
+    fi
+    case "$(_torch_index_url_leaf "${1:-}")" in
+        cu[0-9]*) echo rocm ;;
+        *) return 1 ;;
+    esac
+}
+
+# Index URL for the second venv, or failure when this host has no index for the other vendor.
+# Reuses get_torch_index_url with the vendor forced; the main venv's pins do not carry over.
+_second_vendor_torch_index_url() {  # vendor
+    _svt_url="${UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL:-}"
+    _svt_url="${_svt_url#"${_svt_url%%[![:space:]]*}"}"; _svt_url="${_svt_url%"${_svt_url##*[![:space:]]}"}"
+    if [ -n "$_svt_url" ]; then
+        _trim_index_path_slashes "$_svt_url"
+        return 0
+    fi
+    case "${1:-}" in
+        rocm)
+            _svt_url=$(UNSLOTH_TORCH_INDEX_URL= UNSLOTH_TORCH_INDEX_FAMILY= UNSLOTH_FORCE_ROCM_TORCH=1 \
+                get_torch_index_url) || return 1
+            _torch_index_url_is_rocm "$_svt_url" || return 1
+            ;;
+        cuda)
+            _svt_url=$(UNSLOTH_TORCH_INDEX_URL= UNSLOTH_TORCH_INDEX_FAMILY= UNSLOTH_FORCE_ROCM_TORCH=0 \
+                get_torch_index_url) || return 1
+            case "$(_torch_index_url_leaf "$_svt_url")" in
+                cu[0-9]*) : ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *) return 1 ;;
+    esac
+    echo "$_svt_url"
+}
+
+# Never fails the install: the main venv is already complete when this runs.
+_install_second_vendor_torch() {  # main venv python, main index URL
+    _svt_record="$STUDIO_HOME/second_torch_venv.json"
+    if ! _svt_vendor=$(_second_vendor_for_index "$2"); then
+        substep "[WARN] UNSLOTH_SECOND_VENDOR_TORCH is set, but the main venv has no CUDA or ROCm torch to pair with; skipping the second venv." "$C_WARN"
+        return 0
+    fi
+    if ! _svt_index=$(_second_vendor_torch_index_url "$_svt_vendor"); then
+        substep "[WARN] UNSLOTH_SECOND_VENDOR_TORCH is set, but no $_svt_vendor PyTorch index fits this host; skipping the second venv." "$C_WARN"
+        substep "[WARN] Set UNSLOTH_SECOND_VENDOR_TORCH_INDEX_URL to choose one and re-run." "$C_WARN"
+        return 0
+    fi
+    _svt_dir="$STUDIO_HOME/unsloth_studio_$_svt_vendor"
+    if [ -e "$_svt_dir" ] && [ ! -f "$_svt_dir/.unsloth-second-torch-owned" ]; then
+        substep "[WARN] $_svt_dir exists and was not made by this installer; leaving it and skipping the second venv." "$C_WARN"
+        return 0
+    fi
+    step "torch" "second venv ($_svt_vendor)"
+    substep "$_svt_dir ($(_strip_index_url_credentials "$_svt_index"))"
+    # The record goes first, so a failed rebuild never leaves it pointing at a half-built venv.
+    rm -f "$_svt_record"
+    rm -rf "$_svt_dir"
+    _svt_py="$_svt_dir/bin/python"
+    if ! run_install_cmd "create second venv ($_svt_vendor)" uv venv --python "$1" "$_svt_dir" \
+       || ! : > "$_svt_dir/.unsloth-second-torch-owned" \
+       || ! run_install_cmd_retry "install PyTorch ($_svt_vendor, second venv)" uv pip install --python "$_svt_py" \
+            "torch>=2.4,<${_TORCH_CEILING}" "torchvision>=0.19,<${_TORCHVISION_CEILING}" \
+            "torchaudio>=2.4,<${_TORCHAUDIO_CEILING}" --default-index "$_svt_index"; then
+        substep "[WARN] could not build the $_svt_vendor second venv; the main install is unaffected." "$C_WARN"
+        return 0
+    fi
+    # The python writes its own record, so the path and version are what actually imports.
+    if ! _run_bounded --secs 120 "$_svt_py" -I -c '
+import json, os, sys, torch
+vendor, index_url, out = sys.argv[1:4]
+ok = {"rocm": torch.version.hip, "cuda": torch.version.cuda}[vendor]
+if not ok:
+    sys.exit("torch %s is not a %s build" % (torch.__version__, vendor))
+tmp = out + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump({"schema": 1, "vendor": vendor, "python": sys.executable, "venv": sys.prefix,
+               "torch_version": torch.__version__, "index_url": index_url}, f, indent=2)
+os.replace(tmp, out)
+' "$_svt_vendor" "$(_strip_index_url_credentials "$_svt_index")" "$_svt_record"; then
+        substep "[WARN] the $_svt_vendor second venv installed but its torch did not import as a $_svt_vendor build; not recording it." "$C_WARN"
+        return 0
+    fi
+    substep "recorded in $_svt_record"
+}
+
 # HIP reads CUDA_VISIBLE_DEVICES when HIP_VISIBLE_DEVICES is unset, so "" hides the AMD card.
 _warn_if_cuda_mask_hides_amd() {
     _cvd_hides_nvidia || return 0
@@ -8322,6 +8422,11 @@ if [ -n "${UNSLOTH_CI_SOURCE_OVERLAY:-}" ]; then
     substep "CI: overlaying source checkout (editable, no deps): $UNSLOTH_CI_SOURCE_OVERLAY"
     run_install_cmd_retry "overlay CI source checkout" uv pip install --python "$_VENV_PY" \
         --no-deps -e "$UNSLOTH_CI_SOURCE_OVERLAY"
+fi
+
+# ── Opt-in: the other vendor's torch in its own venv (mixed NVIDIA+AMD hosts, #12248) ──
+if [ "$SKIP_TORCH" = false ] && [ "$OS" = "linux" ] && _second_vendor_torch_requested; then
+    _install_second_vendor_torch "$_VENV_PY" "$TORCH_INDEX_URL"
 fi
 
 # ── Run studio setup ──
