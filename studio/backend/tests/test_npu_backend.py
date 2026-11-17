@@ -1115,7 +1115,16 @@ def test_a_display_name_two_models_share_is_refused(npu, monkeypatch):
         )
 
     monkeypatch.setattr(npu, "catalog", lambda: [_model("b-FLM"), _model("a-FLM")])
-    with pytest.raises(nb.NpuError, match = "lemonade:a-FLM, lemonade:b-FLM"):
+    with pytest.raises(nb.NpuNameAmbiguous, match = "lemonade:a-FLM, lemonade:b-FLM"):
+        npu.model_path_for_name("Qwen3-0.6B-NPU2", start_runtime = True)
+
+
+def test_a_catalog_that_cannot_be_read_raises_instead_of_matching_nothing(npu, monkeypatch):
+    def _down():
+        raise nb.LemonadeUnavailable("lemond exited during startup")
+
+    monkeypatch.setattr(npu, "catalog", _down)
+    with pytest.raises(nb.LemonadeUnavailable):
         npu.model_path_for_name("Qwen3-0.6B-NPU2", start_runtime = True)
 
 

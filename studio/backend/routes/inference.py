@@ -11394,13 +11394,18 @@ async def _npu_path_for_display_name(
 ) -> Optional[str]:
     """``lemonade:<id>`` for the NPU model name the app shows (``Qwen3-0.6B-NPU2`` or its
     ``FastFlowLM/`` repo); any other name is returned unchanged."""
+    from core.inference.lemonade_server import LemonadeUnavailable
     from core.inference.npu_backend import (
         NpuError,
+        NpuNameAmbiguous,
         get_npu_backend,
         looks_like_npu_display_name,
     )
 
     if not looks_like_npu_display_name(requested_model):
+        return requested_model
+    if _auto_switch_opted_out(fastapi_request):
+        # The public preview serves its pinned checkpoint whatever model the caller names.
         return requested_model
     npu = get_npu_backend()
     if not npu.hardware().get("supported"):
@@ -11420,7 +11425,6 @@ async def _npu_path_for_display_name(
         )
         and not (isinstance(scope, dict) and scope.get(LOADED_MODELS_ONLY_SCOPE_KEY))
         and not account_access.managed_account()
-        and not _auto_switch_opted_out(fastapi_request)
         and (
             get_openai_auto_switch_enabled()
             or _model_switch_allowed_for_request(fastapi_request)
@@ -11450,8 +11454,12 @@ async def _npu_path_for_display_name(
         resolved = await asyncio.to_thread(
             npu.model_path_for_name, requested_model, start_runtime = may_load
         )
-    except NpuError as exc:
+    except NpuNameAmbiguous as exc:
         raise _refuse(400, str(exc), "invalid_value") from None
+    except (NpuError, LemonadeUnavailable) as exc:
+        raise _refuse(
+            503, f"The NPU runtime is not available: {exc}", "service_unavailable"
+        ) from None
     if resolved:
         return resolved
     if not await asyncio.to_thread(npu.can_run):

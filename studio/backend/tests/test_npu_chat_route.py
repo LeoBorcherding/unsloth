@@ -2189,6 +2189,46 @@ def test_an_unknown_npu_name_is_refused_not_served_by_another_model(monkeypatch)
     assert "No NPU model is named 'Qwen3-9B-Nope-NPU2'" in json.dumps(caught.value.detail)
 
 
+def test_a_runtime_that_wont_start_is_not_reported_as_an_unknown_name(monkeypatch):
+    from core.inference.lemonade_server import LemonadeUnavailable
+    from routes import inference as routes
+
+    npu, _ = _shown_npu(monkeypatch, loaded = False, running = False, auto_switch = True)
+
+    def _down():
+        raise LemonadeUnavailable("lemond exited during startup")
+
+    monkeypatch.setattr(npu, "catalog", _down)
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(routes._npu_path_for_display_name("Qwen3-0.6B-NPU2", _request()))
+    assert caught.value.status_code == 503
+    detail = json.dumps(caught.value.detail)
+    assert "lemond exited during startup" in detail
+    assert "No NPU model is named" not in detail
+
+
+def test_a_route_that_cannot_serve_the_npu_still_finds_the_loaded_model(monkeypatch):
+    from routes import inference as routes
+
+    npu, model = _shown_npu(monkeypatch, loaded = True, auto_switch = True)
+    path = asyncio.run(
+        routes._npu_path_for_display_name("Qwen3-0.6B-NPU2", _request(), serves_npu = False)
+    )
+    assert path == model.model_path
+    assert npu.catalog_reads == 0
+
+
+def test_the_public_preview_passes_an_npu_name_on_to_its_pinned_checkpoint(monkeypatch):
+    from routes import inference as routes
+
+    npu, _ = _shown_npu(monkeypatch, loaded = False, running = False, auto_switch = True)
+    request = _request()
+    routes.disable_openai_auto_switch_for_request(request.scope)
+    path = asyncio.run(routes._npu_path_for_display_name("Qwen3-0.6B-NPU2", request))
+    assert path == "Qwen3-0.6B-NPU2"
+    assert npu.catalog_reads == 0
+
+
 def test_a_host_without_the_npu_passes_the_name_on(monkeypatch):
     from routes import inference as routes
 
