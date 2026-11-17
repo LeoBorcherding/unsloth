@@ -8474,7 +8474,7 @@ if [ -n "${UNSLOTH_CI_SOURCE_OVERLAY:-}" ]; then
 fi
 
 # ── Opt-in: the other vendor's torch in its own venv (mixed NVIDIA+AMD hosts, #12248) ──
-if [ "$SKIP_TORCH" = false ] && [ "$OS" = "linux" ] && _second_vendor_torch_requested; then
+if [ "$SKIP_TORCH" = false ] && { [ "$OS" = "linux" ] || [ "$OS" = "wsl" ]; } && _second_vendor_torch_requested; then
     _install_second_vendor_torch "$_VENV_PY" "$TORCH_INDEX_URL"
 fi
 

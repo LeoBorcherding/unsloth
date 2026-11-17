@@ -70,6 +70,8 @@ def test_the_install_step_is_gated_on_the_request():
     assert len(calls) == 1, calls
     gate = text.splitlines()[text.splitlines().index(calls[0]) - 1]
     assert "_second_vendor_torch_requested" in gate, gate
+    # ROCm-on-WSL is a supported install, beside an NVIDIA card too.
+    assert '"$OS" = "linux"' in gate and '"$OS" = "wsl"' in gate, gate
 
 
 _LEAF_DEFS = "\n".join(
