@@ -1222,6 +1222,13 @@ async def lifespan(app: FastAPI):
 
     await asyncio.to_thread(shutdown_decisions)
 
+    _diffusion_worker = sys.modules.get("core.inference.diffusion_worker")
+    if _diffusion_worker is not None:
+        try:
+            await asyncio.to_thread(_diffusion_worker.shutdown_diffusion_worker)
+        except Exception as exc:
+            _lifespan_log.warning("image worker shutdown failed: %s", exc)
+
     await run_lifespan_shutdown(
         terminate_hub_downloads,
         lambda: clear_compiled_cache_unless_shared(app),
