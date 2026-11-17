@@ -5964,8 +5964,10 @@ _install_second_vendor_torch() {  # main venv python, main index URL
     step "torch" "second venv ($_svt_vendor)"
     substep "$_svt_dir ($(_strip_index_url_credentials "$_svt_index"))"
     # The record goes first, so a failed rebuild never leaves it pointing at a half-built venv.
-    rm -f "$_svt_record"
-    rm -rf "$_svt_dir"
+    if ! rm -f "$_svt_record" 2>/dev/null || ! rm -rf "$_svt_dir" 2>/dev/null; then
+        substep "[WARN] could not clear the previous $_svt_vendor second venv at $_svt_dir; leaving it and skipping the rebuild." "$C_WARN"
+        return 0
+    fi
     _svt_py="$_svt_dir/bin/python"
     if ! run_install_cmd "create second venv ($_svt_vendor)" uv venv --python "$1" "$_svt_dir" \
        || ! : > "$_svt_dir/.unsloth-second-torch-owned" \

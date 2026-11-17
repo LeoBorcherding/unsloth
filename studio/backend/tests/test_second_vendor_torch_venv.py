@@ -288,12 +288,14 @@ def _install(
     *,
     torch_version: str,
     pip_fails: bool = False,
+    errexit: bool = False,
 ) -> subprocess.CompletedProcess:
     """_install_second_vendor_torch with uv and the index lookup stubbed, in a scratch STUDIO_HOME."""
     wrapper = _fake_python(tmp_path, torch_version)
     pip_rc = 1 if pip_fails else 0
     script = "\n".join(
         [
+            "set -e" if errexit else ":",
             f'STUDIO_HOME="{tmp_path / "studio"}"; mkdir -p "$STUDIO_HOME"',
             "_TORCH_CEILING=2.12.0; _TORCHVISION_CEILING=0.27.0; _TORCHAUDIO_CEILING=2.12.0; C_WARN=",
             'step() { echo "STEP $*"; }',
@@ -348,6 +350,21 @@ def test_a_directory_the_installer_did_not_make_is_left_alone(tmp_path):
     out = _install(tmp_path, torch_version = "2.11.0+rocm7.0")
     assert "RC=0" in out.stdout and "not made by this installer" in out.stdout, out
     assert keep.read_text() == "mine"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason = "root removes anything")
+def test_a_venv_that_cannot_be_removed_does_not_abort_the_installer(tmp_path):
+    """Under set -e an unguarded rm of a venv another user built ended the whole install."""
+    stuck = tmp_path / "studio" / "unsloth_studio_rocm" / "lib"
+    stuck.mkdir(parents = True)
+    (stuck.parent / ".unsloth-second-torch-owned").write_text("")
+    (stuck / "file").write_text("")
+    stuck.chmod(0o555)
+    try:
+        out = _install(tmp_path, torch_version = "2.11.0+rocm7.0", errexit = True)
+    finally:
+        stuck.chmod(0o755)
+    assert "RC=0" in out.stdout and "skipping the rebuild" in out.stdout, out
 
 
 def _record(root: Path, **overrides) -> Path:
