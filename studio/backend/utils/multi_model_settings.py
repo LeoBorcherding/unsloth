@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator, Optional
 
 from utils.account_context import OWNER, run_as
 
@@ -25,6 +27,10 @@ _cache: tuple[float, str] | None = None
 # Bumped on every write, so a read that began before a write never caches the old value.
 _generation = 0
 _MAX_REREADS = 3
+# One request's own mode (a chat tool asked to unload or keep the chat model), never stored.
+_override: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "multi_model_mode_override", default = None
+)
 
 
 def _mode_from_stored(stored: dict[str, Any]) -> str:
@@ -46,6 +52,9 @@ def _read_mode() -> str:
 def get_multi_model_mode() -> str:
     """``"off"``, ``"fit"`` or ``"always"``, read as the owner."""
     global _cache
+    override = _override.get()
+    if override is not None:
+        return override
     mode = DEFAULT_MULTI_MODEL_MODE
     for _attempt in range(_MAX_REREADS):
         with _cache_lock:
@@ -63,6 +72,21 @@ def get_multi_model_mode() -> str:
                 _cache = (time.monotonic(), mode)
                 return mode
     return mode
+
+
+@contextlib.contextmanager
+def multi_model_mode_for_request(mode: Optional[str]) -> Iterator[None]:
+    """Loads started in this context (and threads it spawns via to_thread) use ``mode``."""
+    if mode is None:
+        yield
+        return
+    if mode not in _VALID_MODES:
+        raise ValueError("Keep multiple models loaded must be off, fit or always.")
+    token = _override.set(mode)
+    try:
+        yield
+    finally:
+        _override.reset(token)
 
 
 def get_multi_model_enabled() -> bool:

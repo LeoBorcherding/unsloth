@@ -35,10 +35,18 @@ ERR_RESTORE = (
 
 _DESCRIPTION = (
     "Render one image with a downloaded image model from the Unsloth Studio library, even when "
-    "it is not loaded. Unsloth Studio unloads the chat model if both do not fit, loads the image "
-    "model, renders, unloads it and loads the chat model back, so this can take a minute or more. "
+    "it is not loaded. Unsloth Studio loads the image model, renders, unloads it and, if it had "
+    "to unload the chat model, loads that back, so this can take a minute or more. "
     "Prefer generate_image when it is offered: that model is already loaded. Call without model "
     "to list the downloaded image models."
+)
+
+# The tool's choice, as the Keep multiple models loaded mode the load runs under.
+_UNLOAD_MODES = {"true": "off", "auto": "fit", "false": "always"}
+ERR_UNLOAD_ARG = "Error: unload_chat_model must be true, false or auto."
+ERR_KEEP_NO_FIT = (
+    "Error: '{model}' does not fit beside the chat model, so it was not loaded. Call again with "
+    "unload_chat_model true (or auto) to unload the chat model for this image."
 )
 
 # Load + render + reload of a large model; a no-limit chat still gets this ceiling.
@@ -74,6 +82,16 @@ def use_library_model_schema() -> dict:
                         "type": "string",
                         "description": "What the image should not show, if the model supports it.",
                     },
+                    "unload_chat_model": {
+                        "type": "string",
+                        "enum": ["auto", "true", "false"],
+                        "description": (
+                            "true: unload the chat model while the image model runs, then load "
+                            "it back. false: keep it loaded, and refuse if both do not fit. auto: "
+                            "keep it only if both fit. Omit to follow Keep multiple models loaded "
+                            "in Settings."
+                        ),
+                    },
                 },
                 "required": ["prompt"],
             },
@@ -98,6 +116,16 @@ def _listing(task: str) -> str:
     shown = ", ".join(ids[:_LIST_LIMIT])
     more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
     return f"Downloaded image models: {shown}{more}. Call use_library_model again with one as model."
+
+
+def _unload_mode(arguments: dict) -> tuple[bool, Optional[str]]:
+    """(valid, mode): the load's multi-model mode for unload_chat_model, None for the setting."""
+    raw = arguments.get("unload_chat_model")
+    if raw is None or raw == "":
+        return True, None
+    key = str(raw).strip().lower() if not isinstance(raw, bool) else str(raw).lower()
+    mode = _UNLOAD_MODES.get(key)
+    return mode is not None, mode
 
 
 def _detail(exc: BaseException) -> str:
@@ -129,6 +157,7 @@ class _Swap:
         self.loaded_image = False
         self.chat_identity = None
         self.chat_launch = None
+        self.chat_unloaded = False
         # Set when putting things back failed, appended to the tool result.
         self.note = ""
 
@@ -199,6 +228,27 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
 
 
 async def _swap_and_render(arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float):
+    from core.inference.media_model_index import IMAGE_TASK, resolve_local_media_model
+    from utils.multi_model_settings import multi_model_mode_for_request
+
+    name = str(arguments.get("model") or "").strip()
+    if not name:
+        return await asyncio.to_thread(_listing, IMAGE_TASK)
+    pick = await asyncio.to_thread(resolve_local_media_model, name, task = IMAGE_TASK)
+    if pick is None:
+        return f"Error: no downloaded image model matches '{name}'. " + await asyncio.to_thread(
+            _listing, IMAGE_TASK
+        )
+    valid, mode = _unload_mode(arguments)
+    if not valid:
+        return ERR_UNLOAD_ARG
+    with multi_model_mode_for_request(mode):
+        return await _swap_and_render_as(
+            arguments, prompt, swap, ticket, abort, deadline, name, pick, mode
+        )
+
+
+async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, name, pick, mode):
     from fastapi import HTTPException
 
     from core.inference.ensure_model import media_load_keeps_chat
@@ -212,26 +262,18 @@ async def _swap_and_render(arguments: dict, prompt: str, swap: "_Swap", ticket, 
     from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.llama_keepwarm import launch_to_replay, loaded_identity
     from core.inference.media_chat_tools import media_chat_status
-    from core.inference.media_model_index import IMAGE_TASK, resolve_local_media_model, satisfied_by
+    from core.inference.media_model_index import IMAGE_TASK, satisfied_by
     from core.inference.media_switch_backends import backend_for
     from utils.account_context import current_account
 
-    name = str(arguments.get("model") or "").strip()
-    if not name:
-        return await asyncio.to_thread(_listing, IMAGE_TASK)
-    pick = await asyncio.to_thread(resolve_local_media_model, name, task = IMAGE_TASK)
-    if pick is None:
-        return f"Error: no downloaded image model matches '{name}'. " + await asyncio.to_thread(
-            _listing, IMAGE_TASK
-        )
     subject = current_account().username
     resident = satisfied_by(await asyncio.to_thread(backend_for(DIFFUSION).status), name, pick)
+    keeps_chat = True
     if not resident:
         swap.chat_identity = loaded_identity()
         swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
-        if swap.chat_identity is None and not await asyncio.to_thread(
-            media_load_keeps_chat, DIFFUSION
-        ):
+        keeps_chat = await asyncio.to_thread(media_load_keeps_chat, DIFFUSION)
+        if swap.chat_identity is None and not keeps_chat:
             from core.inference import get_inference_backend
 
             orchestrator = await asyncio.to_thread(get_inference_backend)
@@ -239,8 +281,13 @@ async def _swap_and_render(arguments: dict, prompt: str, swap: "_Swap", ticket, 
                 return ERR_NON_GGUF_CHAT
     try:
         if not resident:
+            if mode == "always" and swap.chat_identity is not None and not keeps_chat:
+                return ERR_KEEP_NO_FIT.format(model = pick.model_id)
             swap.loaded_image = True
-            await _load_image(name, pick, subject, deadline, abort)
+            try:
+                await _load_image(name, pick, subject, deadline, abort)
+            finally:
+                swap.chat_unloaded = swap.chat_identity is not None and loaded_identity() is None
         if abort.is_set():
             return ERR_STOPPED
         status = media_chat_status(IMAGE_TASK)
@@ -316,6 +363,10 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     note = swap.note
     if isinstance(result, str):
         return result + (" " + note if note else "")
+    if swap.chat_unloaded:
+        note = ("The chat model was unloaded for this image and loaded back. " + note).strip()
+    elif swap.loaded_image and swap.chat_identity is not None:
+        note = ("The chat model stayed loaded beside the image model. " + note).strip()
     if not result.images:
         return "Error: the image model returned no image." + (" " + note if note else "")
     image = result.images[0]

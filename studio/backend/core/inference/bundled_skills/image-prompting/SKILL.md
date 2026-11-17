@@ -26,5 +26,8 @@ Each call reloads both models, so it is slow.
 - Use use_library_model when the user names an image model, or no image model is loaded.
 - Call it without a model first if you do not know the downloaded ids, then pick one by name.
 - Ask for several images in one prompt only if the model supports it; otherwise each image is a full swap.
+- unload_chat_model picks what happens to the chat model: true unloads it for the image and loads it
+  back, false keeps it loaded (and refuses a model that does not fit beside it), auto keeps it only
+  when both fit. Leave it out to follow the user's Keep multiple models loaded setting.
 
 Keep the user's own words and intent. Add no people, brands or text they did not ask for, and leave steps and guidance out unless the user asks, so the model's own defaults apply.
