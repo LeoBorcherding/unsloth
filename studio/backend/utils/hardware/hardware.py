@@ -1496,6 +1496,87 @@ def _torch_gpu_mismatch_report() -> Dict[str, Any]:
     }
 
 
+# Torch backend label -> the GPU vendor it drives. Vulkan and CPU name no vendor.
+_BACKEND_VENDOR: Dict[str, str] = {"cuda": "nvidia", "rocm": "amd", "xpu": "intel", "mlx": "apple"}
+# The vendors a second torch could drive (#12248): one CUDA, one ROCm.
+_VENDOR_TORCH_BACKEND: Dict[str, str] = {"nvidia": "cuda", "amd": "rocm"}
+
+
+def qualified_gpu_id(backend: Optional[str], index: Any) -> Optional[str]:
+    """``cuda:0`` / ``rocm:0``: an id that says which runtime ``index`` belongs to, since bare indices repeat across vendors."""
+    if not backend or not isinstance(index, int):
+        return None
+    return f"{backend}:{index}"
+
+
+def tag_gpu_vendor(devices: list[Dict[str, Any]], backend: Optional[str]) -> list[Dict[str, Any]]:
+    """Adds ``vendor`` and ``qualified_id`` to torch-visible rows; ``index`` is unchanged for every existing caller."""
+    vendor = _BACKEND_VENDOR.get(backend or "")
+    if vendor is None:
+        # Vulkan ordinals and CPU belong to no torch vendor: left exactly as they were.
+        return devices
+    tagged = []
+    for device in devices:
+        row = {**device, "vendor": device.get("vendor") or vendor}
+        qualified = qualified_gpu_id(backend, row.get("index"))
+        if qualified:
+            row["qualified_id"] = qualified
+        tagged.append(row)
+    return tagged
+
+
+def other_vendor_gpu_report(torch_backend: Optional[str]) -> Dict[str, Any]:
+    """``other_vendor_devices``: an NVIDIA + AMD host's cards of the vendor this torch cannot drive, read with
+    nvidia-smi / sysfs / the DirectX registry and never a second torch. Display-only, beside ``devices`` and never
+    in it: fit budgets and pins read ``devices``. ``{}`` unless torch is CUDA or ROCm and the other vendor is reachable.
+    """
+    own = _BACKEND_VENDOR.get(torch_backend or "")
+    if own not in _VENDOR_TORCH_BACKEND:
+        return {}
+    try:
+        from utils.llama_cpp_path_settings import reachable_gpu_vendors
+
+        # Cheap sysfs / DLL check first, so a single-vendor host never starts the inventory probe.
+        vendors = reachable_gpu_vendors()
+    except Exception as exc:
+        logger.debug("GPU vendor check failed: %s", exc)
+        return {}
+    others = (set(vendors or ()) & set(_VENDOR_TORCH_BACKEND)) - {own}
+    if not others:
+        return {}
+    # block=False: /api/system holds _system_gpu_cache_lock for the whole call.
+    inventory = get_physical_gpu_inventory(block = False)
+    rows = []
+    for device in inventory.get("devices") or []:
+        vendor = device.get("vendor")
+        if vendor not in others or not isinstance(device.get("index"), int):
+            continue
+        # An AMD card the installers leave on CPU torch (an old iGPU) is not a second-torch candidate either.
+        try:
+            if vendor == "amd" and not _amd_device_can_establish_a_mismatch(device):
+                continue
+        except Exception as exc:
+            logger.debug("AMD arch check failed: %s", exc)
+            continue
+        backend = _VENDOR_TORCH_BACKEND[vendor]
+        rows.append(
+            {
+                "vendor": vendor,
+                "backend": backend,
+                # The probe's own row number: vendor-local, display-only, not a pin.
+                "index": device["index"],
+                "index_kind": "physical",
+                "qualified_id": qualified_gpu_id(backend, device["index"]),
+                "name": device.get("name"),
+                "memory_total_gb": device.get("memory_total_gb"),
+                "source": device.get("source"),
+                "trainable": False,
+                "reason": "torch_backend_mismatch",
+            }
+        )
+    return {"other_vendor_devices": rows} if rows else {}
+
+
 def verdict_pending_mlx_repair(chat_only: bool, reason: Optional[str]) -> bool:
     """True when this settled verdict is one the MLX self-heal is about to overturn: detection answers before utils.mlx_repair gets its turn, so an Apple Silicon host with a broken MLX stack settles chat-only and flips only once the background reinstall lands. Published as final, that greys Train behind a tooltip the repair makes wrong a minute later. Callers report it as still-detecting instead. Takes the verdict as arguments, so a caller holding a snapshot does not re-read the globals mid-pass."""
     if not chat_only or reason != "mlx_unavailable":

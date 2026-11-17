@@ -185,6 +185,17 @@ def host_gpu_vendors() -> Optional[set[str]]:
     return vendors or None
 
 
+def reachable_gpu_vendors() -> Optional[set[str]]:
+    """``host_gpu_vendors`` with the visibility masks applied on every OS (Windows detection only sees DLLs)."""
+    vendors = host_gpu_vendors()
+    if vendors is not None:
+        if _mask_hides_all("CUDA_VISIBLE_DEVICES"):
+            vendors = vendors - {"nvidia"}
+        if _amd_mask_hides_all():
+            vendors = vendors - {"amd"}
+    return vendors
+
+
 def _fits_host(backends: set[str], vendors: Optional[set[str]]) -> bool:
     if vendors is None:
         return True
