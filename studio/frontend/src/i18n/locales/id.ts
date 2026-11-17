@@ -5729,6 +5729,12 @@ export const id = {
       openFileFailed: "Tidak dapat membuka file",
     },
   },
+  exportTabs: {
+    ariaLabel: "Jenis ekspor",
+    llm: "LLM",
+    diffusionLora: "Diffusion LoRA",
+    q4nx: "Konversi ke Q4NX",
+  },
   exportDecision: {
     title: "Model keputusan",
     description:
