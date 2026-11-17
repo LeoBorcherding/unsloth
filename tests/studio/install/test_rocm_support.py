@@ -2102,7 +2102,7 @@ class TestGfx1102Rocm64Floor:
         source = _INSTALL_SH_PATH.read_text(encoding = "utf-8")
         leaf_helper = _extract_sh_function_body(source, "_rocm_leaf_below")
         start = source.find('case "$_torch_index_leaf" in\n    rocm[0-9]*)')
-        end = source.find("\nfi  # _torch_index_pinned guard", start)
+        end = source.find("\n}  # end _amd_route_rocm_torch_index", start)
         assert leaf_helper and start >= 0 and end >= 0
         routing_block = source[start:end]
         floor_pos = routing_block.find("_amd_rocm64_base")
@@ -2148,7 +2148,7 @@ class TestGfx1102Rocm64Floor:
         leaf_helper = _extract_sh_function_body(source, "_rocm_leaf_below")
         gfx_helper = _gpu_record_helpers(source)
         start = source.find('case "$_torch_index_leaf" in\n    rocm[0-9]*)')
-        end = source.find("\nfi  # _torch_index_pinned guard", start)
+        end = source.find("\n}  # end _amd_route_rocm_torch_index", start)
         assert leaf_helper and gfx_helper and start >= 0 and end >= 0
         script = (
             "set -euo pipefail\n"
