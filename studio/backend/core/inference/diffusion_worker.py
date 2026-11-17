@@ -508,10 +508,7 @@ def serve(target: Any, stdin, stdout) -> None:
     tickets: dict[int, GenerationTicket] = {}
     tickets_lock = threading.Lock()
 
-    def run(op: str, call_id: int, body: bytes) -> None:
-        ticket = GenerationTicket()
-        with tickets_lock:
-            tickets[call_id] = ticket
+    def run(op: str, call_id: int, body: bytes, ticket: GenerationTicket) -> None:
         try:
             account, *payload = pickle.loads(body)
             if op == "getattr":
@@ -548,8 +545,12 @@ def serve(target: Any, stdin, stdout) -> None:
             if ticket is not None:
                 ticket.stop()
             continue
+        # Registered before the thread starts, so a Stop sent right behind the call is not lost.
+        ticket = GenerationTicket()
+        with tickets_lock:
+            tickets[message[1]] = ticket
         threading.Thread(
-            target = run, args = message, daemon = True, name = f"diffusion-worker-{op}"
+            target = run, args = (*message, ticket), daemon = True, name = f"diffusion-worker-{op}"
         ).start()
 
 
