@@ -24,14 +24,29 @@ _RTX_4090 = {
     "source": "nvidia-smi",
 }
 # sysfs publishes no name, only the VRAM size.
-_R9700 = {"vendor": "amd", "index": 0, "name": None, "memory_total_gb": 31.86, "source": "sysfs-drm"}
+_R9700 = {
+    "vendor": "amd",
+    "index": 0,
+    "name": None,
+    "memory_total_gb": 31.86,
+    "source": "sysfs-drm",
+}
 
 
 def _refuse(*args, **kwargs):
     raise AssertionError("this probe must not run")
 
 
-def _host(monkeypatch, *, torch_backend, torch_cards, vendors, inventory, amd_supported = True, env = None):
+def _host(
+    monkeypatch,
+    *,
+    torch_backend,
+    torch_cards,
+    vendors,
+    inventory,
+    amd_supported = True,
+    env = None,
+):
     """Pins torch's view, the vendor check and the torch-free inventory; nothing is read off the runner."""
     import utils.hardware as hardware
     import utils.hardware.hardware as hw
@@ -43,13 +58,24 @@ def _host(monkeypatch, *, torch_backend, torch_cards, vendors, inventory, amd_su
     for name, value in (env or {}).items():
         monkeypatch.setenv(name, value)
     cards = [
-        {"index": i, "index_kind": "physical", "visible_ordinal": i, "name": name, "memory_total_gb": total}
+        {
+            "index": i,
+            "index_kind": "physical",
+            "visible_ordinal": i,
+            "name": name,
+            "memory_total_gb": total,
+        }
         for i, (name, total) in enumerate(torch_cards)
     ]
     monkeypatch.setattr(
         hardware,
         "get_backend_visible_gpu_info",
-        lambda: {"available": bool(cards), "backend": torch_backend, "index_kind": "physical", "devices": cards},
+        lambda: {
+            "available": bool(cards),
+            "backend": torch_backend,
+            "index_kind": "physical",
+            "devices": cards,
+        },
     )
     monkeypatch.setattr(
         hardware,
@@ -239,6 +265,5 @@ def test_reachable_gpu_vendors_applies_the_masks(monkeypatch, env, expected):
 
 def test_vulkan_rows_carry_no_vendor_tags():
     from utils.hardware import tag_gpu_vendor
-
     rows = [{"index": 0, "index_kind": "vulkan", "name": "Vulkan0"}]
     assert tag_gpu_vendor(rows, "vulkan") == rows

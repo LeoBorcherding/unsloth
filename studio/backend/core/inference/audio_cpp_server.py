@@ -274,7 +274,6 @@ def _gpu_vendors() -> Optional[set[str]]:
     """GPU vendors this process can reach, or None when that cannot be told."""
     try:
         from utils.llama_cpp_path_settings import reachable_gpu_vendors
-
         return reachable_gpu_vendors()
     except Exception:  # noqa: BLE001 - an unknown host keeps the build's backend
         return None
