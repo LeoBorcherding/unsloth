@@ -93,3 +93,14 @@ def test_existing_local_and_remote_sidecars_still_attach(reattach, tmp_path, mon
     reattach(object(), str(tmp_path))
     reattach(object(), "org/adapter")
     assert attached == [str(tmp_path), str(tmp_path)]
+
+
+@pytest.mark.parametrize("model_type, warns", [("whisper", False), ("glm4_moe", True)])
+def test_offline_miss_warns_only_for_mtp_capable_models(
+    reattach, tmp_path, capsys, model_type, warns
+):
+    pytest.importorskip("unsloth_zoo.speculative.mtp_families")
+    transformers = pytest.importorskip("transformers")
+    model = types.SimpleNamespace(config = transformers.AutoConfig.for_model(model_type))
+    reattach(model, "offline/not-cached", cache_dir = str(tmp_path), local_files_only = True)
+    assert ("could not check" in capsys.readouterr().out.lower()) == warns

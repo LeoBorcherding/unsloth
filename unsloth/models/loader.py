@@ -1147,18 +1147,21 @@ def _reattach_saved_mtp_head(
                 local_files_only = local_files_only,
             )
         except Exception as error:
-            try:
-                from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
-                missing = isinstance(error, EntryNotFoundError) and not isinstance(
-                    error, LocalEntryNotFoundError
-                )
+            from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
+
+            absent = isinstance(error, EntryNotFoundError) and not isinstance(
+                error, LocalEntryNotFoundError
+            )
+            config = getattr(model, "config", None)
+            try:  # only models that can carry a head need to hear about a failed lookup
+                from unsloth_zoo.speculative.mtp_families import mtp_family_for_config
+                mtp = config is None or mtp_family_for_config(config) is not None
             except ImportError:
-                missing = False
-            if not missing:
+                mtp = True
+            if not absent and mtp:
                 print(
-                    f"Unsloth: Could not check for a trained MTP head in '{adapter_dir}' "
-                    f"({type(error).__name__}). If one exists, adapter saves may omit it and "
-                    "later merges may keep the stock head. "
+                    f"Unsloth: Could not check '{adapter_dir}' for a trained MTP head "
+                    f"({type(error).__name__}), so the stock head is kept. "
                     "Retry with Hub access or a cached sidecar."
                 )
             return
