@@ -73,10 +73,18 @@ def _style_hides_element(style: str) -> bool:
     return False
 
 
+def _has_role(attr_dict: dict, role: str) -> bool:
+    value = attr_dict.get("role")
+    return bool(value) and role in value.lower().split()
+
+
 def _is_hidden_element(attr_dict: dict) -> bool:
-    """Any present hidden attribute counts, even hidden=false, since presence means not rendered; aria-hidden=true and inline hiding styles count too"""
+    """Any present hidden attribute counts, even hidden=false, except until-found and tab panels, which tabbed docs ship
+    hidden; aria-hidden=true and inline hiding styles count too"""
     if "hidden" in attr_dict:
-        return True
+        hidden = (attr_dict["hidden"] or "").strip().lower()
+        if hidden != "until-found" and not _has_role(attr_dict, "tabpanel"):
+            return True
     aria_hidden = attr_dict.get("aria-hidden")
     if aria_hidden and aria_hidden.strip().lower() == "true":
         return True
@@ -844,6 +852,84 @@ class _TitleButtonScan:
 # (len, hash) of recent pages -> their title buttons, so main-content passes over one page scan it once
 _TITLE_BUTTON_CACHE: dict[tuple[int, int], frozenset[tuple[int, int]]] = {}
 _TITLE_BUTTON_CACHE_SIZE = 4
+_TAB_LABEL_CACHE: dict[tuple[int, int], dict[str, str]] = {}
+_MAX_TAB_LABEL_CHARS = 80
+# what the renderer skips, except buttons, which sphinx-tabs uses as tabs
+_TAB_LABEL_SKIP = _SKIP_TAGS - {"button"}
+_TAB_PANEL = re.compile(r"tabpanel", re.IGNORECASE)
+_TAB_PANEL_LABELLED = re.compile(r"aria-labelledby", re.IGNORECASE)
+
+
+class _TabLabelScan(HTMLParser):
+    """Text of each shown role=tab element with an id, so a panel's aria-labelledby can name its tab."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs = True)
+        self.labels: dict[str, str] = {}
+        self._open: list[str] = []
+        # per-tag _open indices, so an end tag that matches nothing costs O(1) rather than a stack walk
+        self._open_at: dict[str, list[int]] = {}
+        self._muted_at = -1  # _open index of the outermost skipped or hidden element
+        self._tab_at = -1  # _open index of the tab being read
+        self._tab_id = ""
+        self._parts: list[str] = []
+
+    def _finish_tab(self) -> None:
+        # capped here too, so joining many long labels per panel stays linear
+        label = " ".join("".join(self._parts).split())[:_MAX_TAB_LABEL_CHARS]
+        if label:
+            self.labels.setdefault(self._tab_id, label)
+        self._tab_at = -1
+        self._parts = []
+
+    def _pop_to(self, i: int) -> None:
+        if 0 <= self._tab_at and i <= self._tab_at:
+            self._finish_tab()
+        for tag in self._open[i:]:
+            self._open_at[tag].pop()
+        del self._open[i:]
+        if self._muted_at >= i:
+            self._muted_at = -1
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # an omitted </li> or </p> ends the element at a sibling that closes it, a tab included
+        while self._open and tag in _IMPLICIT_CLOSERS.get(self._open[-1], ()):
+            self._pop_to(len(self._open) - 1)
+        if tag in _VOID_TAGS:
+            return
+        attr_dict = dict(attrs)
+        self._open_at.setdefault(tag, []).append(len(self._open))
+        self._open.append(tag)
+        if self._muted_at < 0 and (tag in _TAB_LABEL_SKIP or _is_hidden_element(attr_dict)):
+            self._muted_at = len(self._open) - 1
+        if self._tab_at < 0 and attr_dict.get("id") and _has_role(attr_dict, "tab"):
+            self._tab_at = len(self._open) - 1
+            self._tab_id = attr_dict["id"]
+
+    def handle_endtag(self, tag: str) -> None:
+        # stray end tags, and the </img> HTMLParser sends after <img/>, match nothing and are ignored
+        positions = self._open_at.get(tag)
+        if positions:
+            self._pop_to(positions[-1])
+
+    def handle_data(self, data: str) -> None:
+        if self._tab_at >= 0 and self._muted_at < 0 and len(self._parts) < 64:
+            self._parts.append(data)
+
+
+def _tab_labels(source_html: str, key: tuple[int, int]) -> dict[str, str]:
+    labels = _TAB_LABEL_CACHE.get(key)
+    if labels is None:
+        labels = {}
+        if _TAB_PANEL.search(source_html) and _TAB_PANEL_LABELLED.search(source_html):
+            scan = _TabLabelScan()
+            scan.feed(source_html)
+            scan.close()
+            labels = scan.labels
+        if len(_TAB_LABEL_CACHE) >= _TITLE_BUTTON_CACHE_SIZE:
+            _TAB_LABEL_CACHE.clear()
+        _TAB_LABEL_CACHE[key] = labels
+    return labels
 
 
 class _MarkdownRenderer(HTMLParser):
@@ -868,6 +954,7 @@ class _MarkdownRenderer(HTMLParser):
         self._record: list | None = None
         # parser positions of buttons that carry their heading title, found by _TitleButtonScan
         self.title_buttons: frozenset[tuple[int, int]] = frozenset()
+        self.tab_labels: dict[str, str] = {}  # tab id -> its text, from _TabLabelScan
         self._title_scan: _TitleButtonScan | None = None
         self._site_links = site_links
         self._out: list[str] = []
@@ -924,8 +1011,10 @@ class _MarkdownRenderer(HTMLParser):
         self._link_heading_parts: list[str] = []
         self._emit_as_heading: bool = False
         self._replaying: bool = False
-        # Credited only at </a>: an <a> left open adopts body prose, which is not furniture.
+        # Credited only at </a> or a nested <a>: an <a> left open adopts body prose, which is not furniture.
         self._link_header_chars: int = 0
+        self._link_open_state: tuple = ()
+        self._closed_link_for: bool = False
 
         self._list_stack: list[str] = []  # "ul" or "ol"
         self._ol_counter: list[int] = []
@@ -1299,6 +1388,30 @@ class _MarkdownRenderer(HTMLParser):
         self._current_row = []
         self._row_has_th = False
 
+    def _link_output_state(self) -> tuple:
+        frame = self._header_stack[-1] if self._header_stack else None
+        quote = self._bq_stack[-1] if self._bq_stack else None
+        row = self._current_row if self._in_table else None
+        cell = self._cell_seq if self._in_cell else -1
+        return (
+            frame,
+            len(self._heading_marks),
+            quote,
+            row,
+            cell,
+            self._table_depth(),
+            len(self._sup_starts),
+            self._inline_code_depth,
+        )
+
+    def _link_routes_unchanged(self) -> bool:
+        # buffers compare by identity: two empty quotes or rows are equal lists but different targets
+        now = self._link_output_state()
+        return all(
+            saved is cur or (not isinstance(saved, list) and saved == cur)
+            for saved, cur in zip(self._link_open_state, now)
+        ) and len(self._link_open_state) == len(now)
+
     # Link text helper: normalize whitespace so block content in <a> stays single-line.
     def _finish_link(self) -> None:
         text = re.sub(r"\s+", " ", "".join(self._link_text_parts)).strip()
@@ -1531,7 +1644,7 @@ class _MarkdownRenderer(HTMLParser):
                 or (_is_aria_heading(attr_dict) if aria_heading is None else aria_heading)
             ):
                 self._heading_marks.append(len(self._open_tags) - 1)
-                if self._in_link:
+                if self._in_link or self._closed_link_for:
                     self._link_had_heading = True
             if (
                 self._strip_header
@@ -1765,8 +1878,42 @@ class _MarkdownRenderer(HTMLParser):
 
         if tag == "form":
             self._form_pointer = True
-        if not self._enter_tag(tag, attr_dict, hidden, aria_heading):
+        # a nested <a> implicitly closes the open one, even when hidden, when its text still routes where
+        # the link opened; <pre> text skips the link buffer
+        if (
+            tag == "a"
+            and self._in_link
+            and not self._in_pre
+            and not self._link_had_heading
+            and self._link_routes_unchanged()
+        ):
+            if self._header_stack:
+                self._header_stack[-1].link_chars += self._link_header_chars
+            self._finish_link()
+            # the closing anchor still records its own heading as one inside a link, as before
+            self._closed_link_for = True
+        entered = self._enter_tag(tag, attr_dict, hidden, aria_heading)
+        if self._closed_link_for:
+            self._closed_link_for = False
+            # a suppressed anchor never becomes the link, so its heading must not carry to the next one
+            if not entered:
+                self._link_had_heading = False
+        if not entered:
             return
+
+        # every panel is read, so name each by its tab rather than leave the model to count tabs
+        if (
+            self.tab_labels
+            and not (self._in_pre or self._in_table)
+            and _has_role(attr_dict, "tabpanel")
+        ):
+            ids = dict.fromkeys((attr_dict.get("aria-labelledby") or "").split())
+            # capped, so repeating an id cannot multiply the page
+            label = " ".join(self.tab_labels[i] for i in ids if i in self.tab_labels)[
+                :_MAX_TAB_LABEL_CHARS
+            ]
+            if label:
+                self._emit(f"\n\n**{label}**\n\n")
 
         if tag in _HEADING_TAGS:
             level = int(tag[1])
@@ -1779,6 +1926,7 @@ class _MarkdownRenderer(HTMLParser):
             self._in_link = True
             self._link_seq += 1
             self._link_header_chars = 0
+            self._link_open_state = self._link_output_state()
 
         elif tag in _INLINE_EMPHASIS:
             self._emit(_INLINE_EMPHASIS[tag])
@@ -2316,6 +2464,7 @@ def _new_renderer(
             page_span_limit = 2 * len(source_html),
         )
         renderer.title_buttons = title_buttons
+        renderer.tab_labels = tab_labels
         renderer._title_scan = scan
         if tokens is None:
             renderer.feed(source_html)
@@ -2331,6 +2480,7 @@ def _new_renderer(
         return renderer
 
     key = (len(source_html), hash(source_html))
+    tab_labels = _tab_labels(source_html, key)
     known = _TITLE_BUTTON_CACHE.get(key)
     if known is not None:
         return build(known, None)

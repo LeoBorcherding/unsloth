@@ -51,7 +51,6 @@ import {
   CapabilityGlyph,
   DELETABLE_LOCAL_SOURCES,
   HubFailureHint,
-  OwnerAvatar,
   TrainIcon,
   TransportConflictDialog,
   deleteCachedModel,
@@ -60,6 +59,7 @@ import {
   downloadManager,
   formatBytes,
   formatParamCount,
+  classifyUnslothSupport,
   hfApiToken,
   isHiddenModelId,
   jobKeyOf,
@@ -74,7 +74,10 @@ import {
   useOnlineStatus,
 } from "@/features/hub";
 import { hasMlxCardTag, isMlxId } from "@/features/hub/lib/format-filters";
-import { isStandaloneGgufPath } from "@/features/hub/lib/model-identity";
+import {
+  hfCacheRepoId,
+  isStandaloneGgufPath,
+} from "@/features/hub/lib/model-identity";
 import {
   AUDIO_CATALOG,
   ConnectedModelInfoDialog,
@@ -121,15 +124,27 @@ import {
   usePinnedModelsStore,
   usePinnedRowDrag,
 } from "@/features/model-picker";
-import { reconcileGgufPinsAfterDelete } from "@/features/model-picker/components/model-selector/reconcile-gguf-pins";
+import {
+  isChatGgufTask,
+  reconcileGgufPinsAfterDelete,
+} from "@/features/model-picker/components/model-selector/reconcile-gguf-pins";
+import { repinExportedGgufAfterDelete } from "@/features/model-picker/components/model-selector/repin-exported-gguf";
+import { isCapableCheckpointQuant } from "@/features/model-picker/components/model-selector/recommended-fit";
 import {
   type NpuModel,
   NpuSetupNotice,
+  npuDeleteDescription,
   npuDownloadLabel,
+  npuRowTooltip,
   npuSizeLabel,
+  refreshNpuModels,
   useNpuCatalog,
   useNpuStatus,
 } from "@/features/npu";
+import {
+  interfaceScaleToZoom,
+  useInterfaceScaleStore,
+} from "@/features/settings/stores/interface-scale-store";
 import { useSettingsDialogStore } from "@/features/settings/stores/settings-dialog-store";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useGpuInfo, useInferenceGpuInfo } from "@/hooks/use-gpu-info";
@@ -138,6 +153,7 @@ import {
   ChevronDownStandardIcon,
   ChevronRightStandardIcon,
 } from "@/lib/chevron-icons";
+import { isTauri } from "@/lib/api-base";
 import { Copy01Icon } from "@/lib/copy-icon";
 import { copyToClipboard } from "@/lib/copy-to-clipboard";
 import { diffusionRouteSearch } from "@/lib/diffusion-route-search";
@@ -156,7 +172,6 @@ import {
   Flag01Icon,
   FlashIcon,
   InformationCircleIcon,
-  LaptopIcon,
   Navigation05Icon,
   RemoveCircleIcon,
   Search01Icon,
@@ -200,7 +215,11 @@ import {
   type ListSection,
   PICKER_EDGE,
   PICKER_GAP,
-  PICKER_WIDTH,
+  pickerDropOffset,
+  pickerMinHeight,
+  pickerRoomBelow,
+  pickerWidth,
+  pickerZoomOut,
   type PickerRow,
   RECOMMENDED_TAB,
   SECTION_LABEL,
@@ -217,8 +236,9 @@ import {
   matchesFormat,
   orderBySection,
   pickerAlignOffset,
-  pickerDropOffset,
   pickerSide,
+  expandQuantFavorites,
+  favoritePinKey,
   pinCoversId,
   readBounded,
   repoSection,
@@ -226,6 +246,7 @@ import {
   sortConnectedRows,
   sortDeviceRows,
 } from "./picker-model";
+import { npuPickerRows } from "./npu-rows";
 import { useComposerReasoning } from "./use-composer-reasoning";
 
 interface Row extends PickerRow {
@@ -241,6 +262,8 @@ interface Row extends PickerRow {
   resumable?: boolean;
   /** Runs on the Audio page: a pick opens it there instead of loading into Chat. */
   media?: "audio";
+  favoriteQuant?: string;
+  inventoryKey?: string;
 }
 
 function cachedMeta(row: Row): ModelSelectorChangeMeta {
@@ -283,6 +306,44 @@ function readExpanded(): boolean {
 function writeExpanded(expanded: boolean): void {
   try {
     localStorage.setItem(EXPANDED_KEY, String(expanded));
+  } catch {
+    // Storage blocked.
+  }
+}
+
+// Expand choice per resident model, cleared on eject.
+const MODEL_EXPANDED_KEY = "unsloth_composer_picker_model_expanded";
+const MODEL_EXPANDED_MAX = 20;
+
+function readModelExpanded(): Record<string, boolean> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MODEL_EXPANDED_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(raw).filter(([, v]) => typeof v === "boolean"),
+    ) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function writeModelExpanded(model: string, expanded: boolean | null): void {
+  try {
+    const map = readModelExpanded();
+    delete map[model];
+    if (expanded !== null) {
+      map[model] = expanded;
+    }
+    const keys = Object.keys(map);
+    for (const key of keys.slice(
+      0,
+      Math.max(0, keys.length - MODEL_EXPANDED_MAX),
+    )) {
+      delete map[key];
+    }
+    localStorage.setItem(MODEL_EXPANDED_KEY, JSON.stringify(map));
   } catch {
     // Storage blocked.
   }
@@ -504,7 +565,11 @@ function rowMaker(
   if (!row || row.kind === "external") {
     return null;
   }
-  const parts = hubParts(row.id) ?? hubParts(row.lora?.baseModel);
+  // A cache snapshot path names its repo, so the logo shows before rows load.
+  const parts =
+    hubParts(row.id) ??
+    hubParts(row.lora?.baseModel) ??
+    hubParts(row.id ? (hfCacheRepoId(row.id) ?? undefined) : undefined);
   return parts ? resolveOwnerProviderLogo(parts.owner, parts.name) : null;
 }
 
@@ -643,39 +708,31 @@ function MakerMark({
   );
 }
 
-function RowMark({
-  row,
-}: {
-  row?: Pick<Row, "kind" | "providerType" | "providerName"> & {
-    id?: string;
-    lora?: LoraModelOption;
-  };
-}) {
+type RowMarkRow = Pick<Row, "kind" | "providerType" | "providerName"> & {
+  id?: string;
+  label?: string;
+  lora?: LoraModelOption;
+};
+
+function rowMarkName(row?: RowMarkRow): string | undefined {
+  const name = row?.label ?? row?.lora?.name ?? row?.id?.split(/[\\/]/).pop();
+  return name?.trim() || undefined;
+}
+
+function hasRowMark(row?: RowMarkRow): boolean {
+  return row?.kind === "external"
+    ? Boolean(row.providerType)
+    : rowMaker(row) !== null || rowMarkName(row) !== undefined;
+}
+
+function RowMark({ row }: { row?: RowMarkRow }) {
   const size = "size-[calc(14px*var(--ui-space-scale,1))] shrink-0";
-  const parts =
-    row && row.kind !== "external"
-      ? (hubParts(row.id) ?? hubParts(row.lora?.baseModel))
-      : null;
   const provider = rowMaker(row);
   if (provider) {
     return <MakerMark provider={provider} className={size} />;
   }
-  if (parts) {
-    // A block box: an inline one sat on the text baseline, about 2px above centre.
+  if (row?.kind === "external" && row.providerType) {
     return (
-      <span className="flex shrink-0">
-        <OwnerAvatar
-          owner={parts.owner}
-          repoName={parts.name}
-          size="xs"
-          remote={false}
-          className="size-[calc(14px*var(--ui-space-scale,1))] shrink-0 rounded-[3px]"
-        />
-      </span>
-    );
-  }
-  if (row?.kind === "external") {
-    return row.providerType ? (
       <span className="flex shrink-0" style={opticalStyle(row.providerType)}>
         <ApiProviderLogo
           providerType={row.providerType}
@@ -683,17 +740,17 @@ function RowMark({
           className={size}
         />
       </span>
-    ) : (
-      <HugeiconsIcon icon={CloudIcon} strokeWidth={1.75} className={size} />
     );
   }
-  return (
-    <HugeiconsIcon
-      icon={row?.kind === "hub" ? Download01Icon : LaptopIcon}
-      strokeWidth={1.75}
-      className={size}
+  const name = row?.kind === "external" ? undefined : rowMarkName(row);
+  // 2px over the slot: a solid disc reads smaller than the logos.
+  return name ? (
+    <ApiProviderLogo
+      providerType={null}
+      name={name}
+      className="-m-[calc(1px*var(--ui-space-scale,1))] size-[calc(16px*var(--ui-space-scale,1))] shrink-0"
     />
-  );
+  ) : null;
 }
 
 interface SourceTab {
@@ -803,7 +860,7 @@ function TabButton({
         <span
           aria-hidden={true}
           className={cn(
-            "composer-tab-line absolute bottom-0 left-1/2 h-[calc(2px*var(--ui-space-scale,1))] w-[calc(16px*var(--ui-space-scale,1))] -translate-x-1/2 rounded-full transition-opacity duration-150",
+            "composer-tab-line absolute bottom-[calc(2px*var(--ui-space-scale,1))] left-1/2 h-[calc(2px*var(--ui-space-scale,1))] w-[calc(16px*var(--ui-space-scale,1))] -translate-x-1/2 rounded-full transition-opacity duration-150",
             shown ? "opacity-100" : "opacity-0",
           )}
         />
@@ -1451,6 +1508,8 @@ export function ComposerModelPicker({
   const navigate = useNavigate();
   const reasoning = useComposerReasoning();
   const pane = source?.selection;
+  const browseOnly = source?.browseOnly === true;
+  const hiddenIds = source?.hiddenIds;
   const runtimeCheckpoint = useChatRuntimeStore((s) => s.params.checkpoint);
   const runtimeVariant = useChatRuntimeStore((s) => s.activeGgufVariant);
   const runtimeLoading = useChatRuntimeStore((s) => s.modelLoading);
@@ -1507,9 +1566,14 @@ export function ComposerModelPicker({
     setConfigStandalone(false);
   };
   const [expanded, setExpandedState] = useState(readExpanded);
+  // undefined: not checked yet since mount.
+  const residentKeyRef = useRef<string | null | undefined>(undefined);
   const setExpanded = useCallback((next: boolean) => {
     setExpandedState(next);
     writeExpanded(next);
+    if (residentKeyRef.current) {
+      writeModelExpanded(residentKeyRef.current, next);
+    }
   }, []);
   const [tab, setTabState] = useState<string | null>(null);
   const [lastTab, setLastTab] = useState(readTab);
@@ -1558,6 +1622,40 @@ export function ComposerModelPicker({
   // State as well as the ref: the panel mounts after this render, and the glide must attach then.
   const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = settingsRef.current;
+    if (!(configTarget && el)) {
+      return;
+    }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      // Stuck once the row has pulled away from the eyebrow above it.
+      const row = el.querySelector<HTMLElement>("[data-config-header-row]");
+      const above = row?.previousElementSibling;
+      const stuck =
+        row != null &&
+        above != null &&
+        row.getBoundingClientRect().top - above.getBoundingClientRect().bottom >
+          Number.parseFloat(getComputedStyle(row).marginTop) + 0.5;
+      if (stuck) {
+        el.dataset.headerStuck = "";
+      } else {
+        delete el.dataset.headerStuck;
+      }
+    };
+    const schedule = () => {
+      if (!frame) {
+        frame = requestAnimationFrame(update);
+      }
+    };
+    schedule();
+    el.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", schedule);
+    };
+  }, [configTarget]);
   const [tabStrip, setTabStrip] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!tabStrip) {
@@ -1589,11 +1687,17 @@ export function ComposerModelPicker({
       : undefined,
   );
   const npuModels = npuCatalog?.models ?? null;
+  // The picker stays mounted, so a conversion made on the Export page lists only on a fresh read.
+  const npuReady = npuStatus?.supported === true && npuStatus.ready === true;
+  useEffect(() => {
+    if (open && npuReady) void refreshNpuModels();
+  }, [open, npuReady]);
   const online = useOnlineStatus();
   const hfToken = useHfTokenStore((s) => s.token);
   const gpuInfo = useGpuInfo(open);
   const quantFormats = gpuInfo.checkpointQuantFormats;
-  const isMac = usePlatformStore((s) => s.deviceType === "mac");
+  const deviceType = usePlatformStore((s) => s.deviceType);
+  const isMac = deviceType === "mac";
   // The field already waits SEARCH_DEBOUNCE_MS; together they keep the Hub's 300 ms.
   const hubQuery = useDebouncedValue(
     onRecommended ? query.trim() : "",
@@ -1745,9 +1849,28 @@ export function ComposerModelPicker({
     [hubScrollRef],
   );
   const recommended = useMemo<ModelOption[]>(() => {
+    // The header picker's runtime gate; vLLM loads compressed-tensors checkpoints the gate refuses.
+    const supported = (r: (typeof hubResults)[number]) =>
+      classifyUnslothSupport({
+        modelId: r.id,
+        pipelineTag: r.pipelineTag,
+        tags: r.tags,
+        libraryName: r.libraryName,
+        quantMethod: r.quantMethod,
+        deviceType,
+      }).status !== "unsupported";
     const fromHub = hubResults
       .filter(
         (r) =>
+          (supported(r) ||
+            (r.quantMethod?.toLowerCase() === "compressed-tensors" &&
+              isCapableCheckpointQuant(
+                r.id,
+                r.quantMethod,
+                quantFormats,
+                r.isGguf,
+              ) &&
+              supported({ ...r, quantMethod: undefined }))) &&
           (matchesRecommendedBrowse(r, quantFormats, !hubQuery) ||
             // A Mac also runs MLX and plain safetensors; the browse gates still apply.
             (isMac &&
@@ -1770,7 +1893,7 @@ export function ComposerModelPicker({
       return fromHub;
     }
     return (source?.models ?? []).filter((m) => !isHiddenModelId(m.id));
-  }, [hubResults, quantFormats, hubQuery, isMac, source?.models]);
+  }, [hubResults, quantFormats, hubQuery, isMac, deviceType, source?.models]);
   // Hub results marked MLX only by their card, which the ModelOption rows drop.
   const mlxTaggedHub = useMemo(
     () =>
@@ -1915,21 +2038,7 @@ export function ComposerModelPicker({
         lora,
       });
     }
-    for (const model of npuModels ?? []) {
-      if (!model.downloaded) {
-        continue;
-      }
-      device.push({
-        key: `npu:${model.id}`,
-        id: model.model_path,
-        label: model.id,
-        tab: DEVICE_TAB,
-        kind: "npu",
-        section: "npu",
-        npu: model,
-        sizeBytes: model.size_gb != null ? model.size_gb * 1e9 : undefined,
-      });
-    }
+    device.push(...npuPickerRows(npuModels, true));
     // Local models load by path and two files can share a name, so the checkpoint is the identity.
     const servedAs = (m: (typeof loadedModels)[number]) => m.checkpoint ?? m.id;
     const loaded = new Map<string, (typeof loadedModels)[number]>();
@@ -2016,19 +2125,18 @@ export function ComposerModelPicker({
       providerType: m.providerType,
       providerName: m.providerName,
     }));
-    const npuOffers: Row[] = (npuModels ?? [])
-      .filter((model) => !model.downloaded)
-      .map((model) => ({
-        key: `npu-offer:${model.id}`,
-        id: model.model_path,
-        label: model.id,
-        tab: RECOMMENDED_TAB,
-        kind: "npu",
-        section: "npu",
-        npu: model,
-      }));
-    return [...marked, ...npuOffers, ...hub, ...external];
+    const npuOffers: Row[] = npuPickerRows(npuModels, false);
+    const all = [...marked, ...npuOffers, ...hub, ...external];
+    return browseOnly
+      ? all.filter(
+          (row) =>
+            !hiddenIds?.has(row.id.toLowerCase()) &&
+            mediaPageForTask(mediaTaskById.get(row.id.toLowerCase())) === null,
+        )
+      : all;
   }, [
+    browseOnly,
+    hiddenIds,
     inventory.cachedGguf,
     inventory.cachedModels,
     npuModels,
@@ -2367,15 +2475,16 @@ export function ComposerModelPicker({
     return () => clearTimeout(timer);
   }, [pending, chosen?.id, modelLoading]);
   const shown = pending ?? chosen;
-  const chosenName =
-    shown?.label ??
-    (checkpoint
-      ? (missingExternalModel(
-          checkpoint,
-          externalModels ?? [],
-          source?.externalConnections ?? [],
-        )?.modelName ?? modelDisplayName(checkpoint))
-      : null);
+  const chosenName = browseOnly
+    ? undefined
+    : (shown?.label ??
+      (checkpoint
+        ? (missingExternalModel(
+            checkpoint,
+            externalModels ?? [],
+            source?.externalConnections ?? [],
+          )?.modelName ?? modelDisplayName(checkpoint))
+        : null));
   const chosenMark: Parameters<typeof RowMark>[0]["row"] =
     shown ??
     (isExternalModelId(checkpoint)
@@ -2387,13 +2496,38 @@ export function ComposerModelPicker({
     !inventory.cachedReady ||
     (externalModels?.length ?? 0) > 0 ||
     rows.some((row) => row.tab === DEVICE_TAB);
+  const hasDeviceRows = rows.some((row) => row.tab === DEVICE_TAB);
+  const [browseDevice, setBrowseDevice] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!browseOnly) return;
+    if (!open) {
+      setBrowseDevice(null);
+      return;
+    }
+    const timer = setTimeout(
+      () => setBrowseDevice((known) => known ?? false),
+      2000,
+    );
+    return () => clearTimeout(timer);
+  }, [browseOnly, open]);
+  useEffect(() => {
+    if (browseOnly && open && inventory.cachedReady) {
+      setBrowseDevice((known) => known ?? hasDeviceRows);
+    }
+  }, [browseOnly, open, inventory.cachedReady, hasDeviceRows]);
   const viewed =
     tab ??
-    (hasModels
-      ? ((lastTab && tabs.some((t) => t.value === lastTab) ? lastTab : null) ??
-        (chosen?.tab === RECOMMENDED_TAB ? DEVICE_TAB : chosen?.tab) ??
-        DEVICE_TAB)
-      : RECOMMENDED_TAB);
+    (browseOnly
+      ? browseDevice
+        ? DEVICE_TAB
+        : RECOMMENDED_TAB
+      : hasModels
+        ? ((lastTab && tabs.some((t) => t.value === lastTab)
+            ? lastTab
+            : null) ??
+          (chosen?.tab === RECOMMENDED_TAB ? DEVICE_TAB : chosen?.tab) ??
+          DEVICE_TAB)
+        : RECOMMENDED_TAB);
   useEffect(() => {
     setOnRecommended(viewed === RECOMMENDED_TAB);
   }, [viewed]);
@@ -2402,13 +2536,7 @@ export function ComposerModelPicker({
       if (row.kind === "external") {
         return pinnedConnected.includes(row.id) ? row.id : null;
       }
-      const base = row.id.toLowerCase();
-      return (
-        pinned.find((key) => {
-          const k = key.toLowerCase();
-          return k === base || k.startsWith(`${base}::`);
-        }) ?? null
-      );
+      return favoritePinKey(pinned, row.id, row.favoriteQuant);
     },
     [pinned, pinnedConnected],
   );
@@ -2561,7 +2689,9 @@ export function ComposerModelPicker({
         ? pinned.length + pinnedConnected.indexOf(key ?? "")
         : pinned.indexOf(key ?? "");
     };
-    return [...found].sort((a, b) => rank(a) - rank(b));
+    return expandQuantFavorites(found, pinned).sort(
+      (a, b) => rank(a) - rank(b),
+    );
   }, [
     viewed,
     favoriteKeyOf,
@@ -2608,7 +2738,21 @@ export function ComposerModelPicker({
       store.endPinnedConnectedDrag(true);
     },
   });
-  const isExpanded = expanded || !chosenName;
+  // No thinking controls: nothing to collapse to, whatever the quants.
+  const noThinking =
+    !(pane || modelLoading) &&
+    !(
+      reasoning.supportsReasoning ||
+      reasoning.supportsPreserve ||
+      reasoning.supportsFast
+    );
+  const isExpanded = expanded || !chosenName || noThinking;
+  // Stored, so the next pick does not load into the collapsed view.
+  useEffect(() => {
+    if (noThinking && !expanded) {
+      setExpanded(true);
+    }
+  }, [noThinking, expanded, setExpanded]);
   useAnimatedListHeight(listEl);
 
   const chosenTarget =
@@ -2660,6 +2804,50 @@ export function ComposerModelPicker({
             !isExternalModelId(checkpoint) &&
             source?.loaded !== false),
       );
+  // A load starts collapsed, a resident model keeps its choice, an eject expands and forgets it.
+  const residentKey =
+    chosenLoaded && checkpoint ? `${checkpoint}\n${activeVariant ?? ""}` : null;
+  const sawLoad = useRef(false);
+  // modelLoading also covers unloads: only a cycle with a load pick is a fresh load.
+  const loadPicked = useChatRuntimeStore((s) => s.loadingModelPick !== null);
+  const loadingFresh = pane ? modelLoading : modelLoading && loadPicked;
+  // Runs once the load settles, when the store holds the new model's reasoning.
+  const closeIfNoThinking = useRef(() => {});
+  closeIfNoThinking.current = () => {
+    if (noThinking) {
+      setOpen(false);
+    }
+  };
+  useEffect(() => {
+    if (modelLoading) {
+      if (loadingFresh) {
+        sawLoad.current = true;
+      }
+      return;
+    }
+    const fresh = sawLoad.current;
+    sawLoad.current = false;
+    const prev = residentKeyRef.current;
+    if (residentKey === prev && !fresh) {
+      return;
+    }
+    residentKeyRef.current = residentKey;
+    if (residentKey !== null) {
+      setExpanded(
+        (fresh ? undefined : readModelExpanded()[residentKey]) ?? false,
+      );
+      if (fresh) {
+        closeIfNoThinking.current();
+      }
+    } else if (prev && !(checkpoint && isExternalModelId(checkpoint))) {
+      writeModelExpanded(prev, null);
+      setExpanded(true);
+    }
+  }, [residentKey, modelLoading, loadingFresh, checkpoint, setExpanded]);
+  // Never loaded, but ejectModel clears a connected pick.
+  const chosenExternal =
+    !pane && Boolean(checkpoint && isExternalModelId(checkpoint));
+  const chosenEjectable = chosenLoaded || chosenExternal;
   // A Compare pane ejects nothing, and the API page only once its load has settled.
   const canEject = !pane || pane.loaded === true;
   const eject = (row: Row) => {
@@ -2694,7 +2882,14 @@ export function ComposerModelPicker({
     return pickSeq.current;
   };
 
-  const pickQuantRow = async (row: Row, target: QuantTarget, seq: number) => {
+  // Close, tab change or unmount abandons a resolving quant; not pickSeq, so an NPU download still loads.
+  const resolveGen = useRef(0);
+  const pickQuantRow = async (
+    row: Row,
+    target: QuantTarget,
+    seq: number,
+    gen: number,
+  ) => {
     if (!source) {
       return;
     }
@@ -2704,14 +2899,17 @@ export function ComposerModelPicker({
       mlx,
       hasVision,
     } = await rowQuants(target);
-    if (pickSeq.current !== seq) {
+    if (pickSeq.current !== seq || resolveGen.current !== gen) {
       return;
     }
     const fetched = list.filter((v) => v.downloaded === true);
-    const quant = chooseQuant(
-      target.remote && fetched.length > 0 ? fetched : list,
-      [row.loadedQuant, defaultVariant],
-    );
+    const favorite = row.favoriteQuant?.toLowerCase();
+    const quant =
+      (favorite && list.find((v) => v.quant.toLowerCase() === favorite)) ||
+      chooseQuant(target.remote && fetched.length > 0 ? fetched : list, [
+        row.loadedQuant,
+        defaultVariant,
+      ]);
     // A plain MLX snapshot has no precision folders: it loads as one checkpoint.
     if (row.kind === "cached" && !(mlx && quant)) {
       if (row.id !== chosen?.id) {
@@ -2760,7 +2958,9 @@ export function ComposerModelPicker({
       failed: false,
       target,
     });
-    const mlxRepo = row.kind === "hub" && !row.hub?.isGguf;
+    const mlxRepo =
+      (row.kind === "hub" && !row.hub?.isGguf) ||
+      (row.kind === "cached" && row.format === "mlx");
     const pickWhole = () => {
       if (pickSeq.current !== seq || !source) {
         return;
@@ -2769,7 +2969,10 @@ export function ComposerModelPicker({
       if (row.id !== chosen?.id) {
         setPending(row);
       }
-      source.onPick(row.id, wholeHubMeta(row));
+      source.onPick(
+        row.id,
+        row.kind === "cached" ? cachedMeta(row) : wholeHubMeta(row),
+      );
       resetView();
     };
     try {
@@ -2833,10 +3036,17 @@ export function ComposerModelPicker({
       }
     }
   };
-  useEffect(() => () => offerAbort.current?.abort(), []);
+  useEffect(
+    () => () => {
+      resolveGen.current += 1;
+      offerAbort.current?.abort();
+    },
+    [],
+  );
   // A listing still in flight at close or tab change must not pick (and download) its lone quant.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `open` and `viewed` are the triggers.
   useEffect(() => {
+    resolveGen.current += 1;
     offerAbort.current?.abort();
     offerAbort.current = null;
     setOffer((now) => (now && now.quants === null ? null : now));
@@ -2877,6 +3087,12 @@ export function ComposerModelPicker({
       isLora: false,
       isDownloaded: true,
     } as const;
+    if (model.local?.problem) {
+      toast.error("Can't load this model on the NPU", {
+        description: model.local.problem,
+      });
+      return;
+    }
     if (model.downloaded) {
       if (row.id !== chosen?.id) {
         setPending(row);
@@ -2903,10 +3119,100 @@ export function ComposerModelPicker({
   // On Device only: Discover's own offer already lists a partial quant.
   const partialsOf = (row: Row) =>
     row.tab === DEVICE_TAB && !row.partial && viewed !== RECOMMENDED_TAB
-      ? (devicePartials.get(row.key) ?? NO_QUANTS)
+      ? (devicePartials.get(row.inventoryKey ?? row.key) ?? NO_QUANTS)
       : NO_QUANTS;
   const variantCount = (row: Row) =>
-    (deviceQuants.get(row.key)?.length ?? 0) + partialsOf(row).length;
+    (deviceQuants.get(row.inventoryKey ?? row.key)?.length ?? 0) +
+    partialsOf(row).length;
+
+  // The disk read cannot see newer uploads: an open quant list asks the Hub once, as the header picker did.
+  const updatesReadAt = useRef(new Map<string, object>());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the open rows are the trigger; variantCount reads deviceQuants.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const queue = shownRows.filter(
+      (row) =>
+        row.kind === "gguf" &&
+        !row.favoriteQuant &&
+        variantCount(row) > 1 &&
+        expandQuantizations !== foldedQuants.has(row.key) &&
+        updatesReadAt.current.get(row.key) !== quantsEpoch,
+    );
+    if (queue.length === 0) {
+      return;
+    }
+    let live = true;
+    const epoch = quantsEpoch;
+    for (const row of queue) {
+      updatesReadAt.current.set(row.key, epoch);
+    }
+    void readBounded(
+      queue,
+      QUANT_READ_WORKERS,
+      async (row) => {
+        const target = quantTarget(row);
+        if (!target) {
+          return null;
+        }
+        try {
+          const { quants } = await rowQuants({
+            ...target,
+            remote: true,
+            everyQuant: true,
+          });
+          return [row.key, quants] as const;
+        } catch {
+          return null;
+        }
+      },
+      (found) => {
+        if (!found || quantsEpochRef.current !== epoch) {
+          return;
+        }
+        const [key, listed] = found;
+        const updated = new Set(
+          listed
+            .filter((v) => v.update_available)
+            .map((v) => v.quant.toLowerCase()),
+        );
+        if (updated.size === 0) {
+          return;
+        }
+        setDeviceQuants((prev) => {
+          const onDisk = prev.get(key);
+          if (!onDisk) {
+            return prev;
+          }
+          const next = new Map(prev);
+          next.set(
+            key,
+            onDisk.map((v) =>
+              updated.has(v.quant.toLowerCase())
+                ? { ...v, update_available: true }
+                : v,
+            ),
+          );
+          return next;
+        });
+      },
+      () => live,
+    );
+    return () => {
+      live = false;
+      for (const row of queue) {
+        updatesReadAt.current.delete(row.key);
+      }
+    };
+  }, [
+    open,
+    shownRows,
+    deviceQuants,
+    foldedQuants,
+    expandQuantizations,
+    quantsEpoch,
+  ]);
 
   const pick = async (row: Row) => {
     if (!source) {
@@ -2923,11 +3229,13 @@ export function ComposerModelPicker({
       row.kind === "gguf" &&
       useChatRuntimeStore.getState().showAllQuantizations;
     // Discover always offers its quants, even with one on disk: that one is ticked, not loaded unasked.
+    // A cached MLX repo offers its precisions, as the header picker did; a plain snapshot loads whole.
     if (
       target &&
-      // A cached MLX snapshot resolves in pickQuantRow, which loads it whole when it has no precisions.
-      row.kind !== "cached" &&
-      (offerAll || (target.remote && (row.kind === "hub" || !row.onDevice)))
+      !row.favoriteQuant &&
+      (row.kind === "cached" ||
+        offerAll ||
+        (target.remote && (row.kind === "hub" || !row.onDevice)))
     ) {
       await toggleOffer(
         row,
@@ -2939,7 +3247,7 @@ export function ComposerModelPicker({
       );
       return;
     }
-    if (variantCount(row) > 1) {
+    if (!row.favoriteQuant && variantCount(row) > 1) {
       setFoldedQuants((prev) => {
         const next = new Set(prev);
         if (!next.delete(row.key)) {
@@ -2951,10 +3259,19 @@ export function ComposerModelPicker({
     }
     if (target) {
       setResolving(row.key);
+      const gen = resolveGen.current;
       try {
-        await pickQuantRow(row, target, seq);
+        await pickQuantRow(
+          row,
+          // A pinned quant no longer on disk downloads again, as from the header picker.
+          row.favoriteQuant && row.kind === "gguf"
+            ? { ...target, remote: true, everyQuant: true }
+            : target,
+          seq,
+          gen,
+        );
       } catch {
-        if (pickSeq.current !== seq) {
+        if (pickSeq.current !== seq || resolveGen.current !== gen) {
           return;
         }
         if (row.kind === "cached") {
@@ -2992,6 +3309,12 @@ export function ComposerModelPicker({
   const toggleFavorite = async (row: Row) => {
     if (row.kind === "external") {
       togglePinnedConnected(row.id);
+      return;
+    }
+    const pinnedKey = row.favoriteQuant ? favoriteKeyOf(row) : null;
+    if (pinnedKey) {
+      const at = pinnedKey.indexOf("::");
+      togglePinned(pinnedKey.slice(0, at), pinnedKey.slice(at + 2));
       return;
     }
     if (isFavorite(row)) {
@@ -3035,17 +3358,22 @@ export function ComposerModelPicker({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [openSide, setOpenSide] = useState(side);
   const [alignOffset, setAlignOffset] = useState(0);
+  const [pickerZoomOutState, setPickerZoomOutState] = useState(1);
+  const [pickerMinBase, setPickerMinBase] = useState(420);
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dropOffset, setDropOffset] = useState(PICKER_GAP);
+  const [roomBelow, setRoomBelow] = useState<number | null>(null);
   const dropsDown = open && openSide === "bottom";
   useEffect(() => {
     if (!(dropsDown && panel)) {
       setDropOffset(PICKER_GAP);
+      setRoomBelow(null);
       return;
     }
     const place = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (rect) {
+        setRoomBelow(pickerRoomBelow(rect.bottom, window.innerHeight));
         setDropOffset(
           pickerDropOffset(rect.bottom, panel.offsetHeight, window.innerHeight),
         );
@@ -3060,6 +3388,32 @@ export function ComposerModelPicker({
       window.removeEventListener("resize", place);
     };
   }, [dropsDown, panel]);
+  // The open-time rect is stale once the trigger moves or lays out late.
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    if (!(open && panel && trigger)) {
+      return;
+    }
+    const place = () => {
+      const rect = trigger.getBoundingClientRect();
+      if (rect.width === 0 || panel.offsetWidth === 0) {
+        return;
+      }
+      setAlignOffset(
+        pickerAlignOffset(align, rect, panel.offsetWidth, window.innerWidth),
+      );
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(panel);
+    observer.observe(trigger);
+    observer.observe(trigger.closest("form") ?? document.body);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [open, panel, align]);
   const onOpenChange = (next: boolean) => {
     setOpen(next);
   };
@@ -3078,8 +3432,24 @@ export function ComposerModelPicker({
             getComputedStyle(trigger).getPropertyValue("--ui-space-scale"),
           ) || 1
         : 1;
+      const zoomOut = pickerZoomOut(
+        window.innerWidth,
+        window.outerWidth,
+        isTauri
+          ? interfaceScaleToZoom(useInterfaceScaleStore.getState().scale)
+          : null,
+      );
+      setPickerZoomOutState(zoomOut);
+      setPickerMinBase(
+        pickerMinHeight(window.innerWidth, window.innerHeight, zoomOut),
+      );
       setAlignOffset(
-        pickerAlignOffset(align, rect, PICKER_WIDTH * scale, window.innerWidth),
+        pickerAlignOffset(
+          align,
+          rect,
+          pickerWidth(window.innerWidth, scale, zoomOut),
+          window.innerWidth,
+        ),
       );
       resetView();
       setActive(0);
@@ -3340,12 +3710,20 @@ export function ComposerModelPicker({
         defaultVariant,
         mlx,
         hasVision,
-      } = await rowQuants(target);
-      const quant = chooseQuant(list, [
-        row.loadedQuant,
-        row.id === chosen?.id ? activeVariant : null,
-        defaultVariant,
-      ]);
+      } = await rowQuants(
+        // As a pick: a pinned quant is resolved even once it is gone from disk.
+        row.favoriteQuant && row.kind === "gguf"
+          ? { ...target, remote: true, everyQuant: true }
+          : target,
+      );
+      const favorite = row.favoriteQuant?.toLowerCase();
+      const quant =
+        (favorite && list.find((v) => v.quant.toLowerCase() === favorite)) ||
+        chooseQuant(list, [
+          row.loadedQuant,
+          row.id === chosen?.id ? activeVariant : null,
+          defaultVariant,
+        ]);
       if (quant && (mlx || row.kind !== "cached")) {
         return ggufMeta(
           row,
@@ -3362,7 +3740,7 @@ export function ComposerModelPicker({
     if (row.kind === "local" && row.lora) {
       return loraMeta(row.lora);
     }
-    if (row.npu?.downloaded) {
+    if (row.npu?.downloaded && !row.npu.local?.problem) {
       return {
         source: "local",
         isLora: false,
@@ -3457,7 +3835,10 @@ export function ComposerModelPicker({
   const deleteQuantFor = (row: Row, variant: GgufVariantDetail) => {
     const inMemory =
       Boolean(row.loaded) &&
-      variant.quant.toLowerCase() === row.loadedQuant?.toLowerCase();
+      variant.quant.toLowerCase() ===
+        (
+          row.loadedQuant ?? (row.id === chosen?.id ? activeVariant : null)
+        )?.toLowerCase();
     if (row.lora?.source === "exported" && row.lora.exportType === "gguf") {
       return {
         title: "Delete exported GGUF variant?",
@@ -3479,6 +3860,7 @@ export function ComposerModelPicker({
             exportType: "gguf",
             ggufVariant: variant.quant,
           });
+          await repinExportedGgufAfterDelete(row.id);
         },
         onDeleted: () =>
           source?.onModelsChange({ id: row.id, ggufVariant: variant.quant }),
@@ -3616,7 +3998,7 @@ export function ComposerModelPicker({
     if (npu?.downloaded && npuCatalog) {
       return {
         title: `Delete ${row.label}?`,
-        description: "This removes the model's NPU files from this device.",
+        description: npuDeleteDescription(npu),
         successMessage: `Deleted ${row.label}`,
         disabled: row.loaded || source?.deleteDisabled,
         onConfirm: () => npuCatalog.remove(npu),
@@ -3640,13 +4022,19 @@ export function ComposerModelPicker({
       successMessage: `Deleted ${repo.repo_id}`,
       disabled: row.loaded || source?.deleteDisabled,
       onConfirm: async () => {
+        const token = useHfTokenStore.getState().token || undefined;
         await deleteCachedModel(
           repo.repo_id,
           undefined,
-          undefined,
+          token,
           repo.cache_path || undefined,
         );
-        unpinRepo(repo.repo_id);
+        // As the header picker: another remembered folder may still hold a pinned quant.
+        if (row.gguf && isChatGgufTask(row.gguf.task)) {
+          await reconcileGgufPinsAfterDelete(repo.repo_id, token);
+        } else {
+          unpinRepo(repo.repo_id);
+        }
       },
       onDeleted: () => {
         void inventory.refreshInventory();
@@ -3655,7 +4043,13 @@ export function ComposerModelPicker({
   };
 
   const renderRow = (row: Row, index: number) => {
-    const isChosen = row.id === chosen?.id;
+    const rowQuant =
+      row.loadedQuant ?? (row.id === chosen?.id ? activeVariant : null);
+    const isChosen =
+      row.id === chosen?.id &&
+      (!row.favoriteQuant ||
+        !rowQuant ||
+        rowQuant.toLowerCase() === row.favoriteQuant.toLowerCase());
     const favorite = isFavorite(row);
     const npuOffer = row.kind === "npu" && !row.npu?.downloaded;
     const npuProgress =
@@ -3673,26 +4067,37 @@ export function ComposerModelPicker({
     const offerOpen = offer?.key === row.key;
     const paramLabel =
       row.kind === "hub" ? (hubParams.get(row.id.toLowerCase()) ?? null) : null;
-    const onDisk = deviceQuants.get(row.key) ?? NO_QUANTS;
+    const onDisk = deviceQuants.get(row.inventoryKey ?? row.key) ?? NO_QUANTS;
     const partials = partialsOf(row);
     const manyQuants = onDisk.length + partials.length > 1;
     const wholeQuant = onDisk.length === 1 ? onDisk[0].quant : null;
-    const soleQuant = manyQuants ? null : wholeQuant;
+    const soleQuant = row.favoriteQuant ?? (manyQuants ? null : wholeQuant);
+    const savedVariant =
+      row.kind !== "gguf"
+        ? undefined
+        : row.favoriteQuant
+          ? onDisk.find(
+              (v) => v.quant.toLowerCase() === row.favoriteQuant?.toLowerCase(),
+            )
+          : onDisk.length === 1
+            ? onDisk[0]
+            : undefined;
     // Known without a quant listing, for Reset run settings and the gear's saved state.
-    const savedMeta =
-      row.kind === "gguf" && onDisk.length === 1
-        ? ggufMeta(row, onDisk[0], true, true, row.gguf?.has_vision)
-        : row.kind === "cached" && onDisk.length === 0 && !row.partial
-          ? cachedMeta(row)
-          : row.kind === "local" && row.lora
-            ? loraMeta(row.lora)
-            : null;
+    const savedMeta = savedVariant
+      ? ggufMeta(row, savedVariant, true, true, row.gguf?.has_vision)
+      : row.kind === "cached" && onDisk.length === 0 && !row.partial
+        ? cachedMeta(row)
+        : row.kind === "local" && row.lora
+          ? loraMeta(row.lora)
+          : null;
     const savedTarget = savedMeta
       ? modelConfigTarget(row.id, savedMeta, row.label)
       : undefined;
     // `foldedQuants` holds the rows toggled away from the "Expand quantizations" setting.
     const quantsOpen =
-      manyQuants && expandQuantizations !== foldedQuants.has(row.key);
+      !row.favoriteQuant &&
+      manyQuants &&
+      expandQuantizations !== foldedQuants.has(row.key);
     // Discover GGUFs star by quant; a multi-quant device row stars the repo.
     const canStar = !(
       quiet ||
@@ -3745,6 +4150,7 @@ export function ComposerModelPicker({
             // Shared with the header picker's rows: the Playwright drivers select by these.
             data-model-picker-option=""
             data-model-picker-active-option={rowActive ? "true" : undefined}
+            title={row.npu ? (npuRowTooltip(row.npu) ?? undefined) : undefined}
             onMouseMove={() => {
               setActive(index);
               setHighlight(true);
@@ -3773,7 +4179,7 @@ export function ComposerModelPicker({
           >
             {resolving === row.key || npuProgress ? (
               <Spinner className="size-[calc(14px*var(--ui-space-scale,1))] shrink-0" />
-            ) : (
+            ) : hasRowMark(row) ? (
               <span
                 className={cn(
                   "flex shrink-0 text-foreground",
@@ -3782,7 +4188,7 @@ export function ComposerModelPicker({
               >
                 <RowMark row={row} />
               </span>
-            )}
+            ) : null}
             <span className="flex min-w-0 flex-1 items-center gap-1.5">
               <span className={cn("truncate", dimmed && DIM_CLASS)}>
                 {row.label}
@@ -3904,7 +4310,9 @@ export function ComposerModelPicker({
                         : undefined
                     }
                     items={[
-                      ...(row.loaded && canEject
+                      ...((row.loaded ||
+                        (chosenExternal && row.id === checkpoint)) &&
+                      canEject
                         ? [
                             {
                               key: "eject",
@@ -4075,7 +4483,7 @@ export function ComposerModelPicker({
       ) : null;
     const quantList = offerOpen ? (
       renderOffer(row)
-    ) : quantsOpen || partials.length > 0 ? (
+    ) : quantsOpen || (partials.length > 0 && !row.favoriteQuant) ? (
       <Fragment key={`quants:${row.key}`}>
         {quantsOpen ? renderDeviceQuants(row, onDisk) : null}
         {quantsOpen || !manyQuants
@@ -4694,7 +5102,7 @@ export function ComposerModelPicker({
               >
                 {modelLoading || pending ? (
                   <Spinner className="size-[calc(14px*var(--ui-space-scale,1))] shrink-0" />
-                ) : chosenName && chosenLoaded ? (
+                ) : chosenName && chosenEjectable ? (
                   <Hint label="Eject model">
                     {/* biome-ignore lint/a11y/useKeyWithClickEvents: mouse-only shortcut; keyboard and screen readers eject from the panel. */}
                     <span
@@ -4709,7 +5117,13 @@ export function ComposerModelPicker({
                           source?.eject();
                         }
                       }}
-                      className="-m-0.5 grid size-[calc(18px*var(--ui-space-scale,1))] shrink-0 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[rgb(0_0_0_/_calc(0.1*var(--contrast-wash-gain,1)))] dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))] [@media(hover:none)]:pointer-events-none"
+                      className={cn(
+                        "grid h-[calc(18px*var(--ui-space-scale,1))] shrink-0 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[rgb(0_0_0_/_calc(0.1*var(--contrast-wash-gain,1)))] dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))] [@media(hover:none)]:pointer-events-none",
+                        // No logo: the eject slot is zero-width until hover (-mr cancels the gap).
+                        hasRowMark(chosenMark)
+                          ? "-m-0.5 w-[calc(18px*var(--ui-space-scale,1))]"
+                          : "-my-0.5 -mr-1.5 w-0 overflow-hidden group-hover/chip:-mx-0.5 group-hover/chip:w-[calc(18px*var(--ui-space-scale,1))]",
+                      )}
                     >
                       <span className="col-start-1 row-start-1 grid place-items-center group-hover/chip:invisible">
                         <RowMark row={chosenMark} />
@@ -4762,7 +5176,7 @@ export function ComposerModelPicker({
           >
             {modelLoading || pending ? (
               <Spinner className="size-[calc(14px*var(--ui-space-scale,1))] shrink-0" />
-            ) : chosenName && chosenLoaded ? (
+            ) : chosenName && chosenEjectable ? (
               <Hint label="Eject model">
                 {/* biome-ignore lint/a11y/useKeyWithClickEvents: mouse-only shortcut; keyboard and screen readers eject from the panel. */}
                 <span
@@ -4777,7 +5191,12 @@ export function ComposerModelPicker({
                       source?.eject();
                     }
                   }}
-                  className="-m-0.5 grid size-[calc(18px*var(--ui-space-scale,1))] shrink-0 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[rgb(0_0_0_/_calc(0.1*var(--contrast-wash-gain,1)))] dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))] [@media(hover:none)]:pointer-events-none"
+                  className={cn(
+                    "grid h-[calc(18px*var(--ui-space-scale,1))] shrink-0 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[rgb(0_0_0_/_calc(0.1*var(--contrast-wash-gain,1)))] dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))] [@media(hover:none)]:pointer-events-none",
+                    hasRowMark(chosenMark)
+                      ? "-m-0.5 w-[calc(18px*var(--ui-space-scale,1))]"
+                      : "-my-0.5 -mr-1.5 w-0 overflow-hidden group-hover/chip:-mx-0.5 group-hover/chip:w-[calc(18px*var(--ui-space-scale,1))]",
+                  )}
                 >
                   <span className="col-start-1 row-start-1 grid place-items-center group-hover/chip:invisible">
                     <RowMark row={chosenMark} />
@@ -4812,14 +5231,23 @@ export function ComposerModelPicker({
       )}
       {/* No collision flip: a height change must not move the panel across the composer. */}
       <PopoverContent
-        ref={setPanel}
         side={openSide}
         avoidCollisions={false}
         collisionPadding={PICKER_EDGE}
         align={align}
         alignOffset={alignOffset}
+        ref={setPanel}
         sideOffset={dropsDown ? dropOffset : PICKER_GAP}
         data-composer-model-picker=""
+        style={
+          {
+            "--picker-zoom-out": pickerZoomOutState,
+            "--picker-min-base": `${pickerMinBase}px`,
+            ...(roomBelow === null
+              ? {}
+              : { "--picker-room": `${roomBelow}px` }),
+          } as CSSProperties
+        }
         data-tour="chat-model-selector-popover"
         data-list-last={
           isExpanded && !hasFoot && !configTarget ? "" : undefined
@@ -4831,15 +5259,16 @@ export function ComposerModelPicker({
             : undefined
         }
         className={cn(
-          "unsloth-plus-menu composer-model-picker relative w-[calc(420px*var(--ui-space-scale,1))] gap-0 overflow-hidden p-2",
-          (isExpanded || configTarget) &&
-            "h-[calc(460px*var(--ui-space-scale,1))]",
+          "unsloth-plus-menu composer-model-picker relative w-(--composer-picker-w) gap-0 overflow-hidden p-2",
+          openSide !== "bottom" &&
+            "[--picker-floor:var(--radix-popover-content-available-height)]",
+          configTarget
+            ? "h-(--composer-picker-min-h) max-h-[var(--picker-floor,calc(100dvh-16px))]"
+            : isExpanded
+              ? "min-h-(--composer-picker-min-h) max-h-(--composer-picker-max-h)"
+              : "max-h-[var(--picker-floor,calc(100dvh-16px))]",
           configTarget &&
             "has-[[role=switch][aria-checked=true][aria-label*=advanced]]:h-[calc(640px*var(--ui-space-scale,1))]",
-          // Opening down, it keeps its height and rides up over the composer instead (pickerDropOffset).
-          openSide === "bottom"
-            ? "max-h-[min(calc(760px*var(--ui-space-scale,1)),calc(100dvh-16px))]"
-            : "max-h-[min(calc(760px*var(--ui-space-scale,1)),var(--radix-popover-content-available-height))]",
         )}
         onOpenAutoFocus={(event) => {
           if (isExpanded) {
@@ -4937,7 +5366,7 @@ export function ComposerModelPicker({
                 ))}
               </div>
               {(!pane || pane.loaded) &&
-              (chosenLoaded || loadedModels.length > 0) &&
+              (chosenEjectable || loadedModels.length > 0) &&
               !pending &&
               !modelLoading ? (
                 <Button
@@ -4947,7 +5376,7 @@ export function ComposerModelPicker({
                     ejectsAll
                       ? "Eject all models"
                       : `Eject ${
-                          chosenLoaded
+                          chosenEjectable
                             ? (chosenName ?? "model")
                             : modelDisplayName(loadedModels[0]?.id ?? "model")
                         }`
@@ -4955,7 +5384,7 @@ export function ComposerModelPicker({
                   onClick={() => {
                     if (ejectsAll) {
                       source?.ejectAll();
-                    } else if (!chosenLoaded && loadedModels[0]) {
+                    } else if (!chosenEjectable && loadedModels[0]) {
                       source?.eject(
                         loadedModels[0].checkpoint ?? loadedModels[0].id,
                       );
@@ -4975,7 +5404,7 @@ export function ComposerModelPicker({
                   {ejectsAll ? "Eject all" : "Eject"}
                 </Button>
               ) : null}
-              {chosenName ? (
+              {chosenName && !noThinking ? (
                 <Hint label="Collapse">
                   <button
                     type="button"
@@ -5242,7 +5671,7 @@ export function ComposerModelPicker({
               role="listbox"
               tabIndex={-1}
               aria-label={viewedTab?.label}
-              className="composer-model-list flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pt-[calc(9px*var(--ui-space-scale,1))] pb-1.5"
+              className="composer-model-list flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pt-[calc(9px*var(--ui-space-scale,1))] pb-[calc(14px*var(--ui-space-scale,1))]"
             >
               {renderList()}
               {viewed === RECOMMENDED_TAB && hubSearch.hasMore ? (
@@ -5280,7 +5709,7 @@ export function ComposerModelPicker({
                 </Hint>
               ) : null}
             </button>
-            {!pending && chosenLoaded && !modelLoading ? (
+            {!pending && chosenEjectable && !modelLoading ? (
               <Button
                 variant="destructive"
                 size="xs"

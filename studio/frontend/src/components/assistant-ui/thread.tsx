@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { MemoryToolUI } from "./tool-ui-memory";
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { AiSpeechIcon, BookmarkIcon, FileSearchIcon, TrashIcon } from "@/lib/hugeicons-derived";
@@ -94,7 +95,15 @@ import {
 import { KnowledgeBaseToolUI } from "@/components/assistant-ui/tool-ui-knowledge-base";
 import { ReadSkillToolUI } from "@/components/assistant-ui/tool-ui-read-skill";
 import { SkillMentionPopover } from "@/components/assistant-ui/skill-mentions";
-import { isRewindCommand, useRewindDialogStore } from "@/features/chat";
+import {
+  ChatSkillsDialog,
+  contextReportBranch,
+  isContextCommand,
+  isRewindCommand,
+  isSkillsCommand,
+  useContextReportStore,
+  useRewindDialogStore,
+} from "@/features/chat";
 import { RenderHtmlToolUI } from "@/components/assistant-ui/tool-ui-render-html";
 import { PythonToolUI } from "@/components/assistant-ui/tool-ui-python";
 import { TerminalToolUI } from "@/components/assistant-ui/tool-ui-terminal";
@@ -179,6 +188,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { forkChatThread } from "@/features/chat/api/chat-api";
+import { syncThreadScroll } from "@/features/chat/thread-scroll-flag";
 import {
   findLatestUserAudioBase64,
   resolveProjectId,
@@ -231,6 +241,8 @@ import {
   useLibraryChatHandoffStore,
 } from "@/features/library/chat-handoff-store";
 import { resumesThought } from "@/features/model-picker";
+import { CompactOnReturnChip } from "./compact-on-return-chip";
+import { isNpuModelId } from "@/features/npu";
 import { cancelResearchRun } from "@/features/chat/api/research-api";
 import {
   ingestResearchUpdate,
@@ -431,6 +443,7 @@ import { downloadFile, isDownloadCancelled } from "@/lib/native-files";
 import { toast } from "@/lib/toast";
 import { Tick02Icon } from "@/lib/tick-icon";
 import { BrowserAgentMenuItem, BrowserAgentPill } from "@/features/browser/agent/lazy-composer-toggle";
+import { ComputerUseMenuItem, ComputerUsePill } from "@/features/computer-use/lazy-composer-toggle";
 import {
   BranchNextIcon,
   BranchPrevIcon,
@@ -484,6 +497,12 @@ import { ProjectIcon } from "@/lib/project-icon";
 import { RefreshGlyph } from "@/lib/refresh-icon";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  NewChatNonceContext,
+  clearTemporaryQueryDraft,
+  temporaryQueryDraft,
+} from "@/features/chat/query-draft";
+import { isQueryDraftId } from "@/features/chat/utils/composer-draft";
+import {
   ArrowDownIcon,
   ArrowUpIcon,
   Loader2Icon,
@@ -518,6 +537,10 @@ import {
 import { extractTaggedText, updateThreadMessage } from "@/features/chat/utils/update-thread-message";
 import { useComposerPillFit } from "@/hooks/use-composer-pill-fit";
 import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  COMPOSER_MIN_ROWS,
+  useComposerMaxRows,
+} from "@/hooks/use-composer-rows";
 import { useUiSpaceScale } from "@/hooks/use-ui-space-scale";
 import { useExpandedComposerFill } from "./use-expanded-composer-fill";
 import { watchComposerClearance } from "@/lib/toast-offset";
@@ -1900,8 +1923,9 @@ const PendingCompactionRule: FC = () => {
   const endsWithReply = useAuiState(
     ({ message }) => message.isLast && message.role === "assistant",
   );
+  const cloud = useChatRuntimeStore((s) => isExternalModelId(s.params.checkpoint));
   if (!pending || !endsWithReply) return null;
-  return <CompactionDivider pending={true} className="mt-6" />;
+  return <CompactionDivider pending={true} cloud={cloud} className="mt-6" />;
 };
 
 // The selector returns the persisted record, which keeps its identity between renders, so a
@@ -2145,6 +2169,7 @@ export const Thread: FC<{
       viewportElRef.current = node;
       setViewportSlot(node ? { el: node, threadId: runtimeThreadId } : null);
       viewportRef(node);
+      syncThreadScroll(node);
     },
     [viewportRef, runtimeThreadId],
   );
@@ -2358,6 +2383,7 @@ export const Thread: FC<{
             viewportRef={viewportElRef}
           />
           <ForkChatShortcut />
+          <ContextReportMount />
 
           {/* Bottom slack so the last message has room above the sticky
           scroll-to-bottom button (and floating composer in single mode),
@@ -2683,7 +2709,10 @@ const ThreadComposerDock: FC<{
             : "top-[calc(10px*var(--ui-space-scale,1))]",
         )}
       />
-      <div ref={dockInnerRef} className="unsloth-composer-dock-inner relative pb-2">
+      <div
+        ref={dockInnerRef}
+        className="unsloth-composer-dock-inner relative pb-[calc(1rem*var(--ui-space-scale,1))]"
+      >
         <div
           ref={composerColumnRef}
           className="pointer-events-auto mx-auto w-full max-w-(--thread-max-width)"
@@ -2840,7 +2869,7 @@ const ThreadWelcome: FC<{
           {!incognito && greeting.kind === "text" && greeting.icon.kind === "sloth" && (
             <MascotImg
               src={currentEmojiSrc}
-              className="unsloth-welcome-sloth size-[calc(44px*var(--ui-space-scale,1))] -translate-y-[2px]"
+              className="unsloth-welcome-sloth size-[calc(40px*var(--ui-space-scale,1))] -translate-y-[2px]"
             />
           )}
           {!incognito && greeting.kind === "text" && greeting.icon.kind === "custom" && (
@@ -2848,7 +2877,7 @@ const ThreadWelcome: FC<{
               src={greeting.icon.src}
               alt=""
               draggable={false}
-              className="unsloth-welcome-sloth unsloth-welcome-icon size-[calc(44px*var(--ui-space-scale,1))] shrink-0 -translate-y-[2px] object-contain"
+              className="unsloth-welcome-sloth unsloth-welcome-icon size-[calc(40px*var(--ui-space-scale,1))] shrink-0 -translate-y-[2px] object-contain"
             />
           )}
           <h1
@@ -2894,7 +2923,7 @@ const ThreadWelcome: FC<{
               style={{ flexGrow: `calc(var(--welcome-spacer-grow,1)*${composerPosition})` }}
             >
               {/* Padding here, not on the spacer, where it would count toward the spacer's share. */}
-              <div className="flex flex-col pb-[calc(16px*var(--ui-space-scale,1))]">{greetingRow}</div>
+              <div className="flex flex-col pb-[calc(22px*var(--ui-space-scale,1))]">{greetingRow}</div>
             </div>
             <div className="aui-thread-welcome-message flex w-full flex-col">
               {!hideComposer && <ComposerAnimated threadId={threadId} />}
@@ -3041,6 +3070,7 @@ const Composer: FC<{
   const effectiveDeepResearchEnabled = deepResearchEnabled && !researchUsed;
   const [researchWebsiteAccessOpen, setResearchWebsiteAccessOpen] =
     useState(false);
+  const [skillsDialogOpen, setSkillsDialogOpen] = useState(false);
   useEffect(() => {
     if (!researchUsed) return;
     if (hasResearchMessage && researchThreadId) {
@@ -3249,7 +3279,10 @@ const Composer: FC<{
   const editorRef = useRef<HTMLDivElement>(null);
   const inputId = useId();
   const uiSpaceScale = useUiSpaceScale();
-  const oneRowHeight = Math.round(40 * uiSpaceScale);
+  const minEditorHeight = Math.round(
+    (16 + 24 * COMPOSER_MIN_ROWS) * uiSpaceScale,
+  );
+  const maxRows = useComposerMaxRows(24 * uiSpaceScale);
   const [editorHeight, setEditorHeight] = useState(40);
   const [isWritingExpanded, setIsWritingExpanded] = useState(false);
   const detachFromBottom = useDetachThreadFromBottom();
@@ -4017,6 +4050,10 @@ const Composer: FC<{
     registeringVideoDrops ||
     hasPendingVideoAttachments ||
     materializingDroppedVideo;
+  const hasMaterializingAttachments =
+    hasMaterializingImageAttachments ||
+    hasMaterializingAudioAttachments ||
+    hasMaterializingVideoAttachments;
   const threadIsRunning = useAuiState(({ thread }) => thread.isRunning);
   const threadListItemRemoteId = useAuiState(
     ({ threadListItem }) => threadListItem.remoteId,
@@ -4119,9 +4156,14 @@ const Composer: FC<{
     hasAttachments && !attachmentsAreQueueableText && composerAcceptsQueueing;
 
   const incognito = useChatRuntimeStore((s) => s.incognito);
-  const shareDraft = useChatPreferencesStore((s) => s.shareComposerDraft);
+  // A `?q=` chat keeps its own slot until saved, so the link never overwrites another unsent draft.
+  const newChatNonce = useContext(NewChatNonceContext);
+  const draftQueryId =
+    !threadListItemRemoteId && isQueryDraftId(newChatNonce) ? newChatNonce : null;
+  const shareDraft =
+    useChatPreferencesStore((s) => s.shareComposerDraft) && !draftQueryId;
   // Route and active IDs can lead the runtime switch; drafts belong to the composer on screen.
-  const draftThreadId = threadListItemRemoteId ?? NEW_CHAT_DRAFT_ID;
+  const draftThreadId = threadListItemRemoteId ?? draftQueryId ?? NEW_CHAT_DRAFT_ID;
   const restoredDraftScopeRef = useRef<string | undefined>(undefined);
   const previousDraftIdentityRef = useRef({
     draftThreadId,
@@ -4158,15 +4200,17 @@ const Composer: FC<{
     if (!composer.getState().isEditing) return;
     if (
       restoredDraftScopeRef.current === draftScope &&
-      previous.threadListItemId === threadListItemId
+      previous.threadListItemId === threadListItemId &&
+      // A temporary chat's scope never changes, so a link opened onto its empty composer checks the id.
+      (previous.draftThreadId === draftThreadId || !isQueryDraftId(draftThreadId))
     ) return;
     restoredDraftScopeRef.current = draftScope;
     // First persistence names the same conversation; navigation must still restore its own draft.
     if (
       !incognito &&
       !previous.incognito &&
-      !shareDraft &&
-      previous.draftThreadId === NEW_CHAT_DRAFT_ID &&
+      (isQueryDraftId(previous.draftThreadId) ||
+        (!shareDraft && previous.draftThreadId === NEW_CHAT_DRAFT_ID)) &&
       aui.threadListItem().getState().remoteId === draftThreadId &&
       previous.threadListItemId === threadListItemId &&
       previous.draftThreadId !== draftThreadId
@@ -4177,15 +4221,20 @@ const Composer: FC<{
         justSentRef.current = { ...justSentRef.current, draftKey };
       }
       const text = latestDraft(previousKey);
-      writeComposerDraft(draftKey, text);
-      stageComposerDraft(draftKey, text);
-      writePasteDraft(pasteDraftKey, latestPasteDraft(previousPasteKey));
+      const pastes = latestPasteDraft(previousPasteKey);
+      // With sharing on, only a query chat's follow-up moves into the shared slot (read from memory here).
+      if (!shareDraft || text || pastes.length > 0) {
+        if (shareDraft) publishDraft(text, draftSource);
+        writeComposerDraft(draftKey, text);
+        stageComposerDraft(draftKey, text);
+        writePasteDraft(pasteDraftKey, pastes);
+        pasteKeyShownRef.current = draftKey;
+      }
       writeComposerDraft(previousKey, "");
       writePasteDraft(previousPasteKey, []);
-      pasteKeyShownRef.current = draftKey;
     }
     if (draftScope === INCOGNITO_DRAFT_SCOPE) {
-      composer.setText("");
+      composer.setText(temporaryQueryDraft(draftKey));
       return;
     }
     remoteDraftRef.current = null;
@@ -4211,6 +4260,7 @@ const Composer: FC<{
     draftKey,
     pasteDraftKey,
     shareDraft,
+    draftSource,
     draftThreadId,
     threadListItemId,
     incognito,
@@ -4384,7 +4434,10 @@ const Composer: FC<{
       draftSaveTimerRef.current = null;
     }
     // A temporary chat's send was never the stored draft.
-    if (draftScopeRef.current === INCOGNITO_DRAFT_SCOPE) return;
+    if (draftScopeRef.current === INCOGNITO_DRAFT_SCOPE) {
+      clearTemporaryQueryDraft(draftKeyRef.current);
+      return;
+    }
     if (shareDraftRef.current) publishDraft("", draftSource);
     if (draftKeyRef.current) writeComposerDraft(draftKeyRef.current, "");
     writePasteDraft(pasteDraftKeyRef.current, []);
@@ -5746,6 +5799,55 @@ const Composer: FC<{
         });
         return;
       }
+      // Never sent: only a card under the last message.
+      if (!overlay && !hasAttachments && isContextCommand(composerText)) {
+        event.preventDefault();
+        const runtime = useChatRuntimeStore.getState();
+        // The count endpoint refuses while anything generates.
+        if (
+          threadIsRunning ||
+          aui.thread().getState().isRunning ||
+          Object.values(runtime.runningByThreadId).some(Boolean)
+        ) {
+          toast.error(translate("context.waitForResponse"));
+          return;
+        }
+        // No local tokenizer: the header ring already shows the provider's total.
+        if (isExternalModelId(runtime.params.checkpoint)) {
+          toast.info(translate("context.apiNoBreakdown"));
+          return;
+        }
+        if (!runtime.params.checkpoint || runtime.loadedContextLength == null) {
+          toast.info(translate("context.noModel"));
+          return;
+        }
+        if (aui.thread().getState().messages.length === 0) {
+          toast.info(translate("context.emptyChat"));
+          return;
+        }
+        aui.composer().setText("");
+        useContextReportStore
+          .getState()
+          .showContext(
+            aui.threadListItem().getState().id,
+            contextReportBranch(aui.thread().getState().messages),
+            runtime.params.checkpoint,
+          );
+        return;
+      }
+      if (
+        !overlay &&
+        !hasAttachments &&
+        !hasPendingAudio &&
+        !hasMaterializingAttachments &&
+        isSkillsCommand(composerText)
+      ) {
+        event.preventDefault();
+        clearStoredDraft();
+        aui.composer().setText("");
+        setSkillsDialogOpen(true);
+        return;
+      }
       if (
         !overlay &&
         !hasAttachments &&
@@ -5763,20 +5865,25 @@ const Composer: FC<{
           return;
         }
         // The compacted turns stay reachable only through search_conversation, so no tools, no reset.
+        // A cloud connection summarizes instead, which needs neither.
         if (
-          !runtime.supportsTools ||
-          !resumesThought({
-            loadedIsGguf: runtime.loadedIsGguf,
-            loadedIsMlx: runtime.loadedIsMlx,
-            activeGgufVariant: runtime.activeGgufVariant,
-            activeNativePathToken: runtime.activeNativePathToken,
-            checkpoint: runtime.params.checkpoint,
-          })
+          !isExternalModelId(runtime.params.checkpoint) &&
+          (!runtime.supportsTools ||
+            !(
+              resumesThought({
+                loadedIsGguf: runtime.loadedIsGguf,
+                loadedIsMlx: runtime.loadedIsMlx,
+                activeGgufVariant: runtime.activeGgufVariant,
+                activeNativePathToken: runtime.activeNativePathToken,
+                checkpoint: runtime.params.checkpoint,
+              }) || isNpuModelId(runtime.params.checkpoint)
+            ))
         ) {
-          toast.info("/compact works with GGUF and MLX models that support tools");
+          toast.info("/compact works with GGUF, MLX and NPU models that support tools");
           return;
         }
         requestThreadCompaction(referenceThreadId);
+        useContextReportStore.getState().dismissContext();
         clearStoredDraft();
         aui.composer().setText("");
         return;
@@ -5935,6 +6042,7 @@ const Composer: FC<{
       disabled,
       disableQueue,
       hasAttachments,
+      hasMaterializingAttachments,
       hasPendingAudio,
       enqueueSend,
       interceptSend,
@@ -6014,6 +6122,7 @@ const Composer: FC<{
         <WebSearchToggle />
         <CodeToolsToggle />
         <BrowserAgentPill glyph={(icon) => <PillGlyph>{icon}</PillGlyph>} />
+        <ComputerUsePill glyph={(icon) => <PillGlyph>{icon}</PillGlyph>} />
         <ImagesToggle />
         <KnowledgeBaseComposerButton side={effectiveMenuSide} />
         {mcpEnabledForChat ? (
@@ -6052,6 +6161,15 @@ const Composer: FC<{
     ),
     [researchWebsiteAccessOpen, effectiveDeepResearchEnabled],
   );
+  const skillsDialog = useMemo(
+    () => (
+      <ChatSkillsDialog
+        open={skillsDialogOpen}
+        onOpenChange={setSkillsDialogOpen}
+      />
+    ),
+    [skillsDialogOpen],
+  );
 
   const composerContent = (
     <>
@@ -6085,7 +6203,7 @@ const Composer: FC<{
               className="unsloth-composer-editor"
               style={
                 {
-                  "--composer-editor-height": `${composerText.length === 0 ? oneRowHeight : Math.max(oneRowHeight, editorHeight)}px`,
+                  "--composer-editor-height": `${composerText.length === 0 ? minEditorHeight : Math.max(minEditorHeight, editorHeight)}px`,
                 } as CSSProperties
               }
             >
@@ -6099,7 +6217,7 @@ const Composer: FC<{
                 data-type-to-activate="composer"
                 className="aui-composer-input unsloth-composer-input"
                 minRows={1}
-                maxRows={12}
+                maxRows={maxRows}
                 onHeightChange={handleEditorHeightChange}
                 autoFocus={!disabled}
                 disabled={disabled}
@@ -6189,6 +6307,7 @@ const Composer: FC<{
         )}
       </div>
       {researchWebsiteAccessDialog}
+      {skillsDialog}
       <ChatAudioUploadMount audioUpload={audioUpload} />
     </>
   );
@@ -7022,6 +7141,7 @@ const ComposerToolsMenu: FC<{
       </DropdownMenuItem>
     ) : null,
     browserUse: <BrowserAgentMenuItem />,
+    computerUse: <ComputerUseMenuItem />,
     chatWithFiles: (
       <DropdownMenuItem
         disabled={ragDisabled}
@@ -7566,6 +7686,7 @@ const ComposerRightControls: FC<{
           !thread.isRunning && !isQueueRunning && !isResearchActive
         }
       >
+        <CompactOnReturnChip />
         <ComposerPrimitive.Send asChild={true}>
           <TooltipIconButton
             tooltip={
@@ -7950,6 +8071,10 @@ function useContinuation() {
     const request: ContinuationRequest = {
       partial,
       ...(carriedReasoning ? { reasoning: carriedReasoning, reasoningDuration } : {}),
+      ...((metadata as { custom?: { splitReasoningSeen?: unknown } } | undefined)?.custom
+        ?.splitReasoningSeen === true
+        ? { splitReasoningSeen: true }
+        : {}),
       ...(thoughtSignature ? { thoughtSignature } : {}),
       ...(thoughtParts.length > 0 ? { thoughtParts } : {}),
       ...(answerParts.length > 0 ? { answerParts } : {}),
@@ -8180,6 +8305,7 @@ const ASSISTANT_PART_COMPONENTS = {
       web_search: WebSearchToolUIConfirmable,
       search_knowledge_base: KnowledgeBaseToolUIConfirmable,
       read_skill: ReadSkillToolUIConfirmable,
+      update_memory: withToolConfirmation(MemoryToolUI),
       studio_load_skill: ReadSkillToolUIConfirmable,
       python: PythonToolUIConfirmable,
       terminal: TerminalToolUIConfirmable,
@@ -8680,6 +8806,19 @@ const RewindDialogMount: FC = () => {
     </Suspense>
   ) : null;
 };
+
+const LazyContextReport = lazy(() =>
+  import("@/components/assistant-ui/context-report").then((module) => ({
+    default: module.ContextReport,
+  })),
+);
+
+const ContextReportMount: FC = () =>
+  useContextReportStore((s) => s.report !== null) ? (
+    <Suspense fallback={null}>
+      <LazyContextReport />
+    </Suspense>
+  ) : null;
 
 const RewindMessageButton: FC = () => {
   const aui = useAui();
