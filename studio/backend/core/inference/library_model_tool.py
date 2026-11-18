@@ -203,8 +203,9 @@ async def _load_image(name: str, pick, subject: str, deadline: float, abort) -> 
     from core.inference.media_auto_switch import maybe_auto_switch_media_model
 
     try:
+        # openai_errors: only that shape carries the refusal code (model_loading, multi_model_always).
         await maybe_auto_switch_media_model(
-            name, owner = DIFFUSION, current_subject = subject, openai_errors = False
+            name, owner = DIFFUSION, current_subject = subject, openai_errors = True
         )
     except HTTPException as exc:
         # The switch answers within ~90 s and leaves a slow load running: wait the rest out here.
@@ -330,6 +331,9 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
     except asyncio.TimeoutError:
         return ERR_TIMEOUT
     except HTTPException as exc:
+        # The Always refusal names the setting, which this call overrode.
+        if mode == "always" and _http_code(exc) == "multi_model_always":
+            return ERR_KEEP_NO_FIT.format(model = pick.model_id)
         return "Error: " + _detail(exc)
     finally:
         # Shielded: a stop must never leave the chat without its model.

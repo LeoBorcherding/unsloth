@@ -410,3 +410,42 @@ def test_put_back_waits_for_the_setup_before_restoring(monkeypatch):
 
     asyncio.run(scenario())
     assert calls == ["unload", "restore"]
+
+
+def test_a_slow_switch_is_waited_out(monkeypatch):
+    from core.inference import media_auto_switch
+    from core.inference.media_switch_errors import slow_switch
+
+    seen = {}
+
+    async def switch(name, *, owner, current_subject, openai_errors):
+        raise slow_switch("image", openai_errors)
+
+    async def wait(name, pick, deadline, abort):
+        seen["waited"] = True
+
+    monkeypatch.setattr(media_auto_switch, "maybe_auto_switch_media_model", switch)
+    monkeypatch.setattr(tool, "_await_image_loaded", wait)
+    asyncio.run(tool._load_image("org/image-model", PICK, "alice", 1e18, threading.Event()))
+    assert seen == {"waited": True}
+
+
+@pytest.mark.parametrize("unload, expected", [("false", "does not fit beside"), (None, "set to Always")])
+def test_always_refusal_names_the_argument_only_when_it_set_always(world, monkeypatch, unload, expected):
+    from core.inference.media_switch_errors import refuse
+
+    async def refused(name, pick, subject, deadline, abort):
+        exc = refuse(
+            "This model needs about 22.9 GB. Keep multiple models loaded is set to Always.",
+            status_code = 409,
+            openai_errors = True,
+            code = "multi_model_always",
+        )
+        raise exc
+
+    monkeypatch.setattr(tool, "_load_image", refused)
+    world.fits_beside = True
+    arguments = {"model": "org/image-model", "prompt": "a fox"}
+    if unload is not None:
+        arguments["unload_chat_model"] = unload
+    assert expected in _call(world, arguments)
