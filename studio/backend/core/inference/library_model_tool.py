@@ -164,6 +164,21 @@ class _Swap:
         self.note = ""
 
 
+def _switch_lock():
+    from core.inference.gpu_arbiter import DIFFUSION
+    from core.inference.media_switch_locks import switch_lock
+
+    return switch_lock(DIFFUSION)
+
+
+async def _setup_settled(limit: float) -> None:
+    """Waits out a switch setup still in preflight, so its load can't start after the put back."""
+    end = time.monotonic() + limit
+    lock = _switch_lock()
+    while lock.locked() and time.monotonic() < end:
+        await asyncio.sleep(_LOAD_POLL_S)
+
+
 async def _await_image_loaded(name: str, pick, deadline: float, abort: threading.Event) -> None:
     from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.media_model_index import satisfied_by
@@ -173,7 +188,10 @@ async def _await_image_loaded(name: str, pick, deadline: float, abort: threading
         backend = backend_for(DIFFUSION)
         if satisfied_by(await asyncio.to_thread(backend.status), name, pick):
             return
-        if not await asyncio.to_thread(backend.loading_repo_ids):
+        # The switch's setup holds its lock through preflight, before the backend registers a load.
+        if not await asyncio.to_thread(backend.loading_repo_ids) and not _switch_lock().locked():
+            if satisfied_by(await asyncio.to_thread(backend_for(DIFFUSION).status), name, pick):
+                return
             raise RuntimeError(f"'{pick.model_id}' stopped loading before it was ready.")
         await asyncio.sleep(_LOAD_POLL_S)
     raise asyncio.TimeoutError
@@ -321,6 +339,7 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
 
 async def _put_back(swap: _Swap, subject: str) -> str:
     if swap.loaded_image:
+        await _setup_settled(_RESTORE_WAIT_S)
         try:
             await _unload_image(subject)
         except Exception as exc:  # noqa: BLE001

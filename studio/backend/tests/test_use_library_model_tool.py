@@ -346,3 +346,67 @@ def test_the_schema_offers_the_three_choices():
         "unload_chat_model"
     ]
     assert prop["enum"] == ["auto", "true", "false"]
+
+
+def _preflight_world(monkeypatch):
+    backend = Backend()
+    monkeypatch.setattr(media_switch_backends, "backend_for", lambda owner: backend)
+    monkeypatch.setattr(
+        media_model_index, "satisfied_by", lambda status, name, pick: bool(status.get("loaded"))
+    )
+    monkeypatch.setattr(tool, "_LOAD_POLL_S", 0.01)
+    return backend
+
+
+def test_wait_outlasts_a_setup_still_in_preflight(monkeypatch):
+    backend = _preflight_world(monkeypatch)
+
+    async def scenario():
+        lock = tool._switch_lock()
+        await lock.acquire()
+
+        async def setup():
+            await asyncio.sleep(0.1)
+            backend.resident = True
+            lock.release()
+
+        task = asyncio.ensure_future(setup())
+        await tool._await_image_loaded("org/image-model", PICK, 1e18, threading.Event())
+        await task
+
+    asyncio.run(scenario())
+    assert backend.resident
+
+
+def test_wait_reports_a_load_that_stopped(monkeypatch):
+    _preflight_world(monkeypatch)
+    with pytest.raises(RuntimeError, match = "stopped loading"):
+        asyncio.run(tool._await_image_loaded("org/image-model", PICK, 1e18, threading.Event()))
+
+
+def test_put_back_waits_for_the_setup_before_restoring(monkeypatch):
+    _preflight_world(monkeypatch)
+    calls = []
+
+    async def unload_image(subject):
+        calls.append("unload")
+
+    async def restore_chat(swap, subject):
+        calls.append("restore")
+
+    monkeypatch.setattr(tool, "_unload_image", unload_image)
+    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+
+    async def scenario():
+        lock = tool._switch_lock()
+        await lock.acquire()
+        swap = tool._Swap()
+        swap.loaded_image = True
+        put_back = asyncio.ensure_future(tool._put_back(swap, "alice"))
+        await asyncio.sleep(0.1)
+        assert calls == []
+        lock.release()
+        await put_back
+
+    asyncio.run(scenario())
+    assert calls == ["unload", "restore"]
