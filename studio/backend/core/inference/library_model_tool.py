@@ -29,9 +29,7 @@ ERR_NON_GGUF_CHAT = (
     "Error: this image model does not fit beside the chat model, and only a GGUF chat model can be "
     "unloaded and put back mid-chat. Load the image model on the Images page instead."
 )
-ERR_RESTORE = (
-    "The chat model could not be loaded back ({detail}); reload it from the model picker."
-)
+ERR_RESTORE = "The chat model could not be loaded back ({detail}); reload it from the model picker."
 
 _DESCRIPTION = (
     "Render one image with a downloaded image model from the Unsloth Studio library, even when "
@@ -115,7 +113,9 @@ def _listing(task: str) -> str:
         return "Error: no image model is downloaded in Unsloth Studio. Download one on the Images page."
     shown = ", ".join(ids[:_LIST_LIMIT])
     more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
-    return f"Downloaded image models: {shown}{more}. Call use_library_model again with one as model."
+    return (
+        f"Downloaded image models: {shown}{more}. Call use_library_model again with one as model."
+    )
 
 
 def _unload_mode(arguments: dict) -> tuple[bool, Optional[str]]:
@@ -132,7 +132,9 @@ def _detail(exc: BaseException) -> str:
     detail = getattr(exc, "detail", None)
     if isinstance(detail, dict):
         error = detail.get("error")
-        detail = detail.get("message") or (error.get("message") if isinstance(error, dict) else error)
+        detail = detail.get("message") or (
+            error.get("message") if isinstance(error, dict) else error
+        )
     return str(detail or exc)
 
 
@@ -196,13 +198,16 @@ async def _load_image(name: str, pick, subject: str, deadline: float, abort) -> 
 
 async def _unload_image(subject: str) -> None:
     from routes.inference import unload_diffusion_model
-
     await unload_diffusion_model(None, current_subject = subject, via_api_key = False)
 
 
 async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
     """Load the chat model this call evicted back, as the scheduled-task swap does. None on success."""
-    from core.inference.llama_keepwarm import end_in_process_request, loaded_identity, stash_for_reload
+    from core.inference.llama_keepwarm import (
+        end_in_process_request,
+        loaded_identity,
+        stash_for_reload,
+    )
     from core.scheduled_tasks.scheduler import _producer_request
     from routes.inference import (
         _RELOAD_ONLY_MODEL,
@@ -227,7 +232,9 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
     return None if restored else "it did not come back up"
 
 
-async def _swap_and_render(arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float):
+async def _swap_and_render(
+    arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float
+):
     from core.inference.media_model_index import IMAGE_TASK, resolve_local_media_model
     from utils.multi_model_settings import multi_model_mode_for_request
 
@@ -275,7 +282,6 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
         keeps_chat = await asyncio.to_thread(media_load_keeps_chat, DIFFUSION)
         if swap.chat_identity is None and not keeps_chat:
             from core.inference import get_inference_backend
-
             orchestrator = await asyncio.to_thread(get_inference_backend)
             if getattr(orchestrator, "active_model_name", None):
                 return ERR_NON_GGUF_CHAT
@@ -379,7 +385,9 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     )
     if note:
         text += " " + note
-    return text + "\n__FILES__:" + json.dumps([saved]) + "\n__IMAGES__:" + json.dumps([saved["name"]])
+    return (
+        text + "\n__FILES__:" + json.dumps([saved]) + "\n__IMAGES__:" + json.dumps([saved["name"]])
+    )
 
 
 def run_use_library_model(
@@ -391,7 +399,9 @@ def run_use_library_model(
 ) -> str:
     """Swap in an image model, render one image into ``workdir``, swap back; always a string."""
     try:
-        return _run(arguments if isinstance(arguments, dict) else {}, workdir, cancel_event, timeout)
+        return _run(
+            arguments if isinstance(arguments, dict) else {}, workdir, cancel_event, timeout
+        )
     except Exception as exc:  # noqa: BLE001 - a tool result, never a crashed turn
         logger.warning("use_library_model failed: %s", exc, exc_info = True)
         return f"Error: use_library_model failed: {exc}"

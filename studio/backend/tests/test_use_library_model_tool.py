@@ -28,7 +28,12 @@ from utils.account_context import OWNER, AccountContext, run_as
 ALICE = AccountContext("a" * 32, "alice")
 PICK = media_model_index.MediaModelPick("org/image-model", "/models/org/image-model")
 CHAT = ("/models/chat.gguf", "Q4_K_M", "org/chat-GGUF")
-STATUS = {"loaded": True, "repo_id": "org/image-model", "family": "z-image", "workflows": ["txt2img"]}
+STATUS = {
+    "loaded": True,
+    "repo_id": "org/image-model",
+    "family": "z-image",
+    "workflows": ["txt2img"],
+}
 
 
 class Backend:
@@ -73,7 +78,9 @@ def world(monkeypatch, server_loop, tmp_path):
         "resolve_local_media_model",
         lambda name, task: PICK if name == "org/image-model" else None,
     )
-    monkeypatch.setattr(media_model_index, "available_media_model_ids", lambda task: ["org/image-model"])
+    monkeypatch.setattr(
+        media_model_index, "available_media_model_ids", lambda task: ["org/image-model"]
+    )
     monkeypatch.setattr(
         media_model_index, "satisfied_by", lambda status, name, pick: bool(status.get("loaded"))
     )
@@ -82,7 +89,9 @@ def world(monkeypatch, server_loop, tmp_path):
     monkeypatch.setattr(llama_keepwarm, "launch_to_replay", lambda backend = None: {"kwargs": {}})
     monkeypatch.setattr(ensure_model, "media_load_keeps_chat", lambda owner: state.fits_beside)
     monkeypatch.setattr(
-        media_chat_tools, "media_chat_status", lambda task: STATUS if state.backend.resident else None
+        media_chat_tools,
+        "media_chat_status",
+        lambda task: STATUS if state.backend.resident else None,
     )
 
     async def load_image(name, pick, subject, deadline, abort):
@@ -271,7 +280,14 @@ def modes(world, monkeypatch):
 
 @pytest.mark.parametrize(
     "value, mode",
-    [("true", "off"), (True, "off"), ("auto", "fit"), ("AUTO", "fit"), ("false", "always"), (False, "always")],
+    [
+        ("true", "off"),
+        (True, "off"),
+        ("auto", "fit"),
+        ("AUTO", "fit"),
+        ("false", "always"),
+        (False, "always"),
+    ],
 )
 def test_unload_chat_model_runs_the_load_under_the_matching_mode(world, modes, value, mode):
     world.fits_beside = mode != "off"
@@ -286,38 +302,47 @@ def test_omitted_unload_chat_model_follows_the_setting(world, modes):
 
 def test_the_override_ends_with_the_call(world, modes):
     from utils.multi_model_settings import get_multi_model_mode
-
     _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "true"})
     assert get_multi_model_mode() == "setting"
 
 
 def test_an_invalid_unload_chat_model_is_refused_before_anything_loads(world):
-    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "maybe"})
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "maybe"}
+    )
     assert result == tool.ERR_UNLOAD_ARG
     assert world.calls == []
 
 
 def test_unload_true_says_the_chat_model_was_unloaded_and_put_back(world):
-    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "true"})
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "true"}
+    )
     assert "The chat model was unloaded for this image and loaded back." in result
     assert world.chat == CHAT
 
 
 def test_keep_that_fits_leaves_the_chat_model_loaded_throughout(world):
     world.fits_beside = True
-    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"}
+    )
     assert "The chat model stayed loaded beside the image model." in result
     assert [c[0] for c in world.calls] == ["load", "generate", "unload", "restore"]
     assert world.chat == CHAT
 
 
 def test_keep_that_does_not_fit_is_refused_and_loads_nothing(world):
-    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"}
+    )
     assert result.startswith("Error: 'org/image-model' does not fit beside the chat model")
     assert [c[0] for c in world.calls] == ["restore"]
     assert world.chat == CHAT and not world.backend.resident
 
 
 def test_the_schema_offers_the_three_choices():
-    prop = tool.use_library_model_schema()["function"]["parameters"]["properties"]["unload_chat_model"]
+    prop = tool.use_library_model_schema()["function"]["parameters"]["properties"][
+        "unload_chat_model"
+    ]
     assert prop["enum"] == ["auto", "true", "false"]
