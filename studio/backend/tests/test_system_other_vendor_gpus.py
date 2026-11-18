@@ -267,3 +267,19 @@ def test_vulkan_rows_carry_no_vendor_tags():
     from utils.hardware import tag_gpu_vendor
     rows = [{"index": 0, "index_kind": "vulkan", "name": "Vulkan0"}]
     assert tag_gpu_vendor(rows, "vulkan") == rows
+
+
+@pytest.mark.parametrize(
+    "platform, expected", [("linux", {"nvidia"}), ("win32", {"nvidia", "amd"})]
+)
+def test_an_emptied_rocr_mask_hides_amd_only_where_rocr_exists(monkeypatch, platform, expected):
+    """Windows HIP has no ROCr layer, so ROCR_VISIBLE_DEVICES cannot hide its cards there."""
+    import utils.llama_cpp_path_settings as ps
+
+    for name in _MASKS:
+        monkeypatch.delenv(name, raising = False)
+    monkeypatch.setenv("ROCR_VISIBLE_DEVICES", "")
+    monkeypatch.setattr(ps.sys, "platform", platform)
+    monkeypatch.setattr(ps, "host_gpu_vendors", lambda: {"nvidia", "amd"})
+
+    assert ps.reachable_gpu_vendors() == expected

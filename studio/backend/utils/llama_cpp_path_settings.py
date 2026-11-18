@@ -136,9 +136,17 @@ def _mask_hides_all(*names: str) -> bool:
 def _amd_mask_hides_all() -> bool:
     """HIP_ and ROCR_VISIBLE_DEVICES stack (ROCR filters the agents HIP then indexes), so an
     empty one at either layer hides everything; CUDA_VISIBLE_DEVICES stands in only when
-    neither is set (_active_gpu_visibility_mask)."""
-    if any(n in os.environ for n in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES")):
-        return _mask_hides_all("HIP_VISIBLE_DEVICES") or _mask_hides_all("ROCR_VISIBLE_DEVICES")
+    neither is set (_active_gpu_visibility_mask). Windows HIP has no ROCr layer, so ROCR_ is ignored there."""
+    hip_masks = (
+        ("HIP_VISIBLE_DEVICES",)
+        if sys.platform == "win32"
+        else (
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+        )
+    )
+    if any(n in os.environ for n in hip_masks):
+        return any(_mask_hides_all(n) for n in hip_masks)
     return _mask_hides_all("CUDA_VISIBLE_DEVICES")
 
 
