@@ -5291,6 +5291,79 @@ def test_cached_flash_next_quant_needs_managed_mtp_before_it_is_downloaded(
     assert after.variants[0].pending_drafter_size_bytes == 0
 
 
+@pytest.mark.parametrize("cache_case", ["same-snapshot", "other-snapshot", "undersized-drafter"])
+def test_a_repo_that_switches_mtp_drafter_offers_an_update_not_a_partial(
+    monkeypatch, tmp_path, cache_case
+):
+    """A quant whose snapshot holds the drafter its revision planned is an update when the repo moves to another."""
+    with gguf_variants._VARIANT_HASH_LOCK:
+        gguf_variants._VARIANT_REQUIREMENT_CACHE.clear()
+
+    async def _run_inline(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    repo_id = "unsloth/Qwen3.8-Flash-Next-GGUF"
+    snapshots_dir = tmp_path / "cache" / "models--unsloth--Qwen3.8-Flash-Next-GGUF" / "snapshots"
+    snapshot = snapshots_dir / "rev0"
+    snapshot.mkdir(parents = True)
+    main_name = "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf"
+    old_mtp = "MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf"
+    new_mtp = "mtp-Qwen3.8-Flash-Next-Q8_0.gguf"
+    (snapshot / main_name).parent.mkdir(parents = True)
+    (snapshot / main_name).write_bytes(b"m" * 100)
+    drafter_home = snapshot if cache_case != "other-snapshot" else snapshots_dir / "rev1"
+    (drafter_home / old_mtp).parent.mkdir(parents = True)
+    (drafter_home / old_mtp).write_bytes(b"d" * (15 if cache_case == "undersized-drafter" else 30))
+    siblings = [
+        _sibling(main_name, 100, "main"),
+        _sibling(old_mtp, 30, "old-mtp"),
+        _sibling("MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf", 40, "nested-q8"),
+        _sibling(new_mtp, 40, "root-q8"),
+    ]
+    monkeypatch.setattr(
+        gguf_variants,
+        "_local_main_gguf_blobs_by_quant",
+        lambda *_args: {"ud-iq4_xs": {main_name: {"main"}, old_mtp: {"old-mtp"}}},
+    )
+    monkeypatch.setattr(state_dir, "cache_root", lambda: tmp_path / "state")
+    monkeypatch.setattr(gguf_variants.asyncio, "to_thread", _run_inline)
+    monkeypatch.setattr(
+        gguf_variants,
+        "list_gguf_variants",
+        lambda *_args, **_kwargs: (
+            [
+                SimpleNamespace(
+                    filename = main_name, quant = "UD-IQ4_XS", display_label = None, size_bytes = 100
+                )
+            ],
+            False,
+            siblings,
+        ),
+    )
+    monkeypatch.setattr(
+        gguf_variants,
+        "iter_hf_cache_snapshots",
+        lambda _repo_id, root = None: sorted(snapshots_dir.iterdir()),
+    )
+    monkeypatch.setattr(
+        gguf_variants.download_registry, "incomplete_blob_hashes", lambda *_a, **_k: set()
+    )
+
+    variant = asyncio.run(gguf_variants.get_gguf_variants_response(repo_id)).variants[0]
+    # The Update action names the new drafter as the transfer either way.
+    assert variant.pending_drafter_filename == new_mtp
+    assert variant.pending_drafter_size_bytes == 40
+    if cache_case == "same-snapshot":
+        assert variant.downloaded is True
+        assert variant.partial is False
+        assert variant.update_available is True
+    else:
+        # Nothing the loader can open beside the main file: it must still go through the manager.
+        assert variant.downloaded is False
+        assert variant.partial is True
+        assert variant.update_available is False
+
+
 def test_a_cached_quant_missing_only_its_projector_stays_listed(monkeypatch, tmp_path):
     """Keep cached weights visible when their required projector is missing."""
     with gguf_variants._VARIANT_HASH_LOCK:

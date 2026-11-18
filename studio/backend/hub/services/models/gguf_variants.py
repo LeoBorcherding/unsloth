@@ -20,6 +20,7 @@ import weakref
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NamedTuple, Optional
 
 from fastapi import HTTPException
@@ -75,8 +76,10 @@ from hub.utils.gguf_plan import (
     is_main_gguf_variant_path,
     plan_from_expected_files,
     precision_folder_plans,
+    preferred_mtp_sibling,
     sibling_sha256,
 )
+from utils.gguf_names import drafter_path_kind
 from utils.paths.path_utils import is_appledouble_metadata
 
 logger = get_logger(__name__)
@@ -2389,6 +2392,39 @@ async def get_gguf_variants_answer(
                     return missing[0]
             return None
 
+        listed_sizes = {
+            str(s.rfilename).replace("\\", "/").lower(): max(0, int(getattr(s, "size", 0) or 0))
+            for s in siblings or ()
+            if getattr(s, "rfilename", None)
+        }
+
+        def _snapshot_has_its_own_mtp(by_filename: dict[str, int]) -> bool:
+            """The MTP head this snapshot's own files plan, whole: the loader opens it, nothing inline."""
+            picked = preferred_mtp_sibling(
+                [SimpleNamespace(rfilename = name) for name in by_filename]
+            )
+            name = getattr(picked, "rfilename", None)
+            return name is not None and by_filename[name] >= listed_sizes.get(name, 1) * 0.99
+
+        def _main_with_superseded_mtp(requirement: _GgufVariantRequirement) -> bool:
+            """Main cached beside a whole MTP head the repo has since replaced: an update, not a partial."""
+            for by_filename, _by_quant in cached_snapshots:
+                missing = [
+                    file
+                    for file in _non_mmproj_companions(requirement)
+                    if not _snapshot_has_companions(by_filename, (file,))
+                ]
+                if (
+                    missing
+                    and all(drafter_path_kind(file.path) == "mtp" for file in missing)
+                    and _filenames_cached_in_snapshot(
+                        by_filename, requirement.main_filenames, requirement.main_size_bytes
+                    )
+                    and _snapshot_has_its_own_mtp(by_filename)
+                ):
+                    return True
+            return False
+
         def _is_fully_downloaded(variant) -> bool:
             quant = variant.quant.lower()
             requirement = requirements_by_quant.get(quant)
@@ -2399,6 +2435,15 @@ async def get_gguf_variants_answer(
             if (
                 requirement is not None
                 and _main_and_companions_ready(requirement)
+                and (
+                    not requirement.mmproj_filenames
+                    or _any_mmproj_cached(requirement.mmproj_filenames)
+                )
+            ):
+                return True
+            if (
+                requirement is not None
+                and _main_with_superseded_mtp(requirement)
                 and (
                     not requirement.mmproj_filenames
                     or _any_mmproj_cached(requirement.mmproj_filenames)
