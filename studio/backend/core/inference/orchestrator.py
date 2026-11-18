@@ -7,6 +7,7 @@ switching between models needing different transformers versions (e.g. GLM-4.7-F
 Qwen needs 4.57.x), the old subprocess is killed and a new one spawned with the correct version.
 Pattern follows core/training/training.py."""
 
+from core.inference.tool_budget import DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE
 import atexit
 import contextvars
 import base64
@@ -2617,7 +2618,9 @@ class InferenceOrchestrator:
                     failure = AudioCppFailure.from_payload(resp.get("failure"))
                     if failure is not None:
                         raise AudioCppFailureError(error, failure)
-                    raise Exception(error)
+                    load_error = Exception(error)
+                    load_error.error_kind = resp.get("error_kind")
+                    raise load_error
 
         except Exception as exc:
             self.loading_models.discard(model_name)
@@ -3677,7 +3680,7 @@ class InferenceOrchestrator:
         reasoning_effort: Optional[str] = None,
         preserve_thinking: Optional[bool] = None,
         continue_final_message: bool = False,
-        max_tool_iterations: int = 25,
+        max_tool_iterations: int = DEFAULT_MAX_TOOL_CALLS_PER_MESSAGE,
         auto_heal_tool_calls: bool = True,
         nudge_tool_calls: Optional[bool] = None,
         tool_call_timeout: int = 300,
