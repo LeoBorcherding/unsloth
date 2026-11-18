@@ -582,3 +582,31 @@ def test_the_listing_shows_image_and_video_models(world, video):
         "Downloaded image models: org/image-model. Downloaded video models: org/video-model. "
         "Call use_library_model again with one as model."
     )
+
+
+def test_another_gguf_of_the_same_repo_is_not_taken_for_the_prior_model(world, monkeypatch):
+    class Repo:
+        def __init__(self):
+            self.file = "model-Q8_0.gguf"
+            self.resident = True
+
+        def status(self):
+            return {"loaded": True, "repo_id": "org/image-model", "gguf_filename": self.file}
+
+        def loading_repo_ids(self):
+            return []
+
+    world.backend = Repo()
+    world.fits_beside = True
+    monkeypatch.setattr(
+        media_model_index,
+        "satisfied_by",
+        lambda status, name, pick: status.get("gguf_filename") == "model-Q4_K_M.gguf",
+    )
+
+    async def load_other_file(owner, name, pick, subject, deadline, abort):
+        world.backend.file = "model-Q4_K_M.gguf"
+
+    monkeypatch.setattr(tool, "_load_media", load_other_file)
+    _call(world, {"model": "org/image-model", "prompt": "a fox"})
+    assert ("unload",) in world.calls

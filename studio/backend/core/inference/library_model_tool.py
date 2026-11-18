@@ -178,8 +178,14 @@ class _Swap:
         self.note = ""
 
 
-def _resident_media(status) -> Optional[str]:
-    return status.get("repo_id") if isinstance(status, dict) and status.get("loaded") else None
+_IDENTITY_KEYS = ("repo_id", "gguf_filename", "gguf_variant", "h3_task")
+
+
+def _resident_media(status) -> Optional[tuple]:
+    """Everything satisfied_by tells models apart by: two GGUF files of one repo are two models."""
+    if not isinstance(status, dict) or not status.get("loaded") or not status.get("repo_id"):
+        return None
+    return tuple(str(status.get(key) or "").strip() for key in _IDENTITY_KEYS)
 
 
 async def _prior_still_resident(swap: "_Swap") -> bool:
