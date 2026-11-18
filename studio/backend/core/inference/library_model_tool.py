@@ -176,7 +176,9 @@ async def _prior_still_resident(swap: "_Swap") -> bool:
 
     if swap.prior_image is None:
         return False
-    return _resident_image(await asyncio.to_thread(backend_for(DIFFUSION).status)) == swap.prior_image
+    return (
+        _resident_image(await asyncio.to_thread(backend_for(DIFFUSION).status)) == swap.prior_image
+    )
 
 
 def _switch_lock():
