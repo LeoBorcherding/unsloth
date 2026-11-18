@@ -465,6 +465,8 @@ def test_a_refused_switch_leaves_the_resident_image_model_loaded(world, monkeypa
     from core.inference.media_switch_errors import refuse
 
     class Other:
+        resident = True
+
         def status(self):
             return {"loaded": True, "repo_id": "org/other-model"}
 
@@ -472,10 +474,17 @@ def test_a_refused_switch_leaves_the_resident_image_model_loaded(world, monkeypa
             return []
 
     world.backend = Other()
+    world.fits_beside = True
+    monkeypatch.setattr(
+        media_model_index,
+        "satisfied_by",
+        lambda status, name, pick: status.get("repo_id") == "org/image-model",
+    )
 
     async def refused(name, pick, subject, deadline, abort):
         raise refuse("no room", status_code = 409, openai_errors = True, code = "multi_model_always")
 
     monkeypatch.setattr(tool, "_load_image", refused)
-    _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    assert "does not fit beside" in result
     assert ("unload",) not in world.calls
