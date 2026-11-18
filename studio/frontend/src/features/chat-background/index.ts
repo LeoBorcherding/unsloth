@@ -16,6 +16,7 @@ export {
   beginBackgroundUpload,
   finishBackgroundUpload,
   hydrateBackground,
+  patchBackground,
   resetChatBackground,
   useBackgroundStore,
 } from "./storage";

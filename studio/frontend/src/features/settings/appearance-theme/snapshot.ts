@@ -6,17 +6,20 @@ import {
   finishBackgroundUpload,
   hydrateBackground,
   nativeMaterialAvailable,
+  patchBackground,
   resetChatBackground,
   sanitizeAdjustments,
   uploadBackgroundImage,
   useBackgroundStore,
   useMaterialStore,
 } from "@/features/chat-background";
+import { getSidebarPinned, setSidebarPinned } from "@/hooks/use-sidebar-pin";
 import { decodeBase64Bytes } from "@/lib/base64-bytes";
 import { blobToDataUrl } from "@/lib/image-fit";
 import { downloadFile, isDownloadCancelled } from "@/lib/native-files";
 import { useAppearanceCustomStore } from "../stores/appearance-custom-store.ts";
 import { getPalette, setPalette } from "../stores/theme-store.ts";
+import type { BackgroundAdjustments } from "../../chat-background/model.ts";
 import {
   type AppearanceSnapshot,
   type AppearanceTheme,
@@ -41,6 +44,7 @@ export function readAppearanceSnapshot(): AppearanceSnapshot {
     palette: getPalette(),
     customization: useAppearanceCustomStore.getState().customization,
     glass: { material, style, strength, lens, menus, scope },
+    sidebarPinned: getSidebarPinned(),
     background: background
       ? { adjustments: sanitizeAdjustments(background), blob: background.blob }
       : null,
@@ -67,6 +71,8 @@ export function applyAppearanceSnapshot(next: AppearanceTarget): void {
     scope,
     nativeFailed: false,
   });
+  // Only on a change, so an unchanged value never pins the sidebar against the window width.
+  setSidebarPinned(next.sidebarPinned);
 }
 
 /** Off macOS, native-only glass would render solid while its switch reads on, so use Liquid 3D. */
@@ -95,10 +101,15 @@ export function restoreBackground(
 }
 
 /** Goes through the normal upload checks and re-encode; resolves false when it can't. */
-export async function applyThemeBackground({
-  dataUrl,
-  adjustments,
-}: ThemeBackground): Promise<boolean> {
+export async function applyThemeBackground(
+  background: ThemeBackground | { adjustments: BackgroundAdjustments },
+): Promise<boolean> {
+  if (!("dataUrl" in background)) {
+    if (!useBackgroundStore.getState().value) return false;
+    patchBackground(background.adjustments);
+    return true;
+  }
+  const { dataUrl, adjustments } = background;
   const comma = dataUrl.indexOf(",");
   try {
     const blob = new Blob([decodeBase64Bytes(dataUrl.slice(comma + 1))], {

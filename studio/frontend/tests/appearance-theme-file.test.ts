@@ -20,6 +20,9 @@ import type {
 const { DEFAULT_CUSTOMIZATION, sanitizeCustomization } = await import(
   "../src/features/settings/stores/appearance-custom-store.ts"
 );
+const { sanitizeAdjustments } = await import(
+  "../src/features/chat-background/model.ts"
+);
 const {
   captureTheme,
   parseThemeFile,
@@ -43,6 +46,7 @@ const BASE: Snapshot = {
     menus: true,
     scope: "all",
   },
+  sidebarPinned: true,
   background: null,
 };
 const withLook = (look: Record<string, unknown>): Snapshot => ({
@@ -247,6 +251,7 @@ test("embedded fonts the browser cannot load are dropped with their selections",
     ),
     {
       "@/features/chat-background": {},
+      "@/hooks/use-sidebar-pin": {},
       "@/lib/base64-bytes": {},
       "@/lib/image-fit": {},
       "@/lib/native-files": {},
@@ -313,4 +318,126 @@ test("glass scope round-trips and counts as a glass change", () => {
   );
   assert.equal(plan.glass.scope, "newChat");
   assert.deepEqual(plan.changes, ["glass"]);
+});
+
+test("the remembered glass style travels with glass off; a bad one is replaced", () => {
+  const off = { ...BASE, glass: { ...BASE.glass, style: "liquid-3d" as const } };
+  const theme = roundTrip(off);
+  assert.equal(theme.glass.style, "liquid-3d");
+  const plan = apply(BASE, theme);
+  assert.equal(plan.glass.style, "liquid-3d");
+  assert.deepEqual(plan.changes, ["glass"]);
+
+  for (const style of ["solid", "neon", 3]) {
+    const result = parse(file({ glass: { material: "solid", style } }));
+    assert.equal(result.theme.glass.style, null);
+    assert.deepEqual(result.warnings, [{ kind: "invalid", path: "glass.style" }]);
+    assert.equal(apply(BASE, result.theme).glass.style, "frosted");
+  }
+});
+
+test("compact sidebar travels with the layout and applies only when asked", () => {
+  const unpinned = { ...BASE, sidebarPinned: false };
+  const text = JSON.stringify(
+    captureTheme(unpinned, { name: "x", includeLayout: false, includeAssets: false }),
+  );
+  assert.equal(text.includes("sidebarPinned"), false);
+  const theme = roundTrip(unpinned);
+  assert.equal(theme.sidebarPinned, false);
+  assert.equal(apply(BASE, theme, false).sidebarPinned, true);
+  const plan = apply(BASE, theme);
+  assert.equal(plan.sidebarPinned, false);
+  assert.deepEqual(plan.changes, ["layout"]);
+
+  const bad = parse(file({ layout: { sidebarPinned: "yes" } }));
+  assert.equal(bad.theme.sidebarPinned, null);
+  assert.deepEqual(bad.warnings, [
+    { kind: "invalid", path: "layout.sidebarPinned" },
+  ]);
+  assert.equal(apply(unpinned, bad.theme).sidebarPinned, false);
+});
+
+const wallpaper = (adjustments: Record<string, unknown>): Snapshot => ({
+  ...BASE,
+  background: {
+    adjustments: sanitizeAdjustments(adjustments),
+    blob: new Blob(["x"]),
+  },
+});
+
+test("wallpaper adjustments travel without the image and restyle the wallpaper here", () => {
+  const theirs = wallpaper({
+    blur: 12,
+    visibility: 35,
+    effect: "Dither",
+    scope: "all",
+    glassFade: true,
+    position: "10% 90%",
+    zoom: 200,
+    sizing: "contain",
+  });
+  const exported = captureTheme(theirs, {
+    name: "x",
+    includeLayout: false,
+    includeAssets: false,
+  });
+  assert.equal("background" in exported, false);
+  const look = exported.backgroundLook as Record<string, unknown>;
+  assert.deepEqual(
+    [look.blur, look.visibility, look.effect, look.scope, look.glassFade],
+    [12, 35, "Dither", "all", true],
+  );
+  // Framing belongs to one image, so it never leaves the device.
+  for (const key of ["position", "zoom", "sizing"])
+    assert.equal(key in look, false);
+
+  const theme = parse(JSON.stringify(exported)).theme;
+  const mine = wallpaper({ position: "70% 20%", zoom: 150 });
+  const plan = apply(mine, theme);
+  assert.deepEqual(plan.changes, ["background"]);
+  assert.ok(plan.background !== "keep" && !("dataUrl" in plan.background));
+  const applied = (plan.background as { adjustments: Record<string, unknown> })
+    .adjustments;
+  assert.deepEqual(
+    [applied.blur, applied.visibility, applied.position, applied.zoom],
+    [12, 35, "70% 20%", 150],
+  );
+  // No wallpaper here: nothing to restyle.
+  assert.equal(apply(BASE, theme).background, "keep");
+});
+
+test("wallpaper adjustments are clamped and unknown keys warned on import", () => {
+  const result = parse(
+    file({
+      backgroundLook: { blur: 99, visibility: -5, effect: "Glitch", zoom: 300 },
+    }),
+  );
+  const look = result.theme.backgroundLook!;
+  assert.deepEqual(
+    [look.blur, look.visibility, look.effect],
+    [20, 0, "None"],
+  );
+  assert.deepEqual(
+    result.warnings.map((w) => ("path" in w ? w.path : w.kind)).sort(),
+    [
+      "backgroundLook.blur",
+      "backgroundLook.effect",
+      "backgroundLook.visibility",
+      "backgroundLook.zoom",
+    ],
+  );
+});
+
+test("a file that carries the image does not repeat its adjustments", () => {
+  const exported = captureTheme(wallpaper({ blur: 4 }), {
+    name: "x",
+    includeLayout: false,
+    includeAssets: true,
+    backgroundDataUrl: "data:image/png;base64,QUJD",
+  });
+  assert.equal("backgroundLook" in exported, false);
+  assert.equal(
+    (exported.background as { adjustments: { blur: number } }).adjustments.blur,
+    4,
+  );
 });

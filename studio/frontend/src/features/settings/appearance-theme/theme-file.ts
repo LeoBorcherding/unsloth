@@ -89,15 +89,38 @@ export type ThemeBackground = {
   dataUrl: string;
   adjustments: BackgroundAdjustments;
 };
+/** Wallpaper adjustments that read the same on any image; position, zoom and sizing frame one image. */
+export const LOOK_ADJUSTMENTS = [
+  "scope",
+  "effect",
+  "visibility",
+  "conversation",
+  "blur",
+  "fade",
+  "outline",
+  "glassLightVisibility",
+  "glassDarkVisibility",
+  "glassFade",
+] as const satisfies readonly (keyof BackgroundAdjustments)[];
+export type LookAdjustments = Pick<
+  BackgroundAdjustments,
+  (typeof LOOK_ADJUSTMENTS)[number]
+>;
+type GlassStyle = Exclude<WindowMaterial, "solid">;
 export type AppearanceTheme = {
   name: string;
   palette: ColorThemeId;
   /** Defaults plus the file's look (and layout, when `hasLayout`) fields. */
   customization: AppearanceCustomization;
   hasLayout: boolean;
-  glass: GlassSettings;
+  /** Compact sidebar; null when the file has no layout or leaves it out. */
+  sidebarPinned: boolean | null;
+  /** The glass look the on/off switch remembers; null keeps the current one. */
+  glass: GlassSettings & { style: GlassStyle | null };
   fonts: ImportedFont[] | null;
   background: ThemeBackground | null;
+  /** For a wallpaper already on this device, when the file carries no image. */
+  backgroundLook: LookAdjustments | null;
 };
 export type ThemeWarning =
   | { kind: "newerVersion" | "backgroundSkipped" }
@@ -112,7 +135,8 @@ export type ThemeParseResult =
 export type AppearanceSnapshot = {
   palette: ColorThemeId;
   customization: AppearanceCustomization;
-  glass: GlassSettings & { style: Exclude<WindowMaterial, "solid"> };
+  glass: GlassSettings & { style: GlassStyle };
+  sidebarPinned: boolean;
   background: { adjustments: BackgroundAdjustments; blob: Blob } | null;
 };
 
@@ -134,6 +158,10 @@ const kept = (sanitized: unknown, given: unknown): boolean =>
     ? Object.keys(given).every((key) => kept(own(sanitized, key), given[key]))
     : JSON.stringify(sanitized)?.toLowerCase() ===
       JSON.stringify(given)?.toLowerCase();
+const pickAdjustments = (a: BackgroundAdjustments): LookAdjustments =>
+  Object.fromEntries(
+    LOOK_ADJUSTMENTS.map((key) => [key, a[key]]),
+  ) as LookAdjustments;
 const pick = (c: AppearanceCustomization, fields: readonly Field[]) =>
   Object.fromEntries(
     fields.map((field) => [field, c[field]]),
@@ -171,16 +199,22 @@ export function captureTheme(
     for (const field of FONT_FIELDS)
       if (omitted.has(fontKey(look[field]))) look[field] = null;
   }
-  const { material, strength, lens, menus, scope } = snapshot.glass;
+  const { material, style, strength, lens, menus, scope } = snapshot.glass;
   const file: Dict = {
     kind: THEME_FILE_KIND,
     schemaVersion: THEME_SCHEMA_VERSION,
     name: cleanThemeName(opts.name) || "Theme",
     palette: snapshot.palette,
     look,
-    glass: { material, strength, lens, menus, scope },
+    glass: { material, style, strength, lens, menus, scope },
   };
-  if (opts.includeLayout) file.layout = pick(c, LAYOUT_FIELDS);
+  if (opts.includeLayout)
+    file.layout = {
+      ...pick(c, LAYOUT_FIELDS),
+      sidebarPinned: snapshot.sidebarPinned,
+    };
+  if (snapshot.background && !(opts.includeAssets && opts.backgroundDataUrl))
+    file.backgroundLook = pickAdjustments(snapshot.background.adjustments);
   if (opts.includeAssets && c.importedFonts.length > 0)
     file.fonts = c.importedFonts;
   if (opts.includeAssets && opts.backgroundDataUrl && snapshot.background) {
@@ -268,6 +302,7 @@ export function parseThemeFile(text: string): ThemeParseResult {
     "layout",
     "fonts",
     "background",
+    "backgroundLook",
   ]);
 
   const rawName = own(root, "name");
@@ -292,7 +327,16 @@ export function parseThemeFile(text: string): ThemeParseResult {
     raw[field] = value;
     given.push([field, `look.${field}`]);
   }
-  const layout = object(own(root, "layout"), "layout", LAYOUT_FIELDS);
+  const layout = object(own(root, "layout"), "layout", [
+    ...LAYOUT_FIELDS,
+    "sidebarPinned",
+  ]);
+  const sidebarPinned = read<boolean | null>(
+    own(layout, "sidebarPinned"),
+    null,
+    (v) => (typeof v === "boolean" ? v : null),
+    "layout.sidebarPinned",
+  );
   // Every layout field is copied, absent ones too, so sidebarNavAuto follows sidebarNav.
   for (const field of layout ? LAYOUT_FIELDS : []) {
     raw[field] = own(layout, field);
@@ -317,6 +361,7 @@ export function parseThemeFile(text: string): ThemeParseResult {
 
   const glassIn = object(own(root, "glass"), "glass", [
     "material",
+    "style",
     "strength",
     "lens",
     "menus",
@@ -333,12 +378,21 @@ export function parseThemeFile(text: string): ThemeParseResult {
       (v) => sanitizeStrength(v, DEFAULT_GLASS.strength[mode]),
       `glass.strength.${mode}`,
     );
-  const glass: GlassSettings = {
+  const glass: AppearanceTheme["glass"] = {
     material: read(
       own(glassIn, "material"),
       DEFAULT_GLASS.material,
       sanitizeMaterial,
       "glass.material",
+    ),
+    style: read<GlassStyle | null>(
+      own(glassIn, "style"),
+      null,
+      (v) => {
+        const style = sanitizeMaterial(v);
+        return style === "solid" ? null : style;
+      },
+      "glass.style",
     ),
     strength: { light: strength("light"), dark: strength("dark") },
     lens: read(
@@ -382,6 +436,21 @@ export function parseThemeFile(text: string): ThemeParseResult {
   } else if (own(root, "background") != null) {
     warn({ kind: "backgroundSkipped" });
   }
+  const lookIn = object(
+    own(root, "backgroundLook"),
+    "backgroundLook",
+    LOOK_ADJUSTMENTS,
+  );
+  const backgroundLook = lookIn
+    ? pickAdjustments(sanitizeAdjustments(lookIn))
+    : null;
+  if (lookIn && backgroundLook) {
+    for (const key of LOOK_ADJUSTMENTS) {
+      const value = own(lookIn, key);
+      if (value != null && !kept(backgroundLook[key], value))
+        warn({ kind: "invalid", path: `backgroundLook.${key}` });
+    }
+  }
 
   return {
     ok: true,
@@ -390,9 +459,11 @@ export function parseThemeFile(text: string): ThemeParseResult {
       palette,
       customization: { ...customization, importedFonts: themeFonts },
       hasLayout: layout !== null,
+      sidebarPinned,
       glass,
       fonts: fonts ? themeFonts : null,
       background,
+      backgroundLook,
     },
     warnings:
       hidden > 0 ? [...warnings, { kind: "more", count: hidden }] : warnings,
@@ -410,7 +481,8 @@ function localFamilies(c: AppearanceCustomization): Set<string> {
 }
 
 export type ThemeApplyPlan = Omit<AppearanceSnapshot, "background"> & {
-  background: "keep" | ThemeBackground;
+  /** `adjustments` alone restyles the wallpaper already on this device. */
+  background: "keep" | ThemeBackground | { adjustments: BackgroundAdjustments };
   changes: ThemeChange[];
   /** Current fonts that no longer fit under the imported-font cap. */
   droppedFonts: string[];
@@ -464,13 +536,27 @@ export function planThemeApply(
     else if (imported.has(key) && !local.has(key)) customization[field] = null;
   }
 
-  const { material } = theme.glass;
+  const { style: savedStyle, ...glassSettings } = theme.glass;
+  const { material } = glassSettings;
   const glass = {
-    ...theme.glass,
-    style: material === "solid" ? current.glass.style : material,
+    ...glassSettings,
+    style:
+      material === "solid" ? (savedStyle ?? current.glass.style) : material,
   };
-  const background =
-    opts.applyAssets && theme.background ? theme.background : "keep";
+  const sidebarPinned =
+    opts.applyLayout && theme.sidebarPinned !== null
+      ? theme.sidebarPinned
+      : current.sidebarPinned;
+  const restyled =
+    current.background && theme.backgroundLook
+      ? { ...current.background.adjustments, ...theme.backgroundLook }
+      : null;
+  const background: ThemeApplyPlan["background"] =
+    opts.applyAssets && theme.background
+      ? theme.background
+      : restyled && !same(restyled, current.background?.adjustments)
+        ? { adjustments: restyled }
+        : "keep";
   const changed = new Set<ThemeChange>();
   if (current.palette !== theme.palette) changed.add("palette");
   for (const field of Object.keys(FIELD_GROUP) as Field[]) {
@@ -481,7 +567,8 @@ export function planThemeApply(
     )
       changed.add(group);
   }
-  const glassKey = (g: GlassSettings) =>
+  if (sidebarPinned !== current.sidebarPinned) changed.add("layout");
+  const glassKey = (g: AppearanceSnapshot["glass"]) =>
     JSON.stringify([
       g.material,
       g.strength.light,
@@ -489,6 +576,7 @@ export function planThemeApply(
       g.lens,
       g.menus,
       g.scope,
+      g.style,
     ]);
   if (glassKey(current.glass) !== glassKey(glass)) changed.add("glass");
   if (background !== "keep") changed.add("background");
@@ -496,6 +584,7 @@ export function planThemeApply(
     palette: theme.palette,
     customization,
     glass,
+    sidebarPinned,
     background,
     changes: THEME_CHANGES.filter((change) => changed.has(change)),
     droppedFonts: merged
