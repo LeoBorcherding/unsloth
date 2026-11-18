@@ -4386,9 +4386,14 @@ def _fail_if_install_damaged(package_name: str = "unsloth") -> None:
     typer.echo("over the top:", err = True)
     # Carry the custom root and the recorded install mode, or the reinstall builds a fresh ~/.unsloth/studio and pulls the whole PyTorch stack. No root argument: recorded_no_torch reads the VENV.
     no_torch = False
+    rocm_requested = False
     try:
         _manifest = _studio_deps.load_install_manifest_module()
         no_torch = _manifest is not None and _manifest.recorded_no_torch() is True
+        rocm_requested = (
+            _manifest is not None
+            and getattr(_manifest, "recorded_rocm_torch_requested", lambda: False)() is True
+        )
     except Exception:
         no_torch = False
     if platform.system() == "Windows":
@@ -4405,6 +4410,8 @@ def _fail_if_install_damaged(package_name: str = "unsloth") -> None:
             env = f"UNSLOTH_STUDIO_HOME={shlex.quote(str(STUDIO_HOME))} "
         if no_torch:
             env += "UNSLOTH_NO_TORCH=1 "
+        elif rocm_requested:
+            env += "UNSLOTH_FORCE_ROCM_TORCH=1 "
         typer.echo(f"  curl -fsSL https://unsloth.ai/install.sh | {env}sh", err = True)
     typer.echo("", err = True)
     # The installer installs only the current requirement sets, so a leftover package is not repaired by the command above.

@@ -2761,6 +2761,14 @@ def _persist_bnb_rocm_version(version: str) -> bool:
     return True
 
 
+def _rocm_torch_request_from_env() -> "bool | None":
+    """UNSLOTH_FORCE_ROCM_TORCH as this run set it; None when unset or blank."""
+    value = (os.environ.get("UNSLOTH_FORCE_ROCM_TORCH") or "").strip().lower()
+    if not value:
+        return None
+    return value in ("1", "true", "yes", "on")
+
+
 def _rocm_torch_explicitly_requested() -> bool:
     """Whether UNSLOTH_FORCE_ROCM_TORCH asked for ROCm torch whatever else the host has.
 
@@ -2768,13 +2776,16 @@ def _rocm_torch_explicitly_requested() -> bool:
     route to its AMD card but an index pin, which names a wheel family rather than a
     preference (#10450). Mirrors UNSLOTH_FORCE_VULKAN; a pin still outranks it. One torch
     install serves one vendor, so this SWAPS the stack: NVIDIA is unavailable while it is set.
+    Unset, the manifest's record of an earlier request answers, so an update keeps it; =0 clears it.
     """
-    return (os.environ.get("UNSLOTH_FORCE_ROCM_TORCH") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    from_env = _rocm_torch_request_from_env()
+    if from_env is not None:
+        return from_env
+    return _RECORDED_ROCM_TORCH_REQUESTED
+
+
+def _rocm_torch_request_is_recorded_only() -> bool:
+    return _rocm_torch_request_from_env() is None and _RECORDED_ROCM_TORCH_REQUESTED
 
 
 def _has_rocm_gpu() -> bool:
@@ -4333,6 +4344,8 @@ def _ensure_cuda_torch(*, probe_only: bool = False) -> "bool | None":
         and not _is_cuda_family_leaf(_pin_family)
         and _forced_rocm_route_is_viable()
     ):
+        if not probe_only and _rocm_torch_request_is_recorded_only():
+            _safe_print(_KEEPING_RECORDED_ROCM_TORCH)
         return
     _cuda_pinned = _explicit_cuda_torch_index_url() is not None or _pin_unusable
     _cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
@@ -4438,8 +4451,8 @@ def _ensure_cuda_torch(*, probe_only: bool = False) -> "bool | None":
     _torch_pkg, _vision_pkg, _audio_pkg = _cuda_repair_torch_specs(index_url, _CUDA_TORCH_PKG_SPEC)
     _safe_print(
         f"   {_why} -- reinstalling CUDA torch from {_strip_index_url_credentials(index_url)}\n"
-        f"   (set UNSLOTH_TORCH_BACKEND=rocm or cpu to keep a deliberate "
-        f"non-CUDA torch)"
+        f"   (set UNSLOTH_FORCE_ROCM_TORCH=1 to keep ROCm torch, or "
+        f"UNSLOTH_TORCH_BACKEND=cpu for a deliberate CPU torch)"
     )
     pip_install(
         "CUDA torch repair",
@@ -5169,6 +5182,16 @@ def _expected_torch_flavor_was_pinned(flavor: str = "") -> bool:
     return bool(_RECORDED_TORCH_TAG_PINNED) and _names_it(
         _flavor_tag_family(_RECORDED_TORCH_TAG or "")
     )
+
+
+def _rocm_torch_request_to_record() -> bool:
+    """Whether to record a deliberate ROCm torch: FORCE (or its record) or a ROCm pin, and ROCm
+    torch is what is resident now. A record whose AMD card is gone fell to CUDA and lapses here."""
+    if NO_TORCH or _rocm_torch_request_from_env() is False:
+        return False
+    if not (_rocm_torch_explicitly_requested() or _expected_torch_flavor_was_pinned("rocm")):
+        return False
+    return _resident_torch_flavor_tag().startswith("rocm")
 
 
 def _flavor_families_this_run_named() -> tuple[str, ...]:
@@ -6603,6 +6626,11 @@ NO_TORCH = _infer_no_torch()
 
 # Read at import: install_python_stack() drops the manifest before its dependency pass.
 _RECORDED_TORCH_TAG = install_manifest.recorded_torch_flavor()
+# Read at import too: the pass drops the manifest before the repairs consult it.
+_RECORDED_ROCM_TORCH_REQUESTED = install_manifest.recorded_rocm_torch_requested()
+_KEEPING_RECORDED_ROCM_TORCH = (
+    "   keeping ROCm torch, recorded at install; UNSLOTH_FORCE_ROCM_TORCH=0 to switch back"
+)
 # setup.ps1 publishes an automatic /cpu the same way as a pinned one.
 _RECORDED_TORCH_TAG_PINNED = install_manifest.recorded_torch_flavor_was_pinned()
 
@@ -12594,6 +12622,7 @@ def install_python_stack() -> int:
             expected_torch_tag_pinned = bool(_recordable_torch_flavor_tag(torch_flavor_tag))
             and _expected_torch_flavor_was_pinned(_recordable_torch_flavor_tag(torch_flavor_tag)),
             woa_torch_index = os.environ.get("UNSLOTH_WOA_SELECTED_TORCH_INDEX"),
+            rocm_torch_requested = _rocm_torch_request_to_record(),
             # Digest the CURRENT REQ_ROOT: the core step may have replaced it.
             extra = {
                 "pass_inputs": {

@@ -1099,6 +1099,24 @@ _UV_MARKER_PREVIOUS=""
 # One flag for both rollbacks so a signal cannot restore half a committed install.
 _STUDIO_INSTALL_COMMITTED=false
 
+# Mirrors install_manifest.recorded_rocm_torch_requested: the key, or a pinned rocm flavor from an
+# older manifest; the parked copy counts. Prints true or false.
+_recorded_rocm_torch_request() {
+    for _rrt_file in "$1/unsloth_install_manifest.json" "$1/unsloth_install_manifest.previous.json"; do
+        [ -f "$_rrt_file" ] || continue
+        _rrt_json=$(tr -d '\n' < "$_rrt_file" 2>/dev/null) || continue
+        if printf '%s' "$_rrt_json" | grep -Eq '"rocm_torch_requested"[[:space:]]*:[[:space:]]*true' \
+           || { printf '%s' "$_rrt_json" | grep -Eq '"expected_torch_tag"[[:space:]]*:[[:space:]]*"[[:space:]]*[Rr][Oo][Cc][Mm]' \
+                && printf '%s' "$_rrt_json" | grep -Eq '"expected_torch_tag_pinned"[[:space:]]*:[[:space:]]*true'; }; then
+            echo true
+        else
+            echo false
+        fi
+        return 0
+    done
+    echo false
+}
+
 _start_studio_venv_replacement() {
     _existing_dir="$1"
     _stamp=$(date +%Y%m%d%H%M%S 2>/dev/null || echo "time")
@@ -4082,6 +4100,8 @@ if [ -x "$VENV_DIR/bin/python" ] || _dir_has_entries "$VENV_DIR"; then
     # _run_bounded the fallback: without version.py it hits `import torch`, which can wedge.
     [ -n "$_PREV_TORCH_VER" ] || _PREV_TORCH_VER=$(_run_bounded "$VENV_DIR/bin/python" -I -c \
         "import torch; print(torch.__version__)" 2>/dev/null | tail -n 1 || true)
+    # Read before the venv moves aside: a ROCm choice made with UNSLOTH_FORCE_ROCM_TORCH or a pin.
+    _ROCM_TORCH_RECORDED=$(_recorded_rocm_torch_request "$VENV_DIR")
     _PREV_PACKAGE_VERSION=$(_dist_version_from_disk "$VENV_DIR" "$PACKAGE_NAME")
     [ -z "$_PREV_PACKAGE_VERSION" ] || substep "found $PACKAGE_NAME $_PREV_PACKAGE_VERSION"
     # New layout already exists — replace only after preserving rollback copy, unless the caller asked for no copy at all, in which case this line would be contradicted by the "discarded" one _start_studio_venv_replacement prints a moment later. install.ps1 varies its twin the same way.
@@ -4400,12 +4420,14 @@ _ensure_rocm_probe_env() {
     fi
 }
 
-# True when the run was told to install ROCm torch even with CUDA usable (#10450).
+# True when the run was told to install ROCm torch even with CUDA usable (#10450). Unset, the
+# previous install's record answers (_ROCM_TORCH_RECORDED); =0 clears it.
 # Mirrors install_python_stack._rocm_torch_explicitly_requested; keep the two in step.
 _rocm_torch_explicitly_requested() {
     case "$(printf '%s' "${UNSLOTH_FORCE_ROCM_TORCH:-}" \
             | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')" in
         1|true|yes|on) return 0 ;;
+        '') [ "${_ROCM_TORCH_RECORDED:-false}" = true ] ;;
         *) return 1 ;;
     esac
 }
@@ -5577,7 +5599,7 @@ get_torch_index_url() {
     # Here too: UNSLOTH_TORCH_BACKEND=cuda would make _ensure_rocm_torch return early (#10450).
     if [ "$_nvidia_detected" -eq 1 ] && _rocm_torch_explicitly_requested && \
        _amd_request_has_a_wheel_route; then
-        echo "[INFO] UNSLOTH_FORCE_ROCM_TORCH is set and an AMD GPU is present -- selecting ROCm PyTorch over CUDA." >&2
+        echo "[INFO] ROCm torch was requested (UNSLOTH_FORCE_ROCM_TORCH or its install record) and an AMD GPU is present -- selecting ROCm PyTorch over CUDA." >&2
         echo "[INFO] One torch install serves one vendor: the NVIDIA card will not be available to training until this is unset and the installer re-run." >&2
         _nvidia_detected=0
     fi
@@ -6618,11 +6640,18 @@ if [ "$_torch_index_pinned" = false ] && [ "$SKIP_TORCH" = false ] && \
         _cuda_fallback_index=$(UNSLOTH_FORCE_ROCM_TORCH=0 get_torch_index_url)
         if [ -n "$_cuda_fallback_index" ] && \
            [ "$_cuda_fallback_index" != "$TORCH_INDEX_URL" ]; then
-            echo "[WARN] UNSLOTH_FORCE_ROCM_TORCH is set, but no ROCm wheel index could be selected for this host." >&2
+            echo "[WARN] ROCm torch was requested (UNSLOTH_FORCE_ROCM_TORCH or its install record), but no ROCm wheel index could be selected for this host." >&2
             echo "[WARN] Keeping the CUDA build rather than installing CPU PyTorch on a machine with a working NVIDIA GPU." >&2
             TORCH_INDEX_URL="$_cuda_fallback_index"
         fi
     fi
+fi
+# Hand a recorded ROCm choice to the dependency pass, which runs in a fresh venv with no manifest.
+if [ "$_torch_index_pinned" = false ] && [ "$SKIP_TORCH" = false ] && \
+   [ -z "$(printf '%s' "${UNSLOTH_FORCE_ROCM_TORCH:-}" | tr -d '[:space:]')" ] && \
+   [ "${_ROCM_TORCH_RECORDED:-false}" = true ] && _torch_index_url_is_rocm "$TORCH_INDEX_URL"; then
+    echo "[INFO] keeping ROCm torch, recorded at install; UNSLOTH_FORCE_ROCM_TORCH=0 to switch back" >&2
+    export UNSLOTH_FORCE_ROCM_TORCH=1
 fi
 if [ "$SKIP_TORCH" = false ]; then
     _warn_if_cuda_mask_hides_amd "$TORCH_INDEX_URL"
