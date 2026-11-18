@@ -167,7 +167,6 @@ class _Swap:
 def _switch_lock():
     from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.media_switch_locks import switch_lock
-
     return switch_lock(DIFFUSION)
 
 
