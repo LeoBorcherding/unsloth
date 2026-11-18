@@ -485,6 +485,8 @@ def test_a_refused_switch_leaves_the_resident_image_model_loaded(world, monkeypa
         raise refuse("no room", status_code = 409, openai_errors = True, code = "multi_model_always")
 
     monkeypatch.setattr(tool, "_load_image", refused)
-    result = _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"}
+    )
     assert "does not fit beside" in result
     assert ("unload",) not in world.calls
