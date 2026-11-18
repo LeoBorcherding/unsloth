@@ -432,7 +432,9 @@ def test_a_slow_switch_is_waited_out(monkeypatch):
 
     monkeypatch.setattr(media_auto_switch, "maybe_auto_switch_media_model", switch)
     monkeypatch.setattr(tool, "_await_loaded", wait)
-    asyncio.run(tool._load_media(DIFFUSION, "org/image-model", PICK, "alice", 1e18, threading.Event()))
+    asyncio.run(
+        tool._load_media(DIFFUSION, "org/image-model", PICK, "alice", 1e18, threading.Event())
+    )
     assert seen == {"waited": True}
 
 
@@ -528,7 +530,13 @@ def video(world, monkeypatch):
         state.owners.append(("unload", owner))
         await unload(owner, subject)
 
-    def render(arguments, *, workdir, cancel_event = None, timeout = None):
+    def render(
+        arguments,
+        *,
+        workdir,
+        cancel_event = None,
+        timeout = None,
+    ):
         state.render = arguments
         return (
             "Generated a video (5s, 832x480) saved as generated-video-abcd1234.mp4. Prompt: "

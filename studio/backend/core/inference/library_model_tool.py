@@ -193,7 +193,6 @@ async def _prior_still_resident(swap: "_Swap") -> bool:
 
 def _switch_lock(owner: str):
     from core.inference.media_switch_locks import switch_lock
-
     return switch_lock(owner)
 
 
@@ -205,7 +204,9 @@ async def _setup_settled(owner: str, limit: float) -> None:
         await asyncio.sleep(_LOAD_POLL_S)
 
 
-async def _await_loaded(owner: str, name: str, pick, deadline: float, abort: threading.Event) -> None:
+async def _await_loaded(
+    owner: str, name: str, pick, deadline: float, abort: threading.Event
+) -> None:
     from core.inference.media_model_index import satisfied_by
     from core.inference.media_switch_backends import backend_for
 
@@ -214,7 +215,10 @@ async def _await_loaded(owner: str, name: str, pick, deadline: float, abort: thr
         if satisfied_by(await asyncio.to_thread(backend.status), name, pick):
             return
         # The switch's setup holds its lock through preflight, before the backend registers a load.
-        if not await asyncio.to_thread(backend.loading_repo_ids) and not _switch_lock(owner).locked():
+        if (
+            not await asyncio.to_thread(backend.loading_repo_ids)
+            and not _switch_lock(owner).locked()
+        ):
             if satisfied_by(await asyncio.to_thread(backend.status), name, pick):
                 return
             raise RuntimeError(f"'{pick.model_id}' stopped loading before it was ready.")
@@ -226,7 +230,6 @@ async def _load_media(owner: str, name: str, pick, subject: str, deadline: float
     from fastapi import HTTPException
 
     from core.inference.media_auto_switch import maybe_auto_switch_media_model
-
     try:
         # openai_errors: only that shape carries the refusal code (model_loading, multi_model_always).
         await maybe_auto_switch_media_model(
@@ -241,7 +244,6 @@ async def _load_media(owner: str, name: str, pick, subject: str, deadline: float
 
 async def _unload_media(owner: str, subject: str) -> None:
     from core.inference.gpu_arbiter import VIDEO
-
     if owner == VIDEO:
         from routes.video import unload_video_model as unload
     else:
@@ -302,8 +304,9 @@ async def _swap_and_render(
         if pick is not None:
             swap.owner, swap.kind = VIDEO, "video"
     if pick is None:
-        return f"Error: no downloaded image or video model matches '{name}'. " + await asyncio.to_thread(
-            _listing
+        return (
+            f"Error: no downloaded image or video model matches '{name}'. "
+            + await asyncio.to_thread(_listing)
         )
     valid, mode = _unload_mode(arguments)
     if not valid:
@@ -399,8 +402,11 @@ async def _render_image(arguments, prompt, pick, ticket, abort):
 
 async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
     from core.inference.generate_video_tool import run_generate_video
-
-    fields = {k: arguments[k] for k in ("seconds", "width", "height", "seed") if arguments.get(k) is not None}
+    fields = {
+        k: arguments[k]
+        for k in ("seconds", "width", "height", "seed")
+        if arguments.get(k) is not None
+    }
     # Off the loop: generate_video blocks on its own coroutines, which run on this loop.
     return await asyncio.to_thread(
         run_generate_video,
@@ -418,7 +424,9 @@ async def _put_back(swap: _Swap, subject: str) -> str:
         try:
             await _unload_media(swap.owner, subject)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("use_library_model: %s model unload failed: %s", swap.kind, exc, exc_info = True)
+            logger.warning(
+                "use_library_model: %s model unload failed: %s", swap.kind, exc, exc_info = True
+            )
     failure = await _restore_chat(swap, subject)
     return ERR_RESTORE.format(detail = failure) if failure else ""
 
@@ -442,7 +450,9 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     abort = threading.Event()
     swap = _Swap()
     future = asyncio.run_coroutine_threadsafe(
-        arun_as(account, _swap_and_render(arguments, prompt, swap, ticket, abort, deadline, workdir)),
+        arun_as(
+            account, _swap_and_render(arguments, prompt, swap, ticket, abort, deadline, workdir)
+        ),
         loop,
     )
     stopped = None
@@ -462,7 +472,9 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
         return stopped or ERR_TIMEOUT
     result = future.result()
     note = swap.note
-    if isinstance(result, str) and not (isinstance(result, _Clip) and not result.startswith("Error")):
+    if isinstance(result, str) and not (
+        isinstance(result, _Clip) and not result.startswith("Error")
+    ):
         return result + (" " + note if note else "")
     if swap.chat_unloaded:
         note = f"The chat model was unloaded for this {swap.kind} and loaded back. {note}".strip()
@@ -471,7 +483,11 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     if isinstance(result, _Clip):
         text, sep, files = result.partition("\n__FILES__")
         model = str(arguments.get("model") or "").strip()
-        return f"{text.replace('Generated a video', f'Generated a video with {model}', 1)} {note}".strip() + sep + files
+        return (
+            f"{text.replace('Generated a video', f'Generated a video with {model}', 1)} {note}".strip()
+            + sep
+            + files
+        )
     if not result.images:
         return "Error: the image model returned no image." + (" " + note if note else "")
     image = result.images[0]
