@@ -17458,6 +17458,11 @@ _diffusion_backend: Optional[DiffusionBackend] = None
 
 
 def get_diffusion_backend() -> DiffusionBackend:
+    from core.inference.diffusion_worker import worker_enabled
+
+    if worker_enabled():
+        from core.inference.diffusion_worker import get_diffusion_worker_backend
+        return get_diffusion_worker_backend()
     global _diffusion_backend
     if _diffusion_backend is None:
         _diffusion_backend = DiffusionBackend()
@@ -17467,4 +17472,7 @@ def get_diffusion_backend() -> DiffusionBackend:
 def generation_in_flight() -> bool:
     """Read the active-generation marker without constructing or locking the backend."""
     backend = _diffusion_backend
-    return backend is not None and backend._gen is not None
+    if backend is not None and backend._gen is not None:
+        return True
+    worker = sys.modules.get("core.inference.diffusion_worker")
+    return worker is not None and worker.generation_in_flight()

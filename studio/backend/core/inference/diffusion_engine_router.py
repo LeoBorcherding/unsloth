@@ -663,6 +663,7 @@ def get_active_diffusion_engine() -> Any:
 # (module, singleton attribute) of every image engine, read from sys.modules only.
 _ENGINE_SINGLETONS = (
     ("core.inference.diffusion", "_diffusion_backend"),
+    ("core.inference.diffusion_worker", "_worker_backend"),
     ("core.inference.sd_cpp_backend", "_sd_cpp_backend"),
     ("core.inference.mlx_diffusion_backend", "_mlx_diffusion_backend"),
 )
