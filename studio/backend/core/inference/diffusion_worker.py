@@ -360,7 +360,6 @@ class DiffusionWorkerBackend:
         object.__setattr__(self, "_local_lock", threading.Lock())
         object.__setattr__(self, "_in_flight", 0)
         object.__setattr__(self, "_holders", [])
-        object.__setattr__(self, "_waiters", set())
 
     @staticmethod
     def _account() -> Any:
@@ -402,13 +401,19 @@ class DiffusionWorkerBackend:
 
     @contextmanager
     def generation_waiter(self, cancel: threading.Event):
-        with self._local_lock:
-            self._waiters.add(cancel)
+        # Registered in the child's backend, so a Stop during a load or unload reaches this waiter there.
+        call_id, pending = self._client.submit("waiter")
+
+        def relay() -> None:
+            pending.event.wait()
+            if pending.ok and pending.value:
+                cancel.set()
+
+        threading.Thread(target = relay, daemon = True, name = "diffusion-worker-waiter").start()
         try:
             yield
         finally:
-            with self._local_lock:
-                self._waiters.discard(cancel)
+            self._client.cancel(call_id)
 
     @property
     def generate(self) -> Callable[..., dict[str, Any]]:
@@ -563,11 +568,28 @@ def serve(target: Any, stdin, stdout) -> None:
     send_lock = threading.Lock()
     tickets: dict[int, GenerationTicket] = {}
     tickets_lock = threading.Lock()
+    waiter_cm: dict[int, Any] = {}
 
-    def run(op: str, call_id: int, body: bytes, ticket: GenerationTicket) -> None:
+    def run(
+        op: str,
+        call_id: int,
+        body: bytes,
+        ticket: GenerationTicket,
+        waiter: Any = None,
+    ) -> None:
         try:
             account, *payload = pickle.loads(body)
-            if op == "getattr":
+            if op == "waiter":
+                if isinstance(waiter, BaseException):
+                    raise waiter
+                waited, ended = waiter
+                try:
+                    while not (waited.wait(0.05) or ended.is_set()):
+                        pass
+                finally:
+                    waiter_cm.pop(call_id).__exit__(None, None, None)
+                value = waited.is_set()
+            elif op == "getattr":
                 value = _encode_attr(payload[0], getattr(target, payload[0]))
             else:
                 method, args, kwargs = payload
@@ -605,8 +627,24 @@ def serve(target: Any, stdin, stdout) -> None:
         ticket = GenerationTicket()
         with tickets_lock:
             tickets[message[1]] = ticket
+        waiter = None
+        if op == "waiter":
+            # Entered here, in frame order, so a cancel_generate sent after it already sees this waiter.
+            waited, ended = threading.Event(), threading.Event()
+            ticket.bind(ended)
+            try:
+                manager = target.generation_waiter(waited)
+                manager.__enter__()
+            except Exception as exc:  # noqa: BLE001 - reported on the call, never kills the loop
+                waiter = exc
+            else:
+                waiter_cm[message[1]] = manager
+                waiter = (waited, ended)
         threading.Thread(
-            target = run, args = (*message, ticket), daemon = True, name = f"diffusion-worker-{op}"
+            target = run,
+            args = (*message, ticket, waiter),
+            daemon = True,
+            name = f"diffusion-worker-{op}",
         ).start()
 
 

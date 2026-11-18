@@ -21,6 +21,7 @@ from utils.account_context import AccountContext, bind_account, reset_account
 
 _FAKE = textwrap.dedent(
     """
+    import contextlib
     import os
     import sys
     import threading
@@ -41,6 +42,8 @@ _FAKE = textwrap.dedent(
             self._active_generate_account = None
             self._gen_cancel = None
             self.unloads = 0
+            self.transition = False
+            self.waiters = set()
 
         @property
         def is_loaded(self):
@@ -82,10 +85,29 @@ _FAKE = textwrap.dedent(
 
         def cancel_generate(self, expected_account=None):
             cancel = self._gen_cancel
-            if cancel is None:
+            if cancel is not None:
+                cancel.set()
+                return True
+            # Mirrors DiffusionBackend: during a load or unload, Stop signals the queued waiters.
+            if not self.transition or not self.waiters:
                 return False
-            cancel.set()
+            for waiter in list(self.waiters):
+                waiter.set()
             return True
+
+        @contextlib.contextmanager
+        def generation_waiter(self, cancel):
+            self.waiters.add(cancel)
+            try:
+                yield
+            finally:
+                self.waiters.discard(cancel)
+
+        def set_transition(self, value):
+            self.transition = value
+
+        def waiter_count(self):
+            return len(self.waiters)
 
         def unload(self, **kwargs):
             self.unloads += 1
@@ -244,6 +266,32 @@ def test_cancel_generate_reaches_the_worker(backend):
     assert backend.cancel_generate() is True
     thread.join(10)
     assert "cancelled" in str(out.get("error"))
+
+
+def test_stop_during_a_transition_reaches_a_queued_waiter(backend):
+    stopped = threading.Event()
+    with backend.generation_waiter(stopped):
+        assert backend.waiter_count() == 1
+        backend.set_transition(True)
+        assert backend.cancel_generate() is True
+        assert stopped.wait(5)
+    deadline = time.monotonic() + 5
+    while backend.waiter_count() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert backend.waiter_count() == 0
+
+
+def test_leaving_a_waiter_unregisters_it_without_signalling(backend):
+    stopped = threading.Event()
+    with backend.generation_waiter(stopped):
+        pass
+    deadline = time.monotonic() + 5
+    while backend.waiter_count() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert backend.waiter_count() == 0
+    backend.set_transition(True)
+    assert backend.cancel_generate() is False
+    assert not stopped.is_set()
 
 
 def test_crash_fails_the_call_and_the_next_call_respawns(backend):
