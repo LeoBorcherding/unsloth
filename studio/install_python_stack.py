@@ -3065,6 +3065,9 @@ def _amd_hardware_is_corroborated() -> bool:
     return _linux_amd_display_device_present()
 
 
+_FORCE_IGPU_NOTED = False
+
+
 def _forced_rocm_route_is_viable() -> bool:
     """Whether a forced ROCm swap has a wheel route here; the bar is _gfx_has_a_wheel_route, not
     presence or rocminfo, since a runtime-less AMD card gets per-arch wheels on pure-AMD hosts
@@ -3093,6 +3096,20 @@ def _forced_rocm_route_is_viable() -> bool:
     if _target is not None:
         # Keyed on the SELECTED target: _miscomputing_arch_host needs every arch bad, a mask can pick one.
         if _target in _ROCM_MISCOMPUTING_GFX:
+            return False
+        # Forcing ROCm onto an iGPU would take CUDA torch off the NVIDIA card for it (#12248).
+        if (
+            _target in _SHADOWING_INTEGRATED_GFX
+            and not (os.environ.get("UNSLOTH_ROCM_GFX_ARCH") or "").strip()
+            and _has_usable_nvidia_gpu()
+        ):
+            global _FORCE_IGPU_NOTED
+            if not _FORCE_IGPU_NOTED:
+                _FORCE_IGPU_NOTED = True
+                _safe_print(
+                    f"   UNSLOTH_FORCE_ROCM_TORCH ignored: its AMD target is the integrated GPU "
+                    f"{_target}, so CUDA PyTorch stays for the NVIDIA GPU."
+                )
             return False
         # Below ROCm 6.0 no generic tag resolves; ask _ensure_rocm_torch's version-independent arms.
         _raw_ver = _detect_rocm_version()
@@ -3231,7 +3248,34 @@ def _generic_only_target_below_floor(gfx: "str | None", ver: "tuple[int, int] | 
     return ver is None or _generic_tag_lacks_kernels(gfx, ver)
 
 
+@contextlib.contextmanager
+def _cvd_set_aside_for_nvidia():
+    """Beside a usable NVIDIA card a forced ROCm run reads CUDA_VISIBLE_DEVICES as NVIDIA's mask,
+    not an AMD pick (#12248). Mirrors install.sh's _amd_cvd_is_nvidia_mask."""
+    _cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if (
+        _cvd is None
+        or "HIP_VISIBLE_DEVICES" in os.environ
+        or not _rocm_torch_explicitly_requested()
+        or not _has_usable_nvidia_gpu()
+    ):
+        yield
+        return
+    del os.environ["CUDA_VISIBLE_DEVICES"]
+    try:
+        yield
+    finally:
+        os.environ["CUDA_VISIBLE_DEVICES"] = _cvd
+
+
 def _runtime_gfx_target(
+    inferred_linux_gfx: "str | None",
+) -> "tuple[str | None, list[str], str | None, list[str]]":
+    with _cvd_set_aside_for_nvidia():
+        return _runtime_gfx_target_for_masks(inferred_linux_gfx)
+
+
+def _runtime_gfx_target_for_masks(
     inferred_linux_gfx: "str | None",
 ) -> "tuple[str | None, list[str], str | None, list[str]]":
     """Return the selected gfx target, detected arches, corrected physical arch, and the

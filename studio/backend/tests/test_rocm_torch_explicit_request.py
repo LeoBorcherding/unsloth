@@ -179,6 +179,7 @@ def _wheel_route_defs(*, arch_family: bool = True, rocminfo: str = _rocminfo_stu
         _shell_function("_amd_visible_masks_select_no_gpu"),
         _shell_function("_amd_generic_tag_carries_gfx"),
         _shell_function("_amd_mask_survivors"),
+        _shell_function("_amd_cvd_is_nvidia_mask"),
         _shell_function("_amd_runtime_gfx_target"),
         _shell_function("_amd_gfx_is_shadowing_integrated"),
         _shell_function("_amd_prefer_discrete_gfx"),
@@ -217,6 +218,10 @@ def _fake_rocminfo(devices: "list[str]") -> str:
 
 def _index_url(env: str, stubs: str) -> str:
     """get_torch_index_url() under a stubbed host, returning the wheel index it picks."""
+    return _index_url_run(env, stubs).stdout
+
+
+def _index_url_run(env: str, stubs: str) -> "subprocess.CompletedProcess[str]":
     script = "\n".join(
         [
             # Pin Linux x86_64: other `uname -m` values return the cpu index outright.
@@ -237,7 +242,7 @@ def _index_url(env: str, stubs: str) -> str:
         capture_output = True,
         text = True,
         env = _clean_env(),
-    ).stdout
+    )
 
 
 # Bash function definitions must be newline separated.
@@ -1568,9 +1573,9 @@ def test_the_same_arch_on_a_version_with_a_wheel_family_is_viable(stack, monkeyp
 
 
 def test_an_arch_the_generic_wheel_lacks_still_routes_on_an_old_version(stack, monkeypatch):
-    """gfx1103 has no generic kernels at any tag, so _ensure_rocm_torch reroutes it to its per-arch
+    """gfx1032 has no generic kernels at any tag, so _ensure_rocm_torch reroutes it to its per-arch
     index."""
-    assert _viable_masked(stack, monkeypatch, devices = ["gfx1103"], rocm = (5, 7)) is True
+    assert _viable_masked(stack, monkeypatch, devices = ["gfx1032"], rocm = (5, 7)) is True
 
 
 def test_the_route_test_does_not_read_the_hosts_rocm_version(stack, monkeypatch):
@@ -1630,9 +1635,10 @@ def test_the_bad_arch_gate_answers_for_the_selected_card_under_the_request(stack
 
 
 def test_the_same_request_selecting_the_deck_still_takes_the_cpu_index(stack):
-    """Control: the request cannot buy ROCm wheels for an arch that computes wrong answers."""
+    """Control: the request cannot buy ROCm wheels for an arch that computes wrong answers. The
+    Deck is an iGPU, so the NVIDIA card keeps CUDA torch rather than dropping to CPU (#12248)."""
     out = _index_url("UNSLOTH_FORCE_ROCM_TORCH=1 HIP_VISIBLE_DEVICES=0", _VAN_GOGH_PLUS_DGPU)
-    assert out.strip().endswith("/cpu"), out
+    assert "/whl/cu" in out.strip(), out
 
 
 def test_the_presence_rule_is_unchanged_for_a_host_that_did_not_ask(stack):
@@ -2183,7 +2189,7 @@ def test_an_unreadable_version_is_judged_as_the_installer_judges_it(stack, monke
     assert stack._forced_rocm_route_is_viable() is False
 
 
-@pytest.mark.parametrize("gfx", ["gfx1151", "gfx1103", "gfx1200", "gfx1201"])
+@pytest.mark.parametrize("gfx", ["gfx1151", "gfx1032", "gfx1200", "gfx1201"])
 def test_an_unreadable_version_still_serves_the_arches_that_do_install(stack, monkeypatch, gfx):
     """The narrowing control."""
     _unreadable_version_host(stack, monkeypatch, gfx)
@@ -2493,3 +2499,123 @@ def test_the_shell_probe_hides_the_amd_card_until_it_is_asked(request_set, sees_
         ]
     )
     assert _bash(script, env = _clean_env()) == ("yes" if sees_amd else "no")
+
+
+# #12248: the forced swap must not hand the NVIDIA card's CUDA torch to an integrated GPU.
+def _igpu_host(archs: "list[str]", *, nvidia: bool = True) -> str:
+    listed = " ".join(archs)
+    return "\n".join(
+        [
+            f"_has_usable_nvidia_gpu() {{ return {0 if nvidia else 1}; }}",
+            "_has_amd_rocm_gpu() { return 0; }",
+            f"_probe_amd_gfx_arch() {{ printf '%s\\n' {listed}; }}",
+            '_amd_arch_index_family_for_gfx() { case "$1" in'
+            " gfx1201) echo gfx120X-all ;; gfx1036) echo gfx103X-all ;; *) return 1 ;; esac; }",
+            f"_kfd_gfx_targets() {{ printf '%s\\n' {listed}; }}",
+            "_infer_linux_amd_gfx_arch() { :; }",
+            "_amd_gpu_present_via_pci() { return 0; }",
+            "_detect_rocm_version_tag() { echo rocm7.0; }",
+            "_amd_sole_index_arch() { :; }",
+            "_amd_agreed_index_family() { :; }",
+            "_rocm_sdk_install_hint() { echo ''; }",
+            "nvidia-smi() { echo 'CUDA Version: 13.0'; }",
+        ]
+    )
+
+
+def test_a_forced_swap_onto_a_lone_igpu_keeps_cuda_and_says_why(stack):
+    """Fails before the fix: gfx1036 has a gfx103X-all route, so the request swapped CUDA out."""
+    out = _index_url_run("UNSLOTH_FORCE_ROCM_TORCH=1", _igpu_host(["gfx1036"]))
+    assert "/whl/cu" in out.stdout, out.stdout
+    assert "integrated GPU gfx1036" in out.stderr, out.stderr
+
+
+def test_a_forced_swap_beside_an_igpu_still_takes_the_discrete_card(stack):
+    out = _index_url("UNSLOTH_FORCE_ROCM_TORCH=1", _igpu_host(["gfx1036", "gfx1201"]))
+    assert "rocm" in out or "gfx" in out, out
+
+
+def _forced_target(env: str, stubs: str) -> str:
+    """The AMD arch the forced swap would install for, or "" when it is refused."""
+    script = "\n".join(
+        [
+            _shell_function("_rocm_torch_explicitly_requested"),
+            stubs,
+            *_wheel_route_defs(arch_family = False),
+            f'{env} _amd_request_has_a_wheel_route; printf "%s" "$_AMD_REQUEST_TARGET_GFX"',
+        ]
+    )
+    return _bash(script)
+
+
+def test_a_cuda_mask_for_the_nvidia_card_does_not_pick_the_igpu(stack):
+    """Fails before the fix: CUDA_VISIBLE_DEVICES=0 read as HIP's mask pinned AMD device 0."""
+    stubs = _igpu_host(["gfx1036", "gfx1201"])
+    env = "export UNSLOTH_FORCE_ROCM_TORCH=1 CUDA_VISIBLE_DEVICES=0;"
+    assert _forced_target(env, stubs) == "gfx1201"
+    script = "\n".join(
+        [
+            _shell_function("_rocm_torch_explicitly_requested"),
+            stubs,
+            *_wheel_route_defs(arch_family = False),
+            f"{env} _amd_prefer_discrete_gfx 'gfx1036\ngfx1201' gfx1036 torch",
+        ]
+    )
+    assert _bash(script) == "gfx1201"
+
+
+def test_an_apu_only_host_is_unchanged(stack):
+    """No NVIDIA card: the iGPU is the only GPU, and both the swap and the CUDA mask read as before."""
+    for env in ("", "UNSLOTH_FORCE_ROCM_TORCH=1", "CUDA_VISIBLE_DEVICES=0"):
+        out = _index_url_run(env, _igpu_host(["gfx1036"], nvidia = False))
+        assert out.stdout.strip().endswith("/rocm7.0"), (env, out.stdout)
+        assert "integrated GPU" not in out.stderr, out.stderr
+
+
+def test_a_cuda_mask_still_picks_the_amd_card_without_nvidia(stack):
+    """CUDA_VISIBLE_DEVICES stays HIP's alias when no NVIDIA card claims it."""
+    stubs = _igpu_host(["gfx1201", "gfx1036"], nvidia = False)
+    assert _index_url("UNSLOTH_FORCE_ROCM_TORCH=1 CUDA_VISIBLE_DEVICES=1", stubs) == _index_url(
+        "UNSLOTH_FORCE_ROCM_TORCH=1 HIP_VISIBLE_DEVICES=1", stubs
+    )
+
+
+def test_the_python_route_refuses_a_lone_igpu_beside_nvidia(stack, monkeypatch, capsys):
+    monkeypatch.setattr(stack, "_FORCE_IGPU_NOTED", False)
+    _mixed_host(stack, monkeypatch, archs = ["gfx1036"])
+    assert stack._forced_rocm_route_is_viable() is False
+    assert "integrated GPU gfx1036" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"archs": ["gfx1036", "gfx1201"]},
+        {"archs": ["gfx1036"], "nvidia": False},
+        {"archs": ["gfx1036"], "declared": "gfx1036"},
+    ],
+    ids = ["igpu-beside-dgpu", "apu-only", "declared-arch"],
+)
+def test_the_python_route_keeps_every_other_igpu_host(stack, monkeypatch, over):
+    _mixed_host(stack, monkeypatch, **over)
+    assert stack._forced_rocm_route_is_viable() is True
+
+
+def test_the_python_target_reads_a_cuda_mask_as_nvidias(stack, monkeypatch):
+    """Fails before the fix: the mask counted as a pin and indexed the AMD list."""
+    _mixed_host(
+        stack, monkeypatch, archs = ["gfx1036", "gfx1201"], masks = {"CUDA_VISIBLE_DEVICES": "0"}
+    )
+    assert stack._runtime_gfx_target(None)[0] == "gfx1201"
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
+
+
+def test_the_python_target_keeps_a_cuda_mask_without_nvidia(stack, monkeypatch):
+    _mixed_host(
+        stack,
+        monkeypatch,
+        nvidia = False,
+        archs = ["gfx1201", "gfx1036"],
+        masks = {"CUDA_VISIBLE_DEVICES": "1"},
+    )
+    assert stack._runtime_gfx_target(None)[0] == "gfx1036"
