@@ -102,18 +102,32 @@ def run_generate_video(
     workdir: str,
     cancel_event = None,
     timeout: Optional[float] = None,
+    create_timeout: Optional[float] = None,
 ) -> str:
-    """Render one clip; always returns the tool result text, never raises."""
+    """Render one clip; always returns the tool result text, never raises.
+
+    ``create_timeout`` lets a caller that unloads the model afterwards wait the create out.
+    """
     try:
         return _run(
-            arguments if isinstance(arguments, dict) else {}, workdir, cancel_event, timeout
+            arguments if isinstance(arguments, dict) else {},
+            workdir,
+            cancel_event,
+            timeout,
+            create_timeout,
         )
     except Exception as exc:  # noqa: BLE001 - a tool result, never a crashed tool loop
         logger.warning("generate_video failed: %s", exc, exc_info = True)
         return f"Error: video generation failed: {exc}"
 
 
-def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) -> str:
+def _run(
+    arguments: dict,
+    workdir: str,
+    cancel_event,
+    timeout: Optional[float],
+    create_timeout: Optional[float] = None,
+) -> str:
     from fastapi import HTTPException
 
     from core.inference import media_keepwarm
@@ -165,7 +179,7 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     future = asyncio.run_coroutine_threadsafe(arun_as(acct, _create()), loop)
     # Never cancel a create in flight: past the backend's begin_generate the job already runs,
     # and a cancel there would leave it rendering with no record on the Video page.
-    create_by = time.monotonic() + min(_CREATE_TIMEOUT_S, max(cap, 1.0))
+    create_by = time.monotonic() + min(create_timeout or _CREATE_TIMEOUT_S, max(cap, 1.0))
     while not future.done():
         if cancel_event is not None and cancel_event.is_set():
             concurrent.futures.wait([future], timeout = _STOP_WAIT_S)

@@ -536,8 +536,10 @@ def video(world, monkeypatch):
         workdir,
         cancel_event = None,
         timeout = None,
+        create_timeout = None,
     ):
         state.render = arguments
+        state.create_timeout = (timeout, create_timeout)
         return (
             "Generated a video (5s, 832x480) saved as generated-video-abcd1234.mp4. Prompt: "
             + arguments["prompt"]
@@ -556,6 +558,8 @@ def test_a_video_model_swaps_in_on_the_video_backend(world, video):
     )
     assert video.owners == [("load", VIDEO), ("unload", VIDEO)]
     assert video.render == {"prompt": "waves at dusk", "seconds": 5, "seed": 3}
+    timeout, create_timeout = video.create_timeout
+    assert create_timeout == timeout and create_timeout > 60
     text, files = result.split("\n__FILES__")
     assert text.startswith("Generated a video with org/video-model (5s, 832x480)")
     assert text.endswith("The chat model was unloaded for this video and loaded back.")

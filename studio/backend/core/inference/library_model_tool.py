@@ -414,12 +414,16 @@ async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
         if arguments.get(k) is not None
     }
     # Off the loop: generate_video blocks on its own coroutines, which run on this loop.
+    budget = max(1.0, deadline - time.monotonic())
+    # The whole budget for the create too: the put back unloads the model, which would cancel a
+    # clip whose create was still running when generate_video's own short create wait ran out.
     return await asyncio.to_thread(
         run_generate_video,
         {"prompt": prompt, **fields},
         workdir = workdir,
         cancel_event = abort,
-        timeout = max(1.0, deadline - time.monotonic()),
+        timeout = budget,
+        create_timeout = budget,
     )
 
 
