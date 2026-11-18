@@ -160,8 +160,23 @@ class _Swap:
         self.chat_identity = None
         self.chat_launch = None
         self.chat_unloaded = False
+        # The image model resident before the switch: a refused switch must leave it loaded.
+        self.prior_image = None
         # Set when putting things back failed, appended to the tool result.
         self.note = ""
+
+
+def _resident_image(status) -> Optional[str]:
+    return status.get("repo_id") if isinstance(status, dict) and status.get("loaded") else None
+
+
+async def _prior_still_resident(swap: "_Swap") -> bool:
+    from core.inference.gpu_arbiter import DIFFUSION
+    from core.inference.media_switch_backends import backend_for
+
+    if swap.prior_image is None:
+        return False
+    return _resident_image(await asyncio.to_thread(backend_for(DIFFUSION).status)) == swap.prior_image
 
 
 def _switch_lock():
@@ -298,7 +313,9 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
     from utils.account_context import current_account
 
     subject = current_account().username
-    resident = satisfied_by(await asyncio.to_thread(backend_for(DIFFUSION).status), name, pick)
+    before = await asyncio.to_thread(backend_for(DIFFUSION).status)
+    resident = satisfied_by(before, name, pick)
+    swap.prior_image = _resident_image(before)
     keeps_chat = True
     if not resident:
         swap.chat_identity = loaded_identity()
@@ -349,6 +366,7 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
 async def _put_back(swap: _Swap, subject: str) -> str:
     if swap.loaded_image:
         await _setup_settled(_RESTORE_WAIT_S)
+    if swap.loaded_image and not await _prior_still_resident(swap):
         try:
             await _unload_image(subject)
         except Exception as exc:  # noqa: BLE001

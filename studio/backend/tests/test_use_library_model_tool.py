@@ -459,3 +459,23 @@ def test_always_refusal_names_the_argument_only_when_it_set_always(
 
 def test_no_model_and_no_prompt_is_a_plain_listing(world):
     assert _call(world, {}).startswith("Downloaded image models: org/image-model.")
+
+
+def test_a_refused_switch_leaves_the_resident_image_model_loaded(world, monkeypatch):
+    from core.inference.media_switch_errors import refuse
+
+    class Other:
+        def status(self):
+            return {"loaded": True, "repo_id": "org/other-model"}
+
+        def loading_repo_ids(self):
+            return []
+
+    world.backend = Other()
+
+    async def refused(name, pick, subject, deadline, abort):
+        raise refuse("no room", status_code = 409, openai_errors = True, code = "multi_model_always")
+
+    monkeypatch.setattr(tool, "_load_image", refused)
+    _call(world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"})
+    assert ("unload",) not in world.calls
