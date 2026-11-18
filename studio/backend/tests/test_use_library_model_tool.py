@@ -430,8 +430,12 @@ def test_a_slow_switch_is_waited_out(monkeypatch):
     assert seen == {"waited": True}
 
 
-@pytest.mark.parametrize("unload, expected", [("false", "does not fit beside"), (None, "set to Always")])
-def test_always_refusal_names_the_argument_only_when_it_set_always(world, monkeypatch, unload, expected):
+@pytest.mark.parametrize(
+    "unload, expected", [("false", "does not fit beside"), (None, "set to Always")]
+)
+def test_always_refusal_names_the_argument_only_when_it_set_always(
+    world, monkeypatch, unload, expected
+):
     from core.inference.media_switch_errors import refuse
 
     async def refused(name, pick, subject, deadline, abort):
