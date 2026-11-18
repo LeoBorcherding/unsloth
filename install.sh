@@ -4516,6 +4516,13 @@ _amd_mask_survivors() {
         }'
 }
 
+# Beside a usable NVIDIA card a forced ROCm run reads CUDA_VISIBLE_DEVICES as NVIDIA's mask, not
+# an AMD pick (#12248). Mirrors _cvd_set_aside_for_nvidia in install_python_stack.py.
+_amd_cvd_is_nvidia_mask() {
+    [ -n "${CUDA_VISIBLE_DEVICES+x}" ] && [ -z "${HIP_VISIBLE_DEVICES+x}" ] && \
+        _rocm_torch_explicitly_requested && _has_usable_nvidia_gpu
+}
+
 # ROCr filters and renumbers beneath HIP; the first survivor wins.
 _amd_runtime_gfx_target() {
     _argt_list="$1"
@@ -4524,7 +4531,7 @@ _amd_runtime_gfx_target() {
         [ -n "$_argt_list" ] || return 0
     fi
     _argt_hip="${HIP_VISIBLE_DEVICES:-}"
-    if [ -z "${HIP_VISIBLE_DEVICES+x}" ]; then
+    if [ -z "${HIP_VISIBLE_DEVICES+x}" ] && ! _amd_cvd_is_nvidia_mask; then
         _argt_hip="${CUDA_VISIBLE_DEVICES:-}"
     fi
     if [ -n "$_argt_hip" ]; then
@@ -4572,7 +4579,7 @@ _amd_prefer_discrete_gfx() {
         return 0
     fi
     if [ -n "${HIP_VISIBLE_DEVICES+x}" ] || [ -n "${ROCR_VISIBLE_DEVICES+x}" ] || \
-       [ -n "${CUDA_VISIBLE_DEVICES+x}" ]; then
+       { [ -n "${CUDA_VISIBLE_DEVICES+x}" ] && ! _amd_cvd_is_nvidia_mask; }; then
         printf '%s' "$_apdg_sel"
         return 0
     fi
@@ -4607,7 +4614,7 @@ _amd_request_has_a_wheel_route() {
     if [ -n "$_arwr_decl" ]; then
         _amd_hardware_corroborated || _kfd_gfx_targets 2>/dev/null | grep -q . || return 1
         if [ -n "${HIP_VISIBLE_DEVICES+x}" ] || [ -n "${ROCR_VISIBLE_DEVICES+x}" ] || \
-           [ -n "${CUDA_VISIBLE_DEVICES+x}" ]; then
+           { [ -n "${CUDA_VISIBLE_DEVICES+x}" ] && ! _amd_cvd_is_nvidia_mask; }; then
             _arwr_dd=$(_amd_ordered_gfx_devices 2>/dev/null | sed 's/:.*$//' \
                 | tr '[:upper:]' '[:lower:]' | awk 'NF')
             [ -n "$_arwr_dd" ] || _arwr_dd=$(_kfd_gfx_targets 2>/dev/null | sed 's/:.*$//' \
@@ -4659,6 +4666,15 @@ _amd_request_has_a_wheel_route() {
     _arwr_sel=$(_amd_prefer_discrete_gfx "$_arwr_pref" "$_arwr_sel")
     [ "$_arwr_sel" = gfx906 ] && [ "$_arwr_count" -gt 1 ] && return 1
     _amd_gfx_has_wheel_route "$_arwr_sel" || return 1
+    # Forcing ROCm onto an iGPU would take CUDA torch off the NVIDIA card for it (#12248).
+    if _amd_gfx_is_shadowing_integrated "$_arwr_sel" && _rocm_torch_explicitly_requested && \
+       _has_usable_nvidia_gpu; then
+        if [ -z "${_AMD_FORCE_IGPU_NOTED:-}" ]; then
+            echo "[INFO] UNSLOTH_FORCE_ROCM_TORCH ignored: its AMD target is the integrated GPU $_arwr_sel, so CUDA PyTorch stays for the NVIDIA GPU." >&2
+            _AMD_FORCE_IGPU_NOTED=1
+        fi
+        return 1
+    fi
     _AMD_REQUEST_TARGET_GFX="$_arwr_sel"
     _AMD_REQUEST_TARGET_SOURCE=probe
     return 0
@@ -5579,6 +5595,9 @@ get_torch_index_url() {
        _amd_request_has_a_wheel_route; then
         echo "[INFO] UNSLOTH_FORCE_ROCM_TORCH is set and an AMD GPU is present -- selecting ROCm PyTorch over CUDA." >&2
         echo "[INFO] One torch install serves one vendor: the NVIDIA card will not be available to training until this is unset and the installer re-run." >&2
+        if [ -n "${CUDA_VISIBLE_DEVICES+x}" ] && [ -z "${HIP_VISIBLE_DEVICES+x}" ]; then
+            echo "[INFO] CUDA_VISIBLE_DEVICES was read as the NVIDIA mask, but ROCm reads it too: set HIP_VISIBLE_DEVICES to pick the AMD GPU when launching." >&2
+        fi
         _nvidia_detected=0
     fi
     if [ "$_nvidia_detected" -eq 0 ]; then
@@ -6788,6 +6807,7 @@ case "$_torch_index_leaf" in
             # studio/install_python_stack.py. rocminfo output is ALREADY ROCr-filtered, so
             # indexing by ROCR again shadows CUDA, its HIP alias: ROCR=2,1 + CUDA=1 is survivor 2.
             _vis_masks="HIP_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES"
+            _amd_cvd_is_nvidia_mask && _vis_masks="HIP_VISIBLE_DEVICES"
             if [ "$_gfx_probe" != rocminfo ] && [ -n "${ROCR_VISIBLE_DEVICES:-}" ] && [ "$ROCR_VISIBLE_DEVICES" != "-1" ]; then
                 _rocr_kept=$(printf '%s\n' "$_gfx_all" | awk -v m="$ROCR_VISIBLE_DEVICES" '
                     NF { v[n++] = $0 }
@@ -7084,7 +7104,9 @@ elif _torch_index_url_is_rocm "$TORCH_INDEX_URL"; then
     fi
     # Same masks as the routing block: rocminfo is already ROCr-filtered, CUDA is HIP's alias.
     _gpu_vis=""
-    for _gpu_vis_m in HIP_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES; do
+    _gpu_vis_masks="HIP_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES"
+    _amd_cvd_is_nvidia_mask && _gpu_vis_masks="HIP_VISIBLE_DEVICES"
+    for _gpu_vis_m in $_gpu_vis_masks; do
         eval "_gpu_vis_set=\${$_gpu_vis_m+x}"
         if [ -n "$_gpu_vis_set" ]; then
             eval "_gpu_vis=\$$_gpu_vis_m"
