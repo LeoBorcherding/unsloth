@@ -176,7 +176,7 @@ def test_a_model_that_fits_beside_the_chat_is_unloaded_but_the_chat_is_untouched
 
 def test_no_model_lists_the_downloaded_ones(world):
     result = _call(world, {"prompt": "a red fox"})
-    assert "Downloaded image models: org/image-model." in result
+    assert result.startswith("No model was given, so no image was made. Downloaded image models: org/image-model.")
     assert world.calls == []
 
 
@@ -453,3 +453,7 @@ def test_always_refusal_names_the_argument_only_when_it_set_always(
     if unload is not None:
         arguments["unload_chat_model"] = unload
     assert expected in _call(world, arguments)
+
+
+def test_no_model_and_no_prompt_is_a_plain_listing(world):
+    assert _call(world, {}).startswith("Downloaded image models: org/image-model.")

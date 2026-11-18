@@ -258,7 +258,9 @@ async def _swap_and_render(
 
     name = str(arguments.get("model") or "").strip()
     if not name:
-        return await asyncio.to_thread(_listing, IMAGE_TASK)
+        listing = await asyncio.to_thread(_listing, IMAGE_TASK)
+        # A prompt with no model is a dropped argument, not a request for the list.
+        return listing if not prompt or listing.startswith("Error") else "No model was given, so no image was made. " + listing
     pick = await asyncio.to_thread(resolve_local_media_model, name, task = IMAGE_TASK)
     if pick is None:
         return f"Error: no downloaded image model matches '{name}'. " + await asyncio.to_thread(
