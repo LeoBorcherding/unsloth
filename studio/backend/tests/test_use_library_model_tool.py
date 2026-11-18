@@ -176,7 +176,9 @@ def test_a_model_that_fits_beside_the_chat_is_unloaded_but_the_chat_is_untouched
 
 def test_no_model_lists_the_downloaded_ones(world):
     result = _call(world, {"prompt": "a red fox"})
-    assert result.startswith("No model was given, so no image was made. Downloaded image models: org/image-model.")
+    assert result.startswith(
+        "No model was given, so no image was made. Downloaded image models: org/image-model."
+    )
     assert world.calls == []
 
 
