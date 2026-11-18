@@ -21,6 +21,8 @@ from core.inference import (
     media_model_index,
     media_switch_backends,
 )
+from core.inference.gpu_arbiter import DIFFUSION, VIDEO
+from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK
 from routes import inference
 from utils import openai_auto_switch_settings as auto_switch
 from utils.account_context import OWNER, AccountContext, run_as
@@ -76,10 +78,12 @@ def world(monkeypatch, server_loop, tmp_path):
     monkeypatch.setattr(
         media_model_index,
         "resolve_local_media_model",
-        lambda name, task: PICK if name == "org/image-model" else None,
+        lambda name, task: PICK if name == "org/image-model" and task == IMAGE_TASK else None,
     )
     monkeypatch.setattr(
-        media_model_index, "available_media_model_ids", lambda task: ["org/image-model"]
+        media_model_index,
+        "available_media_model_ids",
+        lambda task: ["org/image-model"] if task == IMAGE_TASK else [],
     )
     monkeypatch.setattr(
         media_model_index, "satisfied_by", lambda status, name, pick: bool(status.get("loaded"))
@@ -94,12 +98,12 @@ def world(monkeypatch, server_loop, tmp_path):
         lambda task: STATUS if state.backend.resident else None,
     )
 
-    async def load_image(name, pick, subject, deadline, abort):
+    async def load_image(owner, name, pick, subject, deadline, abort):
         state.calls.append(("load", name, subject))
         state.chat = None if not state.fits_beside else state.chat
         state.backend.resident = True
 
-    async def unload_image(subject):
+    async def unload_image(owner, subject):
         state.calls.append(("unload",))
         state.backend.resident = False
 
@@ -123,8 +127,8 @@ def world(monkeypatch, server_loop, tmp_path):
             images = [SimpleNamespace(id = "abcdef0123", width = 1024, height = 1024, seed = 7)]
         )
 
-    monkeypatch.setattr(tool, "_load_image", load_image)
-    monkeypatch.setattr(tool, "_unload_image", unload_image)
+    monkeypatch.setattr(tool, "_load_media", load_image)
+    monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
     monkeypatch.setattr(generate_image_tool, "_generate", generate)
     monkeypatch.setattr(
@@ -177,14 +181,14 @@ def test_a_model_that_fits_beside_the_chat_is_unloaded_but_the_chat_is_untouched
 def test_no_model_lists_the_downloaded_ones(world):
     result = _call(world, {"prompt": "a red fox"})
     assert result.startswith(
-        "No model was given, so no image was made. Downloaded image models: org/image-model."
+        "No model was given, so nothing was made. Downloaded image models: org/image-model."
     )
     assert world.calls == []
 
 
 def test_an_unknown_model_is_refused_with_the_list(world):
     result = _call(world, {"model": "org/nope", "prompt": "a red fox"})
-    assert result.startswith("Error: no downloaded image model matches 'org/nope'.")
+    assert result.startswith("Error: no downloaded image or video model matches 'org/nope'.")
     assert "org/image-model" in result
     assert world.calls == []
 
@@ -269,13 +273,13 @@ def modes(world, monkeypatch):
     monkeypatch.setattr(multi_model_settings, "_read_mode", lambda: "setting")
     multi_model_settings.invalidate_multi_model_cache()
     seen = []
-    load = tool._load_image
+    load = tool._load_media
 
-    async def load_image(name, pick, subject, deadline, abort):
+    async def load_image(owner, name, pick, subject, deadline, abort):
         seen.append(multi_model_settings.get_multi_model_mode())
-        await load(name, pick, subject, deadline, abort)
+        await load(owner, name, pick, subject, deadline, abort)
 
-    monkeypatch.setattr(tool, "_load_image", load_image)
+    monkeypatch.setattr(tool, "_load_media", load_image)
     yield seen
     multi_model_settings.invalidate_multi_model_cache()
 
@@ -364,7 +368,7 @@ def test_wait_outlasts_a_setup_still_in_preflight(monkeypatch):
     backend = _preflight_world(monkeypatch)
 
     async def scenario():
-        lock = tool._switch_lock()
+        lock = tool._switch_lock(DIFFUSION)
         await lock.acquire()
 
         async def setup():
@@ -373,7 +377,7 @@ def test_wait_outlasts_a_setup_still_in_preflight(monkeypatch):
             lock.release()
 
         task = asyncio.ensure_future(setup())
-        await tool._await_image_loaded("org/image-model", PICK, 1e18, threading.Event())
+        await tool._await_loaded(DIFFUSION, "org/image-model", PICK, 1e18, threading.Event())
         await task
 
     asyncio.run(scenario())
@@ -383,27 +387,27 @@ def test_wait_outlasts_a_setup_still_in_preflight(monkeypatch):
 def test_wait_reports_a_load_that_stopped(monkeypatch):
     _preflight_world(monkeypatch)
     with pytest.raises(RuntimeError, match = "stopped loading"):
-        asyncio.run(tool._await_image_loaded("org/image-model", PICK, 1e18, threading.Event()))
+        asyncio.run(tool._await_loaded(DIFFUSION, "org/image-model", PICK, 1e18, threading.Event()))
 
 
 def test_put_back_waits_for_the_setup_before_restoring(monkeypatch):
     _preflight_world(monkeypatch)
     calls = []
 
-    async def unload_image(subject):
+    async def unload_image(owner, subject):
         calls.append("unload")
 
     async def restore_chat(swap, subject):
         calls.append("restore")
 
-    monkeypatch.setattr(tool, "_unload_image", unload_image)
+    monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
 
     async def scenario():
-        lock = tool._switch_lock()
+        lock = tool._switch_lock(DIFFUSION)
         await lock.acquire()
         swap = tool._Swap()
-        swap.loaded_image = True
+        swap.loaded_media = True
         put_back = asyncio.ensure_future(tool._put_back(swap, "alice"))
         await asyncio.sleep(0.1)
         assert calls == []
@@ -423,12 +427,12 @@ def test_a_slow_switch_is_waited_out(monkeypatch):
     async def switch(name, *, owner, current_subject, openai_errors):
         raise slow_switch("image", openai_errors)
 
-    async def wait(name, pick, deadline, abort):
+    async def wait(owner, name, pick, deadline, abort):
         seen["waited"] = True
 
     monkeypatch.setattr(media_auto_switch, "maybe_auto_switch_media_model", switch)
-    monkeypatch.setattr(tool, "_await_image_loaded", wait)
-    asyncio.run(tool._load_image("org/image-model", PICK, "alice", 1e18, threading.Event()))
+    monkeypatch.setattr(tool, "_await_loaded", wait)
+    asyncio.run(tool._load_media(DIFFUSION, "org/image-model", PICK, "alice", 1e18, threading.Event()))
     assert seen == {"waited": True}
 
 
@@ -440,7 +444,7 @@ def test_always_refusal_names_the_argument_only_when_it_set_always(
 ):
     from core.inference.media_switch_errors import refuse
 
-    async def refused(name, pick, subject, deadline, abort):
+    async def refused(owner, name, pick, subject, deadline, abort):
         exc = refuse(
             "This model needs about 22.9 GB. Keep multiple models loaded is set to Always.",
             status_code = 409,
@@ -449,7 +453,7 @@ def test_always_refusal_names_the_argument_only_when_it_set_always(
         )
         raise exc
 
-    monkeypatch.setattr(tool, "_load_image", refused)
+    monkeypatch.setattr(tool, "_load_media", refused)
     world.fits_beside = True
     arguments = {"model": "org/image-model", "prompt": "a fox"}
     if unload is not None:
@@ -481,12 +485,92 @@ def test_a_refused_switch_leaves_the_resident_image_model_loaded(world, monkeypa
         lambda status, name, pick: status.get("repo_id") == "org/image-model",
     )
 
-    async def refused(name, pick, subject, deadline, abort):
+    async def refused(owner, name, pick, subject, deadline, abort):
         raise refuse("no room", status_code = 409, openai_errors = True, code = "multi_model_always")
 
-    monkeypatch.setattr(tool, "_load_image", refused)
+    monkeypatch.setattr(tool, "_load_media", refused)
     result = _call(
         world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "false"}
     )
     assert "does not fit beside" in result
     assert ("unload",) not in world.calls
+
+
+VPICK = media_model_index.MediaModelPick("org/video-model", "/models/org/video-model")
+
+
+@pytest.fixture
+def video(world, monkeypatch):
+    """org/video-model downloaded as a video model; records the owner each load and unload used."""
+    from core.inference import generate_video_tool
+
+    state = SimpleNamespace(owners = [], render = None)
+    monkeypatch.setattr(
+        media_model_index,
+        "resolve_local_media_model",
+        lambda name, task: {
+            ("org/image-model", IMAGE_TASK): PICK,
+            ("org/video-model", VIDEO_TASK): VPICK,
+        }.get((name, task)),
+    )
+    monkeypatch.setattr(
+        media_model_index,
+        "available_media_model_ids",
+        lambda task: {IMAGE_TASK: ["org/image-model"], VIDEO_TASK: ["org/video-model"]}[task],
+    )
+    load, unload = tool._load_media, tool._unload_media
+
+    async def load_media(owner, *args):
+        state.owners.append(("load", owner))
+        await load(owner, *args)
+
+    async def unload_media(owner, subject):
+        state.owners.append(("unload", owner))
+        await unload(owner, subject)
+
+    def render(arguments, *, workdir, cancel_event = None, timeout = None):
+        state.render = arguments
+        return (
+            "Generated a video (5s, 832x480) saved as generated-video-abcd1234.mp4. Prompt: "
+            + arguments["prompt"]
+            + '\n__FILES__:[{"name": "generated-video-abcd1234.mp4", "size": 3}]'
+        )
+
+    monkeypatch.setattr(tool, "_load_media", load_media)
+    monkeypatch.setattr(tool, "_unload_media", unload_media)
+    monkeypatch.setattr(generate_video_tool, "run_generate_video", render)
+    return state
+
+
+def test_a_video_model_swaps_in_on_the_video_backend(world, video):
+    result = _call(
+        world, {"model": "org/video-model", "prompt": "waves at dusk", "seconds": 5, "seed": 3}
+    )
+    assert video.owners == [("load", VIDEO), ("unload", VIDEO)]
+    assert video.render == {"prompt": "waves at dusk", "seconds": 5, "seed": 3}
+    text, files = result.split("\n__FILES__")
+    assert text.startswith("Generated a video with org/video-model (5s, 832x480)")
+    assert text.endswith("The chat model was unloaded for this video and loaded back.")
+    assert "generated-video-abcd1234.mp4" in files
+    assert world.chat == CHAT
+    assert ("generate", "waves at dusk") not in world.calls
+
+
+def test_a_video_model_honours_unload_chat_model_false(world, video):
+    result = _call(
+        world, {"model": "org/video-model", "prompt": "waves", "unload_chat_model": "false"}
+    )
+    assert result.startswith(tool.ERR_KEEP_NO_FIT.format(model = "org/video-model"))
+    assert video.owners == []
+
+
+def test_an_image_model_still_uses_the_image_backend(world, video):
+    _call(world, {"model": "org/image-model", "prompt": "a fox"})
+    assert video.owners == [("load", DIFFUSION), ("unload", DIFFUSION)]
+
+
+def test_the_listing_shows_image_and_video_models(world, video):
+    assert _call(world, {}) == (
+        "Downloaded image models: org/image-model. Downloaded video models: org/video-model. "
+        "Call use_library_model again with one as model."
+    )

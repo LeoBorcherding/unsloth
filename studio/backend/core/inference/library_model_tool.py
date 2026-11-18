@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Chat tool: load a downloaded image model, render one image, then put the chat model back.
+"""Chat tool: load a downloaded image or video model, render one image or clip, then put the chat model back.
 
 The whole swap runs inside one tool call, so the chat turn waiting on it resumes on the restored
 model. Offered only while "Switch model by request" for images is on."""
@@ -26,17 +26,17 @@ ERR_NO_LOOP = "Error: Unsloth Studio could not reach its server loop to run this
 ERR_STOPPED = "Error: the model swap was stopped; the chat model was put back."
 ERR_TIMEOUT = "Error: the model swap took too long and was stopped."
 ERR_NON_GGUF_CHAT = (
-    "Error: this image model does not fit beside the chat model, and only a GGUF chat model can be "
-    "unloaded and put back mid-chat. Load the image model on the Images page instead."
+    "Error: this model does not fit beside the chat model, and only a GGUF chat model can be "
+    "unloaded and put back mid-chat. Load it on the Images or Video page instead."
 )
 ERR_RESTORE = "The chat model could not be loaded back ({detail}); reload it from the model picker."
 
 _DESCRIPTION = (
-    "Render one image with a downloaded image model from the Unsloth Studio library, even when "
-    "it is not loaded. Unsloth Studio loads the image model, renders, unloads it and, if it had "
-    "to unload the chat model, loads that back, so this can take a minute or more. "
-    "Prefer generate_image when it is offered: that model is already loaded. Call without model "
-    "to list the downloaded image models."
+    "Render one image or video clip with any downloaded image or video model from the Unsloth "
+    "Studio library, even when it is not loaded. Unsloth Studio loads that model, renders, "
+    "unloads it and, if it had to unload the chat model, loads that back, so this can take a "
+    "minute or more. Prefer generate_image or generate_video when offered: that model is "
+    "already loaded. Call without model to list the downloaded models."
 )
 
 # The tool's choice, as the Keep multiple models loaded mode the load runs under.
@@ -67,11 +67,15 @@ def use_library_model_schema() -> dict:
                 "properties": {
                     "model": {
                         "type": "string",
-                        "description": "Id of a downloaded image model. Omit to list them.",
+                        "description": "Id of a downloaded image or video model. Omit to list them.",
                     },
-                    "prompt": {"type": "string", "description": "The full image prompt."},
+                    "prompt": {"type": "string", "description": "The full image or video prompt."},
                     "width": {"type": "integer", "description": "Width in pixels. Default 1024."},
                     "height": {"type": "integer", "description": "Height in pixels. Default 1024."},
+                    "seconds": {
+                        "type": "number",
+                        "description": "Clip length in seconds, for a video model.",
+                    },
                     "seed": {
                         "type": "integer",
                         "description": "Seed for a repeatable image. Random when omitted.",
@@ -84,7 +88,7 @@ def use_library_model_schema() -> dict:
                         "type": "string",
                         "enum": ["auto", "true", "false"],
                         "description": (
-                            "true: unload the chat model while the image model runs, then load "
+                            "true: unload the chat model while the image or video model runs, then load "
                             "it back. false: keep it loaded, and refuse if both do not fit. auto: "
                             "keep it only if both fit. Omit to follow Keep multiple models loaded "
                             "in Settings."
@@ -105,17 +109,21 @@ def offers_use_library_model() -> bool:
     return is_owner_context() and get_media_auto_switch_enabled()
 
 
-def _listing(task: str) -> str:
-    from core.inference.media_model_index import available_media_model_ids
+def _listing() -> str:
+    from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, available_media_model_ids
 
-    ids = available_media_model_ids(task)
-    if not ids:
-        return "Error: no image model is downloaded in Unsloth Studio. Download one on the Images page."
-    shown = ", ".join(ids[:_LIST_LIMIT])
-    more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
-    return (
-        f"Downloaded image models: {shown}{more}. Call use_library_model again with one as model."
-    )
+    parts = []
+    for kind, task in (("image", IMAGE_TASK), ("video", VIDEO_TASK)):
+        ids = available_media_model_ids(task)
+        if ids:
+            more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
+            parts.append(f"Downloaded {kind} models: {', '.join(ids[:_LIST_LIMIT])}{more}.")
+    if not parts:
+        return (
+            "Error: no image or video model is downloaded in Unsloth Studio. Download one on "
+            "the Images or Video page."
+        )
+    return " ".join(parts) + " Call use_library_model again with one as model."
 
 
 def _unload_mode(arguments: dict) -> tuple[bool, Optional[str]]:
@@ -156,84 +164,89 @@ class _Swap:
     """What this call changed, so the end of the call can put it back."""
 
     def __init__(self) -> None:
-        self.loaded_image = False
+        from core.inference.gpu_arbiter import DIFFUSION
+
+        self.owner = DIFFUSION
+        self.kind = "image"
+        self.loaded_media = False
+        # The model resident on that backend before the switch: a refused switch must leave it loaded.
+        self.prior_media = None
         self.chat_identity = None
         self.chat_launch = None
         self.chat_unloaded = False
-        # The image model resident before the switch: a refused switch must leave it loaded.
-        self.prior_image = None
         # Set when putting things back failed, appended to the tool result.
         self.note = ""
 
 
-def _resident_image(status) -> Optional[str]:
+def _resident_media(status) -> Optional[str]:
     return status.get("repo_id") if isinstance(status, dict) and status.get("loaded") else None
 
 
 async def _prior_still_resident(swap: "_Swap") -> bool:
-    from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.media_switch_backends import backend_for
 
-    if swap.prior_image is None:
+    if swap.prior_media is None:
         return False
-    return (
-        _resident_image(await asyncio.to_thread(backend_for(DIFFUSION).status)) == swap.prior_image
-    )
+    status = await asyncio.to_thread(backend_for(swap.owner).status)
+    return _resident_media(status) == swap.prior_media
 
 
-def _switch_lock():
-    from core.inference.gpu_arbiter import DIFFUSION
+def _switch_lock(owner: str):
     from core.inference.media_switch_locks import switch_lock
-    return switch_lock(DIFFUSION)
+
+    return switch_lock(owner)
 
 
-async def _setup_settled(limit: float) -> None:
+async def _setup_settled(owner: str, limit: float) -> None:
     """Waits out a switch setup still in preflight, so its load can't start after the put back."""
     end = time.monotonic() + limit
-    lock = _switch_lock()
+    lock = _switch_lock(owner)
     while lock.locked() and time.monotonic() < end:
         await asyncio.sleep(_LOAD_POLL_S)
 
 
-async def _await_image_loaded(name: str, pick, deadline: float, abort: threading.Event) -> None:
-    from core.inference.gpu_arbiter import DIFFUSION
+async def _await_loaded(owner: str, name: str, pick, deadline: float, abort: threading.Event) -> None:
     from core.inference.media_model_index import satisfied_by
     from core.inference.media_switch_backends import backend_for
 
     while time.monotonic() < deadline and not abort.is_set():
-        backend = backend_for(DIFFUSION)
+        backend = backend_for(owner)
         if satisfied_by(await asyncio.to_thread(backend.status), name, pick):
             return
         # The switch's setup holds its lock through preflight, before the backend registers a load.
-        if not await asyncio.to_thread(backend.loading_repo_ids) and not _switch_lock().locked():
-            if satisfied_by(await asyncio.to_thread(backend_for(DIFFUSION).status), name, pick):
+        if not await asyncio.to_thread(backend.loading_repo_ids) and not _switch_lock(owner).locked():
+            if satisfied_by(await asyncio.to_thread(backend.status), name, pick):
                 return
             raise RuntimeError(f"'{pick.model_id}' stopped loading before it was ready.")
         await asyncio.sleep(_LOAD_POLL_S)
     raise asyncio.TimeoutError
 
 
-async def _load_image(name: str, pick, subject: str, deadline: float, abort) -> None:
+async def _load_media(owner: str, name: str, pick, subject: str, deadline: float, abort) -> None:
     from fastapi import HTTPException
 
-    from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.media_auto_switch import maybe_auto_switch_media_model
 
     try:
         # openai_errors: only that shape carries the refusal code (model_loading, multi_model_always).
         await maybe_auto_switch_media_model(
-            name, owner = DIFFUSION, current_subject = subject, openai_errors = True
+            name, owner = owner, current_subject = subject, openai_errors = True
         )
     except HTTPException as exc:
         # The switch answers within ~90 s and leaves a slow load running: wait the rest out here.
         if _http_code(exc) != "model_loading":
             raise
-        await _await_image_loaded(name, pick, deadline, abort)
+        await _await_loaded(owner, name, pick, deadline, abort)
 
 
-async def _unload_image(subject: str) -> None:
-    from routes.inference import unload_diffusion_model
-    await unload_diffusion_model(None, current_subject = subject, via_api_key = False)
+async def _unload_media(owner: str, subject: str) -> None:
+    from core.inference.gpu_arbiter import VIDEO
+
+    if owner == VIDEO:
+        from routes.video import unload_video_model as unload
+    else:
+        from routes.inference import unload_diffusion_model as unload
+    await unload(None, current_subject = subject, via_api_key = False)
 
 
 async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
@@ -268,61 +281,59 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
 
 
 async def _swap_and_render(
-    arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float
+    arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float, workdir: str
 ):
-    from core.inference.media_model_index import IMAGE_TASK, resolve_local_media_model
+    from core.inference.gpu_arbiter import VIDEO
+    from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, resolve_local_media_model
     from utils.multi_model_settings import multi_model_mode_for_request
 
     name = str(arguments.get("model") or "").strip()
     if not name:
-        listing = await asyncio.to_thread(_listing, IMAGE_TASK)
+        listing = await asyncio.to_thread(_listing)
         # A prompt with no model is a dropped argument, not a request for the list.
         return (
             listing
             if not prompt or listing.startswith("Error")
-            else "No model was given, so no image was made. " + listing
+            else "No model was given, so nothing was made. " + listing
         )
     pick = await asyncio.to_thread(resolve_local_media_model, name, task = IMAGE_TASK)
     if pick is None:
-        return f"Error: no downloaded image model matches '{name}'. " + await asyncio.to_thread(
-            _listing, IMAGE_TASK
+        pick = await asyncio.to_thread(resolve_local_media_model, name, task = VIDEO_TASK)
+        if pick is not None:
+            swap.owner, swap.kind = VIDEO, "video"
+    if pick is None:
+        return f"Error: no downloaded image or video model matches '{name}'. " + await asyncio.to_thread(
+            _listing
         )
     valid, mode = _unload_mode(arguments)
     if not valid:
         return ERR_UNLOAD_ARG
     with multi_model_mode_for_request(mode):
         return await _swap_and_render_as(
-            arguments, prompt, swap, ticket, abort, deadline, name, pick, mode
+            arguments, prompt, swap, ticket, abort, deadline, name, pick, mode, workdir
         )
 
 
-async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, name, pick, mode):
+async def _swap_and_render_as(
+    arguments, prompt, swap, ticket, abort, deadline, name, pick, mode, workdir
+):
     from fastapi import HTTPException
 
     from core.inference.ensure_model import media_load_keeps_chat
-    from core.inference.generate_image_tool import (
-        ERR_EDIT_ONLY,
-        _build_request,
-        _generate,
-        _http_error,
-        offers_txt2img,
-    )
-    from core.inference.gpu_arbiter import DIFFUSION
     from core.inference.llama_keepwarm import launch_to_replay, loaded_identity
-    from core.inference.media_chat_tools import media_chat_status
-    from core.inference.media_model_index import IMAGE_TASK, satisfied_by
+    from core.inference.media_model_index import satisfied_by
     from core.inference.media_switch_backends import backend_for
     from utils.account_context import current_account
 
     subject = current_account().username
-    before = await asyncio.to_thread(backend_for(DIFFUSION).status)
+    before = await asyncio.to_thread(backend_for(swap.owner).status)
     resident = satisfied_by(before, name, pick)
-    swap.prior_image = _resident_image(before)
+    swap.prior_media = _resident_media(before)
     keeps_chat = True
     if not resident:
         swap.chat_identity = loaded_identity()
         swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
-        keeps_chat = await asyncio.to_thread(media_load_keeps_chat, DIFFUSION)
+        keeps_chat = await asyncio.to_thread(media_load_keeps_chat, swap.owner)
         if swap.chat_identity is None and not keeps_chat:
             from core.inference import get_inference_backend
             orchestrator = await asyncio.to_thread(get_inference_backend)
@@ -332,27 +343,16 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
         if not resident:
             if mode == "always" and swap.chat_identity is not None and not keeps_chat:
                 return ERR_KEEP_NO_FIT.format(model = pick.model_id)
-            swap.loaded_image = True
+            swap.loaded_media = True
             try:
-                await _load_image(name, pick, subject, deadline, abort)
+                await _load_media(swap.owner, name, pick, subject, deadline, abort)
             finally:
                 swap.chat_unloaded = swap.chat_identity is not None and loaded_identity() is None
         if abort.is_set():
             return ERR_STOPPED
-        status = media_chat_status(IMAGE_TASK)
-        if status is None:
-            return f"Error: '{pick.model_id}' did not finish loading."
-        if not offers_txt2img(status):
-            return ERR_EDIT_ONLY
-        try:
-            request = _build_request(arguments, prompt, status)
-        except (TypeError, ValueError) as exc:
-            return f"Error: invalid use_library_model arguments: {exc}"
-        try:
-            response = await _generate(request, ticket)
-        except HTTPException as exc:
-            return ERR_STOPPED if abort.is_set() else _http_error(exc)
-        return response
+        if swap.kind == "video":
+            return _Clip(await _render_video(arguments, prompt, abort, deadline, workdir))
+        return await _render_image(arguments, prompt, pick, ticket, abort)
     except asyncio.TimeoutError:
         return ERR_TIMEOUT
     except HTTPException as exc:
@@ -365,14 +365,60 @@ async def _swap_and_render_as(arguments, prompt, swap, ticket, abort, deadline, 
         swap.note = await asyncio.shield(_put_back(swap, subject))
 
 
+class _Clip(str):
+    """A finished video tool result, told apart from an error string."""
+
+
+async def _render_image(arguments, prompt, pick, ticket, abort):
+    from fastapi import HTTPException
+
+    from core.inference.generate_image_tool import (
+        ERR_EDIT_ONLY,
+        _build_request,
+        _generate,
+        _http_error,
+        offers_txt2img,
+    )
+    from core.inference.media_chat_tools import media_chat_status
+    from core.inference.media_model_index import IMAGE_TASK
+
+    status = media_chat_status(IMAGE_TASK)
+    if status is None:
+        return f"Error: '{pick.model_id}' did not finish loading."
+    if not offers_txt2img(status):
+        return ERR_EDIT_ONLY
+    try:
+        request = _build_request(arguments, prompt, status)
+    except (TypeError, ValueError) as exc:
+        return f"Error: invalid use_library_model arguments: {exc}"
+    try:
+        return await _generate(request, ticket)
+    except HTTPException as exc:
+        return ERR_STOPPED if abort.is_set() else _http_error(exc)
+
+
+async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
+    from core.inference.generate_video_tool import run_generate_video
+
+    fields = {k: arguments[k] for k in ("seconds", "width", "height", "seed") if arguments.get(k) is not None}
+    # Off the loop: generate_video blocks on its own coroutines, which run on this loop.
+    return await asyncio.to_thread(
+        run_generate_video,
+        {"prompt": prompt, **fields},
+        workdir = workdir,
+        cancel_event = abort,
+        timeout = max(1.0, deadline - time.monotonic()),
+    )
+
+
 async def _put_back(swap: _Swap, subject: str) -> str:
-    if swap.loaded_image:
-        await _setup_settled(_RESTORE_WAIT_S)
-    if swap.loaded_image and not await _prior_still_resident(swap):
+    if swap.loaded_media:
+        await _setup_settled(swap.owner, _RESTORE_WAIT_S)
+    if swap.loaded_media and not await _prior_still_resident(swap):
         try:
-            await _unload_image(subject)
+            await _unload_media(swap.owner, subject)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("use_library_model: image model unload failed: %s", exc, exc_info = True)
+            logger.warning("use_library_model: %s model unload failed: %s", swap.kind, exc, exc_info = True)
     failure = await _restore_chat(swap, subject)
     return ERR_RESTORE.format(detail = failure) if failure else ""
 
@@ -396,7 +442,8 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     abort = threading.Event()
     swap = _Swap()
     future = asyncio.run_coroutine_threadsafe(
-        arun_as(account, _swap_and_render(arguments, prompt, swap, ticket, abort, deadline)), loop
+        arun_as(account, _swap_and_render(arguments, prompt, swap, ticket, abort, deadline, workdir)),
+        loop,
     )
     stopped = None
     while not future.done():
@@ -415,12 +462,16 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
         return stopped or ERR_TIMEOUT
     result = future.result()
     note = swap.note
-    if isinstance(result, str):
+    if isinstance(result, str) and not (isinstance(result, _Clip) and not result.startswith("Error")):
         return result + (" " + note if note else "")
     if swap.chat_unloaded:
-        note = ("The chat model was unloaded for this image and loaded back. " + note).strip()
-    elif swap.loaded_image and swap.chat_identity is not None:
-        note = ("The chat model stayed loaded beside the image model. " + note).strip()
+        note = f"The chat model was unloaded for this {swap.kind} and loaded back. {note}".strip()
+    elif swap.loaded_media and swap.chat_identity is not None:
+        note = f"The chat model stayed loaded beside the {swap.kind} model. {note}".strip()
+    if isinstance(result, _Clip):
+        text, sep, files = result.partition("\n__FILES__")
+        model = str(arguments.get("model") or "").strip()
+        return f"{text.replace('Generated a video', f'Generated a video with {model}', 1)} {note}".strip() + sep + files
     if not result.images:
         return "Error: the image model returned no image." + (" " + note if note else "")
     image = result.images[0]
@@ -445,7 +496,7 @@ def run_use_library_model(
     cancel_event = None,
     timeout: Optional[float] = None,
 ) -> str:
-    """Swap in an image model, render one image into ``workdir``, swap back; always a string."""
+    """Swap in an image or video model, render one image or clip into ``workdir``, swap back; always a string."""
     try:
         return _run(
             arguments if isinstance(arguments, dict) else {}, workdir, cancel_event, timeout

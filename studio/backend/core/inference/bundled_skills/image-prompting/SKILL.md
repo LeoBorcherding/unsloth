@@ -19,11 +19,12 @@ Use this skill when the user asks for an image or a video and their request is s
 
 ## Picking a model that is not loaded
 
-use_library_model loads a downloaded image model for one image, then puts the chat model back.
-Each call reloads both models, so it is slow.
+use_library_model loads a downloaded image or video model for one image or clip, then puts the chat
+model back. Each call reloads both models, so it is slow.
 
-- Use generate_image when it is offered and the user did not name another model.
-- Use use_library_model when the user names an image model, or no image model is loaded.
+- Use generate_image or generate_video when offered and the user did not name another model.
+- Use use_library_model when the user names an image or video model, or none is loaded. For a video
+  model it also takes seconds.
 - Call it without a model first if you do not know the downloaded ids, then pick one by name.
 - Ask for several images in one prompt only if the model supports it; otherwise each image is a full swap.
 - unload_chat_model picks what happens to the chat model: true unloads it for the image and loads it

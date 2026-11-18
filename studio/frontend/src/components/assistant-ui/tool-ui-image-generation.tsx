@@ -634,3 +634,20 @@ export const VideoGenerationToolUI = memo(
   VideoGenerationToolUIImpl,
 ) as unknown as ToolCallMessagePartComponent;
 VideoGenerationToolUI.displayName = "VideoGenerationToolUI";
+
+/** `use_library_model`: renders an image or a clip, so the result's file picks the card. */
+const LibraryModelToolUIImpl: ToolCallMessagePartComponent = (props) => {
+  const isVideo = sandboxMediaResult(props.result)?.files?.some((file) =>
+    VIDEO_FILE.test(file.name),
+  );
+  return isVideo ? (
+    <VideoGenerationToolUI {...props} />
+  ) : (
+    <ImageGenerationToolUI {...props} />
+  );
+};
+
+export const LibraryModelToolUI = memo(
+  LibraryModelToolUIImpl,
+) as unknown as ToolCallMessagePartComponent;
+LibraryModelToolUI.displayName = "LibraryModelToolUI";
