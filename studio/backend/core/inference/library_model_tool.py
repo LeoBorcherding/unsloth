@@ -408,6 +408,7 @@ async def _render_image(arguments, prompt, pick, ticket, abort):
 
 async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
     from core.inference.generate_video_tool import run_generate_video
+
     fields = {
         k: arguments[k]
         for k in ("seconds", "width", "height", "seed")
