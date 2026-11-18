@@ -44,7 +44,7 @@ _UNLOAD_MODES = {"true": "off", "auto": "fit", "false": "always"}
 ERR_UNLOAD_ARG = "Error: unload_chat_model must be true, false or auto."
 ERR_KEEP_NO_FIT = (
     "Error: '{model}' does not fit beside the chat model, so it was not loaded. Call again with "
-    "unload_chat_model true (or auto) to unload the chat model for this image."
+    "unload_chat_model true (or auto) to unload the chat model for this {kind}."
 )
 
 # Load + render + reload of a large model; a no-limit chat still gets this ceiling.
@@ -351,7 +351,7 @@ async def _swap_and_render_as(
     try:
         if not resident:
             if mode == "always" and swap.chat_identity is not None and not keeps_chat:
-                return ERR_KEEP_NO_FIT.format(model = pick.model_id)
+                return ERR_KEEP_NO_FIT.format(model = pick.model_id, kind = swap.kind)
             swap.loaded_media = True
             try:
                 await _load_media(swap.owner, name, pick, subject, deadline, abort)
@@ -367,7 +367,7 @@ async def _swap_and_render_as(
     except HTTPException as exc:
         # The Always refusal names the setting, which this call overrode.
         if mode == "always" and _http_code(exc) == "multi_model_always":
-            return ERR_KEEP_NO_FIT.format(model = pick.model_id)
+            return ERR_KEEP_NO_FIT.format(model = pick.model_id, kind = swap.kind)
         return "Error: " + _detail(exc)
     finally:
         # Shielded: a stop must never leave the chat without its model.

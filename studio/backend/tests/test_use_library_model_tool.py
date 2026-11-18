@@ -572,7 +572,7 @@ def test_a_video_model_honours_unload_chat_model_false(world, video):
     result = _call(
         world, {"model": "org/video-model", "prompt": "waves", "unload_chat_model": "false"}
     )
-    assert result.startswith(tool.ERR_KEEP_NO_FIT.format(model = "org/video-model"))
+    assert result.startswith(tool.ERR_KEEP_NO_FIT.format(model = "org/video-model", kind = "video"))
     assert video.owners == []
 
 
