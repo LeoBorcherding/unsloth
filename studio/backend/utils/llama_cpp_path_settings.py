@@ -136,9 +136,17 @@ def _mask_hides_all(*names: str) -> bool:
 def _amd_mask_hides_all() -> bool:
     """HIP_ and ROCR_VISIBLE_DEVICES stack (ROCR filters the agents HIP then indexes), so an
     empty one at either layer hides everything; CUDA_VISIBLE_DEVICES stands in only when
-    neither is set (_active_gpu_visibility_mask)."""
-    if any(n in os.environ for n in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES")):
-        return _mask_hides_all("HIP_VISIBLE_DEVICES") or _mask_hides_all("ROCR_VISIBLE_DEVICES")
+    neither is set (_active_gpu_visibility_mask). Windows HIP has no ROCr layer, so ROCR_ is ignored there."""
+    hip_masks = (
+        ("HIP_VISIBLE_DEVICES",)
+        if sys.platform == "win32"
+        else (
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+        )
+    )
+    if any(n in os.environ for n in hip_masks):
+        return any(_mask_hides_all(n) for n in hip_masks)
     return _mask_hides_all("CUDA_VISIBLE_DEVICES")
 
 
@@ -183,6 +191,17 @@ def host_gpu_vendors() -> Optional[set[str]]:
             vendors.discard("amd")
         return vendors if detected else None
     return vendors or None
+
+
+def reachable_gpu_vendors() -> Optional[set[str]]:
+    """``host_gpu_vendors`` with the visibility masks applied on every OS (Windows detection only sees DLLs)."""
+    vendors = host_gpu_vendors()
+    if vendors is not None:
+        if _mask_hides_all("CUDA_VISIBLE_DEVICES"):
+            vendors = vendors - {"nvidia"}
+        if _amd_mask_hides_all():
+            vendors = vendors - {"amd"}
+    return vendors
 
 
 def _fits_host(backends: set[str], vendors: Optional[set[str]]) -> bool:

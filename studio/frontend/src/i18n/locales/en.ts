@@ -2801,6 +2801,10 @@ export const en = {
         dismissNotice: "Dismiss",
         unusableDevice: "unusable",
         unknownDevice: "Unknown GPU",
+        otherVendorNote:
+          "Also on this machine. The installed {backend} PyTorch can't train on these.",
+        vendorDevice: "{vendor} GPU",
+        notTrainable: "not for training",
         deviceWithIndex: "GPU {index}",
         vramUtilization: "VRAM",
         used: "{value} used",

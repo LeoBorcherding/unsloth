@@ -76,6 +76,11 @@ import {
   monitorRefreshMs,
 } from "@/components/monitor-refresh";
 import { useMonitorOverlayStore } from "../stores/monitor-overlay-store";
+import {
+  backendLabel as torchBackendLabel,
+  type OtherVendorGpuDevice,
+  otherVendorGpuRows,
+} from "../lib/other-vendor-gpus";
 import { MemoryShareBar } from "@/components/monitor-memory";
 import { inferenceGpuDisjoint, poolSplit } from "@/components/monitor-share";
 import { useLoadedModels } from "@/features/loaded-models/use-loaded-models";
@@ -299,6 +304,7 @@ type GpuPhysicalInventory = SystemGpuInfo & {
   physical_devices?: PhysicalGpuDevice[];
   mismatch?: GpuTorchMismatch | null;
   driver_warning?: GpuDriverWarning | null;
+  other_vendor_devices?: OtherVendorGpuDevice[];
 };
 
 export function ResourcesTab() {
@@ -709,6 +715,7 @@ export function ResourcesTab() {
   const physicalDevices = gpuMismatch
     ? (gpuInventory?.physical_devices ?? [])
     : [];
+  const otherVendorGpus = otherVendorGpuRows(gpuInventory?.other_vendor_devices);
   const rawDriverWarning = gpuInventory?.driver_warning ?? null;
   const driverWarning =
     rawDriverWarning?.driver_version &&
@@ -1032,6 +1039,40 @@ export function ResourcesTab() {
                       ? formatGiB(device.memory_total_gb)
                       : unknownLabel
                   } · ${t("settings.resources.gpu.unusableDevice")}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {/* The other vendor's cards on an NVIDIA + AMD host: listed, never selectable. */}
+        {otherVendorGpus.length > 0 ? (
+          <div className="flex flex-col gap-2 border-b border-border/60 py-3">
+            <p className="text-sm text-muted-foreground">
+              {t("settings.resources.gpu.otherVendorNote", {
+                backend: torchBackendLabel(gpuInventory?.backend),
+              })}
+            </p>
+            {otherVendorGpus.map((device) => (
+              <div
+                key={device.key}
+                className="flex min-w-0 items-center justify-between gap-4 text-xs text-muted-foreground opacity-70"
+              >
+                <span className="min-w-0 truncate">
+                  {device.name ??
+                    t("settings.resources.gpu.vendorDevice", {
+                      vendor: device.vendorLabel,
+                    })}
+                </span>
+                <span className="shrink-0 font-mono tabular-nums">
+                  {[
+                    device.qualifiedId,
+                    device.memoryTotalGb === null
+                      ? unknownLabel
+                      : formatGiB(device.memoryTotalGb),
+                    t("settings.resources.gpu.notTrainable"),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </span>
               </div>
             ))}

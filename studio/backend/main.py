@@ -2729,6 +2729,8 @@ def _get_cached_system_gpu_info(
         get_visible_gpu_utilization,
         get_vulkan_inference_gpu_info,
         gpu_query,
+        other_vendor_gpu_report,
+        tag_gpu_vendor,
     )
 
     global _system_gpu_cache, _system_gpu_probe_s
@@ -2814,7 +2816,7 @@ def _get_cached_system_gpu_info(
         gpu_info = {
             **visibility_info,
             "available": visibility_info.get("available", False),
-            "devices": enriched_devices,
+            "devices": tag_gpu_vendor(enriched_devices, visibility_info.get("backend")),
             "backend": visibility_info.get("backend"),
             "gguf_gpu_ids_supported": gpu_ids_supported,
             # Host-level used VRAM when no counter is attributable to one card; Windows ROCm sets it, else None.
@@ -2822,6 +2824,8 @@ def _get_cached_system_gpu_info(
             if aggregate_basis_matches
             else None,
             **amd_driver_warning_report(),
+            # The other vendor's cards on an NVIDIA + AMD host, which this torch cannot open (#12248).
+            **other_vendor_gpu_report(visibility_info.get("backend")),
         }
 
         # Forced Vulkan may list other GPUs on train hosts; if its probe fails, keep the unavailable shape.
