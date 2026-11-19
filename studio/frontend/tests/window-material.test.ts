@@ -503,3 +503,45 @@ test("the update cards that float like toasts take the glass toast surface", () 
 		assert.match(source, /className="toast-surface /, file);
 	}
 });
+
+test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame through the way out", async () => {
+	const { nextGlassFrameRoll, GLASS_FRAME_ROLL_MS } = await import("../src/features/chat-background/glass-frame-roll.ts");
+	assert.equal(nextGlassFrameRoll(false, false, null), null);
+	assert.equal(nextGlassFrameRoll(true, true, null), null);
+	assert.equal(nextGlassFrameRoll(false, true, null), "in");
+	assert.equal(nextGlassFrameRoll(true, false, null), "out");
+	// Re-pinned mid-way out turns around.
+	assert.equal(nextGlassFrameRoll(false, true, "out"), "in");
+	const hook = readFileSync(new URL("../src/features/chat-background/glass-frame-roll.ts", import.meta.url), "utf8");
+	assert.match(hook, /return \{ frame: frame \|\| state\.roll === "out", roll: state\.roll \};/);
+	assert.match(hook, /holdGlassMotion\(document\.querySelector\("\[data-windows-glass-frame\]"\), GLASS_FRAME_ROLL_MS\)/);
+	const sidebar = readFileSync(new URL("../src/components/app-sidebar.tsx", import.meta.url), "utf8");
+	assert.match(sidebar, /data-windows-glass-frame=\{glassFrame\.frame \|\| undefined\}\n\s+data-glass-frame-roll=\{glassFrame\.roll \?\? undefined\}/);
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	// The CSS durations are the hook's.
+	for (const duration of css.match(/sidebar-glass-roll \.\d+s|translate \.\d+s/g) ?? []) {
+		assert.ok(duration.endsWith(`.${GLASS_FRAME_ROLL_MS / 100}s`), duration);
+	}
+});
+
+test("the glass frame's roll is a transform and a mask front, at rest identical, and off with reduced motion", () => {
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	// Without @property support the fallback is the resting mask, never an unmasked 100vw layer.
+	assert.match(css, /@property --sidebar-glass-roll \{\n  syntax: "<number>";\n  inherits: false;\n  initial-value: 1;\n\}/);
+	assert.match(css, /--sidebar-glass-front: calc\(var\(--sidebar-width\) \+ var\(--sidebar-glass-roll, 1\) \* \(100% - var\(--sidebar-width\) \+ var\(--sidebar-glass-soft\)\)\);/);
+	// Four layers (column, front, band, corner): the front intersects the band and corner only.
+	assert.match(css, /--sidebar-glass-soft\)\), transparent var\(--sidebar-glass-front\)\) left top \/ 100% 100% no-repeat,\n    linear-gradient\(black 0 0\) left top \/ 100% var\(--studio-custom-titlebar-height\) no-repeat,/);
+	assert.match(css, /mask-composite: add, intersect, add, add;/);
+	assert.match(css, /--sidebar-glass-soft: calc\(var\(--glass-blur, 0px\) \+ 16px\);/);
+	const motion = css.slice(css.indexOf("@keyframes sidebar-glass-roll"));
+	const block = motion.slice(0, motion.indexOf("\n}\n", motion.indexOf("@media")) + 3);
+	assert.match(block, /^@keyframes sidebar-glass-roll \{\n  from \{ --sidebar-glass-roll: 0; \}\n\}\n@media \(prefers-reduced-motion: no-preference\) \{/);
+	// Only the container's translate transitions; everything keys on the roll flag, so mount never animates.
+	assert.deepEqual(block.match(/transition: [^;]+;/g), ["transition: translate .2s ease;"]);
+	for (const selector of block.match(/^  html[^{]+/gm) ?? []) {
+		assert.ok(selector.includes("[data-glass-frame-roll"), selector);
+		assert.ok(!selector.includes(":has("), selector);
+	}
+	assert.match(block, /\[data-glass-frame-roll="in"\]::before \{\n    animation: sidebar-glass-roll \.2s ease backwards;/);
+	assert.match(block, /\[data-glass-frame-roll="out"\]::before \{\n    animation: sidebar-glass-roll \.2s ease reverse forwards;/);
+});

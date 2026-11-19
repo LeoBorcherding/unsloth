@@ -76,7 +76,7 @@ test("the Windows page blur learns about the sidebar frame from the root, not a 
   // which Windows and Linux share).
   assert.match(
     readSrc("components/app-sidebar.tsx"),
-    /data-windows-glass-frame=\{\(pinned && usesCustomTitlebar\) \|\| undefined\}/,
+    /useGlassFrameRoll\(pinned && usesCustomTitlebar\)/,
   );
 });
 

@@ -7305,11 +7305,41 @@ html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [
   width: 100vw;
   pointer-events: none;
   box-shadow: none;
+  /* The band's front: at rest (roll 1) past the right edge, so the mask is the column, band and corner. */
+  --sidebar-glass-soft: calc(var(--glass-blur, 0px) + 16px);
+  --sidebar-glass-front: calc(var(--sidebar-width) + var(--sidebar-glass-roll, 1) * (100% - var(--sidebar-width) + var(--sidebar-glass-soft)));
   mask:
     linear-gradient(black 0 0) left top / var(--sidebar-width) 100% no-repeat,
+    linear-gradient(to right, black calc(var(--sidebar-glass-front) - var(--sidebar-glass-soft)), transparent var(--sidebar-glass-front)) left top / 100% 100% no-repeat,
     linear-gradient(black 0 0) left top / 100% var(--studio-custom-titlebar-height) no-repeat,
     radial-gradient(circle at right bottom, transparent calc(var(--radius-md) - 1px), black var(--radius-md))
       var(--sidebar-width) var(--studio-custom-titlebar-height) / var(--radius-md) var(--radius-md) no-repeat;
+  /* The front cuts only the band and its corner; the column never waits on it. */
+  mask-composite: add, intersect, add, add;
+}
+/* A pin or unpin (data-glass-frame-roll, set by AppSidebar for one roll) slides the column and rolls the band out
+   from its edge, or back into it; the front is a soft edge as wide as the glass's own blur. Transform and the
+   strip's mask only: nothing else restyles. */
+@property --sidebar-glass-roll {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+@keyframes sidebar-glass-roll {
+  from { --sidebar-glass-roll: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll] {
+    /* Its translate is a stacking context while it moves: keep it over the page as the pinned strip is. */
+    z-index: 1;
+    transition: translate .2s ease;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="in"]::before {
+    animation: sidebar-glass-roll .2s ease backwards;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="out"]::before {
+    animation: sidebar-glass-roll .2s ease reverse forwards;
+  }
 }
 html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-windows-glass-frame] > [data-slot="sidebar-inner"] {
   position: relative;
