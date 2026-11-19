@@ -3,16 +3,12 @@
 
 """Make accelerate's ``init_on_device`` / ``init_empty_weights`` per-thread.
 
-accelerate swaps ``torch.nn.Module.register_parameter`` process-wide for the length of the ``with`` block and restores
-whatever it saved on exit. Studio builds meta skeletons from several threads at once (a load, and the
-``download-plan`` fit checks the Images page fires while it runs), so (a) a module another thread builds meanwhile
-gets meta parameters ("N tensor(s) ... were not in the file", "Cannot copy out of meta tensor"), and (b) two
-overlapping blocks that exit in the wrong order leave the meta patch installed for good: every later load in the
-process fails until a restart.
+accelerate swaps ``torch.nn.Module.register_parameter`` process-wide for the ``with`` block. Studio builds meta
+skeletons from several threads at once (a load plus the Images page's ``download-plan`` fit checks), so other threads'
+modules got meta parameters, and overlapping blocks that exit out of order left the patch installed for good.
 
-``install()`` puts one permanent dispatcher on ``register_parameter`` that moves a parameter to the meta (or other)
-device only while the *calling thread* is inside ``init_on_device``, and replaces accelerate's ``init_on_device`` with
-a version that keeps that state thread-local. Idempotent; a missing accelerate is a no-op."""
+``install()`` puts one permanent dispatcher on ``register_parameter`` that applies only while the calling thread is
+inside ``init_on_device``, so a thread started inside a block builds real tensors. Idempotent; no accelerate is a no-op."""
 
 from __future__ import annotations
 
@@ -108,13 +104,14 @@ class _PatchOnImport(importlib.abc.MetaPathFinder):
         path,
         target = None,
     ):
-        if fullname != "accelerate.big_modeling":
+        if fullname != "accelerate.big_modeling" or getattr(_tls, "finding", False):
             return None
-        sys.meta_path.remove(self)
+        # Skip this finder on re-entry; removing it from sys.meta_path races other threads' imports.
+        _tls.finding = True
         try:
             spec = importlib.util.find_spec(fullname)
         finally:
-            sys.meta_path.insert(0, self)
+            _tls.finding = False
         if spec is None or spec.loader is None:
             return None
         loader = spec.loader
@@ -122,7 +119,6 @@ class _PatchOnImport(importlib.abc.MetaPathFinder):
 
         def exec_module(module):
             original_exec(module)
-            sys.modules[fullname] = module
             with contextlib.suppress(ValueError):
                 sys.meta_path.remove(self)
             install()

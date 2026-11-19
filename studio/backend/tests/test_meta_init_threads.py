@@ -76,7 +76,8 @@ def test_a_block_does_not_leak_into_another_thread():
         t.join()
 
 
-def test_nesting_and_buffers_behave_like_accelerate():
+def test_innermost_device_wins_and_buffers_follow_accelerate():
+    # Stock accelerate raises "Cannot copy out of meta tensor" on the inner block; the innermost device wins here.
     import torch
     import torch.nn as nn
     from accelerate import init_empty_weights, init_on_device
@@ -106,6 +107,8 @@ def test_install_on_import_patches_accelerate_when_it_is_first_imported(tmp_path
         assert "accelerate" not in sys.modules and "torch" not in sys.modules
         from accelerate import init_empty_weights, big_modeling
         assert meta_init._installed, "not installed on import"
+        import torch.nn as nn
+        assert "install" in nn.Module.register_parameter.__qualname__, "dispatcher not installed"
         import accelerate
         assert accelerate.init_on_device is big_modeling.init_on_device
         print("ok")
