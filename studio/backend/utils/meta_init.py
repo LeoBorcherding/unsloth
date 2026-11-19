@@ -3,12 +3,20 @@
 
 """Make accelerate's ``init_on_device`` / ``init_empty_weights`` per-thread.
 
-accelerate swaps ``torch.nn.Module.register_parameter`` process-wide for the ``with`` block. Studio builds meta
-skeletons from several threads at once (a load plus the Images page's ``download-plan`` fit checks), so other threads'
-modules got meta parameters, and overlapping blocks that exit out of order left the patch installed for good.
+accelerate swaps ``torch.nn.Module.register_parameter`` process-wide for the length of the ``with`` block and restores
+whatever it saved on exit. Studio builds meta skeletons from several threads at once (a load, and the
+``download-plan`` fit checks the Images page fires while it runs), so (a) a module another thread builds meanwhile
+gets meta parameters ("N tensor(s) ... were not in the file", "Cannot copy out of meta tensor"), and (b) two
+overlapping blocks that exit in the wrong order leave the meta patch installed for good: every later load in the
+process fails until a restart.
 
-``install()`` puts one permanent dispatcher on ``register_parameter`` that applies only while the calling thread is
-inside ``init_on_device``, so a thread started inside a block builds real tensors. Idempotent; no accelerate is a no-op."""
+``install()`` puts one permanent dispatcher on ``register_parameter`` that moves a parameter to the meta (or other)
+device only while the *calling thread* is inside ``init_on_device``, and replaces accelerate's ``init_on_device`` with
+a version that keeps that state thread-local. Idempotent; a missing accelerate is a no-op.
+
+Behaviour change: a thread started *inside* an ``init_on_device`` block no longer inherits it (stock accelerate gives
+it meta parameters because the patch is process-wide); it builds real tensors unless it enters a block itself. No
+``init_empty_weights`` block in Studio starts a thread today."""
 
 from __future__ import annotations
 
@@ -78,7 +86,7 @@ def install() -> bool:
 
         nn.Module.register_parameter = register_parameter
         big_modeling.init_on_device = init_on_device
-        # Mid-import of accelerate this attribute isn't bound yet; its own `from .big_modeling import` picks ours up.
+        # Mid-import of accelerate this isn't bound yet; its own `from .big_modeling import` picks ours up.
         accelerate = sys.modules.get("accelerate")
         if getattr(accelerate, "init_on_device", None) is not None:
             accelerate.init_on_device = init_on_device
@@ -97,7 +105,7 @@ class _PatchOnImport(importlib.abc.MetaPathFinder):
     ):
         if fullname != "accelerate.big_modeling" or _installed or getattr(_tls, "finding", False):
             return None
-        # Stays on sys.meta_path as a no-op: removing it races other threads' imports.
+        # Stays on sys.meta_path (a no-op once installed): removing it races other threads' imports.
         _tls.finding = True
         try:
             spec = importlib.util.find_spec(fullname)
