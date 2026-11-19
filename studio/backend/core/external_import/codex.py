@@ -37,7 +37,7 @@ def _meta(path: Path) -> dict:
     if path not in _META:
         try:
             first = next(islice(read_jsonl(path), 1), {})
-        except (OSError, ImportError):
+        except Exception:  # a corrupt .zst raises ZstdError or EOFError, not OSError
             first = {}
         payload = first.get("payload") if first.get("type") == "session_meta" else None
         payload = payload if isinstance(payload, dict) else {}

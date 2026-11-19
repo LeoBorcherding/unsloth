@@ -692,6 +692,26 @@ def test_codex_without_a_zstd_decoder_warns_instead_of_failing(codex_home, monke
     assert summary.warnings and "zstandard" in summary.warnings[0]
 
 
+def test_codex_one_unreadable_zst_rollout_does_not_fail_the_import(client, codex_home):
+    try:
+        from compression import zstd  # noqa: F401  # novermin
+    except ImportError:
+        pytest.importorskip("zstandard")
+    _rollout(codex_home, sid = "good")
+    bad = (
+        codex_home / "sessions" / "2026" / "09" / "21" / "rollout-2026-09-21T12-00-00-bad.jsonl.zst"
+    )
+    bad.parent.mkdir(parents = True)
+    bad.write_bytes(b"not zstd at all" * 8)
+
+    response = client.post("/api/import/codex")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["new_chats"] == 1
+    assert [w.split(":")[0] for w in body["warnings"]] == [bad.name]
+    assert _messages(codex.SOURCE, "good")
+
+
 # Discovery
 
 
