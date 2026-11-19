@@ -406,22 +406,13 @@ def _unsloth_reset_stray_compile_cache(self):
 
 
 def _accelerate_deepspeed_zero_stage():
-    """Return the ZeRO stage selected by an Accelerate DeepSpeed launch.
-
-    Accelerate exports these values before the training script starts, so this
-    remains available while the model is loaded, before ``Trainer`` creates its
-    ``Accelerator``. A launch may export the stage directly or only export a
-    path to the DeepSpeed JSON config.
-    """
+    """ZeRO stage of an `accelerate launch` DeepSpeed run, from the env it exports before model load."""
     enabled = os.environ.get("ACCELERATE_USE_DEEPSPEED", "").strip().lower()
     if enabled not in ("1", "true", "yes", "on"):
         return None
-    value = os.environ.get("ACCELERATE_DEEPSPEED_ZERO_STAGE")
-    if value is not None:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
+    value = os.environ.get("ACCELERATE_DEEPSPEED_ZERO_STAGE", "").strip()
+    if value.isdigit():
+        return int(value)
 
     config_file = os.environ.get("ACCELERATE_DEEPSPEED_CONFIG_FILE")
     if not config_file:

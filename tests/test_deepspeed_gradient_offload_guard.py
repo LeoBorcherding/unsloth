@@ -1,12 +1,6 @@
-"""DeepSpeed ZeRO-1/2 must not run Unsloth's gradient-offload checkpointer.
+"""Accelerate DeepSpeed ZeRO-1/2 launches fall back to standard gradient checkpointing (#4195).
 
-ZeRO installs hooks that consume each parameter gradient during backward.
-Unsloth's smart checkpoint path may offload or clear that gradient first, so
-DeepSpeed receives ``None`` and crashes in ``grad_reduc.view(-1)`` (#4195).
-
-These tests execute the small policy functions directly from source. They need
-neither torch nor DeepSpeed and therefore cover the launch-time decision on
-every CI platform.
+The policy functions run straight from source, so no torch or DeepSpeed is needed.
 """
 
 import ast
@@ -181,6 +175,18 @@ def test_missing_config_file_does_not_disable_offloading():
         assert apply_checkpointing("unsloth", 4096, "bf16") == "unsloth"
     assert calls == [("patch", {"dtype": "bf16"})]
     assert logger.messages == []
+
+
+def test_invalid_stage_falls_back_to_the_config_file():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "deepspeed.json"
+        path.write_text(json.dumps({"zero_optimization": {"stage": 2}}), encoding = "utf-8")
+        with _environment(
+            ACCELERATE_USE_DEEPSPEED = "true",
+            ACCELERATE_DEEPSPEED_ZERO_STAGE = "auto",
+            ACCELERATE_DEEPSPEED_CONFIG_FILE = path,
+        ):
+            assert resolve_stage() == 2
 
 
 def test_invalid_stage_does_not_disable_offloading():
