@@ -177,7 +177,8 @@ test("the pinned caption strip stops at docked Run settings, whose glass runs to
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	const sheet = readFileSync(new URL("../src/features/chat/chat-settings-sheet.tsx", import.meta.url), "utf8");
 	const frame = /\[data-slot="sidebar-container"\]\[data-windows-glass-frame\]::before \{([^}]*)\}/.exec(css)?.[1] ?? "";
-	assert.ok(frame.includes("left top / calc(100% - var(--studio-chat-settings-docked-width, 0px)) var(--studio-custom-titlebar-height)"));
+	// The caption band runs the full width; the panel column below it keeps the strip's glass beside Run settings.
+	assert.ok(frame.includes("linear-gradient(black 0 0) left top / 100% var(--studio-custom-titlebar-height) no-repeat"), frame);
 	// Only while the pinned strip is there; unpinned, the panel starts below the caption with its rounded corner.
 	const glassFrame = 'html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready]';
 	const panel = new RegExp(glassFrame.replace(/[[\]()|]/g, "\\$&") + ' aside\\[data-slot="chat-settings-panel"\\] \\{([^}]*)\\}').exec(css)?.[1] ?? "";
@@ -185,13 +186,14 @@ test("the pinned caption strip stops at docked Run settings, whose glass runs to
 	assert.ok(panel.includes("padding-top: var(--studio-custom-titlebar-height, 0px);"), panel);
 	assert.ok(css.includes(glassFrame + ' [data-slot="chat-settings-resize-handle"] {\n  top: var(--studio-custom-titlebar-height, 0px);'));
 	// Beside the strip the strip's own glass runs down the panel column, and the panel draws none, so nothing meets in a seam.
-	assert.ok(frame.includes("linear-gradient(black 0 0) right top / var(--studio-chat-settings-docked-width, 0px) 100% no-repeat"), frame);
+	assert.ok(frame.includes("linear-gradient(black 0 0) right 0 top calc(var(--studio-custom-titlebar-height) + var(--studio-run-settings-corner)) / var(--studio-chat-settings-docked-width, 0px) 100% no-repeat"), frame);
 	assert.ok(frame.includes("background-attachment: fixed;"), frame);
 	assert.ok(css.includes('html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {\n  background: transparent;\n  -webkit-backdrop-filter: none;\n  backdrop-filter: none;\n  box-shadow: none;'));
 	assert.ok(css.includes('html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"]::before {\n  -webkit-backdrop-filter: none;\n  backdrop-filter: none;'));
 	assert.ok(frame.includes("radial-gradient(circle at left bottom, transparent calc(var(--studio-run-settings-fillet) - 1px), black var(--studio-run-settings-fillet))"), frame);
-	assert.ok(frame.includes("calc(100vw - var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-fillet)) var(--studio-custom-titlebar-height)"), frame);
-	assert.ok(frame.includes("--studio-run-settings-fillet: min(var(--radius-md), var(--studio-chat-settings-docked-width, 0px));"), frame);
+	assert.ok(frame.includes("calc(100vw + var(--sidebar-glass-shift, 0px) - var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-fillet)) var(--studio-custom-titlebar-height)"), frame);
+	// At rest (roll 1) the full fillet and no convex corner.
+	assert.ok(frame.includes("--studio-run-settings-fillet: calc(min(var(--radius-md), var(--studio-chat-settings-docked-width, 0px)) * max(0, 2 * var(--sidebar-glass-roll, 1) - 1));"), frame);
 	// Off glass the panel still starts below the caption.
 	assert.ok(sheet.includes('"var(--chat-settings-top, var(--studio-custom-titlebar-height, 0px))"'));
 	assert.match(sheet, /marginTop: CHAT_SETTINGS_TOP,/);
@@ -343,15 +345,18 @@ test("the window buttons get an inset glass pill off the pinned strip, keeping t
 test("docked Run settings rounds its top corner only while no pinned sidebar strip meets it", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	const panel = String.raw`html\[data-glass\]\[data-chat-wallpaper-workspace-ready\]`;
-	assert.match(css, new RegExp(String.raw`${panel} aside\[data-slot="chat-settings-panel"\] \{\n  transition: border-top-left-radius \.2s ease;`));
+	// No transition of its own: the strip's roll draws the corner turning and hands over on this shape.
+	assert.doesNotMatch(css, /transition: border-top-left-radius/);
 	// No custom titlebar (macOS, browser, fullscreen) leaves the corner square.
 	assert.match(css, new RegExp(String.raw`${panel}:not\(\[data-sidebar-glass-frame\]\) aside\[data-slot="chat-settings-panel"\] \{\n  border-top-left-radius: min\(14px, var\(--studio-custom-titlebar-height, 0px\)\);`));
 	assert.match(css, new RegExp(String.raw`${panel} aside\[data-slot="chat-settings-panel"\] > div:last-child \{\n  border-top-left-radius: inherit;`));
 	// The strip is only drawn for a pinned sidebar under the custom titlebar.
 	const sidebar = readFileSync(new URL("../src/components/app-sidebar.tsx", import.meta.url), "utf8");
-	assert.match(sidebar, /data-windows-glass-frame=\{\(pinned && usesCustomTitlebar\) \|\| undefined\}/);
+	assert.match(sidebar, /const glassFrame = useGlassFrameRoll\(pinned && usesCustomTitlebar\);/);
+	assert.match(sidebar, /data-windows-glass-frame=\{glassFrame\.frame \|\| undefined\}/);
 	// Mirrored on <html> by the sidebar, not read through a :has() that would restyle the thread.
-	assert.match(sidebar, /const glassFrame = pinned && usesCustomTitlebar;\n\s*useEffect\(\(\) => \{\n\s*const el = document\.documentElement;\n\s*el\.toggleAttribute\("data-sidebar-glass-frame", glassFrame\);\n\s*return \(\) => el\.removeAttribute\("data-sidebar-glass-frame"\);/);
+	// Held through the roll out, like the frame itself.
+	assert.match(sidebar, /useEffect\(\(\) => \{\n\s*const el = document\.documentElement;\n\s*el\.toggleAttribute\("data-sidebar-glass-frame", glassFrame\.frame\);\n\s*return \(\) => el\.removeAttribute\("data-sidebar-glass-frame"\);/);
 	const sheet = readFileSync(new URL("../src/features/chat/chat-settings-sheet.tsx", import.meta.url), "utf8");
 	const docked = sheet.slice(sheet.indexOf("<aside"), sheet.indexOf("</aside>"));
 	assert.match(docked, /\{settingsContent\}\n\s*<\/div>\n\s*$/);
@@ -596,4 +601,61 @@ test("the update cards that float like toasts take the glass toast surface", () 
 		const source = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8");
 		assert.match(source, /className="toast-surface /, file);
 	}
+});
+
+test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame through the way out", async () => {
+	const { nextGlassFrameRoll, GLASS_FRAME_ROLL_MS } = await import("../src/features/chat-background/glass-frame-roll.ts");
+	assert.equal(nextGlassFrameRoll(false, false, null), null);
+	assert.equal(nextGlassFrameRoll(true, true, null), null);
+	assert.equal(nextGlassFrameRoll(false, true, null), "in");
+	// Pinned while held out: the column is already on screen, only the band rolls.
+	assert.equal(nextGlassFrameRoll(false, true, null, true), "peek");
+	assert.equal(nextGlassFrameRoll(true, false, null), "out");
+	// Re-pinned mid-way out turns around.
+	assert.equal(nextGlassFrameRoll(false, true, "out"), "in");
+	const hook = readFileSync(new URL("../src/features/chat-background/glass-frame-roll.ts", import.meta.url), "utf8");
+	assert.match(hook, /return \{ frame: frame \|\| state\.roll === "out", roll: state\.roll \};/);
+	assert.match(hook, /holdGlassMotion\(document\.querySelector\(FRAME\), GLASS_FRAME_ROLL_MS\)/);
+	// The end of a roll commits with its effects, so the frame and the <html> flag drop in one frame.
+	assert.match(hook, /const end = \(\) => flushSync\(/);
+	const sidebar = readFileSync(new URL("../src/components/app-sidebar.tsx", import.meta.url), "utf8");
+	assert.match(sidebar, /data-windows-glass-frame=\{glassFrame\.frame \|\| undefined\}\n\s+data-glass-frame-roll=\{glassFrame\.roll \?\? undefined\}/);
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	for (const duration of css.match(/sidebar-glass-roll \.\d+s/g) ?? []) {
+		assert.ok(duration.endsWith(`.${GLASS_FRAME_ROLL_MS / 100}s`), duration);
+	}
+});
+
+test("the glass frame's roll is one clock for the slide, the front and the Run settings corner, off with reduced motion", () => {
+	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+	// Without @property support the fallback is the resting mask, never an unmasked 100vw layer.
+	assert.match(css, /@property --sidebar-glass-roll \{\n  syntax: "<number>";\n  inherits: true;\n  initial-value: 1;\n\}/);
+	const frame = /\[data-slot="sidebar-container"\]\[data-windows-glass-frame\]::before \{([^}]*)\}/.exec(css)?.[1] ?? "";
+	assert.ok(frame.includes("--sidebar-glass-front: calc(var(--sidebar-width) + var(--sidebar-glass-roll, 1) * (100% - var(--sidebar-width) + var(--sidebar-glass-soft)));"), frame);
+	assert.ok(frame.includes("--sidebar-glass-soft: calc(var(--glass-blur, 0px) + 16px);"), frame);
+	// The concave fillet shrinks to square by the halfway point, then the panel's convex corner grows.
+	assert.ok(frame.includes("--studio-run-settings-corner: calc(min(14px, var(--studio-custom-titlebar-height, 0px), var(--studio-chat-settings-docked-width, 0px)) * max(0, 1 - 2 * var(--sidebar-glass-roll, 1)));"), frame);
+	// It ends on the panel's own unpinned corner, so the hand-over is exact.
+	assert.match(css, /:not\(\[data-sidebar-glass-frame\]\) aside\[data-slot="chat-settings-panel"\] \{\n  border-top-left-radius: min\(14px, var\(--studio-custom-titlebar-height, 0px\)\);/);
+	// Eight layers: the front intersects only the band and the two inner curves below it, never the columns.
+	const layers = frame.slice(frame.indexOf("mask:"), frame.indexOf("mask-composite")).split(/no-repeat,?/).length - 1;
+	assert.equal(layers, 8);
+	assert.ok(frame.includes("mask-composite: add, add, add, add, intersect, add, add, add;"), frame);
+	const front = frame.indexOf("linear-gradient(to right, black calc(var(--sidebar-glass-front)");
+	assert.ok(front > frame.indexOf("right 0 top calc(var(--studio-custom-titlebar-height) + var(--studio-run-settings-corner))"));
+	assert.ok(front < frame.indexOf("left top / 100% var(--studio-custom-titlebar-height)"));
+	// Widened by the slide, so the strip still reaches the window edge while the column moves.
+	assert.ok(frame.includes("width: calc(100vw + var(--sidebar-glass-shift, 0px));"), frame);
+	const motion = css.slice(css.indexOf("@keyframes sidebar-glass-roll"));
+	const block = motion.slice(0, motion.indexOf("\n}\n", motion.indexOf("@media")) + 3);
+	assert.match(block, /^@keyframes sidebar-glass-roll \{\n  from \{ --sidebar-glass-roll: 0; \}\n\}\n@media \(prefers-reduced-motion: no-preference\) \{/);
+	assert.equal(block.match(/transition:/g), null);
+	assert.match(block, /--sidebar-glass-shift: calc\(\(1 - var\(--sidebar-glass-roll, 1\)\) \* var\(--sidebar-glass-slide\) \* var\(--sidebar-width\)\);\n\s+translate: calc\(0px - var\(--sidebar-glass-shift\)\) 0;/);
+	assert.match(block, /\[data-glass-frame-roll="peek"\] \{\n    --sidebar-glass-slide: 0;/);
+	for (const selector of block.match(/^  html[^{]+/gm) ?? []) {
+		assert.ok(selector.includes("[data-glass-frame-roll"), selector);
+		assert.ok(!selector.includes(":has("), selector);
+	}
+	assert.match(block, /:is\(\[data-glass-frame-roll="in"\], \[data-glass-frame-roll="peek"\]\) \{\n    animation: sidebar-glass-roll \.2s ease backwards;/);
+	assert.match(block, /\[data-glass-frame-roll="out"\] \{\n    animation: sidebar-glass-roll \.2s ease reverse forwards;/);
 });

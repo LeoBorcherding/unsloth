@@ -7311,19 +7311,65 @@ html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [
   /* Keep the corner above the scrolled conversation canvas. */
   z-index: 1;
   inset: 0 auto 0 0;
-  width: 100vw;
+  /* While the column slides (--sidebar-glass-shift), the strip reaches past it to the window edge, and the
+     Run settings layers, anchored right, stay put. */
+  width: calc(100vw + var(--sidebar-glass-shift, 0px));
   pointer-events: none;
   box-shadow: none;
+  /* The band's front: at rest (roll 1) past the right edge. */
+  --sidebar-glass-soft: calc(var(--glass-blur, 0px) + 16px);
+  --sidebar-glass-front: calc(var(--sidebar-width) + var(--sidebar-glass-roll, 1) * (100% - var(--sidebar-width) + var(--sidebar-glass-soft)));
+  /* Where the band meets docked Run settings: a concave fillet when pinned, the panel's own convex corner when not.
+     Through a roll one turns into the other, crossing square at the halfway point. Both 0 while it is closed. */
+  --studio-run-settings-fillet: calc(min(var(--radius-md), var(--studio-chat-settings-docked-width, 0px)) * max(0, 2 * var(--sidebar-glass-roll, 1) - 1));
+  --studio-run-settings-corner: calc(min(14px, var(--studio-custom-titlebar-height, 0px), var(--studio-chat-settings-docked-width, 0px)) * max(0, 1 - 2 * var(--sidebar-glass-roll, 1)));
   mask:
     linear-gradient(black 0 0) left top / var(--sidebar-width) 100% no-repeat,
-    linear-gradient(black 0 0) left top / calc(100% - var(--studio-chat-settings-docked-width, 0px)) var(--studio-custom-titlebar-height) no-repeat,
+    /* Docked Run settings below the caption, with its convex corner. */
+    linear-gradient(black 0 0) right 0 top calc(var(--studio-custom-titlebar-height) + var(--studio-run-settings-corner)) / var(--studio-chat-settings-docked-width, 0px) 100% no-repeat,
+    linear-gradient(black 0 0) right 0 top var(--studio-custom-titlebar-height) / calc(var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-corner)) var(--studio-run-settings-corner) no-repeat,
+    radial-gradient(circle at right bottom, black calc(var(--studio-run-settings-corner) - 1px), transparent var(--studio-run-settings-corner))
+      calc(100vw + var(--sidebar-glass-shift, 0px) - var(--studio-chat-settings-docked-width, 0px)) var(--studio-custom-titlebar-height) / var(--studio-run-settings-corner) var(--studio-run-settings-corner) no-repeat,
+    /* The front: cuts the layers below it (caption band and both inner curves), never the columns above. */
+    linear-gradient(to right, black calc(var(--sidebar-glass-front) - var(--sidebar-glass-soft)), transparent var(--sidebar-glass-front)) left top / 100% 100% no-repeat,
+    linear-gradient(black 0 0) left top / 100% var(--studio-custom-titlebar-height) no-repeat,
     radial-gradient(circle at right bottom, transparent calc(var(--radius-md) - 1px), black var(--radius-md))
       var(--sidebar-width) var(--studio-custom-titlebar-height) / var(--radius-md) var(--radius-md) no-repeat,
-    linear-gradient(black 0 0) right top / var(--studio-chat-settings-docked-width, 0px) 100% no-repeat,
-    /* The same inner curve where the strip meets docked Run settings; zero-sized while it is closed. */
     radial-gradient(circle at left bottom, transparent calc(var(--studio-run-settings-fillet) - 1px), black var(--studio-run-settings-fillet))
-      calc(100vw - var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-fillet)) var(--studio-custom-titlebar-height) / var(--studio-run-settings-fillet) var(--studio-run-settings-fillet) no-repeat;
-  --studio-run-settings-fillet: min(var(--radius-md), var(--studio-chat-settings-docked-width, 0px));
+      calc(100vw + var(--sidebar-glass-shift, 0px) - var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-fillet)) var(--studio-custom-titlebar-height) / var(--studio-run-settings-fillet) var(--studio-run-settings-fillet) no-repeat;
+  mask-composite: add, add, add, add, intersect, add, add, add;
+}
+/* A pin or unpin (data-glass-frame-roll, set by AppSidebar for one roll) slides the column and rolls the band out
+   from its edge, or back into it; the front is a soft edge as wide as the glass's own blur, hard only once it
+   reaches the window edge. Unpinning ends on the panel's own unpinned shape, so its glass takes over unchanged.
+   Transform and the strip's mask only: nothing else restyles. */
+@property --sidebar-glass-roll {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+@keyframes sidebar-glass-roll {
+  from { --sidebar-glass-roll: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* One clock for the column's slide and the strip's front: a transition would drift from the mask. */
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll] {
+    /* Pinning a peeked sidebar only rolls the band: the column is already out. */
+    --sidebar-glass-slide: 1;
+    --sidebar-glass-shift: calc((1 - var(--sidebar-glass-roll, 1)) * var(--sidebar-glass-slide) * var(--sidebar-width));
+    translate: calc(0px - var(--sidebar-glass-shift)) 0;
+    /* Its translate is a stacking context while it moves: keep it over the page as the pinned strip is. */
+    z-index: 1;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="peek"] {
+    --sidebar-glass-slide: 0;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame]:is([data-glass-frame-roll="in"], [data-glass-frame-roll="peek"]) {
+    animation: sidebar-glass-roll .2s ease backwards;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="out"] {
+    animation: sidebar-glass-roll .2s ease reverse forwards;
+  }
 }
 html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-windows-glass-frame] > [data-slot="sidebar-inner"] {
   position: relative;
@@ -7469,10 +7515,8 @@ html[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat
 html.dark[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-panel"] {
   box-shadow: inset 1px 0 0 rgb(255 255 255 / .08);
 }
-/* No pinned sidebar strip to meet, so the docked panel's top corner rounds under the custom titlebar. */
-html[data-glass][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
-  transition: border-top-left-radius .2s ease;
-}
+/* No pinned sidebar strip to meet, so the docked panel's top corner rounds under the custom titlebar. No transition:
+   the strip's roll draws the corner turning, and hands over on this exact shape. */
 html[data-glass][data-chat-wallpaper-workspace-ready]:not([data-sidebar-glass-frame]) aside[data-slot="chat-settings-panel"] {
   border-top-left-radius: min(14px, var(--studio-custom-titlebar-height, 0px));
 }
