@@ -116,7 +116,8 @@ def effective_training_load_in_4bit(
             "This checkpoint requires its original 4-bit model load mode, "
             "which is unavailable with the active Transformers runtime."
         )
-    return not latest_tier_active
+    # MEASUREMENT ONLY (do not merge): let QLoRA load on latest-sidecar models to size it.
+    return True
 
 
 def exact_resume_requires_current_4bit(config: dict[str, Any]) -> bool:
