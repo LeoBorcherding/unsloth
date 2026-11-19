@@ -95,9 +95,9 @@ class _PatchOnImport(importlib.abc.MetaPathFinder):
         path,
         target = None,
     ):
-        if fullname != "accelerate.big_modeling" or getattr(_tls, "finding", False):
+        if fullname != "accelerate.big_modeling" or _installed or getattr(_tls, "finding", False):
             return None
-        # Skip this finder on re-entry; removing it from sys.meta_path races other threads' imports.
+        # Stays on sys.meta_path as a no-op: removing it races other threads' imports.
         _tls.finding = True
         try:
             spec = importlib.util.find_spec(fullname)
@@ -110,8 +110,6 @@ class _PatchOnImport(importlib.abc.MetaPathFinder):
 
         def exec_module(module):
             original_exec(module)
-            with contextlib.suppress(ValueError):
-                sys.meta_path.remove(self)
             install()
 
         loader.exec_module = exec_module
