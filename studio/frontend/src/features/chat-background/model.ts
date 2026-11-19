@@ -52,6 +52,36 @@ export const LENS_SCALE: Record<LensMode, number> = {
 export function sanitizeLens(value: unknown): LensMode {
 	return LENS_MODES.includes(value as LensMode) ? (value as LensMode) : "off";
 }
+/** Every glass surface the lens can draw into; lens.tsx skips those without a backdrop filter at the moment.
+ * Not page cards: a grid would clone the wallpaper twice per card. */
+export const LENS_HOSTS = [
+	".unsloth-composer-surface",
+	".unsloth-files-panel",
+	'[data-slot="sidebar-inner"]',
+	"[data-windows-glass-frame]",
+	'[data-slot="chat-settings-panel"]',
+	'[data-slot="sheet-content"]',
+	'[data-slot="dialog-content"]',
+	"[data-chat-model-controls] > .unsloth-model-selector-trigger",
+	"[data-chat-model-controls] > [data-chat-model-notice]",
+	"[data-chat-header-actions] > button",
+	'[data-slot$="menu-content"]',
+	'[data-slot$="menu-sub-content"]',
+	'[data-slot="select-content"]',
+	'[data-slot="combobox-content"]',
+	'[data-slot="popover-content"]',
+	'[data-slot="hover-card-content"]',
+	".menu-soft-surface",
+	".menu-soft-surface-up",
+	".dropdown-surface",
+	'[data-sonner-toast][data-styled="true"]',
+	".toast-surface",
+	'[data-auth-wallpaper] > [data-slot="card"]',
+	".tooltip-compact",
+	".tooltip-rich",
+	"[data-glass-float]",
+	".aui-thread-scroll-to-bottom",
+].join(", ");
 // Off draws nothing: without GPU rendering, WebKitGTK repaints each wallpaper copy and its filter on every frame.
 export function lensDrawn(material: WindowMaterial, lens: LensMode): boolean {
 	return material !== "solid" && lens !== "off";
