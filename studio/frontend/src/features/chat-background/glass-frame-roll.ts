@@ -15,10 +15,24 @@ const FRAME = "[data-windows-glass-frame]";
 const HELD_OUT = '[data-slot="sidebar-container"][data-held-out]';
 
 /** Next roll for a frame change: only a toggle rolls, so mount, reload and route changes never animate. */
-export function nextGlassFrameRoll(was: boolean, now: boolean, roll: GlassFrameRoll, heldOut = false): GlassFrameRoll {
+export function nextGlassFrameRoll(
+  was: boolean,
+  now: boolean,
+  roll: GlassFrameRoll,
+  heldOut = false,
+  plays = true,
+): GlassFrameRoll {
   if (was === now) return roll;
+  // No roll to wait for: holding the frame would only leave Run settings without glass.
+  if (!plays) return null;
   if (!now) return "out";
   return heldOut ? "peek" : "in";
+}
+
+/** Mirrors the roll's CSS: it runs under prefers-reduced-motion: no-preference, and Reduce motion clamps it. */
+function rollPlays(): boolean {
+  if (document.documentElement.classList.contains("force-reduced-motion")) return false;
+  return window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches !== false;
 }
 
 /**
@@ -30,8 +44,9 @@ export function useGlassFrameRoll(frame: boolean): { frame: boolean; roll: Glass
   // Derived in render, not an effect: the frame must not drop for a single commit on the way out. The DOM still
   // shows the previous commit here, so it says whether the sidebar was held out when the pin landed.
   if (state.frame !== frame) {
-    const heldOut = frame && typeof document !== "undefined" && document.querySelector(HELD_OUT) !== null;
-    setState({ frame, roll: nextGlassFrameRoll(state.frame, frame, state.roll, heldOut) });
+    const dom = typeof document !== "undefined";
+    const heldOut = frame && dom && document.querySelector(HELD_OUT) !== null;
+    setState({ frame, roll: nextGlassFrameRoll(state.frame, frame, state.roll, heldOut, dom && rollPlays()) });
   }
   useEffect(() => {
     const { roll } = state;

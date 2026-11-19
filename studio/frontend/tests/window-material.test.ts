@@ -582,8 +582,12 @@ test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame t
 	assert.equal(nextGlassFrameRoll(true, false, null), "out");
 	// Re-pinned mid-way out turns around.
 	assert.equal(nextGlassFrameRoll(false, true, "out"), "in");
+	// Reduced motion: no roll, so unpinning drops the frame at once instead of holding it with nothing moving.
+	assert.equal(nextGlassFrameRoll(true, false, null, false, false), null);
+	assert.equal(nextGlassFrameRoll(false, true, "out", false, false), null);
 	const hook = readFileSync(new URL("../src/features/chat-background/glass-frame-roll.ts", import.meta.url), "utf8");
 	assert.match(hook, /return \{ frame: frame \|\| state\.roll === "out", roll: state\.roll \};/);
+	assert.match(hook, /classList\.contains\("force-reduced-motion"\)\) return false;\n\s+return window\.matchMedia\?\.\("\(prefers-reduced-motion: no-preference\)"\)/);
 	assert.match(hook, /holdGlassMotion\(document\.querySelector\(FRAME\), GLASS_FRAME_ROLL_MS\)/);
 	// The end of a roll commits with its effects, so the frame and the <html> flag drop in one frame.
 	assert.match(hook, /const end = \(\) => flushSync\(/);
