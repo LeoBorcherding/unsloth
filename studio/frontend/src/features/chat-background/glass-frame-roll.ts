@@ -53,13 +53,24 @@ export function useGlassFrameRoll(frame: boolean): { frame: boolean; roll: Glass
   useEffect(() => {
     const { roll } = state;
     if (!roll) return;
+    const el = document.querySelector(FRAME);
     // The click's own hold can end mid-roll; software compositing would then blur every remaining frame.
-    holdGlassMotion(document.querySelector(FRAME), GLASS_FRAME_ROLL_MS);
+    holdGlassMotion(el, GLASS_FRAME_ROLL_MS);
     // Synchronous, with its effects: the frame and the <html> flag must drop in the same frame, or the panel
     // paints once with neither the strip's glass nor its own.
     const end = () => flushSync(() => setState((s) => (s.roll === roll ? { ...s, roll: null } : s)));
+    // Also on the animation's own end, so Reduce motion turned on mid-roll (which clamps it) ends the hold too.
+    const onEnd = (e: Event) => {
+      if (e.target === el && (e as AnimationEvent).animationName === "sidebar-glass-roll") end();
+    };
+    el?.addEventListener("animationend", onEnd);
+    el?.addEventListener("animationcancel", onEnd);
     const timer = setTimeout(end, GLASS_FRAME_ROLL_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      el?.removeEventListener("animationend", onEnd);
+      el?.removeEventListener("animationcancel", onEnd);
+    };
   }, [state]);
   return { frame: frame || state.roll === "out", roll: state.roll };
 }

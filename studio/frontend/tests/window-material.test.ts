@@ -589,7 +589,10 @@ test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame t
 	assert.match(hook, /return \{ frame: frame \|\| state\.roll === "out", roll: state\.roll \};/);
 	// Reduce motion On or Off wins over the OS setting.
 	assert.match(hook, /if \(html\.contains\("force-reduced-motion"\)\) return false;\n\s+if \(html\.contains\("force-motion"\)\) return true;\n\s+return window\.matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)\.matches !== true;/);
-	assert.match(hook, /holdGlassMotion\(document\.querySelector\(FRAME\), GLASS_FRAME_ROLL_MS\)/);
+	assert.match(hook, /const el = document\.querySelector\(FRAME\);\n[^\n]*\n\s+holdGlassMotion\(el, GLASS_FRAME_ROLL_MS\)/);
+	// A roll clamped mid-way by Reduce motion ends the hold on its own animationend, not 200 ms later.
+	assert.match(hook, /e\.target === el && \(e as AnimationEvent\)\.animationName === "sidebar-glass-roll"\) end\(\);/);
+	assert.match(hook, /el\?\.addEventListener\("animationend", onEnd\);\n\s+el\?\.addEventListener\("animationcancel", onEnd\);/);
 	// The end of a roll commits with its effects, so the frame and the <html> flag drop in one frame.
 	assert.match(hook, /const end = \(\) => flushSync\(/);
 	const sidebar = readFileSync(new URL("../src/components/app-sidebar.tsx", import.meta.url), "utf8");
