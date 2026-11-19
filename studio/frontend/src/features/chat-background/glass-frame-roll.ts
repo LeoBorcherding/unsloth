@@ -29,10 +29,12 @@ export function nextGlassFrameRoll(
   return heldOut ? "peek" : "in";
 }
 
-/** Mirrors the roll's CSS: it runs under prefers-reduced-motion: no-preference, and Reduce motion clamps it. */
+/** The roll's only gate: Reduce motion On or Off overrides the OS setting, as everywhere else. */
 function rollPlays(): boolean {
-  if (document.documentElement.classList.contains("force-reduced-motion")) return false;
-  return window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches !== false;
+  const html = document.documentElement.classList;
+  if (html.contains("force-reduced-motion")) return false;
+  if (html.contains("force-motion")) return true;
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches !== true;
 }
 
 /**

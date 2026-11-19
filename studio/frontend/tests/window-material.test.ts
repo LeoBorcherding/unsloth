@@ -587,7 +587,8 @@ test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame t
 	assert.equal(nextGlassFrameRoll(false, true, "out", false, false), null);
 	const hook = readFileSync(new URL("../src/features/chat-background/glass-frame-roll.ts", import.meta.url), "utf8");
 	assert.match(hook, /return \{ frame: frame \|\| state\.roll === "out", roll: state\.roll \};/);
-	assert.match(hook, /classList\.contains\("force-reduced-motion"\)\) return false;\n\s+return window\.matchMedia\?\.\("\(prefers-reduced-motion: no-preference\)"\)/);
+	// Reduce motion On or Off wins over the OS setting.
+	assert.match(hook, /if \(html\.contains\("force-reduced-motion"\)\) return false;\n\s+if \(html\.contains\("force-motion"\)\) return true;\n\s+return window\.matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)\.matches !== true;/);
 	assert.match(hook, /holdGlassMotion\(document\.querySelector\(FRAME\), GLASS_FRAME_ROLL_MS\)/);
 	// The end of a roll commits with its effects, so the frame and the <html> flag drop in one frame.
 	assert.match(hook, /const end = \(\) => flushSync\(/);
@@ -599,7 +600,7 @@ test("the pinned glass frame rolls only on a pin or unpin, and keeps its frame t
 	}
 });
 
-test("the glass frame's roll is one clock for the slide, the front and the Run settings corner, off with reduced motion", () => {
+test("the glass frame's roll is one clock for the slide, the front and the Run settings corner, gated by the hook alone", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	// Without @property support the fallback is the resting mask, never an unmasked 100vw layer.
 	assert.match(css, /@property --sidebar-glass-roll \{\n  syntax: "<number>";\n  inherits: true;\n  initial-value: 1;\n\}/);
@@ -620,15 +621,17 @@ test("the glass frame's roll is one clock for the slide, the front and the Run s
 	// Widened by the slide, so the strip still reaches the window edge while the column moves.
 	assert.ok(frame.includes("width: calc(100vw + var(--sidebar-glass-shift, 0px));"), frame);
 	const motion = css.slice(css.indexOf("@keyframes sidebar-glass-roll"));
-	const block = motion.slice(0, motion.indexOf("\n}\n", motion.indexOf("@media")) + 3);
-	assert.match(block, /^@keyframes sidebar-glass-roll \{\n  from \{ --sidebar-glass-roll: 0; \}\n\}\n@media \(prefers-reduced-motion: no-preference\) \{/);
+	const block = motion.slice(0, motion.indexOf("\n}\n", motion.indexOf('[data-glass-frame-roll="out"] {')) + 3);
+	// No media query: the hook sets data-glass-frame-roll only when the roll plays, so it is the one gate.
+	assert.match(block, /^@keyframes sidebar-glass-roll \{\n  from \{ --sidebar-glass-roll: 0; \}\n\}\n\/\* One clock for the column's slide/);
+	assert.equal(block.includes("@media"), false);
 	assert.equal(block.match(/transition:/g), null);
 	assert.match(block, /--sidebar-glass-shift: calc\(\(1 - var\(--sidebar-glass-roll, 1\)\) \* var\(--sidebar-glass-slide\) \* var\(--sidebar-width\)\);\n\s+translate: calc\(0px - var\(--sidebar-glass-shift\)\) 0;/);
-	assert.match(block, /\[data-glass-frame-roll="peek"\] \{\n    --sidebar-glass-slide: 0;/);
-	for (const selector of block.match(/^  html[^{]+/gm) ?? []) {
+	assert.match(block, /\[data-glass-frame-roll="peek"\] \{\n  --sidebar-glass-slide: 0;/);
+	for (const selector of block.match(/^html[^{]+/gm) ?? []) {
 		assert.ok(selector.includes("[data-glass-frame-roll"), selector);
 		assert.ok(!selector.includes(":has("), selector);
 	}
-	assert.match(block, /:is\(\[data-glass-frame-roll="in"\], \[data-glass-frame-roll="peek"\]\) \{\n    animation: sidebar-glass-roll \.2s ease backwards;/);
-	assert.match(block, /\[data-glass-frame-roll="out"\] \{\n    animation: sidebar-glass-roll \.2s ease reverse forwards;/);
+	assert.match(block, /:is\(\[data-glass-frame-roll="in"\], \[data-glass-frame-roll="peek"\]\) \{\n  animation: sidebar-glass-roll \.2s ease backwards;/);
+	assert.match(block, /\[data-glass-frame-roll="out"\] \{\n  animation: sidebar-glass-roll \.2s ease reverse forwards;/);
 });
