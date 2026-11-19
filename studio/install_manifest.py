@@ -670,6 +670,7 @@ PROTECTED_MANIFEST_KEYS: Tuple[str, ...] = (
     "expected_torch_tag",
     "expected_torch_tag_pinned",
     "woa_torch_index",
+    "rocm_torch_requested",
 )
 
 
@@ -682,6 +683,7 @@ def write_manifest(
     expected_torch_tag: Optional[str] = None,
     expected_torch_tag_pinned: Optional[bool] = None,
     woa_torch_index: Optional[str] = None,
+    rocm_torch_requested: Optional[bool] = None,
     extra: Optional[Dict[str, object]] = None,
 ) -> Optional[Path]:
     """Record a completed install. Never raises: no manifest reads as incomplete,
@@ -726,6 +728,10 @@ def write_manifest(
         # netloc, not hostname: hostname strips ":443", so a value with a port is refused.
         if _woa_ok:
             payload["woa_torch_index"] = "https://pypi.nvidia.com" + parsed.path.rstrip("/")
+    # UNSLOTH_FORCE_ROCM_TORCH (or a ROCm pin) is exported for one run only; without this an
+    # update on a mixed NVIDIA+AMD host swaps the ROCm torch back to CUDA. Absent = not requested.
+    if rocm_torch_requested:
+        payload["rocm_torch_requested"] = True
     for key, value in (extra or {}).items():
         if value is None or key in payload or key in PROTECTED_MANIFEST_KEYS:
             continue
@@ -853,6 +859,24 @@ def recorded_torch_flavor_was_pinned(root: Optional[Path] = None) -> bool:
         return False
     # An ACTUAL boolean: bool("false") is True.
     return manifest.get("expected_torch_tag_pinned") is True
+
+
+def recorded_rocm_torch_requested(root: Optional[Path] = None) -> bool:
+    """Whether the last install chose ROCm torch on purpose: UNSLOTH_FORCE_ROCM_TORCH, or a ROCm
+    index pin (older manifests record that only as a pinned rocm flavor). The parked copy counts,
+    so an update killed mid-pass does not forget the choice."""
+    for manifest in (read_manifest(root), read_previous_manifest(root)):
+        if manifest is None:
+            continue
+        if manifest.get("rocm_torch_requested") is True:
+            return True
+        tag = manifest.get("expected_torch_tag")
+        return (
+            isinstance(tag, str)
+            and tag.strip().lower().startswith("rocm")
+            and manifest.get("expected_torch_tag_pinned") is True
+        )
+    return False
 
 
 def _parse_requirement_line(line: str) -> Optional[Tuple[str, str, str]]:
