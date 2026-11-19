@@ -7213,6 +7213,13 @@ html[data-glass] .wallpaper-preview[data-wallpaper-conversation] .wallpaper-prev
   --glass-composer-boost: 9%;
   --glass-blur: calc(var(--glass-blur-base) * var(--glass-strength, 1) + 5px + var(--glass-repaint, 0) * .01px);
 }
+/* Bubble: the composer's tint; code: the panes' darker floor. No blur: the viewport mask is a backdrop root. */
+html[data-glass] :is([data-wallpaper-workspace], [data-chat-content-root])[data-wallpaper-ready][data-wallpaper-ready] .aui-user-message-content {
+  background-color: color-mix(in srgb, var(--glass-composer-fill) min(96%, calc((max(calc(var(--glass-tint) + 14%), var(--glass-read-floor, 0%), var(--glass-composer-floor)) + 9%) * var(--glass-opacity, 1))), transparent);
+}
+html[data-glass] :is([data-wallpaper-workspace], [data-chat-content-root])[data-wallpaper-ready][data-wallpaper-ready] .aui-thread-root [data-streamdown="code-block"] {
+  background-color: color-mix(in srgb, var(--glass-composer-fill) min(96%, calc((max(calc(var(--glass-tint) + 14%), var(--glass-read-floor, 0%), var(--glass-pane-floor)) + 9%) * var(--glass-opacity, 1))), transparent);
+}
 html[data-glass="frosted"][data-chat-wallpaper-workspace-ready] [data-windows-glass-frame]::before,
 html[data-glass="frosted"][data-chat-wallpaper-workspace-ready] [data-slot="sidebar-inner"],
 html[data-glass="frosted"] :is([data-wallpaper-workspace], [data-chat-content-root])[data-wallpaper-ready][data-wallpaper-ready] :is(.unsloth-composer-surface, .unsloth-files-panel),
@@ -7299,17 +7306,70 @@ html[data-glass-clear][data-chat-wallpaper-workspace-ready] [data-windows-glass-
 html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame]::before {
   content: "";
   position: absolute;
+  /* Window-anchored, so the sheen and noise run on unbroken into docked Run settings. */
+  background-attachment: fixed;
   /* Keep the corner above the scrolled conversation canvas. */
   z-index: 1;
   inset: 0 auto 0 0;
-  width: 100vw;
+  /* While the column slides (--sidebar-glass-shift), the strip reaches past it to the window edge, and the
+     Run settings layers, anchored right, stay put. */
+  width: calc(100vw + var(--sidebar-glass-shift, 0px));
   pointer-events: none;
   box-shadow: none;
+  /* The band's front: at rest (roll 1) past the right edge. */
+  --sidebar-glass-soft: calc(var(--glass-blur, 0px) + 16px);
+  --sidebar-glass-front: calc(var(--sidebar-width) + var(--sidebar-glass-roll, 1) * (100% - var(--sidebar-width) + var(--sidebar-glass-soft)));
+  /* Where the band meets docked Run settings: a concave fillet when pinned, the panel's own convex corner when not.
+     Through a roll one turns into the other, crossing square at the halfway point. Both 0 while it is closed. */
+  --studio-run-settings-fillet: calc(min(var(--radius-md), var(--studio-chat-settings-docked-width, 0px)) * max(0, 2 * var(--sidebar-glass-roll, 1) - 1));
+  --studio-run-settings-corner: calc(min(14px, var(--studio-custom-titlebar-height, 0px), var(--studio-chat-settings-docked-width, 0px)) * max(0, 1 - 2 * var(--sidebar-glass-roll, 1)));
   mask:
     linear-gradient(black 0 0) left top / var(--sidebar-width) 100% no-repeat,
+    /* Docked Run settings below the caption, with its convex corner. */
+    linear-gradient(black 0 0) right 0 top calc(var(--studio-custom-titlebar-height) + var(--studio-run-settings-corner)) / var(--studio-chat-settings-docked-width, 0px) 100% no-repeat,
+    linear-gradient(black 0 0) right 0 top var(--studio-custom-titlebar-height) / calc(var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-corner)) var(--studio-run-settings-corner) no-repeat,
+    radial-gradient(circle at right bottom, black calc(var(--studio-run-settings-corner) - 1px), transparent var(--studio-run-settings-corner))
+      calc(100vw + var(--sidebar-glass-shift, 0px) - var(--studio-chat-settings-docked-width, 0px)) var(--studio-custom-titlebar-height) / var(--studio-run-settings-corner) var(--studio-run-settings-corner) no-repeat,
+    /* The front: cuts the layers below it (caption band and both inner curves), never the columns above. */
+    linear-gradient(to right, black calc(var(--sidebar-glass-front) - var(--sidebar-glass-soft)), transparent var(--sidebar-glass-front)) left top / 100% 100% no-repeat,
     linear-gradient(black 0 0) left top / 100% var(--studio-custom-titlebar-height) no-repeat,
     radial-gradient(circle at right bottom, transparent calc(var(--radius-md) - 1px), black var(--radius-md))
-      var(--sidebar-width) var(--studio-custom-titlebar-height) / var(--radius-md) var(--radius-md) no-repeat;
+      var(--sidebar-width) var(--studio-custom-titlebar-height) / var(--radius-md) var(--radius-md) no-repeat,
+    radial-gradient(circle at left bottom, transparent calc(var(--studio-run-settings-fillet) - 1px), black var(--studio-run-settings-fillet))
+      calc(100vw + var(--sidebar-glass-shift, 0px) - var(--studio-chat-settings-docked-width, 0px) - var(--studio-run-settings-fillet)) var(--studio-custom-titlebar-height) / var(--studio-run-settings-fillet) var(--studio-run-settings-fillet) no-repeat;
+  mask-composite: add, add, add, add, intersect, add, add, add;
+}
+/* A pin or unpin (data-glass-frame-roll, set by AppSidebar for one roll) slides the column and rolls the band out
+   from its edge, or back into it; the front is a soft edge as wide as the glass's own blur, hard only once it
+   reaches the window edge. Unpinning ends on the panel's own unpinned shape, so its glass takes over unchanged.
+   Transform and the strip's mask only: nothing else restyles. */
+@property --sidebar-glass-roll {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+@keyframes sidebar-glass-roll {
+  from { --sidebar-glass-roll: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* One clock for the column's slide and the strip's front: a transition would drift from the mask. */
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll] {
+    /* Pinning a peeked sidebar only rolls the band: the column is already out. */
+    --sidebar-glass-slide: 1;
+    --sidebar-glass-shift: calc((1 - var(--sidebar-glass-roll, 1)) * var(--sidebar-glass-slide) * var(--sidebar-width));
+    translate: calc(0px - var(--sidebar-glass-shift)) 0;
+    /* Its translate is a stacking context while it moves: keep it over the page as the pinned strip is. */
+    z-index: 1;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="peek"] {
+    --sidebar-glass-slide: 0;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame]:is([data-glass-frame-roll="in"], [data-glass-frame-roll="peek"]) {
+    animation: sidebar-glass-roll .2s ease backwards;
+  }
+  html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame][data-glass-frame-roll="out"] {
+    animation: sidebar-glass-roll .2s ease reverse forwards;
+  }
 }
 html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [data-windows-glass-frame] > [data-slot="sidebar-inner"] {
   position: relative;
@@ -7424,6 +7484,26 @@ html[data-glass="macos"] [data-slot="chat-settings-panel"] {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
+/* The pinned strip stops at the docked panel, whose glass runs to the window top instead of meeting it in a seam. */
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
+  --chat-settings-top: 0px;
+  padding-top: var(--studio-custom-titlebar-height, 0px);
+}
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-resize-handle"] {
+  top: var(--studio-custom-titlebar-height, 0px);
+}
+/* Beside the pinned strip, the strip's own glass runs down the panel column too, so sidebar, caption and
+   panel are one blurred sheet; two backdrop blurs side by side always show an edge where they meet. */
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"]::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-panel"] .bg-panel-surface,
 html[data-glass="macos"] [data-slot="chat-settings-panel"] .bg-panel-surface {
   background-color: transparent;
@@ -7434,6 +7514,14 @@ html[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat
 }
 html.dark[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-panel"] {
   box-shadow: inset 1px 0 0 rgb(255 255 255 / .08);
+}
+/* No pinned sidebar strip to meet, so the docked panel's top corner rounds under the custom titlebar. No transition:
+   the strip's roll draws the corner turning, and hands over on this exact shape. */
+html[data-glass][data-chat-wallpaper-workspace-ready]:not([data-sidebar-glass-frame]) aside[data-slot="chat-settings-panel"] {
+  border-top-left-radius: min(14px, var(--studio-custom-titlebar-height, 0px));
+}
+html[data-glass][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] > div:last-child {
+  border-top-left-radius: inherit;
 }
 
 html[data-glass] {
@@ -7491,6 +7579,8 @@ html[data-glass="macos"] :is([data-slot="sidebar-inner"], [data-slot="chat-setti
   background-color: color-mix(in srgb, var(--foreground) calc(14% * var(--contrast-wash-gain, 1)), transparent);
 }
 /* On the buttons, not the row, so the glass is the hover's box. */
+html[data-glass][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button::before,
+html[data-glass][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button),
 html[data-glass][data-chat-wallpaper-ready] [data-chat-model-controls] > :is(.unsloth-model-selector-trigger, [data-chat-model-notice]),
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] .unsloth-model-selector-trigger {
   position: relative;
@@ -7501,10 +7591,13 @@ html[data-glass][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="pag
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   text-shadow: none;
 }
+html[data-glass^="liquid"][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button::before,
+html[data-glass^="liquid"][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button),
 html[data-glass^="liquid"][data-chat-wallpaper-ready] [data-chat-model-controls] > :is(.unsloth-model-selector-trigger, [data-chat-model-notice]),
 html[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] .unsloth-model-selector-trigger {
   box-shadow: var(--glass-rim);
 }
+html[data-glass="liquid-3d"][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button)::before,
 html[data-glass="liquid-3d"][data-chat-wallpaper-ready] [data-chat-model-controls] > :is(.unsloth-model-selector-trigger, [data-chat-model-notice])::before,
 html[data-glass="liquid-3d"][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] .unsloth-model-selector-trigger::before {
   content: "";
@@ -7516,9 +7609,26 @@ html[data-glass="liquid-3d"][data-chat-wallpaper-workspace-ready] [data-wallpape
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   pointer-events: none;
 }
+html[data-glass][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button:hover::before,
+html[data-glass][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button):is(:hover, [aria-expanded="true"], [aria-pressed="true"]),
 html[data-glass][data-chat-wallpaper-ready] [data-chat-model-controls] > :is(.unsloth-model-selector-trigger, [data-chat-model-notice]):is(:hover:not(:has([data-eject-hit]:hover)), [aria-expanded="true"]),
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] .unsloth-model-selector-trigger:is(:hover:not(:has([data-eject-hit]:hover)), [aria-expanded="true"]) {
   background-image: linear-gradient(var(--glass-hover), var(--glass-hover)), var(--glass-sheen, linear-gradient(transparent, transparent));
+}
+/* Window buttons keep the full caption corner as their hit area; the glass is an inset pill. */
+html[data-glass][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button {
+  background-color: transparent !important;
+}
+html[data-glass][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button::before {
+  content: "";
+  position: absolute;
+  inset: 2px 4px;
+  z-index: -1;
+  border-radius: 10px;
+  pointer-events: none;
+}
+html[data-glass][data-chat-wallpaper-ready]:not([data-sidebar-glass-frame]) [data-window-controls] > button:last-child:hover::before {
+  background-color: #c42b1c !important;
 }
 /* Non-chat pages: the chat model button's glass on resting surfaces, its frost only on buttons that draw a hover or open pill. */
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] > [data-slot="sidebar-inset"] :where(.elevated-card, [class~="bg-card"], [class*="dark:bg-card"], [data-slot="input"], .panel-field, .field-soft, [data-slot="button"]:is([data-variant="outline"], [data-variant="secondary"]), button:is([data-active="true"][class*="active=true]:bg-"], [aria-current="page"]:is([class^="bg-"], [class*=" bg-"], [class*="dark:bg-"])), .hub-tag-soft, .hub-stat-pill, .hub-tab-toggle, .hub-download-card, .hub-tag-meta, .glass-inset) {
@@ -7581,6 +7691,7 @@ html[data-glass]:not(.dark)[data-chat-wallpaper-workspace-ready] [data-wallpaper
   backdrop-filter: none;
 }
 /* Focus rings are box-shadows: let them beat the glass edge. */
+html[data-glass][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button):focus-visible,
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] > [data-slot="sidebar-inset"] :focus-visible:is([class*="focus-visible:ring"]) {
   box-shadow: var(--tw-inset-shadow, 0 0 #0000), var(--tw-inset-ring-shadow, 0 0 #0000), var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow, 0 0 #0000) !important;
 }
@@ -7606,6 +7717,7 @@ html[data-glass]:not(.dark)[data-chat-wallpaper-workspace-ready] [data-wallpaper
 html[data-glass]:not(.dark)[data-chat-wallpaper-workspace-ready] [data-wallpaper-route="page"] > [data-slot="sidebar-inset"] .glass-inset {
   box-shadow: var(--glass-light-edge);
 }
+html:not(.dark)[data-glass][data-chat-wallpaper-ready] :is([data-chat-header-actions] > button, [data-chat-new-chat], html:not([data-sidebar-glass-frame]) [data-titlebar-nav]:not([data-slot="sidebar"] *) > button),
 html:not(.dark)[data-glass][data-chat-wallpaper-ready] [data-chat-model-controls] > :is(.unsloth-model-selector-trigger, [data-chat-model-notice]) {
   box-shadow: var(--glass-light-edge);
 }
