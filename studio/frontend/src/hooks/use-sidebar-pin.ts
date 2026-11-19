@@ -73,6 +73,14 @@ function setPinnedGlobal(next: boolean) {
   listeners.forEach((cb) => cb());
 }
 
+export function getSidebarPinned(): boolean {
+  return held ? beforeHold : pinnedValue;
+}
+
+export function setSidebarPinned(next: boolean) {
+  if (next !== getSidebarPinned()) setPinnedGlobal(next);
+}
+
 export function holdSidebarPinned() {
   if (!held) beforeHold = pinnedValue;
   held = true;
