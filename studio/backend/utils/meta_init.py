@@ -40,12 +40,9 @@ def install() -> bool:
         try:
             import torch.nn as nn
             from accelerate import big_modeling
+            from accelerate.utils import parse_flag_from_env
         except Exception:  # noqa: BLE001 -- no accelerate, nothing to guard
             return False
-        try:
-            from accelerate.utils import parse_flag_from_env
-        except Exception:  # noqa: BLE001
-            parse_flag_from_env = None
 
         original_register_parameter = nn.Module.register_parameter
 
@@ -66,11 +63,7 @@ def install() -> bool:
         @contextlib.contextmanager
         def init_on_device(device: Any, include_buffers: Optional[bool] = None):
             if include_buffers is None:
-                include_buffers = (
-                    parse_flag_from_env("ACCELERATE_INIT_INCLUDE_BUFFERS", False)
-                    if parse_flag_from_env is not None
-                    else False
-                )
+                include_buffers = parse_flag_from_env("ACCELERATE_INIT_INCLUDE_BUFFERS", False)
             if include_buffers:
                 # accelerate's own path: a torch.device context, which is already thread-local.
                 with device:
@@ -85,12 +78,10 @@ def install() -> bool:
 
         nn.Module.register_parameter = register_parameter
         big_modeling.init_on_device = init_on_device
-        try:
-            import accelerate
-            if getattr(accelerate, "init_on_device", None) is not None:
-                accelerate.init_on_device = init_on_device
-        except Exception:  # noqa: BLE001
-            pass
+        # Mid-import of accelerate this attribute isn't bound yet; its own `from .big_modeling import` picks ours up.
+        accelerate = sys.modules.get("accelerate")
+        if getattr(accelerate, "init_on_device", None) is not None:
+            accelerate.init_on_device = init_on_device
         _installed = True
         return True
 
