@@ -939,6 +939,8 @@ test("a context fixed by extra args is not an Auto fit", async () => {
   assert.equal(argsPinContext(["-c", "8192"]), true);
   assert.equal(argsPinContext(["--ctx-size", "8192"]), true);
   assert.equal(argsPinContext(["--ctx-size=8192"]), true);
+  assert.equal(argsPinContext(["--ctx_size", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx_size=8192"]), true);
   assert.equal(argsPinContext(["--ctx-checkpoints", "4", "-cb"]), false);
   assert.equal(argsPinContext(null), false);
 });

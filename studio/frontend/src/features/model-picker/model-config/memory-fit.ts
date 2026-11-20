@@ -351,9 +351,11 @@ export function previewsAutoFit(state: {
 
 /** Extra args that fix the context, so a load with Context on Auto was not an Auto fit. */
 export function argsPinContext(args: readonly string[] | null | undefined): boolean {
-  return (args ?? []).some(
-    (arg) => arg === "-c" || arg === "--ctx-size" || arg.startsWith("--ctx-size="),
-  );
+  return (args ?? []).some((arg) => {
+    // As extraArgFlagName (llama-extra-args.ts) reads it: `--ctx_size` is the backend's alias.
+    const name = arg.trim().split("=", 1)[0];
+    return name === "-c" || name.replaceAll("_", "-") === "--ctx-size";
+  });
 }
 
 /** Whether the resident's window came from an Auto fit: no Context set, no `-c` in its extra
