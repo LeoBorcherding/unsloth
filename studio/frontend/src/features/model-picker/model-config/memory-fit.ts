@@ -345,8 +345,6 @@ export interface ResidentFit {
   ctx: number;
   gpuBytes: number;
   totalBytes: number;
-  /** Loaded on Auto, so a window under native means the fit filled the budget. */
-  loadedAuto: boolean;
 }
 
 // Interpolation error stays well under this; a KV dtype or slot change moves the price far past it.
@@ -354,8 +352,8 @@ const RESIDENT_MATCH_TOLERANCE = 0.02;
 
 /** The window Auto would fit to with these settings, or null when the estimate cannot say.
  *  Interpolated between the floor and native prices: both are the loader's own sizing, and KV and
- *  the context-linear compute share grow linearly between them. With a model loaded, its own price
- *  is the budget: an Auto load cut below native filled the memory it had, which the unload frees. */
+ *  the context-linear compute share grow linearly between them. With a model loaded, the budget is
+ *  its own price plus what is free now, both of which a reload has. */
 export function resolveAutoFittedContext(
   estimate: MemoryFitEstimate,
   capacity: MemoryFitCapacity,
@@ -401,15 +399,16 @@ export function resolveAutoFittedContext(
       : resident.gpuBytes
     : Number.NaN;
   if (resident && Number.isFinite(residentBytes) && residentBytes > 0 && resident.ctx > 0) {
-    const filled = resident.loadedAuto && resident.ctx < nativeCtx;
-    // Unchanged settings price the same at the loaded window: that window is the answer.
+    // The unload frees the resident's own bytes on top of what is free now. Not the reclaim
+    // credit: that already counts the resident where it counts anything.
+    budget = residentBytes + (freeKnown ? availableGb * 1024 ** 3 : 0);
+    // Unchanged settings price the same at the loaded window, so never show less than it.
     if (
       resident.ctx >= floorCtx &&
       Math.abs(priceAt(resident.ctx) - residentBytes) <= residentBytes * RESIDENT_MATCH_TOLERANCE
     ) {
-      return filled ? resident.ctx : Math.max(resident.ctx, budgetFit(freeBudget));
+      return Math.max(resident.ctx, budgetFit(budget));
     }
-    budget = filled ? residentBytes : Math.max(residentBytes, freeBudget ?? 0);
   }
   if (budget == null) return null;
   return budgetFit(budget);

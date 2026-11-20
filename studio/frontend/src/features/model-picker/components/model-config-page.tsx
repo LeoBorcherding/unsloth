@@ -3867,7 +3867,6 @@ export function ModelConfigPage({
               ctx: residentContext,
               gpuBytes: reclaimableEstimate.gpuBytes,
               totalBytes: reclaimableEstimate.totalBytes,
-              loadedAuto: (loadedConfig?.customContextLength ?? null) == null,
             }
           : null)
       : null;
