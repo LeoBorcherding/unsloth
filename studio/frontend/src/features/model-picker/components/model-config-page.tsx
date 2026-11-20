@@ -142,9 +142,9 @@ import {
   mlxOffloadFromSlider,
   mlxOffloadModePatch,
   mlxOffloadSliderValue,
-  argsPinContext,
   previewsAutoFit,
   requestedPoolHoldsResident,
+  residentWasAutoFit,
   resolveAutoFittedContext,
   resolveReclaimableMemoryCredit,
 } from "../model-config/memory-fit";
@@ -3878,9 +3878,12 @@ export function ModelConfigPage({
               ctx: residentContext,
               gpuBytes: reclaimableEstimate.gpuBytes,
               totalBytes: reclaimableEstimate.totalBytes,
-              loadedAuto:
-                (loadedConfig?.customContextLength ?? null) == null &&
-                !argsPinContext(loadedLlamaExtraArgs),
+              loadedAuto: residentWasAutoFit({
+                customContextLength: loadedConfig?.customContextLength,
+                gpuMemoryMode: loadedConfig?.gpuMemoryMode,
+                gpuLayers: loadedConfig?.gpuLayers,
+                llamaExtraArgs: loadedLlamaExtraArgs,
+              }),
             }
           : null)
       : null;

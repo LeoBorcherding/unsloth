@@ -356,6 +356,23 @@ export function argsPinContext(args: readonly string[] | null | undefined): bool
   );
 }
 
+/** Whether the resident's window came from an Auto fit: no Context set, no `-c` in its extra
+ *  args, and not Manual with fixed layers, where the reload pins the loaded window instead. */
+export function residentWasAutoFit(loaded: {
+  customContextLength?: number | null;
+  gpuMemoryMode?: "auto" | "manual" | null;
+  gpuLayers?: number | null;
+  llamaExtraArgs?: readonly string[] | null;
+}): boolean {
+  const fixedLayers =
+    loaded.gpuMemoryMode === "manual" && loaded.gpuLayers != null && loaded.gpuLayers >= 0;
+  return (
+    (loaded.customContextLength ?? null) == null &&
+    !fixedLayers &&
+    !argsPinContext(loaded.llamaExtraArgs)
+  );
+}
+
 /** The loaded model, priced at the window it loaded with. */
 export interface ResidentFit {
   ctx: number;

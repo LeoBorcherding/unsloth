@@ -942,3 +942,13 @@ test("a context fixed by extra args is not an Auto fit", async () => {
   assert.equal(argsPinContext(["--ctx-checkpoints", "4", "-cb"]), false);
   assert.equal(argsPinContext(null), false);
 });
+
+test("only a load the fitter sized counts as an Auto fit", async () => {
+  const { residentWasAutoFit } = await import("../src/features/model-picker/model-config/memory-fit.ts");
+  assert.equal(residentWasAutoFit({}), true);
+  assert.equal(residentWasAutoFit({ customContextLength: 8192 }), false);
+  assert.equal(residentWasAutoFit({ llamaExtraArgs: ["-c", "8192"] }), false);
+  // Manual with fixed layers reloads at the loaded window (fixedLayerContextPin).
+  assert.equal(residentWasAutoFit({ gpuMemoryMode: "manual", gpuLayers: 20 }), false);
+  assert.equal(residentWasAutoFit({ gpuMemoryMode: "manual", gpuLayers: -1 }), true, "Manual with Auto layers still fits");
+});
