@@ -354,6 +354,8 @@ export interface ResidentFit {
   ctx: number;
   gpuBytes: number;
   totalBytes: number;
+  /** Loaded on Auto: a window under native means the fit filled the budget it had. */
+  loadedAuto: boolean;
 }
 
 // Interpolation error stays well under this; a KV dtype or slot change moves the price far past it.
@@ -408,15 +410,17 @@ export function resolveAutoFittedContext(
       : resident.gpuBytes
     : Number.NaN;
   if (resident && Number.isFinite(residentBytes) && residentBytes > 0 && resident.ctx > 0) {
-    // The unload frees the resident's own bytes on top of what is free now. Not the reclaim
-    // credit: that already counts the resident where it counts anything.
-    budget = residentBytes + (freeKnown ? availableGb * 1024 ** 3 : 0);
-    // Unchanged settings price the same at the loaded window, so never show less than it.
+    // An Auto load cut below native filled its budget, and what reads as free beside it is the
+    // loader's reserve (measured: a T4 showed room for 86,272 where the same reload took 82,176).
+    // Any other load leaves real room on top. Not the reclaim credit: it already counts the resident.
+    const filled = resident.loadedAuto && resident.ctx < nativeCtx;
+    budget = residentBytes + (!filled && freeKnown ? availableGb * 1024 ** 3 : 0);
+    // Unchanged settings price the same at the loaded window.
     if (
       resident.ctx >= floorCtx &&
       Math.abs(priceAt(resident.ctx) - residentBytes) <= residentBytes * RESIDENT_MATCH_TOLERANCE
     ) {
-      return Math.max(resident.ctx, budgetFit(budget));
+      return filled ? resident.ctx : Math.max(resident.ctx, budgetFit(budget));
     }
   }
   if (budget == null) return null;

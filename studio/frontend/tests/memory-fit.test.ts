@@ -898,27 +898,28 @@ test("with a model loaded, its own price is the budget: unchanged settings keep 
   // Resident: the f16 Auto load, cut to 82,176 tokens; priced there. The VRAM it holds reads as used,
   // and the GPU credit is 0 under Auto placement, so free memory alone would say "floor".
   const residentBytes = 3.54 * GB + ((38.66 - 3.54) * GB * (82176 - 8192)) / (262144 - 8192);
-  const resident = { ctx: 82176, gpuBytes: residentBytes, totalBytes: residentBytes };
-  // After a filled Auto load, usable free VRAM is what the loader's reserve left: none.
+  const resident = { ctx: 82176, gpuBytes: residentBytes, totalBytes: residentBytes, loadedAuto: true };
+  // What the panel read as usable free on that T4 with the f16 load resident: the loader's reserve.
   const capacity: MemoryFitCapacity = {
     gpuCapacityGb: 15,
     totalCapacityGb: 60,
     systemRamCapacityGb: 50,
-    freeGpuCapacityGb: 0,
+    freeGpuCapacityGb: 0.55,
     freeGpuCapacityKnown: true,
     usableSystemRamGb: 40,
     singleMemoryPool: false,
   };
   assert.equal(resolveAutoFittedContext(f16, capacity), 8192, "free VRAM alone: the floor");
-  assert.equal(resolveAutoFittedContext(f16, capacity, resident), 82176);
+  assert.equal(resolveAutoFittedContext(f16, capacity, resident), 82176, "unchanged: the loaded window");
   const refit = resolveAutoFittedContext(q8, capacity, resident) as number;
   // The real q8_0 Auto load on that card picked 146,432.
   assert.ok(Math.abs(refit - 146432) / 146432 < 0.01, `${refit}`);
-  // VRAM freed since the load is room the reload also gets.
-  const roomier = resolveAutoFittedContext(f16, { ...capacity, freeGpuCapacityGb: 4 }, resident) as number;
-  assert.ok(roomier > 82176 + 25000, `${roomier}`);
+  // A load that did not fill its budget (pinned here) leaves real room on top of its own bytes.
+  const pinned = { ...resident, loadedAuto: false };
+  assert.ok((resolveAutoFittedContext(f16, { ...capacity, freeGpuCapacityGb: 4 }, pinned) as number) > 82176 + 25000);
   assert.ok(
-    (resolveAutoFittedContext(q8, { ...capacity, freeGpuCapacityGb: 4 }, resident) as number) > refit,
+    (resolveAutoFittedContext(q8, { ...capacity, freeGpuCapacityGb: 4 }, pinned) as number) >
+      (resolveAutoFittedContext(q8, capacity, pinned) as number),
   );
 });
 
