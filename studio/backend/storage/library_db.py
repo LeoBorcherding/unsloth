@@ -5,12 +5,11 @@
 
 import sqlite3
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Optional
 
-from storage.studio_db import connect_studio_db
+from storage.studio_db import connect_studio_db, now_ms
 from utils.paths import ensure_dir, studio_db_path
 
 _schema_lock = threading.Lock()
@@ -94,10 +93,6 @@ def _lock(conn: sqlite3.Connection) -> None:
     conn.execute("BEGIN IMMEDIATE")
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 def _folder(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -142,7 +137,7 @@ def _is_descendant(conn: sqlite3.Connection, folder_id: str, ancestor_id: str) -
 
 
 def create_folder(name: str, parent_id: Optional[str] = None) -> dict:
-    now = _now_ms()
+    now = now_ms()
     folder_id = uuid.uuid4().hex
     conn = get_connection()
     try:
@@ -190,7 +185,7 @@ def update_folder(
                 raise KeyError(parent_id)
             if _is_descendant(conn, parent_id, folder_id):
                 raise ValueError("A folder cannot be moved into itself")
-        now = _now_ms()
+        now = now_ms()
         if name is not None:
             conn.execute(
                 "UPDATE library_folders SET name = ?, updated_at = ? WHERE id = ?",
@@ -273,7 +268,7 @@ def update_entry(
             ).fetchone()
         ):
             raise KeyError(folder_id)
-        now = _now_ms()
+        now = now_ms()
         if fingerprint is not None:
             conn.execute(
                 "DELETE FROM library_entries WHERE item_id = ? AND fingerprint IS NOT NULL AND fingerprint != ?",
@@ -311,7 +306,7 @@ def mark_opened(item_id: str, fingerprint: Optional[str] = None) -> None:
     conn = get_connection()
     try:
         _lock(conn)
-        now = _now_ms()
+        now = now_ms()
         if fingerprint is not None:
             conn.execute(
                 "DELETE FROM library_entries WHERE item_id = ? AND fingerprint IS NOT NULL AND fingerprint != ?",
@@ -399,7 +394,7 @@ def get_upload(upload_id: str) -> Optional[dict]:
 
 
 def insert_upload(upload_id: str, name: str, content_type: str, size_bytes: int) -> dict:
-    now = _now_ms()
+    now = now_ms()
     conn = get_connection()
     try:
         conn.execute(
@@ -424,7 +419,7 @@ def touch_upload(upload_id: str, size_bytes: int) -> None:
     try:
         conn.execute(
             "UPDATE library_uploads SET size_bytes = ?, updated_at = ? WHERE id = ?",
-            (size_bytes, _now_ms(), upload_id),
+            (size_bytes, now_ms(), upload_id),
         )
         conn.commit()
     finally:

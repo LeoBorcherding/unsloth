@@ -86,12 +86,13 @@ from dataclasses import dataclass, fields as dataclass_fields, replace
 
 import re as _re
 from pydantic import BaseModel, BeforeValidator
-from urllib.parse import quote as _urlquote, unquote as _urlunquote
+from urllib.parse import unquote as _urlunquote
 
 # Model size extraction (shared with core/inference/llama_cpp.py)
 from utils.models import extract_model_size_b as _extract_model_size_b
 from utils.models.checkpoints import is_full_finetune_output
 
+from utils.content_disposition import attachment_disposition
 from utils.api_errors import (
     ANTHROPIC_TYPE_BY_STATUS,
     anthropic_error_body,
@@ -37827,12 +37828,7 @@ async def serve_sandbox_file(
     }
     if media_type is None:
         media_type = "application/octet-stream"
-        # RFC 5987: ASCII fallback plus UTF-8 form, so "ventas año.csv" saves.
-        ascii_name = safe_filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
-        quoted = _urlquote(safe_filename)
-        headers["Content-Disposition"] = (
-            f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quoted}"
-        )
+        headers["Content-Disposition"] = attachment_disposition(safe_filename, "download")
 
     headers["Content-Length"] = str(size)
     if head_only:

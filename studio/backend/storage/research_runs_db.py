@@ -10,11 +10,14 @@ import hashlib
 import json
 import sqlite3
 import threading
-import time
 from typing import Any
 
 from core.inference.web_access_policy import check_url_access, normalize_website_policy
-from storage.studio_db import get_connection as _studio_connection, insert_server_chat_message
+from storage.studio_db import (
+    get_connection as _studio_connection,
+    insert_server_chat_message,
+    now_ms,
+)
 
 ACTIVE_STATUSES = frozenset(
     {"planning", "awaiting_approval", "queued", "running", "paused", "cancelling"}
@@ -32,10 +35,6 @@ def get_connection():
 
 class ResearchConflictError(RuntimeError):
     pass
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def canonical_plan(plan: dict[str, Any]) -> tuple[str, str]:
