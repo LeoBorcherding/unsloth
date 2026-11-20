@@ -7476,6 +7476,15 @@ html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wa
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+/* WebKitGTK before 2.54 (webkit-cpu-paint) blurs whatever paints over a backdrop-filter layer into it, so the
+   strip's glass haloed the sidebar logo and the slider thumbs. A surface's own backdrop leaves its children out,
+   so there the sidebar and the docked panel blur for themselves, over the strip's glass and with its fill. */
+html.tauri.render-linux.webkit-cpu-paint[data-glass][data-chat-wallpaper-workspace-ready] [data-windows-glass-frame] > [data-slot="sidebar-inner"],
+html.tauri.render-linux.webkit-cpu-paint[data-glass][data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
+  background-color: color-mix(in srgb, var(--glass-sidebar-fill) min(96%, calc(max(var(--glass-tint), var(--glass-pane-floor)) * var(--glass-opacity, 1))), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
 /* No edge line either, as the pinned sidebar has none: it would cut straight through the strip's inner curve. */
 html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] > div:last-child {
   border-left-color: transparent;
