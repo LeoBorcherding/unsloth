@@ -640,7 +640,7 @@ function GgufContextLengthSetting({
             ? ` Auto currently selected ${activeLoadedContext.toLocaleString()} tokens.`
             : ""}
           {isAuto && refitsLoadedContext != null
-            ? ` The loaded ${refitsLoadedContext.toLocaleString()} tokens were fitted to other settings; Auto fits again on load.`
+            ? ` Loaded at ${refitsLoadedContext.toLocaleString()} tokens for your previous settings. Reload to let Auto resize based on your changes.`
             : ""}
           {nativeContextLength != null
             ? ` This model's native context is ${nativeContextLength.toLocaleString()} tokens.`

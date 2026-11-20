@@ -73,6 +73,10 @@ test("the existing info hint owns the mode explanation and fitted result", () =>
     /renderWarning=\{\(v\) => resolvedIsDiffusion \? \( <DiffusionContextNote [^)]*\) : isActiveModel && loadedMaxContextLength != null && v > loadedMaxContextLength && \(/,
   );
   assert.match(panelCode, /\{renderWarning\(shown\)\}/);
+  assert.match(
+    panelCode,
+    /Loaded at \$\{refitsLoadedContext\.toLocaleString\(\)\} tokens for your previous settings\. Reload to let Auto resize based on your changes\./,
+  );
   assert.doesNotMatch(
     panelCode,
     /<p className="text-ui-11 leading-relaxed text-muted-foreground">/,
