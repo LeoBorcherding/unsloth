@@ -150,7 +150,7 @@ import {
   resolveResidentEstimateRequest,
   selectResidentEstimateSettings,
 } from "../model-config/resident-memory-request";
-import { estimateKey, useMemoryEstimate } from "../hooks/use-memory-estimate";
+import { useMemoryEstimate } from "../hooks/use-memory-estimate";
 import { usePrefillOptionAvailable } from "../hooks/use-int8-prefill-available";
 import {
   fetchLoadModelOverride,
@@ -3847,13 +3847,7 @@ export function ModelConfigPage({
       estimateAvailable: memoryEstimate.estimate.available,
       estimateStale: memoryEstimate.stale,
       isActiveModel,
-      residentKnown: residentEstimateRequest != null,
-      residentLoadedAuto: (loadedConfig?.customContextLength ?? null) == null,
-      pendingMatchesResident:
-        residentEstimateRequest != null &&
-        memoryEstimateRequest != null &&
-        estimateKey({ ...memoryEstimateRequest, nCtx: null }) ===
-          estimateKey({ ...residentEstimateRequest, nCtx: null }),
+      residentPriced: reclaimableEstimate != null && residentContext != null,
     })
       ? resolveAutoFittedContext(memoryEstimate.estimate, {
           gpuCapacityGb: memoryGpuCapacityGb,
@@ -3868,7 +3862,14 @@ export function ModelConfigPage({
           singleMemoryPool,
           reclaimableTotalBytes: reclaimableCredit.totalBytes,
           reclaimableGpuBytes: reclaimableCredit.gpuBytes,
-        })
+        }, reclaimableEstimate && residentContext != null
+          ? {
+              ctx: residentContext,
+              gpuBytes: reclaimableEstimate.gpuBytes,
+              totalBytes: reclaimableEstimate.totalBytes,
+              loadedAuto: (loadedConfig?.customContextLength ?? null) == null,
+            }
+          : null)
       : null;
 
   const storedRecord = useStoredPerModelConfig(configId, target.ggufVariant);

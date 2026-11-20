@@ -858,7 +858,7 @@ test("on one pool the floor's own total is used, so host terms that shrink with 
   assert.equal(fitted, Math.floor((256 + (1.5 / 10.5) * (262144 - 256)) / 256) * 256);
 });
 
-test("the Context field previews Auto only from a current estimate that the resident has not answered", async () => {
+test("the Context field previews Auto only from a current estimate, and for a loaded model only once it is priced", async () => {
   const { previewsAutoFit } = await import(
     "../src/features/model-picker/model-config/memory-fit.ts"
   );
@@ -867,19 +867,63 @@ test("the Context field previews Auto only from a current estimate that the resi
     estimateAvailable: true,
     estimateStale: false,
     isActiveModel: true,
-    residentKnown: true,
-    residentLoadedAuto: true,
-    pendingMatchesResident: false,
+    residentPriced: true,
   };
-  assert.equal(previewsAutoFit(base), true, "a KV dtype change on the resident");
-  assert.equal(previewsAutoFit({ ...base, pendingMatchesResident: true }), false, "unchanged Auto resident");
-  assert.equal(
-    previewsAutoFit({ ...base, pendingMatchesResident: true, residentLoadedAuto: false }),
-    true,
-    "a resident pinned to a context says nothing about what Auto would pick",
-  );
+  assert.equal(previewsAutoFit(base), true);
   assert.equal(previewsAutoFit({ ...base, estimateStale: true }), false, "estimate priced the old settings");
-  assert.equal(previewsAutoFit({ ...base, residentKnown: false }), false);
-  assert.equal(previewsAutoFit({ ...base, isActiveModel: false, residentKnown: false }), true);
+  assert.equal(previewsAutoFit({ ...base, residentPriced: false }), false, "no yardstick yet: the loaded window stands");
+  assert.equal(previewsAutoFit({ ...base, isActiveModel: false, residentPriced: false }), true);
   assert.equal(previewsAutoFit({ ...base, isGguf: false }), false);
+});
+
+test("with a model loaded, its own price is the budget: unchanged settings keep its window, q8_0 refits", async () => {
+  const { resolveAutoFittedContext } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  // Colab T4, Qwen3-4B Q4_K_M: the panel's f16 and q8_0 estimates, 4 slots, Auto.
+  const pending = (gpuBytes: number, gpuFloorBytes: number): MemoryFitEstimate => ({
+    gpuBytes,
+    totalBytes: gpuBytes,
+    kvEstimable: true,
+    drafterKvUnsized: false,
+    adaptersUnsized: false,
+    moeOffloadUnmodelled: false,
+    contextIsPinned: false,
+    gpuFloorBytes,
+    gpuFloorCtx: 8192,
+    nCtx: 262144,
+  });
+  const f16 = pending(38.66 * GB, 3.54 * GB);
+  const q8 = pending(22.78 * GB, 3.05 * GB);
+  // Resident: the f16 Auto load, cut to 82,176 tokens; priced there. The VRAM it holds reads as used,
+  // and the GPU credit is 0 under Auto placement, so free memory alone would say "floor".
+  const residentBytes = 3.54 * GB + ((38.66 - 3.54) * GB * (82176 - 8192)) / (262144 - 8192);
+  const resident = { ctx: 82176, gpuBytes: residentBytes, totalBytes: residentBytes, loadedAuto: true };
+  const capacity: MemoryFitCapacity = {
+    gpuCapacityGb: 15,
+    totalCapacityGb: 60,
+    systemRamCapacityGb: 50,
+    freeGpuCapacityGb: 0.4,
+    freeGpuCapacityKnown: true,
+    usableSystemRamGb: 40,
+    singleMemoryPool: false,
+  };
+  assert.equal(resolveAutoFittedContext(f16, capacity), 8192, "without the resident: the floor");
+  assert.equal(resolveAutoFittedContext(f16, capacity, resident), 82176);
+  const refit = resolveAutoFittedContext(q8, capacity, resident) as number;
+  // The real q8_0 Auto load on that card picked 146,432.
+  assert.ok(Math.abs(refit - 146432) / 146432 < 0.03, `${refit}`);
+  // A resident pinned to a window never filled the budget, so its price is only a floor under it:
+  // with more free than it holds, Auto would go past the pinned window.
+  const pinned = resolveAutoFittedContext(
+    f16,
+    { ...capacity, freeGpuCapacityGb: 20 },
+    { ...resident, loadedAuto: false },
+  ) as number;
+  assert.ok(pinned > 82176, `${pinned}`);
+  assert.equal(
+    resolveAutoFittedContext(f16, capacity, { ...resident, loadedAuto: false }),
+    82176,
+    "with nothing more free, the pinned window is the most Auto can show",
+  );
 });

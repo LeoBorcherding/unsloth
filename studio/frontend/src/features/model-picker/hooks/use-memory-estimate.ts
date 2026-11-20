@@ -23,7 +23,7 @@ export interface MemoryEstimateState {
 }
 
 /** Settings the backend ignores stay out, or the row re-fetches for nothing. */
-export function estimateKey(request: MemoryEstimateRequest | null): string | null {
+function estimateKey(request: MemoryEstimateRequest | null): string | null {
   if (!request) return null;
   return JSON.stringify([
     request.modelPath,

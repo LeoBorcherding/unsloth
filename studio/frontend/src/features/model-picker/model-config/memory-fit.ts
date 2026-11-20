@@ -327,31 +327,39 @@ export function resolveMemoryFit(
 const AUTO_CONTEXT_STEP = 256;
 
 /** Whether the Context field previews Auto's fit, rather than the resident's window or a default.
- *  A resident Auto load with the same fit-moving settings already answered; a stale estimate
- *  priced the previous settings. */
+ *  A stale estimate priced the previous settings; the resident model is the fit's yardstick, so
+ *  without a current price of it the loaded window stands. */
 export function previewsAutoFit(state: {
   isGguf: boolean;
   estimateAvailable: boolean;
   estimateStale: boolean;
   isActiveModel: boolean;
-  /** The resident's own settings are known, so they can be compared at all. */
-  residentKnown: boolean;
-  residentLoadedAuto: boolean;
-  pendingMatchesResident: boolean;
+  residentPriced: boolean;
 }): boolean {
   if (!state.isGguf || !state.estimateAvailable || state.estimateStale) return false;
-  if (!state.isActiveModel) return true;
-  return (
-    state.residentKnown && !(state.residentLoadedAuto && state.pendingMatchesResident)
-  );
+  return !state.isActiveModel || state.residentPriced;
 }
 
-/** The window Auto would fit to with these settings and the memory free now, or null when the
- *  estimate cannot say. Interpolated between the floor and native prices: both are the loader's
- *  own sizing, and KV and the context-linear compute share grow linearly between them. */
+/** The loaded model, priced at the window it loaded with. */
+export interface ResidentFit {
+  ctx: number;
+  gpuBytes: number;
+  totalBytes: number;
+  /** Loaded on Auto, so a window under native means the fit filled the budget. */
+  loadedAuto: boolean;
+}
+
+// Interpolation error stays well under this; a KV dtype or slot change moves the price far past it.
+const RESIDENT_MATCH_TOLERANCE = 0.02;
+
+/** The window Auto would fit to with these settings, or null when the estimate cannot say.
+ *  Interpolated between the floor and native prices: both are the loader's own sizing, and KV and
+ *  the context-linear compute share grow linearly between them. With a model loaded, its own price
+ *  is the budget: an Auto load cut below native filled the memory it had, which the unload frees. */
 export function resolveAutoFittedContext(
   estimate: MemoryFitEstimate,
   capacity: MemoryFitCapacity,
+  resident: ResidentFit | null = null,
 ): number | null {
   const nativeCtx = estimate.nCtx ?? 0;
   const floorCtx = estimate.gpuFloorCtx ?? 0;
@@ -368,31 +376,54 @@ export function resolveAutoFittedContext(
   }
   if (nativeCtx <= floorCtx) return nativeCtx;
   const { freeGpuCapacityGb: availableGb, freeGpuCapacityKnown: known } = capacity;
-  if (!Number.isFinite(availableGb) || availableGb < 0 || (availableGb === 0 && !known)) {
-    return null;
-  }
+  const freeKnown = Number.isFinite(availableGb) && availableGb >= 0 && (availableGb > 0 || known);
   const reclaimableTotal = reclaimableBytes(capacity.reclaimableTotalBytes);
   const reclaimed = capacity.singleMemoryPool
     ? reclaimableTotal
     : Math.min(reclaimableBytes(capacity.reclaimableGpuBytes), reclaimableTotal);
-  const budget =
-    (availableGb +
-      Math.max(0, reclaimed / 1024 ** 3 - reclaimableBytes(capacity.freeGpuReserveDeficitGb))) *
-    1024 ** 3;
+  const freeBudget = freeKnown
+    ? (availableGb +
+        Math.max(0, reclaimed / 1024 ** 3 - reclaimableBytes(capacity.freeGpuReserveDeficitGb))) *
+      1024 ** 3
+    : null;
   const nativeBytes = capacity.singleMemoryPool ? estimate.totalBytes : estimate.gpuBytes;
   const floorBytes =
     capacity.singleMemoryPool && Number.isFinite(estimate.floorTotalBytes)
       ? (estimate.floorTotalBytes as number)
       : nativeBytes - Math.max(0, estimate.gpuBytes - (estimate.gpuFloorBytes as number));
   const shrinkable = Math.max(0, nativeBytes - floorBytes);
-  if (nativeBytes <= budget) return nativeCtx;
-  if (floorBytes >= budget || shrinkable === 0) return floorCtx;
-  const fitted =
-    floorCtx + ((budget - floorBytes) / shrinkable) * (nativeCtx - floorCtx);
-  return Math.max(
-    floorCtx,
-    Math.min(nativeCtx, Math.floor(fitted / AUTO_CONTEXT_STEP) * AUTO_CONTEXT_STEP),
-  );
+  const priceAt = (ctx: number) =>
+    floorBytes + (shrinkable * (ctx - floorCtx)) / (nativeCtx - floorCtx);
+  let budget = freeBudget;
+  const residentBytes = resident
+    ? capacity.singleMemoryPool
+      ? resident.totalBytes
+      : resident.gpuBytes
+    : Number.NaN;
+  if (resident && Number.isFinite(residentBytes) && residentBytes > 0 && resident.ctx > 0) {
+    const filled = resident.loadedAuto && resident.ctx < nativeCtx;
+    // Unchanged settings price the same at the loaded window: that window is the answer.
+    if (
+      resident.ctx >= floorCtx &&
+      Math.abs(priceAt(resident.ctx) - residentBytes) <= residentBytes * RESIDENT_MATCH_TOLERANCE
+    ) {
+      return filled ? resident.ctx : Math.max(resident.ctx, budgetFit(freeBudget));
+    }
+    budget = filled ? residentBytes : Math.max(residentBytes, freeBudget ?? 0);
+  }
+  if (budget == null) return null;
+  return budgetFit(budget);
+
+  function budgetFit(room: number | null): number {
+    if (room == null) return floorCtx;
+    if (nativeBytes <= room) return nativeCtx;
+    if (floorBytes >= room || shrinkable === 0) return floorCtx;
+    const fitted = floorCtx + ((room - floorBytes) / shrinkable) * (nativeCtx - floorCtx);
+    return Math.max(
+      floorCtx,
+      Math.min(nativeCtx, Math.floor(fitted / AUTO_CONTEXT_STEP) * AUTO_CONTEXT_STEP),
+    );
+  }
 }
 
 interface AdvisoryVerdicts {
