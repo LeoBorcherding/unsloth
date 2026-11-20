@@ -834,6 +834,7 @@ export const it = {
     error: "Errore",
     export: "Esporta",
     help: "Aiuto",
+    justNow: "proprio ora",
     todayAt: "Oggi, {time}",
     yesterdayAt: "Ieri, {time}",
     loading: "Caricamento...",
@@ -5634,7 +5635,6 @@ export const it = {
       modified: "Modificato {time}",
       opened: "Aperto {time}",
       modifiedColumn: "Modificato",
-      justNow: "proprio ora",
     },
     size: {
       bytes: "{value} B",

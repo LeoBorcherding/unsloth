@@ -68,7 +68,7 @@ import {
   GitBranchIcon,
 } from "lucide-react";
 import { type ReactNode, createContext, useContext } from "react";
-import { formatActivityTime, formatCardTime } from "../format";
+import { formatActivityTime, formatCardTime } from "@/i18n/relative-time";
 import {
   CARD_ICON_CLASS as FILE_CARD_ICON_CLASS,
   CARD_SURFACE as FILE_CARD_SURFACE,

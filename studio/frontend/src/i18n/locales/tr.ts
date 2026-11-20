@@ -1049,6 +1049,7 @@ export const tr = {
     error: "Hata",
     export: "Dışa aktar",
     help: "Yardım",
+    justNow: "az önce",
     todayAt: "Bugün, {time}",
     yesterdayAt: "Dün, {time}",
     loading: "Yükleniyor...",
@@ -5939,7 +5940,6 @@ export const tr = {
       modified: "Değiştirildi: {time}",
       opened: "Açıldı: {time}",
       modifiedColumn: "Değiştirilme",
-      justNow: "az önce",
     },
     size: {
       bytes: "{value} B",

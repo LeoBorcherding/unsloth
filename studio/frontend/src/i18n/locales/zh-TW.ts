@@ -999,6 +999,7 @@ export const zhTW = {
     error: "錯誤",
     export: "匯出",
     help: "說明",
+    justNow: "剛剛",
     todayAt: "今天 {time}",
     yesterdayAt: "昨天 {time}",
     loading: "載入中...",
@@ -5648,7 +5649,6 @@ export const zhTW = {
       modified: "修改於 {time}",
       opened: "開啟於 {time}",
       modifiedColumn: "修改日期",
-      justNow: "剛剛",
     },
     size: {
       bytes: "{value} B",

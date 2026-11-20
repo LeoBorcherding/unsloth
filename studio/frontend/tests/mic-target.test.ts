@@ -28,6 +28,7 @@ import * as sttModelCatalog from "../src/features/settings/stores/stt-model-cata
 import * as sttContext from "../src/features/settings/stores/stt-context.ts";
 import { installLocalStorageFake, readSrc } from "./helpers/kit.ts";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
+import { escapeRegExp } from "../src/lib/escape-regexp.ts";
 
 const { store } = installLocalStorageFake();
 const KEY = "unsloth_voice_settings";
@@ -38,6 +39,7 @@ const { useVoiceSettingsStore } = loadWithStubs<
   new URL("../src/features/settings/stores/voice-settings-store.ts", import.meta.url),
   {
     "@/lib/api-base": { isTauri: false },
+    "@/lib/escape-regexp": { escapeRegExp },
     "../../audio/audio-cpp-catalog": audioCppCatalog,
     zustand,
     "zustand/middleware": zustandMiddleware,

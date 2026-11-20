@@ -19,7 +19,8 @@ import {
   hasThumbnail,
 } from "../file-kind";
 import { streamsPreview } from "../file-name";
-import { formatCardTime, formatItemCount } from "../format";
+import { formatCardTime } from "@/i18n/relative-time";
+import { formatItemCount } from "../format";
 import { useColumnCount, useLibraryThumbnail, useSeen } from "../hooks";
 import { useLibraryActions } from "../actions-context";
 import { CARD_COLUMNS, useLibrarySettingsStore } from "../settings-store";

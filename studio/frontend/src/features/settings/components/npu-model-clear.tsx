@@ -11,6 +11,7 @@ import {
   useNpuCatalogStore,
 } from "@/features/npu/npu-catalog-store";
 import { useT } from "@/i18n";
+import { errorMessage } from "@/lib/error-message";
 import { toast } from "@/lib/toast";
 
 /** Keep the Hub's NPU list in step once it has been listed; listing before that would start lemond. */
@@ -43,7 +44,7 @@ export function NpuModelClear({
       refreshNpuCatalogIfListed();
     } catch (error) {
       toast.error(t("settings.resources.storage.caches.clearFailed"), {
-        description: error instanceof Error ? error.message : String(error),
+        description: errorMessage(error),
       });
     } finally {
       setDeleting(false);

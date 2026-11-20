@@ -1054,6 +1054,7 @@ export const vi = {
     error: "Lỗi",
     export: "Xuất",
     help: "Trợ giúp",
+    justNow: "vừa xong",
     todayAt: "Hôm nay, {time}",
     yesterdayAt: "Hôm qua, {time}",
     loading: "Đang tải...",
@@ -5936,7 +5937,6 @@ export const vi = {
       modified: "Đã sửa {time}",
       opened: "Đã mở {time}",
       modifiedColumn: "Ngày sửa đổi",
-      justNow: "vừa xong",
     },
     size: {
       bytes: "{value} B",

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { useObjectUrl } from "@/hooks/use-object-url";
 import { notifyGalleryChanged } from "@/lib/gallery-flags";
 import { getHfToken, hfApiToken } from "@/features/hub";
 import {
@@ -52,19 +53,6 @@ function outputFrames(step: number, total?: number): number {
 
 function seconds(value: number): string {
   return `${value.toFixed(1)} s`;
-}
-
-function useObjectUrl(blob: Blob | null): string | null {
-  const url = useMemo(() => (blob ? URL.createObjectURL(blob) : null), [blob]);
-  useEffect(
-    () => () => {
-      if (url) {
-        URL.revokeObjectURL(url);
-      }
-    },
-    [url],
-  );
-  return url;
 }
 
 export function VideoRestylePanel({ active }: { active: boolean }) {

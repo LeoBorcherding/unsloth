@@ -76,9 +76,7 @@ export interface LibrarySnapshot {
   unlistedBytes?: Record<string, number>;
 }
 
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+export { errorMessage } from "@/lib/error-message";
 
 async function ensureOk(response: Response): Promise<Response> {
   if (!response.ok) throw new Error(await readFastApiError(response));

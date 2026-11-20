@@ -1047,6 +1047,7 @@ export const fa = {
     error: "خطا",
     export: "خروجی گرفتن",
     help: "راهنما",
+    justNow: "همین الان",
     todayAt: "امروز، {time}",
     yesterdayAt: "دیروز، {time}",
     loading: "در حال بارگذاری...",
@@ -5921,7 +5922,6 @@ export const fa = {
       modified: "تغییر {time}",
       opened: "باز شده {time}",
       modifiedColumn: "تاریخ تغییر",
-      justNow: "همین الان",
     },
     size: {
       bytes: "{value} B",

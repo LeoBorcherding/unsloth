@@ -1002,6 +1002,7 @@ export const th = {
     error: "ข้อผิดพลาด",
     export: "ส่งออก",
     help: "ความช่วยเหลือ",
+    justNow: "เมื่อสักครู่",
     todayAt: "วันนี้ {time}",
     yesterdayAt: "เมื่อวาน {time}",
     loading: "กำลังโหลด...",
@@ -5690,7 +5691,6 @@ export const th = {
       modified: "แก้ไขเมื่อ {time}",
       opened: "เปิดเมื่อ {time}",
       modifiedColumn: "วันที่แก้ไข",
-      justNow: "เมื่อสักครู่",
     },
     size: {
       bytes: "{value} B",

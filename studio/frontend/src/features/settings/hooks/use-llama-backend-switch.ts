@@ -3,6 +3,7 @@
 
 import { invalidateLlamaFlagCatalog } from "@/features/model-picker/api/llama-flags";
 import { useT } from "@/i18n";
+import { errorMessage } from "@/lib/error-message";
 import {
   signalLlamaJobStarted,
   subscribeToLlamaJobStarted,
@@ -45,7 +46,7 @@ export function useLlamaBackendSwitch() {
       return next;
     } catch (error) {
       if (mounted.current) {
-        setLoadError(error instanceof Error ? error.message : String(error));
+        setLoadError(errorMessage(error));
       }
       return null;
     }
@@ -186,7 +187,7 @@ export function useLlamaBackendSwitch() {
         }
         setApplying(false);
         ownedJob.current = null;
-        toast.error(error instanceof Error ? error.message : String(error));
+        toast.error(errorMessage(error));
       }
     })();
   }, [selected, status?.backendRequest, refresh, startPolling, t]);

@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useT } from "@/i18n";
+import { escapeRegExp } from "@/lib/escape-regexp";
 import { cn } from "@/lib/utils";
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -52,12 +53,11 @@ export function CreateKeyForm({
   const [expiry, setExpiry] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [prefix, suffix] = t("settings.apiKeys.defaultTokenName").split("{n}");
-  const escape = (text = "") => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const defaultName = t("settings.apiKeys.defaultTokenName", {
     n: String(
       nextDefaultTokenNumber(
         existingNames,
-        new RegExp(`^${escape(prefix)}(\\d+)${escape(suffix)}$`),
+        new RegExp(`^${escapeRegExp(prefix)}(\\d+)${escapeRegExp(suffix ?? "")}$`),
       ),
     ),
   });

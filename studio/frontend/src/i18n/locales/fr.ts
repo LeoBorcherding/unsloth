@@ -955,6 +955,7 @@ export const fr = {
     error: "Erreur",
     export: "Exporter",
     help: "Aide",
+    justNow: "à l'instant",
     todayAt: "Aujourd’hui, {time}",
     yesterdayAt: "Hier, {time}",
     loading: "Chargement...",
@@ -5649,7 +5650,6 @@ export const fr = {
       modified: "Modifié {time}",
       opened: "Ouvert {time}",
       modifiedColumn: "Modifié",
-      justNow: "à l'instant",
     },
     size: {
       bytes: "{value} o",

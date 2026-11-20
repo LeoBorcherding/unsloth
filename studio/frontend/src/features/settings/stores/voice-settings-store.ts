@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import { isTauri } from "@/lib/api-base";
+import { escapeRegExp } from "@/lib/escape-regexp";
 import { isAudioCppFolderId } from "../../audio/audio-cpp-catalog";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -554,10 +555,6 @@ export function resolveModelDictationLanguage(
     WHISPER_DICTATION_LANGUAGES.has(primary)
     ? resolved
     : requested;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Case-insensitive, word-bounded ("jane doe" -> "Jane Doe"). */

@@ -954,6 +954,7 @@ export const ru = {
     error: "Ошибка",
     export: "Экспорт",
     help: "Справка",
+    justNow: "только что",
     todayAt: "Сегодня, {time}",
     yesterdayAt: "Вчера, {time}",
     loading: "Загрузка…",
@@ -5593,7 +5594,6 @@ export const ru = {
       modified: "Изменено {time}",
       opened: "Открыто {time}",
       modifiedColumn: "Изменено",
-      justNow: "только что",
     },
     size: {
       bytes: "{value} Б",

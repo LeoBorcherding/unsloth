@@ -951,6 +951,7 @@ export const ko = {
     error: "오류",
     export: "내보내기",
     help: "도움말",
+    justNow: "방금",
     todayAt: "오늘 {time}",
     yesterdayAt: "어제 {time}",
     loading: "로딩 중...",
@@ -5556,7 +5557,6 @@ export const ko = {
       modified: "수정: {time}",
       opened: "열람: {time}",
       modifiedColumn: "수정한 날짜",
-      justNow: "방금",
     },
     size: {
       bytes: "{value} B",

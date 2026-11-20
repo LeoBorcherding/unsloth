@@ -955,6 +955,7 @@ export const hi = {
     error: "त्रुटि",
     export: "एक्सपोर्ट करें",
     help: "सहायता",
+    justNow: "अभी",
     todayAt: "आज, {time}",
     yesterdayAt: "कल, {time}",
     loading: "लोड हो रहा है...",
@@ -5576,7 +5577,6 @@ export const hi = {
       modified: "बदला गया: {time}",
       opened: "खोला गया: {time}",
       modifiedColumn: "बदला गया",
-      justNow: "अभी",
     },
     size: {
       bytes: "{value} B",

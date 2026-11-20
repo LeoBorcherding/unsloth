@@ -1060,6 +1060,7 @@ export const uk = {
     error: "Помилка",
     export: "Експортувати",
     help: "Довідка",
+    justNow: "щойно",
     todayAt: "Сьогодні, {time}",
     yesterdayAt: "Учора, {time}",
     loading: "Завантаження...",
@@ -5983,7 +5984,6 @@ export const uk = {
       modified: "Змінено: {time}",
       opened: "Відкрито: {time}",
       modifiedColumn: "Змінено",
-      justNow: "щойно",
     },
     size: {
       bytes: "{value} B",
