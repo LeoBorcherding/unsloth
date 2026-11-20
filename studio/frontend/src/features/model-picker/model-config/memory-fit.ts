@@ -349,6 +349,13 @@ export function previewsAutoFit(state: {
   return !state.isActiveModel || state.residentPriced;
 }
 
+/** Extra args that fix the context, so a load with Context on Auto was not an Auto fit. */
+export function argsPinContext(args: readonly string[] | null | undefined): boolean {
+  return (args ?? []).some(
+    (arg) => arg === "-c" || arg === "--ctx-size" || arg.startsWith("--ctx-size="),
+  );
+}
+
 /** The loaded model, priced at the window it loaded with. */
 export interface ResidentFit {
   ctx: number;

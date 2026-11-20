@@ -933,3 +933,12 @@ test("the loaded model's bytes count toward a reload only on cards the reload us
   assert.equal(requestedPoolHoldsResident(on0, { ids: [1], indexKind: "physical" }), false);
   assert.equal(requestedPoolHoldsResident({ ids: [0, 1], indexKind: "physical" }, { ids: [1], indexKind: "physical" }), false);
 });
+
+test("a context fixed by extra args is not an Auto fit", async () => {
+  const { argsPinContext } = await import("../src/features/model-picker/model-config/memory-fit.ts");
+  assert.equal(argsPinContext(["-c", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx-size", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx-size=8192"]), true);
+  assert.equal(argsPinContext(["--ctx-checkpoints", "4", "-cb"]), false);
+  assert.equal(argsPinContext(null), false);
+});

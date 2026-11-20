@@ -142,6 +142,7 @@ import {
   mlxOffloadFromSlider,
   mlxOffloadModePatch,
   mlxOffloadSliderValue,
+  argsPinContext,
   previewsAutoFit,
   requestedPoolHoldsResident,
   resolveAutoFittedContext,
@@ -3877,7 +3878,9 @@ export function ModelConfigPage({
               ctx: residentContext,
               gpuBytes: reclaimableEstimate.gpuBytes,
               totalBytes: reclaimableEstimate.totalBytes,
-              loadedAuto: (loadedConfig?.customContextLength ?? null) == null,
+              loadedAuto:
+                (loadedConfig?.customContextLength ?? null) == null &&
+                !argsPinContext(loadedLlamaExtraArgs),
             }
           : null)
       : null;
