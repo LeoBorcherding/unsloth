@@ -6,15 +6,16 @@ import { useEffect, useState } from "react";
 /** An object URL for a blob, revoked when the blob changes or the component unmounts. */
 export function useObjectUrl(blob: Blob | null | undefined): string | null {
   // Effect state, not a memo: StrictMode would revoke a memoized URL and blank the image.
-  const [url, setUrl] = useState<string | null>(null);
+  const [state, setState] = useState<{ blob: Blob; url: string } | null>(null);
   useEffect(() => {
     if (!blob) {
-      setUrl(null);
+      setState(null);
       return;
     }
     const next = URL.createObjectURL(blob);
-    setUrl(next);
+    setState({ blob, url: next });
     return () => URL.revokeObjectURL(next);
   }, [blob]);
-  return url;
+  // Tied to the blob, so the previous blob's soon-revoked URL never renders for a frame.
+  return blob && state?.blob === blob ? state.url : null;
 }

@@ -13,7 +13,7 @@ import {
   streamsPreview,
   uniqueFileNames,
 } from "../src/features/library/file-name.ts";
-import { formatCardTime } from "../src/features/library/format.ts";
+import { formatCardTime } from "../src/i18n/relative-time.ts";
 import { decodeNote, encodeNote } from "../src/features/library/note-text.ts";
 import {
   acquireObjectUrl,

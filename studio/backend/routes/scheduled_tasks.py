@@ -9,10 +9,11 @@ import uuid
 from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth.authentication import authenticated_via_api_key, get_current_subject
 from core.scheduled_tasks.schedule import InvalidSchedule, Schedule, next_run_after, parse_schedule
+from models.validators import NotBlank
 from storage import scheduled_tasks_db as db
 
 router = APIRouter()
@@ -20,24 +21,17 @@ router = APIRouter()
 _NOT_FOUND = "Scheduled task not found"
 
 
-def _not_blank(value: str) -> str:
-    value = value.strip()
-    if not value:
-        raise ValueError("must not be blank")
-    return value
-
-
-Title = Annotated[str, Field(max_length = 120), AfterValidator(_not_blank)]
-Prompt = Annotated[str, Field(max_length = 20_000), AfterValidator(_not_blank)]
+Title = Annotated[str, Field(max_length = 120), NotBlank]
+Prompt = Annotated[str, Field(max_length = 20_000), NotBlank]
 TimeZoneName = Annotated[str, Field(max_length = 64)]
 # Which finished runs get a toast and system notification; every run's chat still shows unread in Recents.
 Notify = Literal["all", "failures", "none"]
-TaskModel = Annotated[str, Field(max_length = 512), AfterValidator(_not_blank)]
+TaskModel = Annotated[str, Field(max_length = 512), NotBlank]
 # lowest/highest are relative and resolved per run (local levels are known only once loaded); null = model default.
 ReasoningEffort = Literal[
     "off", "lowest", "highest", "minimal", "low", "medium", "high", "xhigh", "max"
 ]
-ProjectId = Annotated[str, Field(max_length = 128), AfterValidator(_not_blank)]
+ProjectId = Annotated[str, Field(max_length = 128), NotBlank]
 # Fields an update may set back to null, unlike the rest, where null means unchanged.
 _CLEARABLE = ("model", "reasoningEffort", "projectId")
 

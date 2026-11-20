@@ -11,6 +11,7 @@ import { DeleteConfirmDialog } from "@/features/hub/catalog/download-card";
 import { deleteCachedModel } from "@/features/hub/inventory";
 import { useHfTokenStore } from "@/features/hub/stores/hf-token-store";
 import { useT } from "@/i18n";
+import { errorMessage } from "@/lib/error-message";
 import { toast } from "@/lib/toast";
 
 /** Share the Hub's exact-copy deletion, dependency checks and inventory events. */
@@ -41,7 +42,7 @@ export function HfCacheModelClear({
       setOpen(false);
     } catch (error) {
       toast.error(t("settings.resources.storage.caches.clearFailed"), {
-        description: error instanceof Error ? error.message : String(error),
+        description: errorMessage(error),
       });
     } finally {
       setDeleting(false);

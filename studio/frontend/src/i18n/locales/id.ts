@@ -1053,6 +1053,7 @@ export const id = {
     error: "Kesalahan",
     export: "Ekspor",
     help: "Bantuan",
+    justNow: "baru saja",
     todayAt: "Hari ini, {time}",
     yesterdayAt: "Kemarin, {time}",
     loading: "Memuat...",
@@ -5941,7 +5942,6 @@ export const id = {
       modified: "Diubah {time}",
       opened: "Dibuka {time}",
       modifiedColumn: "Diubah",
-      justNow: "baru saja",
     },
     size: {
       bytes: "{value} B",

@@ -3,7 +3,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatCardTime, formatSize } from "../src/features/library/format.ts";
+import { formatSize } from "../src/features/library/format.ts";
+import { formatCardTime } from "../src/i18n/relative-time.ts";
 import { formatDate, formatNumber } from "../src/lib/intl-cache.ts";
 import {
   type TimeFormat,

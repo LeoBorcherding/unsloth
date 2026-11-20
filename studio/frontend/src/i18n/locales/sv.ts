@@ -1005,6 +1005,7 @@ export const sv = {
     error: "Fel",
     export: "Exportera",
     help: "Hjälp",
+    justNow: "just nu",
     todayAt: "I dag, {time}",
     yesterdayAt: "I går, {time}",
     loading: "Läser in …",
@@ -5796,7 +5797,6 @@ export const sv = {
       modified: "Ändrad {time}",
       opened: "Öppnad {time}",
       modifiedColumn: "Ändrad",
-      justNow: "just nu",
     },
     size: {
       bytes: "{value} B",

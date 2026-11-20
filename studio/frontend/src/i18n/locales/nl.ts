@@ -1065,6 +1065,7 @@ export const nl = {
     error: "Fout",
     export: "Exporteren",
     help: "Help",
+    justNow: "zojuist",
     todayAt: "Vandaag, {time}",
     yesterdayAt: "Gisteren, {time}",
     loading: "Laden...",
@@ -5993,7 +5994,6 @@ export const nl = {
       modified: "Gewijzigd {time}",
       opened: "Geopend {time}",
       modifiedColumn: "Gewijzigd",
-      justNow: "zojuist",
     },
     size: {
       bytes: "{value} B",

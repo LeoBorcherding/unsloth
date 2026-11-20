@@ -949,6 +949,7 @@ export const zhCN = {
     error: "错误",
     export: "导出",
     help: "帮助",
+    justNow: "刚刚",
     todayAt: "今天 {time}",
     yesterdayAt: "昨天 {time}",
     loading: "加载中...",
@@ -5467,7 +5468,6 @@ export const zhCN = {
       modified: "修改于 {time}",
       opened: "打开于 {time}",
       modifiedColumn: "修改时间",
-      justNow: "刚刚",
     },
     size: {
       bytes: "{value} B",

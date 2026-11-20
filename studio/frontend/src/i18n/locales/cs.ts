@@ -1054,6 +1054,7 @@ export const cs = {
     error: "Chyba",
     export: "Exportovat",
     help: "Nápověda",
+    justNow: "právě teď",
     todayAt: "Dnes, {time}",
     yesterdayAt: "Včera, {time}",
     loading: "Načítání...",
@@ -5965,7 +5966,6 @@ export const cs = {
       modified: "Změněno {time}",
       opened: "Otevřeno {time}",
       modifiedColumn: "Změněno",
-      justNow: "právě teď",
     },
     size: {
       bytes: "{value} B",

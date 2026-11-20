@@ -954,6 +954,7 @@ export const ptBR = {
     error: "Erro",
     export: "Exportar",
     help: "Ajuda",
+    justNow: "agora mesmo",
     todayAt: "Hoje, {time}",
     yesterdayAt: "Ontem, {time}",
     loading: "Carregando...",
@@ -5594,7 +5595,6 @@ export const ptBR = {
       modified: "Modificado {time}",
       opened: "Aberto {time}",
       modifiedColumn: "Modificado",
-      justNow: "agora mesmo",
     },
     size: {
       bytes: "{value} B",

@@ -988,6 +988,7 @@ export const he = {
     error: "שגיאה",
     export: "ייצוא",
     help: "עזרה",
+    justNow: "הרגע",
     todayAt: "היום, {time}",
     yesterdayAt: "אתמול, {time}",
     loading: "טוען...",
@@ -5656,7 +5657,6 @@ export const he = {
       modified: "שונה {time}",
       opened: "נפתח {time}",
       modifiedColumn: "תאריך שינוי",
-      justNow: "הרגע",
     },
     size: {
       bytes: "{value} B",

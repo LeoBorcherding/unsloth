@@ -7,6 +7,7 @@ import { createLibraryComposerAttachment } from "../src/features/library/compose
 import type { LibraryItem } from "../src/features/library/api.ts";
 import * as fileNames from "../src/features/library/file-name.ts";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
+import { errorMessage } from "../src/lib/error-message.ts";
 
 const item: LibraryItem = {
   id: "upload:report",
@@ -59,6 +60,7 @@ test("a saved file keeps its bytes and attaches to the ongoing conversation", as
       },
       "@/i18n": {},
       "@/lib/api-base": {},
+      "@/lib/error-message": { errorMessage },
       "@/lib/format-fastapi-error": {},
       "./file-name": fileNames,
       "./note-text": {},
@@ -81,6 +83,7 @@ test("the existing Library read limit refuses a grown file before it reaches the
       "@/features/auth": { authFetch: async () => new Response("x".repeat(21)) },
       "@/i18n": { translate: (key: string) => key },
       "@/lib/api-base": {},
+      "@/lib/error-message": { errorMessage },
       "@/lib/format-fastapi-error": {},
       "./file-name": fileNames,
       "./note-text": {},

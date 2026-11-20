@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
-import time
 from pathlib import Path
-from typing import Optional
 
 from filelock import FileLock
+
+from storage.studio_db import now_ms
+from utils.image_files import atomic_write_bytes, sniff_image_type
 
 CLIENT_PREFERENCES_KEY = "client_preferences"
 CHAT_BACKGROUND_KEY = "chat_background"
 MAX_BACKGROUND_IMAGE_BYTES = 20 * 1024 * 1024
 BACKGROUND_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
-
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def _read(key: str) -> dict:
@@ -45,7 +40,7 @@ def update_client_preferences(changes: dict) -> dict:
         merged = {
             **stored,
             **{k: v for k, v in changes.items() if v is not None},
-            "updatedAt": _now_ms(),
+            "updatedAt": now_ms(),
         }
         if compare_and_set_app_setting(CLIENT_PREFERENCES_KEY, previous, merged):
             return merged
@@ -66,37 +61,20 @@ def background_lock() -> FileLock:
     return FileLock(str(path.with_name(".chat-background.lock")))
 
 
-def sniff_image_type(data: bytes) -> Optional[str]:
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
-
-
 def save_background_image(data: bytes) -> dict:
     if not data or len(data) > MAX_BACKGROUND_IMAGE_BYTES:
         raise ValueError("Background image is empty or too large.")
     media_type = sniff_image_type(data)
-    if media_type is None:
+    if media_type not in BACKGROUND_IMAGE_TYPES:
         raise ValueError("Background image must be PNG, JPEG or WebP.")
     with background_lock():
         path = background_image_path()
-        fd, tmp = tempfile.mkstemp(dir = path.parent, prefix = ".chat-background-")
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(data)
-            os.replace(tmp, path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok = True)
-            raise
+        atomic_write_bytes(path, data, prefix = ".chat-background-")
         image = {"sha256": hashlib.sha256(data).hexdigest(), "type": media_type, "size": len(data)}
         stored = get_chat_background()
         return _write(
             CHAT_BACKGROUND_KEY,
-            {"adjustments": stored.get("adjustments"), "image": image, "updatedAt": _now_ms()},
+            {"adjustments": stored.get("adjustments"), "image": image, "updatedAt": now_ms()},
         )
 
 
@@ -106,7 +84,7 @@ def save_background_adjustments(adjustments: dict) -> dict:
         if not stored.get("image"):
             raise LookupError("No background image is saved.")
         return _write(
-            CHAT_BACKGROUND_KEY, {**stored, "adjustments": adjustments, "updatedAt": _now_ms()}
+            CHAT_BACKGROUND_KEY, {**stored, "adjustments": adjustments, "updatedAt": now_ms()}
         )
 
 
@@ -114,5 +92,5 @@ def clear_background() -> dict:
     with background_lock():
         background_image_path().unlink(missing_ok = True)
         return _write(
-            CHAT_BACKGROUND_KEY, {"adjustments": None, "image": None, "updatedAt": _now_ms()}
+            CHAT_BACKGROUND_KEY, {"adjustments": None, "image": None, "updatedAt": now_ms()}
         )

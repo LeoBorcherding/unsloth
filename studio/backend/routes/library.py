@@ -10,7 +10,7 @@ import re
 import secrets
 import time
 from typing import Literal, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -30,6 +30,7 @@ from loggers import get_logger
 from storage import library_db
 from storage.studio_db import ChatMessageProtectedError
 from utils.account_context import run_as
+from utils.content_disposition import attachment_disposition
 from utils.upload_limits import LIBRARY_UPLOAD_MAX_BYTES
 from utils.utils import log_and_http_error, safe_curated_detail
 
@@ -363,9 +364,11 @@ async def download_item(
         raise HTTPException(status_code = 404, detail = "Item not found")
     except ValueError:
         raise HTTPException(status_code = 400, detail = "This item has no file to download")
-    ascii_name = item.name.encode("ascii", "replace").decode("ascii").replace('"', "_")
-    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(item.name)}"
-    headers = {"Content-Disposition": disposition, "Cache-Control": "private, no-store", **_NOSNIFF}
+    headers = {
+        "Content-Disposition": attachment_disposition(item.name, "download"),
+        "Cache-Control": "private, no-store",
+        **_NOSNIFF,
+    }
     return _send(request, item, "application/octet-stream", headers)
 
 

@@ -951,6 +951,7 @@ export const ar = {
     error: "خطأ",
     export: "تصدير",
     help: "مساعدة",
+    justNow: "للتوّ",
     todayAt: "اليوم، {time}",
     yesterdayAt: "أمس، {time}",
     loading: "جارٍ التحميل...",
@@ -5565,7 +5566,6 @@ export const ar = {
       modified: "عُدّل {time}",
       opened: "فُتح {time}",
       modifiedColumn: "تاريخ التعديل",
-      justNow: "للتوّ",
     },
     size: {
       bytes: "{value} بايت",

@@ -953,6 +953,7 @@ export const ja = {
     error: "エラー",
     export: "エクスポート",
     help: "ヘルプ",
+    justNow: "たった今",
     todayAt: "今日 {time}",
     yesterdayAt: "昨日 {time}",
     loading: "読み込み中...",
@@ -5516,7 +5517,6 @@ export const ja = {
       modified: "変更: {time}",
       opened: "開いた日時: {time}",
       modifiedColumn: "更新日時",
-      justNow: "たった今",
     },
     size: {
       bytes: "{value} B",

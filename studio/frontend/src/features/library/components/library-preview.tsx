@@ -39,7 +39,8 @@ import {
   isTextPreviewable,
   modelLabelKey,
 } from "../file-kind";
-import { formatCardTime, formatSize } from "../format";
+import { formatCardTime } from "@/i18n/relative-time";
+import { formatSize } from "../format";
 import { type EmbeddedBody, fileExtension, hasOwnFile, itemVersion } from "../file-name";
 import { useLibraryAudioPeaks, useLibraryDocument, useLibraryPreviewUrl } from "../hooks";
 import { useLibraryOrigin } from "../origin";

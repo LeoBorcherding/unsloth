@@ -11,6 +11,7 @@ import * as zustandMiddleware from "zustand/middleware";
 
 import { installLocalStorageFake } from "./helpers/kit.ts";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
+import { errorMessage } from "../src/lib/error-message.ts";
 
 const { fireWindowEvent } = installLocalStorageFake();
 const SIGNED_OUT = "unsloth:auth-session-cleared";
@@ -82,6 +83,7 @@ function loadApi(session: { epoch: number }, authFetch: (url: string, init?: Req
     },
     "@/i18n": { translate: (key: string) => key },
     "@/lib/api-base": {},
+    "@/lib/error-message": { errorMessage },
     "@/lib/format-fastapi-error": {},
     "./file-name": {},
     "./note-text": {},

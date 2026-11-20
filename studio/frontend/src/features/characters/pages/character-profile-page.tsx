@@ -4,7 +4,7 @@
 import { useAppShellReadySignal } from "@/components/app-readiness";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatActivityTime } from "@/features/library/format";
+import { formatActivityTime } from "@/i18n/relative-time";
 import { useLocale, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import {

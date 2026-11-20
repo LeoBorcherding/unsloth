@@ -68,6 +68,7 @@ import {
 import { useLocale, useT } from "@/i18n";
 
 import { isTauri } from "@/lib/api-base";
+import { errorMessage } from "@/lib/error-message";
 import {
   ChevronDownStandardIcon,
   ChevronLeftStandardIcon,
@@ -314,7 +315,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
       (error: unknown) => {
         if (cancelled) return;
         toast.error(t("common.error"), {
-          description: error instanceof Error ? error.message : String(error),
+          description: errorMessage(error),
         });
       },
     );
@@ -346,7 +347,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
     } catch (error) {
       if (!isDownloadCancelled(error)) {
         toast.error(t("settings.data.exportFailed"), {
-          description: error instanceof Error ? error.message : String(error),
+          description: errorMessage(error),
         });
       }
     } finally {
@@ -444,7 +445,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
       await handleImport(nativeImportSource(selected));
     } catch (error) {
       toast.error(t("settings.chat.importFailed"), {
-        description: error instanceof Error ? error.message : String(error),
+        description: errorMessage(error),
       });
     }
   };
@@ -479,7 +480,7 @@ export function DataTab({ searchEntry }: { searchEntry?: string }) {
       }
     } catch (error) {
       toast.error(t("settings.chat.importFailed"), {
-        description: error instanceof Error ? error.message : String(error),
+        description: errorMessage(error),
       });
     } finally {
       setExternalImporting(null);

@@ -38,6 +38,7 @@ import {
 import { useChatRuntimeStore } from "@/features/chat";
 import { type TranslationKey, useLocale, useT } from "@/i18n";
 import { isTauri } from "@/lib/api-base";
+import { errorMessage } from "@/lib/error-message";
 import { isDownloadCancelled } from "@/lib/native-files";
 import { toast } from "@/lib/toast";
 import { TrashIcon } from "@/lib/hugeicons-derived";
@@ -71,7 +72,7 @@ function DownloadLocationRow() {
       live = false;
     };
   }, []);
-  const failed = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
+  const failed = (error: unknown) => toast.error(errorMessage(error));
   const change = () =>
     pickNativeDownloadFolder().then((picked) => picked && setFolder(picked), failed);
   const reset = () => resetNativeDownloadFolder().then(setFolder, failed);
@@ -220,7 +221,7 @@ export function BrowserTab() {
   };
   const exportBookmarks = () =>
     exportBookmarksFile().catch((error: unknown) => {
-      if (!isDownloadCancelled(error)) toast.error(error instanceof Error ? error.message : String(error));
+      if (!isDownloadCancelled(error)) toast.error(errorMessage(error));
     });
   const collapseHtmlArtifacts = useChatRuntimeStore((state) => state.collapseHtmlArtifacts);
   const allowArtifactNetworkAccess = useChatRuntimeStore((state) => state.allowArtifactNetworkAccess);

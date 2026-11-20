@@ -11,13 +11,17 @@ import os
 import secrets
 import sqlite3
 import threading
-import time
 import weakref
 from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
-from storage.studio_db import get_connection, insert_server_chat_message, on_wal_keeper_closed
+from storage.studio_db import (
+    get_connection,
+    insert_server_chat_message,
+    now_ms,
+    on_wal_keeper_closed,
+)
 from utils.account_context import current_account_id
 from utils.paths import studio_db_path
 
@@ -174,10 +178,6 @@ on_wal_keeper_closed(_discard_all_pooled)
 
 class ChatGenerationConflictError(RuntimeError):
     pass
-
-
-def now_ms() -> int:
-    return int(time.time() * 1000)
 
 
 def reset_schema_state_for_tests() -> None:

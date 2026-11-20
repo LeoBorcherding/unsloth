@@ -1060,6 +1060,7 @@ export const pl = {
     error: "Błąd",
     export: "Eksportuj",
     help: "Pomoc",
+    justNow: "przed chwilą",
     todayAt: "Dzisiaj, {time}",
     yesterdayAt: "Wczoraj, {time}",
     loading: "Wczytywanie...",
@@ -5993,7 +5994,6 @@ export const pl = {
       modified: "Zmodyfikowano {time}",
       opened: "Otwarto {time}",
       modifiedColumn: "Data modyfikacji",
-      justNow: "przed chwilą",
     },
     size: {
       bytes: "{value} B",

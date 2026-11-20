@@ -1059,6 +1059,7 @@ export const es419 = {
     error: "Error",
     export: "Exportar",
     help: "Ayuda",
+    justNow: "hace un momento",
     todayAt: "Hoy, {time}",
     yesterdayAt: "Ayer, {time}",
     loading: "Cargando...",
@@ -6029,7 +6030,6 @@ export const es419 = {
       modified: "Modificado {time}",
       opened: "Abierto {time}",
       modifiedColumn: "Modificado",
-      justNow: "hace un momento",
     },
     size: {
       bytes: "{value} B",

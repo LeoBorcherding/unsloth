@@ -48,6 +48,7 @@ import {
   useLibraryFavorite,
   useLibraryFavoritesStore,
 } from "@/features/library";
+import { useObjectUrl } from "@/hooks/use-object-url";
 import { useT } from "@/i18n";
 import { MAX_HIGHLIGHT_CHARS } from "@/lib/markdown-plugins";
 import { urlToBlob } from "@/lib/native-files";
@@ -118,17 +119,6 @@ const galleryImagesOf = (attachments: readonly unknown[] | undefined): GalleryIm
     ];
   });
 
-const useObjectUrl = (file: File | undefined): string | undefined => {
-  const [url, setUrl] = useState<{ file: File; url: string } | null>(null);
-  useEffect(() => {
-    if (!file) return;
-    const next = URL.createObjectURL(file);
-    setUrl({ file, url: next });
-    return () => URL.revokeObjectURL(next);
-  }, [file]);
-  return file && url?.file === file ? url.url : undefined;
-};
-
 const loadGalleryImage = (image: GalleryImage): Promise<Blob> =>
   image.file ? Promise.resolve(image.file) : urlToBlob(image.image ?? "");
 
@@ -162,7 +152,7 @@ const ImageGalleryDialog: FC<
   const [failedId, setFailedId] = useState<string | null>(null);
   const index = images.findIndex((image) => image.id === shownId);
   const current = images[index] ?? owner;
-  const objectUrl = useObjectUrl(open ? current.file : undefined);
+  const objectUrl = useObjectUrl(open ? current.file : undefined) ?? undefined;
   const src = current.file ? objectUrl : current.image;
   const failed = failedId === current.id;
   const previous = index > 0 ? images[index - 1] : undefined;

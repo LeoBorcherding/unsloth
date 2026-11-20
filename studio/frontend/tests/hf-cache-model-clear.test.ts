@@ -8,6 +8,7 @@ import {
   stubJsxRuntime,
   type StubElement,
 } from "./helpers/module-stubs.ts";
+import { errorMessage } from "../src/lib/error-message.ts";
 
 type ClearProps = { repoId: string; cachePath: string; disabled?: boolean };
 type Delete = (...args: unknown[]) => Promise<void>;
@@ -64,6 +65,7 @@ function drive(
           select({ token: "test-hf-token" }),
       },
       "@/i18n": { useT: () => (key: string) => key },
+      "@/lib/error-message": { errorMessage },
       "@/lib/toast": {
         toast: { error: (...args: unknown[]) => errors.push(args) },
       },

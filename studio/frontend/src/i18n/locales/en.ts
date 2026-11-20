@@ -955,6 +955,7 @@ export const en = {
     error: "Error",
     export: "Export",
     help: "Help",
+    justNow: "just now",
     todayAt: "Today, {time}",
     yesterdayAt: "Yesterday, {time}",
     loading: "Loading...",
@@ -5604,7 +5605,6 @@ export const en = {
       modified: "Modified {time}",
       opened: "Opened {time}",
       modifiedColumn: "Modified",
-      justNow: "just now",
     },
     // {value} is already formatted for the locale.
     size: {
