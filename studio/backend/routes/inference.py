@@ -183,6 +183,7 @@ from core.inference.http_stream import SSE_LINE_END, aiter_sse_lines
 from core.inference.sse import SSELineDecoder, iter_sse_lines
 from core.inference import model_slots
 from core.inference.llama_cpp import (
+    EFFORT_FLOOR_THINKS_ARCHITECTURES,
     _TERMINAL_RETIREMENT_HOOKS,
     _llama_chunk_has_generated_output,
     _local_ssl_context,
@@ -5112,6 +5113,8 @@ def _resolved_kwargs_think(llama_backend, resolved) -> bool:
         return bool(resolved["enable_thinking"])
     if "reasoning_effort" in resolved:
         effort = resolved["reasoning_effort"]
+        if getattr(llama_backend, "_architecture", None) in EFFORT_FLOOR_THINKS_ARCHITECTURES:
+            return True
         if isinstance(effort, str):
             return effort.strip().lower() != "none"
         if isinstance(effort, (int, float)) and not isinstance(effort, bool):

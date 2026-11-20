@@ -6070,16 +6070,15 @@ class FastBaseModel:
             model,
             use_gradient_checkpointing = use_gradient_checkpointing,
         )
-        # Gemma4 ClippableLinear wraps nn.Linear and PEFT cannot inject LoRA on it directly, so patch PEFT to target the inner .linear child.
-        _clippable_linear_cls = None
-        try:
-            from transformers.models.gemma4.modeling_gemma4 import (
-                Gemma4ClippableLinear as _clippable_linear_cls,
-            )
-        except ImportError:
-            pass
-        if _clippable_linear_cls is not None:
-            from peft.tuners.lora.model import LoraModel as _LoraModel
+        # Wrappers around one nn.Linear child `linear` (Gemma4ClippableLinear, Inkling 2's q/k/v projections)
+        # take no LoRA themselves, so PEFT targets the inner child instead.
+        from peft.tuners.lora.model import LoraModel as _LoraModel
+
+        _inner_linear_patched = not getattr(
+            _LoraModel._create_and_replace, "_unsloth_inner_linear", False
+        )
+        if _inner_linear_patched:
+            from peft.tuners.tuners_utils import check_target_module_exists
 
             _original_car = _LoraModel._create_and_replace
 
@@ -6093,7 +6092,18 @@ class FastBaseModel:
                 current_key = None,
                 **kwargs,
             ):
-                if isinstance(target, _clippable_linear_cls):
+                inner = getattr(target, "linear", None)
+                if (
+                    type(target) is not torch.nn.Linear
+                    and isinstance(inner, torch.nn.Linear)
+                    and not hasattr(target, "lora_A")
+                    and not hasattr(target, "base_layer")
+                ):
+                    # The child is matched on its own: wrapping it here too would build the adapter twice.
+                    if current_key is not None and check_target_module_exists(
+                        peft_config, current_key + ".linear"
+                    ):
+                        return None
                     return _original_car(
                         self,
                         peft_config,
@@ -6115,6 +6125,7 @@ class FastBaseModel:
                     **kwargs,
                 )
 
+            _patched_car._unsloth_inner_linear = True
             _LoraModel._create_and_replace = _patched_car
 
         from .lora_init import fast_lora_init, record_fast_pissa
@@ -6144,7 +6155,7 @@ class FastBaseModel:
         except Exception as _exc:
             logger.warning_once(f"Unsloth: could not lift adapter hooks: {_exc}")
 
-        if _clippable_linear_cls is not None:
+        if _inner_linear_patched:
             _LoraModel._create_and_replace = _original_car
         if qat_scheme is not None:
             print("Unsloth: Applying QAT to mitigate quantization degradation")

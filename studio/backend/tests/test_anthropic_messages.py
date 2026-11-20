@@ -250,6 +250,14 @@ def test_think_parsing_expected_gates_on_capability_and_request():
         _think_parsing_expected(_EffortBackend(), _basic_payload(reasoning_effort = "none")) is False
     )
 
+    # Inkling 2 still thinks at "none", so its reasoning keeps being split out of the reply.
+    class _Inkling2Backend(_EffortBackend):
+        _architecture = "inkling2"
+
+    assert (
+        _think_parsing_expected(_Inkling2Backend(), _basic_payload(reasoning_effort = "none")) is True
+    )
+
     # _coerce_reasoning_effort rewrites 'none' to 0, so 0 reads as off.
     class _NumericEffortBackend(_Backend):
         def _request_reasoning_kwargs(self, enable_thinking, reasoning_effort, preserve_thinking):

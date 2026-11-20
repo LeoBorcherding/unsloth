@@ -8424,6 +8424,10 @@ def _is_external_link(path: Path) -> bool:
     return False
 
 
+# Inkling 2 still thinks at effort "none" (level 0), so its reasoning is split at every level.
+EFFORT_FLOOR_THINKS_ARCHITECTURES = frozenset({"inkling2"})
+
+
 # Inkling's float() coercion turns unknown names into 0 (no thinking), so map them.
 _INKLING_REASONING_EFFORT = {
     "none": 0.0,
@@ -30600,9 +30604,11 @@ class LlamaCppBackend:
                     reasoning_kw = self._reasoning_kwargs(
                         thinking_default, _reasoning_effort_from_env(env)
                     )
-                    # An effort ladder thinks at every level but "none" (Inkling: 0), low included.
+                    # An effort ladder thinks at every level but "none", low included; Inkling 2's "none" thinks too.
                     self._reasoning_default = reasoning_kw.get(
-                        "enable_thinking", reasoning_kw.get("reasoning_effort") not in ("none", 0)
+                        "enable_thinking",
+                        self._architecture in EFFORT_FLOOR_THINKS_ARCHITECTURES
+                        or reasoning_kw.get("reasoning_effort") not in ("none", 0),
                     )
                     # preserve_thinking is independent of the thinking gate.
                     # Qwen3.8 defaults it on; Qwen3.6, Gemma 4, and every other

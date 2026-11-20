@@ -3772,10 +3772,11 @@ def _prepare_compressed_tensors_model(model, full_finetuning = False):
         _prepare_compressed_tensors_full_finetuning(model)
         return
     _tag_compressed_tensors_modules(model)
-    if _route_compressed_tensors_nvfp4_to_unsloth(model):
-        return
-    if not _route_compressed_tensors_fp8_to_unsloth(model):
-        _decompress_compressed_tensors_model(model)
+    if not _route_compressed_tensors_nvfp4_to_unsloth(model):
+        if not _route_compressed_tensors_fp8_to_unsloth(model):
+            _decompress_compressed_tensors_model(model)
+    # Modules nothing above decompressed (an all-ignored plan) still sit in compiled-unsafe OffloadCaches.
+    _remove_same_device_compressed_tensors_offload(model)
 
 
 _FP8_SCALE_SUFFIXES = (".weight_scale_inv", "_scale_inv", ".weight_scale", "_scale")

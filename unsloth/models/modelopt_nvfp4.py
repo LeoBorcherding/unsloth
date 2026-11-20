@@ -80,6 +80,35 @@ def _ct_ignore(names, config) -> list:
     return out
 
 
+def _ignore_from_parameter_groups(config) -> Optional[list]:
+    """Inkling 2 lists quantized tensors under hf_quant_config.json `parameter_groups`, with no ignore list."""
+    from .modelopt_fp8 import _hf_quant_config_path
+
+    try:
+        path = _hf_quant_config_path(getattr(config, "_name_or_path", None))
+        with open(path, encoding = "utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    groups = [
+        group
+        for section in (data.values() if isinstance(data, dict) else ())
+        if isinstance(section, dict)
+        for group in (section.get("parameter_groups") or ())
+        if isinstance(group, dict)
+    ]
+    if not groups:
+        return None
+    kept, quantized = [], []
+    for group in groups:
+        names = [str(t).rsplit(".", 1)[0] for t in group.get("tensors") or ()]
+        (kept if group.get("weight_transform", "cast") == "cast" else quantized).extend(names)
+    # Packed experts take their own loader, so with no quantized Linear every Linear stays 16bit.
+    if not any(".experts" not in name for name in quantized):
+        return ["*"]
+    return sorted(set(kept) - set(quantized))
+
+
 def modelopt_nvfp4_plan(config) -> Optional[dict]:
     """compressed-tensors NVFP4A16 quantization_config for a ModelOpt NVFP4 config, else None."""
     quant = _as_dict(getattr(config, "quantization_config", None))
@@ -97,6 +126,8 @@ def modelopt_nvfp4_plan(config) -> Optional[dict]:
         ignore = quant.get("exclude_modules")
     if ignore is None:
         ignore = block.get("exclude_modules")
+    if ignore is None:
+        ignore = _ignore_from_parameter_groups(config)
     weights = {
         "num_bits": 4,
         "type": "float",
