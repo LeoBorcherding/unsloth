@@ -142,6 +142,10 @@ import {
   mlxOffloadFromSlider,
   mlxOffloadModePatch,
   mlxOffloadSliderValue,
+  previewsAutoFit,
+  requestedPoolHoldsResident,
+  residentWasAutoFit,
+  resolveAutoFittedContext,
   resolveReclaimableMemoryCredit,
 } from "../model-config/memory-fit";
 import {
@@ -572,6 +576,7 @@ function GgufContextLengthSetting({
   max,
   nativeContextLength,
   activeLoadedContext,
+  autoFitted = null,
   inputRef,
   onChange,
   renderWarning,
@@ -579,6 +584,8 @@ function GgufContextLengthSetting({
 }: {
   value: number;
   autoValue: number;
+  /** Auto's window for the pending settings, when it differs from what is loaded. */
+  autoFitted?: number | null;
   min: number;
   max: number;
   nativeContextLength: number | null;
@@ -630,6 +637,9 @@ function GgufContextLengthSetting({
           {isAuto && activeLoadedContext != null
             ? ` Auto currently selected ${activeLoadedContext.toLocaleString()} tokens.`
             : ""}
+          {isAuto && autoFitted != null && autoFitted !== activeLoadedContext
+            ? ` With these settings and the memory free now, Auto would select about ${autoFitted.toLocaleString()} tokens.`
+            : ""}
           {nativeContextLength != null
             ? ` This model's native context is ${nativeContextLength.toLocaleString()} tokens.`
             : ""}
@@ -656,9 +666,11 @@ function GgufContextLengthSetting({
         thumbValueText={(v) =>
           !(isMaxPosition(v) && value === 0)
             ? `${(isMaxPosition(v) ? max : v).toLocaleString()} tokens`
-            : activeLoadedContext != null
-              ? `Auto, currently ${autoValue.toLocaleString()} tokens`
-              : "Auto"
+            : autoFitted != null
+              ? `Auto, about ${autoValue.toLocaleString()} tokens`
+              : activeLoadedContext != null
+                ? `Auto, currently ${autoValue.toLocaleString()} tokens`
+                : "Auto"
         }
       />
     ) : null;
@@ -3830,6 +3842,51 @@ export function ModelConfigPage({
       // A ROCm APU's memory_total_gb is a BIOS window onto RAM, not the pool size.
       unifiedPoolReportedAsGpuMemory: isAppleUnifiedMemory,
     });
+  const autoFittedContext =
+    memoryEstimate.estimate &&
+    previewsAutoFit({
+      isGguf: Boolean(target.isGguf),
+      estimateAvailable: memoryEstimate.estimate.available,
+      estimateStale: memoryEstimate.stale,
+      isActiveModel,
+      residentPriced: reclaimableEstimate != null && residentContext != null,
+    })
+      ? resolveAutoFittedContext(memoryEstimate.estimate, {
+          gpuCapacityGb: memoryGpuCapacityGb,
+          totalCapacityGb: memoryTotalCapacityGb,
+          systemRamCapacityGb: inferenceGpu.systemRamTotalGb,
+          freeGpuCapacityGb: memoryFreeGpuCapacityGb,
+          freeGpuCapacityKnown: memoryFreeGpuCapacityKnown,
+          freeGpuReserveDeficitGb: memoryFreeGpuReserveDeficitGb,
+          usableSystemRamGb: memoryUsableSystemRamGb,
+          usableSystemRamKnown: inferenceGpu.systemRamAvailableKnown,
+          systemRamReserveDeficitGb: memorySystemRamReserveDeficitGb,
+          singleMemoryPool,
+          reclaimableTotalBytes: reclaimableCredit.totalBytes,
+          reclaimableGpuBytes: reclaimableCredit.gpuBytes,
+        }, reclaimableEstimate &&
+          residentContext != null &&
+          // Bytes freed on cards the new load won't use are no room for it.
+          requestedPoolHoldsResident(
+            { ids: loadedGpuIds, indexKind: loadedGpuIndexKind },
+            {
+              ids: runtimeConfig.selectedGpuIds ?? null,
+              indexKind: runtimeConfig.selectedGpuIndexKind ?? null,
+            },
+          )
+          ? {
+              ctx: residentContext,
+              gpuBytes: reclaimableEstimate.gpuBytes,
+              totalBytes: reclaimableEstimate.totalBytes,
+              loadedAuto: residentWasAutoFit({
+                customContextLength: loadedConfig?.customContextLength,
+                gpuMemoryMode: loadedConfig?.gpuMemoryMode,
+                gpuLayers: loadedConfig?.gpuLayers,
+                llamaExtraArgs: loadedLlamaExtraArgs,
+              }),
+            }
+          : null)
+      : null;
 
   const storedRecord = useStoredPerModelConfig(configId, target.ggufVariant);
   const matchesStored =
@@ -4540,11 +4597,12 @@ export function ModelConfigPage({
               value={contextIsAuto ? 0 : contextValue}
               autoValue={Math.min(
                 Math.max(
-                  activeLoadedContext ?? AUTO_OFFLOAD_CONTEXT_LENGTH,
+                  autoFittedContext ?? activeLoadedContext ?? AUTO_OFFLOAD_CONTEXT_LENGTH,
                   minContext,
                 ),
                 maxContext,
               )}
+              autoFitted={autoFittedContext}
               min={minContext}
               max={maxContext}
               nativeContextLength={nativeContextLength}

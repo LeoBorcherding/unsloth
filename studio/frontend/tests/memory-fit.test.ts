@@ -742,3 +742,215 @@ test("a shrunk context keeps its host terms at native, the bound that holds", ()
   assert.equal(result.hostShareBytes, 20 * GB);
   assert.equal(result.hostShareFit, "exceeds");
 });
+
+test("Auto's window refits when a cheaper KV cache leaves more of the free memory to fill", async () => {
+  const { resolveAutoFittedContext } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  // Unified 32 GB Mac, 8 GB free after the resident unloads. Weights 7.46 GB; f16 KV at the
+  // 262,144-token native window costs 8.14 GB over the 256-token floor, q8_0 about half that.
+  const capacity: MemoryFitCapacity = {
+    gpuCapacityGb: 21,
+    totalCapacityGb: 21,
+    systemRamCapacityGb: 32,
+    freeGpuCapacityGb: 2,
+    freeGpuCapacityKnown: true,
+    usableSystemRamGb: 2,
+    singleMemoryPool: true,
+    reclaimableTotalBytes: 6 * GB,
+    reclaimableGpuBytes: 6 * GB,
+  };
+  const auto = (shrinkable: number, cacheTypeKv: string): MemoryFitEstimate & { cacheTypeKv: string } => ({
+    gpuBytes: 7.5 * GB + shrinkable,
+    totalBytes: 7.5 * GB + shrinkable,
+    kvEstimable: true,
+    drafterKvUnsized: false,
+    adaptersUnsized: false,
+    moeOffloadUnmodelled: false,
+    contextIsPinned: false,
+    gpuFloorBytes: 7.5 * GB,
+    gpuFloorCtx: 256,
+    nCtx: 262144,
+    cacheTypeKv,
+  });
+  const f16 = resolveAutoFittedContext(auto(8 * GB, "f16"), capacity);
+  const q8 = resolveAutoFittedContext(auto(4 * GB, "q8_0"), capacity);
+  assert.ok(f16 != null && q8 != null);
+  assert.ok(f16 > 256 && f16 < 262144, `${f16}`);
+  assert.ok(q8 > f16 * 1.9, `q8_0 ${q8} vs f16 ${f16}`);
+  assert.equal(f16 % 256, 0);
+  // Enough free memory: the native window stands. Too little: the loader's floor.
+  assert.equal(resolveAutoFittedContext(auto(8 * GB, "f16"), { ...capacity, freeGpuCapacityGb: 20 }), 262144);
+  assert.equal(
+    resolveAutoFittedContext(auto(8 * GB, "f16"), { ...capacity, freeGpuCapacityGb: 0, reclaimableTotalBytes: 0 }),
+    256,
+  );
+  // A pinned context or an unsized cache has no window to predict; nor does an unknown free figure.
+  assert.equal(resolveAutoFittedContext({ ...auto(8 * GB, "f16"), contextIsPinned: true }, capacity), null);
+  assert.equal(resolveAutoFittedContext({ ...auto(8 * GB, "f16"), kvEstimable: false }, capacity), null);
+  assert.equal(
+    resolveAutoFittedContext(auto(8 * GB, "f16"), { ...capacity, freeGpuCapacityGb: 0, freeGpuCapacityKnown: false }),
+    null,
+  );
+});
+
+test("on separate pools Auto fits the GPU share to free VRAM", async () => {
+  const { resolveAutoFittedContext } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  const fitted = resolveAutoFittedContext(
+    {
+      gpuBytes: 20 * GB,
+      totalBytes: 22 * GB,
+      kvEstimable: true,
+      drafterKvUnsized: false,
+      adaptersUnsized: false,
+      moeOffloadUnmodelled: false,
+      contextIsPinned: false,
+      gpuFloorBytes: 6 * GB,
+      gpuFloorCtx: 8192,
+      nCtx: 131072,
+    },
+    {
+      gpuCapacityGb: 15,
+      totalCapacityGb: 60,
+      systemRamCapacityGb: 50,
+      freeGpuCapacityGb: 13,
+      freeGpuCapacityKnown: true,
+      usableSystemRamGb: 40,
+      singleMemoryPool: false,
+    },
+  );
+  // (13 - 6) / (20 - 6) of the way from 8192 to 131072, on the 256 grid.
+  assert.equal(fitted, Math.floor((8192 + 0.5 * (131072 - 8192)) / 256) * 256);
+});
+
+test("on one pool the floor's own total is used, so host terms that shrink with context count", async () => {
+  const { resolveAutoFittedContext } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  const estimate: MemoryFitEstimate = {
+    gpuBytes: 15.5 * GB,
+    // 2.5 GB of checkpoints at native: host RAM, outside gpuBytes, still the same pool.
+    totalBytes: 18 * GB,
+    kvEstimable: true,
+    drafterKvUnsized: false,
+    adaptersUnsized: false,
+    moeOffloadUnmodelled: false,
+    contextIsPinned: false,
+    gpuFloorBytes: 7.5 * GB,
+    gpuFloorCtx: 256,
+    floorTotalBytes: 7.5 * GB,
+    nCtx: 262144,
+  };
+  const capacity: MemoryFitCapacity = {
+    gpuCapacityGb: 21,
+    totalCapacityGb: 21,
+    systemRamCapacityGb: 32,
+    freeGpuCapacityGb: 9,
+    freeGpuCapacityKnown: true,
+    usableSystemRamGb: 9,
+    singleMemoryPool: true,
+  };
+  // Subtracting only the GPU delta left 10 GB at the floor, over the 9 GB free, so Auto read as the floor.
+  assert.equal(resolveAutoFittedContext({ ...estimate, floorTotalBytes: null }, capacity), 256);
+  const fitted = resolveAutoFittedContext(estimate, capacity);
+  assert.equal(fitted, Math.floor((256 + (1.5 / 10.5) * (262144 - 256)) / 256) * 256);
+});
+
+test("the Context field previews Auto only from a current estimate, and for a loaded model only once it is priced", async () => {
+  const { previewsAutoFit } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  const base = {
+    isGguf: true,
+    estimateAvailable: true,
+    estimateStale: false,
+    isActiveModel: true,
+    residentPriced: true,
+  };
+  assert.equal(previewsAutoFit(base), true);
+  assert.equal(previewsAutoFit({ ...base, estimateStale: true }), false, "estimate priced the old settings");
+  assert.equal(previewsAutoFit({ ...base, residentPriced: false }), false, "no yardstick yet: the loaded window stands");
+  assert.equal(previewsAutoFit({ ...base, isActiveModel: false, residentPriced: false }), true);
+  assert.equal(previewsAutoFit({ ...base, isGguf: false }), false);
+});
+
+test("with a model loaded, its own price is the budget: unchanged settings keep its window, q8_0 refits", async () => {
+  const { resolveAutoFittedContext } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  // Colab T4, Qwen3-4B Q4_K_M: the panel's f16 and q8_0 estimates, 4 slots, Auto.
+  const pending = (gpuBytes: number, gpuFloorBytes: number): MemoryFitEstimate => ({
+    gpuBytes,
+    totalBytes: gpuBytes,
+    kvEstimable: true,
+    drafterKvUnsized: false,
+    adaptersUnsized: false,
+    moeOffloadUnmodelled: false,
+    contextIsPinned: false,
+    gpuFloorBytes,
+    gpuFloorCtx: 8192,
+    nCtx: 262144,
+  });
+  const f16 = pending(38.66 * GB, 3.54 * GB);
+  const q8 = pending(22.78 * GB, 3.05 * GB);
+  // Resident: the f16 Auto load, cut to 82,176 tokens; priced there. The VRAM it holds reads as used,
+  // and the GPU credit is 0 under Auto placement, so free memory alone would say "floor".
+  const residentBytes = 3.54 * GB + ((38.66 - 3.54) * GB * (82176 - 8192)) / (262144 - 8192);
+  const resident = { ctx: 82176, gpuBytes: residentBytes, totalBytes: residentBytes, loadedAuto: true };
+  // What the panel read as usable free on that T4 with the f16 load resident: the loader's reserve.
+  const capacity: MemoryFitCapacity = {
+    gpuCapacityGb: 15,
+    totalCapacityGb: 60,
+    systemRamCapacityGb: 50,
+    freeGpuCapacityGb: 0.55,
+    freeGpuCapacityKnown: true,
+    usableSystemRamGb: 40,
+    singleMemoryPool: false,
+  };
+  assert.equal(resolveAutoFittedContext(f16, capacity), 8192, "free VRAM alone: the floor");
+  assert.equal(resolveAutoFittedContext(f16, capacity, resident), 82176, "unchanged: the loaded window");
+  const refit = resolveAutoFittedContext(q8, capacity, resident) as number;
+  // The real q8_0 Auto load on that card picked 146,432.
+  assert.ok(Math.abs(refit - 146432) / 146432 < 0.01, `${refit}`);
+  // A load that did not fill its budget (pinned here) leaves real room on top of its own bytes.
+  const pinned = { ...resident, loadedAuto: false };
+  assert.ok((resolveAutoFittedContext(f16, { ...capacity, freeGpuCapacityGb: 4 }, pinned) as number) > 82176 + 25000);
+  assert.ok(
+    (resolveAutoFittedContext(q8, { ...capacity, freeGpuCapacityGb: 4 }, pinned) as number) >
+      (resolveAutoFittedContext(q8, capacity, pinned) as number),
+  );
+});
+
+test("the loaded model's bytes count toward a reload only on cards the reload uses", async () => {
+  const { requestedPoolHoldsResident } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  const on0 = { ids: [0], indexKind: "physical" as const };
+  assert.equal(requestedPoolHoldsResident(on0, { ids: null, indexKind: null }), true, "no pin: every card");
+  assert.equal(requestedPoolHoldsResident(on0, { ids: [0, 1], indexKind: "physical" }), true);
+  assert.equal(requestedPoolHoldsResident(on0, { ids: [1], indexKind: "physical" }), false);
+  assert.equal(requestedPoolHoldsResident({ ids: [0, 1], indexKind: "physical" }, { ids: [1], indexKind: "physical" }), false);
+});
+
+test("a context fixed by extra args is not an Auto fit", async () => {
+  const { argsPinContext } = await import("../src/features/model-picker/model-config/memory-fit.ts");
+  assert.equal(argsPinContext(["-c", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx-size", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx-size=8192"]), true);
+  assert.equal(argsPinContext(["--ctx_size", "8192"]), true);
+  assert.equal(argsPinContext(["--ctx_size=8192"]), true);
+  assert.equal(argsPinContext(["--ctx-checkpoints", "4", "-cb"]), false);
+  assert.equal(argsPinContext(null), false);
+});
+
+test("only a load the fitter sized counts as an Auto fit", async () => {
+  const { residentWasAutoFit } = await import("../src/features/model-picker/model-config/memory-fit.ts");
+  assert.equal(residentWasAutoFit({}), true);
+  assert.equal(residentWasAutoFit({ customContextLength: 8192 }), false);
+  assert.equal(residentWasAutoFit({ llamaExtraArgs: ["-c", "8192"] }), false);
+  // Manual with fixed layers reloads at the loaded window (fixedLayerContextPin).
+  assert.equal(residentWasAutoFit({ gpuMemoryMode: "manual", gpuLayers: 20 }), false);
+  assert.equal(residentWasAutoFit({ gpuMemoryMode: "manual", gpuLayers: -1 }), true, "Manual with Auto layers still fits");
+});

@@ -64,6 +64,10 @@ export interface MemoryFitEstimate {
   /** False when the loader will shrink the priced context to fit. Absent reads as pinned. */
   contextIsPinned?: boolean;
   gpuFloorBytes?: number | null;
+  /** The context `gpuFloorBytes` is priced at. */
+  gpuFloorCtx?: number | null;
+  /** `totalBytes` at that context: on one pool, host terms such as checkpoints shrink with it. */
+  floorTotalBytes?: number | null;
   floorCanOffload?: boolean;
   nCtx?: number;
 }
@@ -90,6 +94,21 @@ export interface MemoryFitCapacity {
 
 function reclaimableBytes(value: number | undefined): number {
   return Number.isFinite(value) && (value as number) > 0 ? (value as number) : 0;
+}
+
+/** Whether the requested cards cover every card the resident is on, so its unload frees them. */
+export function requestedPoolHoldsResident(
+	residentPool: ReconciledGpuSelection,
+	requestedPool: ReconciledGpuSelection,
+): boolean {
+	return (
+		!requestedPool.ids?.length ||
+		(residentPool.ids != null &&
+			residentPool.ids.length > 0 &&
+			residentPool.indexKind != null &&
+			residentPool.indexKind === requestedPool.indexKind &&
+			residentPool.ids.every((id) => requestedPool.ids!.includes(id)))
+	);
 }
 
 export function resolveReclaimableMemoryCredit(
@@ -122,13 +141,7 @@ export function resolveReclaimableMemoryCredit(
 	)
 		return { totalBytes: 0, gpuBytes: 0 };
 	const files = Math.min(estimate.weightsBytes, total);
-	const includesResidentPool =
-		!requestedPool.ids?.length ||
-		(residentPool.ids != null &&
-			residentPool.ids.length > 0 &&
-			residentPool.indexKind != null &&
-			residentPool.indexKind === requestedPool.indexKind &&
-			residentPool.ids.every((id) => requestedPool.ids!.includes(id)));
+	const includesResidentPool = requestedPoolHoldsResident(residentPool, requestedPool);
 	const residentDevices = residentPool.ids?.length
 		? devices.filter(
 				(device) =>
@@ -318,6 +331,137 @@ export function resolveMemoryFit(
       contextShrinks,
     }),
   };
+}
+
+const AUTO_CONTEXT_STEP = 256;
+
+/** Whether the Context field previews Auto's fit, rather than the resident's window or a default.
+ *  A stale estimate priced the previous settings; the resident model is the fit's yardstick, so
+ *  without a current price of it the loaded window stands. */
+export function previewsAutoFit(state: {
+  isGguf: boolean;
+  estimateAvailable: boolean;
+  estimateStale: boolean;
+  isActiveModel: boolean;
+  residentPriced: boolean;
+}): boolean {
+  if (!state.isGguf || !state.estimateAvailable || state.estimateStale) return false;
+  return !state.isActiveModel || state.residentPriced;
+}
+
+/** Extra args that fix the context, so a load with Context on Auto was not an Auto fit. */
+export function argsPinContext(args: readonly string[] | null | undefined): boolean {
+  return (args ?? []).some((arg) => {
+    // As extraArgFlagName (llama-extra-args.ts) reads it: `--ctx_size` is the backend's alias.
+    const name = arg.trim().split("=", 1)[0];
+    return name === "-c" || name.replaceAll("_", "-") === "--ctx-size";
+  });
+}
+
+/** Whether the resident's window came from an Auto fit: no Context set, no `-c` in its extra
+ *  args, and not Manual with fixed layers, where the reload pins the loaded window instead. */
+export function residentWasAutoFit(loaded: {
+  customContextLength?: number | null;
+  gpuMemoryMode?: "auto" | "manual" | null;
+  gpuLayers?: number | null;
+  llamaExtraArgs?: readonly string[] | null;
+}): boolean {
+  const fixedLayers =
+    loaded.gpuMemoryMode === "manual" && loaded.gpuLayers != null && loaded.gpuLayers >= 0;
+  return (
+    (loaded.customContextLength ?? null) == null &&
+    !fixedLayers &&
+    !argsPinContext(loaded.llamaExtraArgs)
+  );
+}
+
+/** The loaded model, priced at the window it loaded with. */
+export interface ResidentFit {
+  ctx: number;
+  gpuBytes: number;
+  totalBytes: number;
+  /** Loaded on Auto: a window under native means the fit filled the budget it had. */
+  loadedAuto: boolean;
+}
+
+// Interpolation error stays well under this; a KV dtype or slot change moves the price far past it.
+const RESIDENT_MATCH_TOLERANCE = 0.02;
+
+/** The window Auto would fit to with these settings, or null when the estimate cannot say.
+ *  Interpolated between the floor and native prices: both are the loader's own sizing, and KV and
+ *  the context-linear compute share grow linearly between them. With a model loaded, the budget is
+ *  its own price plus what is free now, both of which a reload has. */
+export function resolveAutoFittedContext(
+  estimate: MemoryFitEstimate,
+  capacity: MemoryFitCapacity,
+  resident: ResidentFit | null = null,
+): number | null {
+  const nativeCtx = estimate.nCtx ?? 0;
+  const floorCtx = estimate.gpuFloorCtx ?? 0;
+  if (
+    !hasContextFloor(estimate) ||
+    !estimate.kvEstimable ||
+    !(floorCtx > 0) ||
+    !Number.isFinite(nativeCtx) ||
+    !Number.isFinite(estimate.gpuBytes) ||
+    !Number.isFinite(estimate.totalBytes) ||
+    (!capacity.singleMemoryPool && estimate.gpuBytes === 0)
+  ) {
+    return null;
+  }
+  if (nativeCtx <= floorCtx) return nativeCtx;
+  const { freeGpuCapacityGb: availableGb, freeGpuCapacityKnown: known } = capacity;
+  const freeKnown = Number.isFinite(availableGb) && availableGb >= 0 && (availableGb > 0 || known);
+  const reclaimableTotal = reclaimableBytes(capacity.reclaimableTotalBytes);
+  const reclaimed = capacity.singleMemoryPool
+    ? reclaimableTotal
+    : Math.min(reclaimableBytes(capacity.reclaimableGpuBytes), reclaimableTotal);
+  const freeBudget = freeKnown
+    ? (availableGb +
+        Math.max(0, reclaimed / 1024 ** 3 - reclaimableBytes(capacity.freeGpuReserveDeficitGb))) *
+      1024 ** 3
+    : null;
+  const nativeBytes = capacity.singleMemoryPool ? estimate.totalBytes : estimate.gpuBytes;
+  const floorBytes =
+    capacity.singleMemoryPool && Number.isFinite(estimate.floorTotalBytes)
+      ? (estimate.floorTotalBytes as number)
+      : nativeBytes - Math.max(0, estimate.gpuBytes - (estimate.gpuFloorBytes as number));
+  const shrinkable = Math.max(0, nativeBytes - floorBytes);
+  const priceAt = (ctx: number) =>
+    floorBytes + (shrinkable * (ctx - floorCtx)) / (nativeCtx - floorCtx);
+  let budget = freeBudget;
+  const residentBytes = resident
+    ? capacity.singleMemoryPool
+      ? resident.totalBytes
+      : resident.gpuBytes
+    : Number.NaN;
+  if (resident && Number.isFinite(residentBytes) && residentBytes > 0 && resident.ctx > 0) {
+    // An Auto load cut below native filled its budget, and what reads as free beside it is the
+    // loader's reserve (measured: a T4 showed room for 86,272 where the same reload took 82,176).
+    // Any other load leaves real room on top. Not the reclaim credit: it already counts the resident.
+    const filled = resident.loadedAuto && resident.ctx < nativeCtx;
+    budget = residentBytes + (!filled && freeKnown ? availableGb * 1024 ** 3 : 0);
+    // Unchanged settings price the same at the loaded window.
+    if (
+      resident.ctx >= floorCtx &&
+      Math.abs(priceAt(resident.ctx) - residentBytes) <= residentBytes * RESIDENT_MATCH_TOLERANCE
+    ) {
+      return filled ? resident.ctx : Math.max(resident.ctx, budgetFit(budget));
+    }
+  }
+  if (budget == null) return null;
+  return budgetFit(budget);
+
+  function budgetFit(room: number | null): number {
+    if (room == null) return floorCtx;
+    if (nativeBytes <= room) return nativeCtx;
+    if (floorBytes >= room || shrinkable === 0) return floorCtx;
+    const fitted = floorCtx + ((room - floorBytes) / shrinkable) * (nativeCtx - floorCtx);
+    return Math.max(
+      floorCtx,
+      Math.min(nativeCtx, Math.floor(fitted / AUTO_CONTEXT_STEP) * AUTO_CONTEXT_STEP),
+    );
+  }
 }
 
 interface AdvisoryVerdicts {

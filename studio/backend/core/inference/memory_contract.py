@@ -63,6 +63,8 @@ def build_memory_estimate(
     quant_file_bytes: int,
     native_context: Optional[int] = None,
     gpu_floor_bytes: Optional[int] = None,
+    gpu_floor_ctx: Optional[int] = None,
+    floor_total_bytes: Optional[int] = None,
     floor_can_offload: bool = False,
     context_is_pinned: bool = True,
     inherited_device_pin: bool = False,
@@ -107,6 +109,10 @@ def build_memory_estimate(
             else (None if gpu_bytes is None else int(gpu_bytes))
         ),
         gpu_floor_bytes = None if gpu_floor_bytes is None else int(gpu_floor_bytes),
+        gpu_floor_ctx = None if gpu_floor_bytes is None or not gpu_floor_ctx else int(gpu_floor_ctx),
+        floor_total_bytes = (
+            None if gpu_floor_bytes is None or floor_total_bytes is None else int(floor_total_bytes)
+        ),
         floor_can_offload = bool(floor_can_offload),
         kv_estimable = bool(getattr(breakdown, "kv_estimable", True)),
         kv_on_gpu = bool(getattr(breakdown, "kv_on_gpu", True)),
@@ -162,6 +168,8 @@ def project_estimate_memory_response(estimate: MemoryEstimate) -> dict:
         "context_fitted": estimate.context_fitted,
         "context_is_pinned": estimate.context_is_pinned,
         "gpu_floor_bytes": estimate.gpu_floor_bytes,
+        "gpu_floor_ctx": estimate.gpu_floor_ctx,
+        "floor_total_bytes": estimate.floor_total_bytes,
         "floor_can_offload": estimate.floor_can_offload,
         "cache_type_kv": estimate.cache_type_kv,
         "n_parallel": estimate.n_parallel,
