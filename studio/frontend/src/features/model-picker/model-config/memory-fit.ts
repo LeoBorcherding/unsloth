@@ -96,6 +96,21 @@ function reclaimableBytes(value: number | undefined): number {
   return Number.isFinite(value) && (value as number) > 0 ? (value as number) : 0;
 }
 
+/** Whether the requested cards cover every card the resident is on, so its unload frees them. */
+export function requestedPoolHoldsResident(
+	residentPool: ReconciledGpuSelection,
+	requestedPool: ReconciledGpuSelection,
+): boolean {
+	return (
+		!requestedPool.ids?.length ||
+		(residentPool.ids != null &&
+			residentPool.ids.length > 0 &&
+			residentPool.indexKind != null &&
+			residentPool.indexKind === requestedPool.indexKind &&
+			residentPool.ids.every((id) => requestedPool.ids!.includes(id)))
+	);
+}
+
 export function resolveReclaimableMemoryCredit(
 	estimate:
 		| (Pick<MemoryFitEstimate, "totalBytes" | "gpuBytes"> & {
@@ -126,13 +141,7 @@ export function resolveReclaimableMemoryCredit(
 	)
 		return { totalBytes: 0, gpuBytes: 0 };
 	const files = Math.min(estimate.weightsBytes, total);
-	const includesResidentPool =
-		!requestedPool.ids?.length ||
-		(residentPool.ids != null &&
-			residentPool.ids.length > 0 &&
-			residentPool.indexKind != null &&
-			residentPool.indexKind === requestedPool.indexKind &&
-			residentPool.ids.every((id) => requestedPool.ids!.includes(id)));
+	const includesResidentPool = requestedPoolHoldsResident(residentPool, requestedPool);
 	const residentDevices = residentPool.ids?.length
 		? devices.filter(
 				(device) =>

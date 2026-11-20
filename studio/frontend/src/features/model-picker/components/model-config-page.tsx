@@ -143,6 +143,7 @@ import {
   mlxOffloadModePatch,
   mlxOffloadSliderValue,
   previewsAutoFit,
+  requestedPoolHoldsResident,
   resolveAutoFittedContext,
   resolveReclaimableMemoryCredit,
 } from "../model-config/memory-fit";
@@ -3862,7 +3863,16 @@ export function ModelConfigPage({
           singleMemoryPool,
           reclaimableTotalBytes: reclaimableCredit.totalBytes,
           reclaimableGpuBytes: reclaimableCredit.gpuBytes,
-        }, reclaimableEstimate && residentContext != null
+        }, reclaimableEstimate &&
+          residentContext != null &&
+          // Bytes freed on cards the new load won't use are no room for it.
+          requestedPoolHoldsResident(
+            { ids: loadedGpuIds, indexKind: loadedGpuIndexKind },
+            {
+              ids: runtimeConfig.selectedGpuIds ?? null,
+              indexKind: runtimeConfig.selectedGpuIndexKind ?? null,
+            },
+          )
           ? {
               ctx: residentContext,
               gpuBytes: reclaimableEstimate.gpuBytes,

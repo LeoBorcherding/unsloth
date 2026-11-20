@@ -921,3 +921,14 @@ test("with a model loaded, its own price is the budget: unchanged settings keep 
     (resolveAutoFittedContext(q8, { ...capacity, freeGpuCapacityGb: 4 }, resident) as number) > refit,
   );
 });
+
+test("the loaded model's bytes count toward a reload only on cards the reload uses", async () => {
+  const { requestedPoolHoldsResident } = await import(
+    "../src/features/model-picker/model-config/memory-fit.ts"
+  );
+  const on0 = { ids: [0], indexKind: "physical" as const };
+  assert.equal(requestedPoolHoldsResident(on0, { ids: null, indexKind: null }), true, "no pin: every card");
+  assert.equal(requestedPoolHoldsResident(on0, { ids: [0, 1], indexKind: "physical" }), true);
+  assert.equal(requestedPoolHoldsResident(on0, { ids: [1], indexKind: "physical" }), false);
+  assert.equal(requestedPoolHoldsResident({ ids: [0, 1], indexKind: "physical" }, { ids: [1], indexKind: "physical" }), false);
+});
