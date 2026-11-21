@@ -190,8 +190,9 @@ class _Swap:
         self.owner = DIFFUSION
         self.kind = "image"
         self.loaded_media = False
-        # The model resident on that backend before the switch: a refused switch must leave it loaded.
-        self.prior_media = None
+        # What this call loaded, so the put back unloads only that.
+        self.name = ""
+        self.pick = None
         self.chat_identity = None
         self.chat_launch = None
         self.chat_unloaded = False
@@ -219,23 +220,16 @@ def _enter_shared(swap: "_Swap") -> None:
     swap.shared.users += 1
 
 
-_IDENTITY_KEYS = ("repo_id", "gguf_filename", "gguf_variant", "h3_task")
-
-
-def _resident_media(status) -> Optional[tuple]:
-    """Everything satisfied_by tells models apart by: two GGUF files of one repo are two models."""
-    if not isinstance(status, dict) or not status.get("loaded") or not status.get("repo_id"):
-        return None
-    return tuple(str(status.get(key) or "").strip() for key in _IDENTITY_KEYS)
-
-
-async def _prior_still_resident(swap: "_Swap") -> bool:
+async def _ours_resident(swap: "_Swap") -> bool:
+    """This call's pick is still the resident model: a refused switch left the prior one, and another
+    request may have switched in a newer one since."""
+    from core.inference.media_model_index import satisfied_by
     from core.inference.media_switch_backends import backend_for
 
-    if swap.prior_media is None:
+    if swap.pick is None:
         return False
     status = await asyncio.to_thread(backend_for(swap.owner).status)
-    return _resident_media(status) == swap.prior_media
+    return satisfied_by(status, swap.name, swap.pick)
 
 
 def _switch_lock(owner: str):
@@ -435,7 +429,6 @@ async def _swap_and_render_as(
     subject = current_account().username
     before = await asyncio.to_thread(backend_for(swap.owner).status)
     resident = satisfied_by(before, name, pick)
-    swap.prior_media = _resident_media(before)
     keeps_chat = True
     if not resident:
         swap.chat_identity = loaded_identity()
@@ -452,6 +445,7 @@ async def _swap_and_render_as(
             if mode == "always" and swap.chat_identity is not None and not keeps_chat:
                 return ERR_KEEP_NO_FIT.format(model = pick.model_id, kind = swap.kind)
             swap.loaded_media = True
+            swap.name, swap.pick = name, pick
             try:
                 await _load_media(swap.owner, name, pick, subject, deadline, abort)
             finally:
@@ -541,7 +535,7 @@ async def _put_back(swap: _Swap, subject: str) -> str:
         swap = shared.loader or swap
     if swap.loaded_media:
         await _setup_settled(swap.owner, _RESTORE_WAIT_S)
-    if swap.loaded_media and not await _prior_still_resident(swap):
+    if swap.loaded_media and await _ours_resident(swap):
         try:
             await _unload_media(swap.owner, subject)
         except Exception as exc:  # noqa: BLE001

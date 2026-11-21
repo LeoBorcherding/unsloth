@@ -430,6 +430,10 @@ def test_wait_reports_a_load_that_stopped(monkeypatch):
         asyncio.run(tool._await_loaded(DIFFUSION, "org/image-model", PICK, 1e18, threading.Event()))
 
 
+async def _still_ours(swap):
+    return True
+
+
 def test_put_back_waits_for_the_setup_before_restoring(monkeypatch):
     _preflight_world(monkeypatch)
     calls = []
@@ -442,6 +446,7 @@ def test_put_back_waits_for_the_setup_before_restoring(monkeypatch):
 
     monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
 
     async def scenario():
         lock = tool._switch_lock(DIFFUSION)
@@ -668,6 +673,7 @@ def test_only_the_last_chat_on_a_shared_model_puts_things_back(monkeypatch):
 
     monkeypatch.setattr(tool, "_unload_media", unload_media)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
 
     async def scenario():
         loader, reader = tool._Swap(), tool._Swap()
@@ -698,6 +704,7 @@ def test_put_back_waits_for_another_render_on_the_backend(monkeypatch):
 
     monkeypatch.setattr(tool, "_unload_media", unload_media)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
 
     async def scenario():
         swap = tool._Swap()
@@ -1207,3 +1214,31 @@ def test_stt_cleanup_leaves_a_model_another_transcription_loaded(world, monkeypa
     monkeypatch.setattr(inference, "_transcribe_audio_result", own)
     _call(world, {"model": "unsloth/whisper-tiny", "audio": "clip.wav"})
     assert unloaded == [{"expected_model": "tiny"}]
+
+
+def test_the_put_back_leaves_a_newer_image_model_another_request_switched_in(world, monkeypatch):
+    class Newer:
+        def status(self):
+            return {"loaded": True, "repo_id": "org/newer-model"}
+
+        def loading_repo_ids(self):
+            return []
+
+    monkeypatch.setattr(
+        media_model_index,
+        "satisfied_by",
+        lambda status, name, pick: status.get("repo_id") == "org/image-model",
+    )
+    render = tool._render_image
+
+    async def render_then_switched(*args, **kwargs):
+        out = await render(*args, **kwargs)
+        world.backend = Newer()
+        return out
+
+    monkeypatch.setattr(tool, "_render_image", render_then_switched)
+    result = _call(
+        world, {"model": "org/image-model", "prompt": "a fox", "unload_chat_model": "true"}
+    )
+    assert result.startswith("Generated a")
+    assert ("unload",) not in world.calls
