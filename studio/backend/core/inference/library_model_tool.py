@@ -921,9 +921,20 @@ async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
         return "Error: " + _detail(exc)
     finally:
         after = (await asyncio.to_thread(stt_registry.resident)).get("model")
-        if after and after != before:
+        # Only the model this call named: another transcription may have loaded a different one since.
+        if after and after != before and _same_stt(after, name):
             await asyncio.to_thread(stt_registry.unload, expected_model = after)
     return f"{name} transcribed {audio}:\n{str(result.get('text') or '').strip()}"
+
+
+def _same_stt(resident: str, name: str) -> bool:
+    """Whisper reports its short key ("tiny"); the listing names the repo."""
+    try:
+        from core.inference.stt_sidecar import STT_MODELS
+    except Exception:  # noqa: BLE001
+        STT_MODELS = {}
+    ids = {resident.lower(), str(STT_MODELS.get(resident, "")).lower()}
+    return name.strip().lower() in ids
 
 
 async def _full_listing() -> str:

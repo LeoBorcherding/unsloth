@@ -1162,3 +1162,48 @@ def test_tts_and_music_see_the_calls_stop_event(world, monkeypatch):
     while not saw and time.monotonic() < deadline:
         time.sleep(0.05)
     assert saw == [True]
+
+
+def test_stt_cleanup_leaves_a_model_another_transcription_loaded(world, monkeypatch):
+    from core.inference import stt_registry
+
+    resident, unloaded = {}, []
+
+    async def transcribe(
+        raw,
+        model,
+        language,
+        fast,
+        request = None,
+        **kwargs,
+    ):
+        resident["model"] = "base"  # a concurrent request swapped the sidecar to another model
+        return {"text": "ok"}
+
+    monkeypatch.setattr(tool, "_speech_ids", lambda: ([], ["unsloth/whisper-tiny"]))
+    monkeypatch.setattr(inference, "_transcribe_audio_result", transcribe)
+    monkeypatch.setattr(stt_registry, "resident", lambda: dict(resident))
+    monkeypatch.setattr(stt_registry, "unload", lambda **kw: unloaded.append(kw))
+    import os
+
+    os.makedirs(world.workdir, exist_ok = True)
+    with open(os.path.join(world.workdir, "clip.wav"), "wb") as f:
+        f.write(b"1")
+    _call(world, {"model": "unsloth/whisper-tiny", "audio": "clip.wav"})
+    assert unloaded == []
+    resident.clear()
+
+    async def own(
+        raw,
+        model,
+        language,
+        fast,
+        request = None,
+        **kwargs,
+    ):
+        resident["model"] = "tiny"
+        return {"text": "ok"}
+
+    monkeypatch.setattr(inference, "_transcribe_audio_result", own)
+    _call(world, {"model": "unsloth/whisper-tiny", "audio": "clip.wav"})
+    assert unloaded == [{"expected_model": "tiny"}]
