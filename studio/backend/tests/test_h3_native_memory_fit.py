@@ -909,6 +909,18 @@ def test_the_fallback_reason_names_the_missing_rocm_libraries(monkeypatch):
     assert "diffusion-accelerator-fallback" in sd_cpp_backend.ACCELERATOR_FALLBACK_CLEAR_HINT
 
 
+def test_the_fallback_reason_does_not_send_a_rocm_10_host_to_rocm_7(monkeypatch):
+    # ROCm 10.x ships the same sonames and amdhip64_7.dll, so the advice must name it too.
+    monkeypatch.setattr(sd_cpp_backend, "_rocm_missing_memo", (["libhipblas.so.3"],))
+    monkeypatch.setattr(sd_cpp_backend.sys, "platform", "linux")
+    monkeypatch.setattr(sd_cpp_backend.os, "name", "posix")
+    assert "10.x" in sd_cpp_backend.accelerator_fallback_reason("rocm")
+    monkeypatch.setattr(sd_cpp_backend, "_rocm_missing_memo", (None,))
+    assert "10.x" in sd_cpp_backend.accelerator_fallback_reason("rocm")
+    monkeypatch.setattr(sd_cpp_backend.os, "name", "nt")
+    assert "10.x" in sd_cpp_backend.accelerator_fallback_reason("rocm")
+
+
 def test_an_unaskable_rocm_runtime_is_not_read_as_loading(monkeypatch):
     monkeypatch.setattr(sd_cpp_backend, "rocm_runtime_missing_sonames", lambda: None)
     monkeypatch.setattr(sd_cpp_backend.os, "name", "posix")

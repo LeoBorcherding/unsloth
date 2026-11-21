@@ -438,6 +438,18 @@ def test_without_hip_path_the_default_location_is_searched_newest_7x_first(hip_s
     assert sdmod.windows_hip_sdk_bin_dirs() == [str(hip_sdk.bin), str(older)]
 
 
+def test_a_rocm_10_hip_sdk_is_found_and_sorts_ahead_of_7x(hip_sdk, monkeypatch):
+    monkeypatch.delenv("HIP_PATH")
+    # ROCm 10.x keeps the HIP 7 runtime ABI: its Windows SDK ships amdhip64_7.dll and hipblas.dll.
+    rocm10 = _dll_dir(
+        hip_sdk.program_files / "AMD" / "ROCm" / "10.1" / "bin",
+        "hipblas.dll",
+        "rocblas.dll",
+        "amdhip64_7.dll",
+    )
+    assert sdmod.windows_hip_sdk_bin_dirs() == [str(rocm10), str(hip_sdk.bin)]
+
+
 def test_no_hip_sdk_finds_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "Program Files"))
     monkeypatch.delenv("HIP_PATH", raising = False)

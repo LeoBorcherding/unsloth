@@ -1091,7 +1091,7 @@ def _rocm_version_key(name: str) -> tuple:
 
 
 def windows_hip_sdk_bin_dirs() -> list[str]:
-    """HIP SDK 7.x bin dirs with hipblas.dll: HIP_PATH / ROCM_PATH, then Program Files newest first (installer never adds bin to PATH)."""
+    """HIP SDK bin dirs with hipblas.dll and the HIP 7 runtime (ROCm 7.x and 10.x): HIP_PATH / ROCM_PATH, then Program Files newest first (installer never adds bin to PATH)."""
     roots = [os.environ.get("HIP_PATH"), os.environ.get("ROCM_PATH")]
     base = Path(os.environ.get("ProgramFiles") or r"C:\Program Files") / "AMD" / "ROCm"
     try:
@@ -1107,7 +1107,8 @@ def windows_hip_sdk_bin_dirs() -> list[str]:
         if not root:
             continue
         bindir = os.path.join(root, "bin")
-        # amdhip64_7.dll marks a 7.x SDK: a 6.x hipblas.dll binds the other HIP runtime.
+        # amdhip64_7.dll is the HIP runtime ABI, not the ROCm release: 7.x and 10.x SDKs both ship it, and a
+        # 6.x hipblas.dll binds amdhip64_6.dll instead.
         if bindir not in dirs and all(
             os.path.isfile(os.path.join(bindir, dll)) for dll in ("hipblas.dll", "amdhip64_7.dll")
         ):
@@ -1219,7 +1220,7 @@ def _verify_bundle_starts(
         hint = ""
         if sys.platform == "win32" and accelerator_class(accelerator) == "rocm":
             hint = (
-                " The ROCm build needs the AMD HIP SDK 7.x runtime (hipblas.dll, rocblas.dll), found on PATH or "
+                " The ROCm build needs the AMD HIP SDK 7.x or 10.x runtime (hipblas.dll, rocblas.dll), found on PATH or "
                 f"under HIP_PATH; install it from {HIP_SDK_URL}."
             )
         raise UnrunnableBuildError(
