@@ -333,7 +333,7 @@ function FloatingMonitorPanel({
       <motion.div
         {...{ [FIND_PORTAL_ATTRIBUTE]: "" }}
         ref={monitorRef}
-        // Grabbing it must not dismiss a modal under it (dialog.tsx, sheet.tsx).
+        // It sits above modals: modal-pe-live keeps it live under the lock, and this keeps a grab from dismissing one.
         data-floating-panel=""
         onPointerDownCapture={() => raisePanel("resource-monitor")}
         // The whole card is a grip; controls, resize edges and the grip itself keep their own pointer.
@@ -361,7 +361,7 @@ function FloatingMonitorPanel({
         className={cn(
           // transition-none: reduce motion's 0.01ms duration otherwise turns the drop's transform to
           // left/top handoff into a transition, and the compositor paints a frame at the start spot.
-          "settings-surface bg-background pointer-events-auto absolute flex max-h-full w-64 transition-none max-w-full cursor-grab select-none active:cursor-grabbing flex-col overflow-hidden rounded-2xl border border-border/70 p-3 shadow-border ring-0",
+          "settings-surface bg-background pointer-events-auto modal-pe-live absolute flex max-h-full w-64 transition-none max-w-full cursor-grab select-none active:cursor-grabbing flex-col overflow-hidden rounded-2xl border border-border/70 p-3 shadow-border ring-0",
           layout ? "top-0 left-0" : "right-0 bottom-0",
         )}
         data-testid="floating-monitor"

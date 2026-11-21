@@ -161,12 +161,14 @@ test("an interaction on a toast or a corner card does not dismiss the sheet unde
   assert.deepEqual(seen, [onToast, onRail, onPanel, elsewhere], "the caller's handler was dropped");
 });
 
-test("both floating panels carry the marker the modals exempt", () => {
+test("both floating panels stay live over a modal and carry the marker it exempts", () => {
   for (const path of [
     "../src/components/floating-monitor.tsx",
     "../src/features/api-monitor/api-monitor-overlay.tsx",
   ]) {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");
     assert.match(source, /<motion\.div[\s\S]*?ref=\{monitorRef\}[\s\S]*?data-floating-panel=""/, path);
+    // index.css forces pointer-events-auto to none under a modal lock unless it opts out.
+    assert.match(source, /pointer-events-auto modal-pe-live /, path);
   }
 });
