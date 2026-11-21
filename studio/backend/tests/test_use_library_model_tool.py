@@ -131,7 +131,7 @@ def world(monkeypatch, server_loop, tmp_path):
         return None
 
     async def no_llms():
-        return []
+        return ()
 
     monkeypatch.setattr(tool, "_catalog_row", no_row)
     monkeypatch.setattr(tool, "_downloaded_llms", no_llms)
@@ -697,7 +697,7 @@ def llm(world, monkeypatch):
         )
 
     async def llms():
-        return ["org/other-llm"]
+        return (("chat", ["org/other-llm"]),)
 
     async def complete(name, prompt, subject, *, beside):
         mode = multi_model_settings.get_multi_model_mode()
@@ -745,7 +745,7 @@ def test_an_llm_with_unload_false_runs_beside_the_chat_model(world, llm):
     result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "false"})
     assert llm.calls == [("ask", "org/other-llm", True), ("unload", "org/other-llm")]
     assert llm.modes == ["always"]
-    assert result.endswith("It ran beside the chat model, which stayed loaded.")
+    assert result.endswith("org/other-llm ran beside the chat model, which stayed loaded.")
     assert world.chat == CHAT
 
 
@@ -788,3 +788,64 @@ def test_the_listing_includes_chat_models(world, llm):
     assert _call(world, {}).startswith(
         "Downloaded chat models: org/other-llm. Downloaded image models"
     )
+
+
+def test_a_tts_model_speaks_beside_the_chat_model_and_keeps_the_file_envelope_last(world, monkeypatch):
+    from core.scheduled_tasks import scheduler
+
+    async def row(name):
+        return SimpleNamespace(id = "org/tts", task = "text-to-speech")
+
+    spoken = []
+
+    async def speak(name, text, subject, workdir, *, beside):
+        spoken.append((name, text, beside))
+        return 'Spoke the text with org/tts and saved it as a.wav.\n__FILES__:[{"name": "a.wav", "size": 1}]', False
+
+    async def unload(name, subject):
+        spoken.append(("unload", name))
+
+    monkeypatch.setattr(tool, "_catalog_row", row)
+    monkeypatch.setattr(tool, "_speak_tts", speak)
+    monkeypatch.setattr(tool, "_unload_llm", unload)
+    monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: False)
+    result = _call(world, {"model": "org/tts", "prompt": "hello there", "unload_chat_model": "false"})
+    assert spoken == [("org/tts", "hello there", True), ("unload", "org/tts")]
+    body, files = result.split("\n__FILES__")
+    assert body.endswith("org/tts ran beside the chat model, which stayed loaded.")
+    assert "a.wav" in files
+
+
+def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(world, monkeypatch, tmp_path):
+    from core.inference import stt_registry
+
+    async def row(name):
+        return SimpleNamespace(id = "org/asr", task = "automatic-speech-recognition")
+
+    async def transcribe(raw, model, language, fast, request = None, **kwargs):
+        loaded["model"] = model
+        return {"text": f"heard {len(raw)} bytes"}
+
+    loaded, unloaded = {}, []
+    monkeypatch.setattr(tool, "_catalog_row", row)
+    monkeypatch.setattr(inference, "_transcribe_audio_result", transcribe)
+    monkeypatch.setattr(stt_registry, "resident", lambda: {"model": loaded.get("model")} if loaded else {})
+    monkeypatch.setattr(stt_registry, "unload", lambda **kw: unloaded.append(kw))
+    import os
+
+    os.makedirs(world.workdir, exist_ok = True)
+    with open(os.path.join(world.workdir, "clip.wav"), "wb") as f:
+        f.write(b"12345")
+    result = _call(world, {"model": "org/asr", "audio": "clip.wav"})
+    assert result == "org/asr transcribed clip.wav:\nheard 5 bytes"
+    assert unloaded == [{"expected_model": "org/asr"}]
+    assert world.calls == []
+
+
+def test_an_stt_model_refuses_a_path_outside_the_chat(world, monkeypatch):
+    async def row(name):
+        return SimpleNamespace(id = "org/asr", task = "automatic-speech-recognition")
+
+    monkeypatch.setattr(tool, "_catalog_row", row)
+    result = _call(world, {"model": "org/asr", "audio": "../../etc/passwd"})
+    assert result == "Error: no audio file named '../../etc/passwd' in this chat."

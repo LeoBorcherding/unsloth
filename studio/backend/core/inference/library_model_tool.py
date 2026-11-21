@@ -67,14 +67,18 @@ def use_library_model_schema() -> dict:
                 "properties": {
                     "model": {
                         "type": "string",
-                        "description": "Id of a downloaded chat, image or video model. Omit to list them.",
+                        "description": "Id of a downloaded model (chat, image, video, text-to-speech, speech-to-text). Omit to list them.",
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "For a chat model, the message to send it; for an image or video model, the full prompt.",
+                        "description": "For a chat model, the message to send it; for text-to-speech, the text to speak; for an image or video model, the full prompt.",
                     },
                     "width": {"type": "integer", "description": "Width in pixels. Default 1024."},
                     "height": {"type": "integer", "description": "Height in pixels. Default 1024."},
+                    "audio": {
+                        "type": "string",
+                        "description": "For a speech-to-text model: the name of an audio file in this chat.",
+                    },
                     "seconds": {
                         "type": "number",
                         "description": "Clip length in seconds, for a video model.",
@@ -344,8 +348,21 @@ async def _swap_and_render(
             swap.owner, swap.kind = VIDEO, "video"
     if pick is None:
         row = await _catalog_row(name)
-        if row is not None and getattr(row, "task", None) in _LLM_TASKS:
+        task = getattr(row, "task", None) if row is not None else "missing"
+        if task in _LLM_TASKS:
             return await _ask_llm(arguments, prompt, row.id, swap)
+        if task == _TTS_TASK:
+            from utils.account_context import current_account
+
+            subject = current_account().username
+            return await _on_chat_seat(
+                arguments,
+                row.id,
+                swap,
+                lambda beside: _speak_tts(row.id, prompt, subject, workdir, beside = beside),
+            )
+        if task == _STT_TASK:
+            return await _transcribe(row.id, arguments, workdir)
         return f"Error: no downloaded model matches '{name}'. " + await _full_listing()
     valid, mode = _unload_mode(arguments)
     if not valid:
@@ -494,7 +511,7 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     from utils.account_context import arun_as, current_account
 
     prompt = str(arguments.get("prompt") or "").strip()
-    if not prompt and str(arguments.get("model") or "").strip():
+    if not prompt and not arguments.get("audio") and str(arguments.get("model") or "").strip():
         return ERR_NO_PROMPT
     account = current_account()
     loop = server_loop()
@@ -584,6 +601,8 @@ def run_use_library_model(
 
 
 _LLM_TASKS = (None, "", "text-generation", "image-text-to-text")
+_TTS_TASK = "text-to-speech"
+_STT_TASK = "automatic-speech-recognition"
 
 
 async def _catalog_row(name: str):
@@ -598,11 +617,15 @@ async def _catalog_row(name: str):
     return None
 
 
-async def _downloaded_llms() -> list[str]:
+async def _downloaded_llms() -> tuple:
+    """(kind, ids) groups the media index does not list: chat, text-to-speech, speech-to-text."""
     from routes.inference import _cached_local_catalog
-    return [
-        row.id for row in await _cached_local_catalog() if getattr(row, "task", None) in _LLM_TASKS
-    ]
+
+    rows = await _cached_local_catalog()
+    groups = (("chat", _LLM_TASKS), ("text-to-speech", (_TTS_TASK,)), ("speech-to-text", (_STT_TASK,)))
+    return tuple(
+        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks]) for kind, tasks in groups
+    )
 
 
 def _evict_chat_model() -> None:
@@ -670,8 +693,15 @@ async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -
     return str(message.get("content") or "").strip(), False
 
 
-async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> str:
-    """Ask another downloaded LLM. Beside the chat model when it stays, else after unloading it."""
+def _with_note(text: str, note: str) -> str:
+    """The note goes above a file envelope, which has to stay last."""
+    body, sep, files = text.partition("\n__FILES__")
+    return f"{body}\n\n{note}" + sep + files
+
+
+async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
+    """A model that loads through the chat switch (an LLM, a TTS model): beside the chat model when it
+    stays, else after unloading it. ``run(beside)`` returns (text, refused)."""
     from core.inference.llama_keepwarm import launch_to_replay, loaded_identity
     from core.scheduled_tasks.scheduler import _model_is_loaded
     from utils.account_context import current_account
@@ -683,37 +713,129 @@ async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> st
         return ERR_UNLOAD_ARG
     mode = mode or await asyncio.to_thread(get_multi_model_mode)
     if _model_is_loaded(name):
-        text, _ = await _complete_llm(name, prompt, subject, beside = True)
-        return text if text.startswith("Error") else f"{name} answered:\n{text}"
+        return (await run(True))[0]
     if mode in ("always", "fit"):
         with multi_model_mode_for_request("always"):
-            text, refused = await _complete_llm(name, prompt, subject, beside = True)
+            text, refused = await run(True)
         if not refused:
             await _unload_llm(name, subject)
             if text.startswith("Error"):
                 return text
-            return f"{name} answered:\n{text}\n\nIt ran beside the chat model, which stayed loaded."
+            return _with_note(text, f"{name} ran beside the chat model, which stayed loaded.")
         if mode == "always":
             return ERR_KEEP_NO_FIT.format(model = name, kind = "model")
     swap.chat_identity = loaded_identity()
     swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
     if swap.chat_identity is None:
         from core.inference import get_inference_backend
+
         orchestrator = await asyncio.to_thread(get_inference_backend)
         if getattr(orchestrator, "active_model_name", None):
             return ERR_NON_GGUF_CHAT
     try:
         await asyncio.to_thread(_evict_chat_model)
         with multi_model_mode_for_request("off"):
-            text, _ = await _complete_llm(name, prompt, subject, beside = False)
+            text, _ = await run(False)
         await _unload_llm(name, subject)
     finally:
         # Shielded: a stop must never leave the chat without its model.
         swap.note = await asyncio.shield(_put_back(swap, subject))
     if text.startswith("Error"):
         return text
-    return f"{name} answered:\n{text}\n\nThe chat model was unloaded so {name} could run, and loaded back."
+    return _with_note(text, f"The chat model was unloaded so {name} could run, and loaded back.")
+
+
+async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> str:
+    from utils.account_context import current_account
+
+    subject = current_account().username
+
+    async def run(beside: bool) -> tuple[str, bool]:
+        text, refused = await _complete_llm(name, prompt, subject, beside = beside)
+        return (text if refused or text.startswith("Error") else f"{name} answered:\n{text}"), refused
+
+    return await _on_chat_seat(arguments, name, swap, run)
+
+
+async def _speak_tts(name: str, text: str, subject: str, workdir: str, *, beside: bool) -> tuple[str, bool]:
+    """(result, refused): one clip from TTS model ``name``, saved into the chat's sandbox."""
+    import hashlib
+    import os
+
+    from fastapi import HTTPException
+
+    from core.inference.gpu_arbiter import MULTI_MODEL_REFUSAL_MARKERS
+    from core.inference.llama_keepwarm import end_in_process_request
+    from core.inference.orchestrator import AUDIO_GENERATION_MAX_TOKENS
+    from core.scheduled_tasks.scheduler import _producer_request
+    from models.inference import ChatCompletionRequest
+    from routes.inference import (
+        _generate_tts_wav,
+        _persist_tts_clip,
+        allow_model_switch_for_request,
+        load_alongside_for_request,
+    )
+
+    request = _producer_request(None, "library-model-speak", threading.Event(), "UTC", loaded_only = False)
+    allow_model_switch_for_request(request.scope)
+    if beside:
+        load_alongside_for_request(request.scope)
+    payload = ChatCompletionRequest(
+        messages = [{"role": "user", "content": text}], max_tokens = AUDIO_GENERATION_MAX_TOKENS
+    )
+    wav = None
+    try:
+        wav, rate, served, audio_type = await _generate_tts_wav(
+            text, payload, request, subject, speech_api_default_max_tokens = True, requested_model = name
+        )
+    except HTTPException as exc:
+        detail = _detail(exc)
+        if any(marker in detail for marker in MULTI_MODEL_REFUSAL_MARKERS):
+            return detail, True
+        return "Error: " + detail, False
+    finally:
+        end_in_process_request(request.scope, answered = wav is not None)
+    # The Audio page keeps it too, as for the speech route.
+    await asyncio.to_thread(_persist_tts_clip, wav, rate, text, served, audio_type)
+    root = os.path.realpath(workdir)
+    os.makedirs(root, exist_ok = True)
+    file = f"generated-speech-{hashlib.sha1(wav).hexdigest()[:8]}.wav"
+    with open(os.path.join(root, file), "wb") as out:
+        out.write(wav)
+    saved = {"name": file, "size": len(wav)}
+    return f"Spoke the text with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps([saved]), False
+
+
+async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
+    """STT runs beside whatever is loaded (no GPU arbiter owner), so there is no chat swap."""
+    import os
+
+    from fastapi import HTTPException
+
+    from core.inference import stt_registry
+    from core.scheduled_tasks.scheduler import _producer_request
+    from routes.inference import _transcribe_audio_result
+
+    audio = str(arguments.get("audio") or "").strip()
+    if not audio:
+        return "Error: a speech-to-text model needs audio: the name of an audio file in this chat."
+    root = os.path.realpath(workdir)
+    path = os.path.realpath(os.path.join(root, audio))
+    if not path.startswith(root + os.sep) or not os.path.isfile(path):
+        return f"Error: no audio file named '{audio}' in this chat."
+    raw = await asyncio.to_thread(lambda: open(path, "rb").read())
+    before = (await asyncio.to_thread(stt_registry.resident)).get("model")
+    request = _producer_request(None, "library-model-transcribe", threading.Event(), "UTC", loaded_only = False)
+    try:
+        result = await _transcribe_audio_result(raw, name, None, False, request = request)
+    except HTTPException as exc:
+        return "Error: " + _detail(exc)
+    finally:
+        after = (await asyncio.to_thread(stt_registry.resident)).get("model")
+        if after and after != before:
+            await asyncio.to_thread(stt_registry.unload, expected_model = after)
+    return f"{name} transcribed {audio}:\n{str(result.get('text') or '').strip()}"
 
 
 async def _full_listing() -> str:
-    return await asyncio.to_thread(_listing, (("chat", await _downloaded_llms()),))
+    return await asyncio.to_thread(_listing, await _downloaded_llms())
