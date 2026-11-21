@@ -386,7 +386,6 @@ def _rocm_windows_torch_set_by_name(name: str) -> "_RocmWindowsTorchSet | None":
 def _installed_torch_local_tag() -> str:
     try:
         from importlib import metadata
-
         return metadata.version("torch").lower().rpartition("+")[2]
     except Exception:
         return ""
@@ -423,6 +422,8 @@ def _rocm_windows_torch_set_switch_pending(installed_tag: str) -> bool:
     if want.tag in opt_in_tags or installed_tag in opt_in_tags:
         return installed_tag != want.tag
     return False
+
+
 # gfx1033 excluded: in _ROCM_MISCOMPUTING_GFX, keeps its family route. CDNA stays on the family map.
 _WINDOWS_MULTIARCH_GFX: "frozenset[str]" = frozenset(
     {
@@ -6012,7 +6013,11 @@ def _rocm_fused_sdpa_works() -> "bool | None":
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    marks = [l.strip()[len(_FUSED_SDPA_PROBE_MARKER) :] for l in out.splitlines() if l.strip().startswith(_FUSED_SDPA_PROBE_MARKER)]
+    marks = [
+        l.strip()[len(_FUSED_SDPA_PROBE_MARKER) :]
+        for l in out.splitlines()
+        if l.strip().startswith(_FUSED_SDPA_PROBE_MARKER)
+    ]
     if not marks:
         return None
     # A process that reached the GPU and then died inside a fused kernel is a failure, not silence.
@@ -6027,7 +6032,9 @@ def _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch: "str | None") -> bool:
     works = _rocm_fused_sdpa_works()
     if works is not False:
         if works is None:
-            _safe_print("   could not run the fused attention check on the GPU; keeping the installed torch")
+            _safe_print(
+                "   could not run the fused attention check on the GPU; keeping the installed torch"
+            )
         return True
     d = _rocm_windows_default_torch_set()
     gfx = _bare_gfx(gfx_arch)

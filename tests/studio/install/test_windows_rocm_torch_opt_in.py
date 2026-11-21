@@ -20,7 +20,9 @@ _SETUP_PS1 = PACKAGE_ROOT / "studio" / "setup.ps1"
 
 
 def _load_stack_module():
-    spec = importlib.util.spec_from_file_location("studio_install_python_stack_rocm_opt_in", _STACK_PY)
+    spec = importlib.util.spec_from_file_location(
+        "studio_install_python_stack_rocm_opt_in", _STACK_PY
+    )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
@@ -47,10 +49,16 @@ _ROCM101_TRIO = (
 @pytest.fixture
 def host(monkeypatch):
     """No mirror, no request, and a torch tag the test sets (default: none installed)."""
-    for name in ("UNSLOTH_ROCM_TORCH", "UNSLOTH_ROCM_WINDOWS_MIRROR", "UNSLOTH_ROCM_WINDOWS_MULTIARCH_MIRROR"):
+    for name in (
+        "UNSLOTH_ROCM_TORCH",
+        "UNSLOTH_ROCM_WINDOWS_MIRROR",
+        "UNSLOTH_ROCM_WINDOWS_MULTIARCH_MIRROR",
+    ):
         monkeypatch.delenv(name, raising = False)
     monkeypatch.setattr(stack_mod, "_ROCM_WINDOWS_INDEX_BASE", "https://repo.amd.com/rocm/whl")
-    monkeypatch.setattr(stack_mod, "_ROCM_WINDOWS_MULTIARCH_INDEX_BASE", "https://repo.amd.com/rocm/whl-multi-arch")
+    monkeypatch.setattr(
+        stack_mod, "_ROCM_WINDOWS_MULTIARCH_INDEX_BASE", "https://repo.amd.com/rocm/whl-multi-arch"
+    )
     monkeypatch.setattr(stack_mod, "_ROCM_TORCH_SET_WARNED", False)
     state = SimpleNamespace(tag = "")
     monkeypatch.setattr(stack_mod, "_installed_torch_local_tag", lambda: state.tag)
@@ -132,7 +140,6 @@ class TestFastPath:
 
     def _installed(self, windows, version):
         import importlib.metadata as md
-
         windows.tag = version.rpartition("+")[2]
         windows.mp.setattr(md, "version", lambda name: version)
 
@@ -191,7 +198,9 @@ class TestFusedAttentionProbe:
         ],
     )
     def test_reads_the_probe(self, monkeypatch, stdout, expected):
-        monkeypatch.setattr(stack_mod.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout = stdout))
+        monkeypatch.setattr(
+            stack_mod.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout = stdout)
+        )
         assert stack_mod._rocm_fused_sdpa_works() is expected
 
     def test_a_timeout_is_no_answer(self, monkeypatch):
@@ -205,7 +214,11 @@ class TestFusedAttentionProbe:
 def _ps_sets(path):
     text = path.read_text(encoding = "utf-8")
     start = text.index("function Get-RocmWindowsTorchSet")
-    body = text[start : text.index("\n}", start) if path.name == "setup.ps1" else text.index("\n    }", start)]
+    body = text[
+        start : text.index("\n}", start)
+        if path.name == "setup.ps1"
+        else text.index("\n    }", start)
+    ]
     return {
         m.group(1): (m.group(2), m.group(3), m.group(4), m.group(5))
         for m in re.finditer(
@@ -220,6 +233,9 @@ class TestPowerShellTablesMatch:
     def test_same_sets_as_python(self, path):
         expected = {
             s.name: (s.tag, s.torch, s.torchvision, s.torchaudio)
-            for s in (stack_mod._rocm_windows_default_torch_set(), *stack_mod._ROCM_WINDOWS_OPT_IN_TORCH_SETS)
+            for s in (
+                stack_mod._rocm_windows_default_torch_set(),
+                *stack_mod._ROCM_WINDOWS_OPT_IN_TORCH_SETS,
+            )
         }
         assert _ps_sets(path) == expected
