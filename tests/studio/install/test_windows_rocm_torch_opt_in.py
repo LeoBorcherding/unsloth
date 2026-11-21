@@ -155,10 +155,15 @@ class TestFastPath:
 
 
 class TestFusedAttentionGate:
-    def _gate(self, host, works):
+    def _gate(
+        self,
+        host,
+        works,
+        restore_ok = True,
+    ):
         calls = []
         host.mp.setattr(stack_mod, "_rocm_fused_sdpa_works", lambda: works)
-        host.mp.setattr(stack_mod, "pip_install_try", lambda *a, **k: calls.append(a) or True)
+        host.mp.setattr(stack_mod, "pip_install_try", lambda *a, **k: calls.append(a) or restore_ok)
         return stack_mod._rocm_windows_opt_in_fused_sdpa_gate("gfx1201"), calls
 
     def test_the_default_trio_is_never_probed(self, host):
@@ -166,9 +171,10 @@ class TestFusedAttentionGate:
         host.mp.setattr(stack_mod, "_rocm_fused_sdpa_works", lambda: pytest.fail("probed"))
         assert stack_mod._rocm_windows_opt_in_fused_sdpa_gate("gfx1201")
 
-    def test_working_fused_attention_keeps_the_opt_in(self, host):
+    def test_working_fused_attention_keeps_the_opt_in(self, host, capsys):
         host.tag = "rocm10.1.0"
         assert self._gate(host, True) == (True, [])
+        assert "fused attention runs" in capsys.readouterr().out
 
     def test_no_answer_keeps_the_opt_in(self, host):
         host.tag = "rocm10.1.0"
@@ -178,11 +184,43 @@ class TestFusedAttentionGate:
         host.tag = "rocm10.1.0"
         host.mp.setenv("UNSLOTH_ROCM_TORCH", "rocm10.1")
         kept, calls = self._gate(host, False)
-        assert not kept
+        assert kept
         assert len(calls) == 1
         assert calls[0][-3:] == _DEFAULT_TRIO
         assert _MULTIARCH in calls[0]
         assert "fused attention" in capsys.readouterr().out
+
+    def test_a_failed_restore_is_reported_and_returned(self, host, capsys):
+        host.tag = "rocm10.1.0"
+        kept, calls = self._gate(host, False, restore_ok = False)
+        assert not kept
+        assert len(calls) == 1
+        assert "still installed" in capsys.readouterr().out
+
+    def test_setup_stops_when_the_failing_trio_stays(self, host):
+        host.tag = "rocm10.1.0"
+        host.mp.setenv("UNSLOTH_ROCM_TORCH_INSTALLED", "1")
+        host.mp.setattr(stack_mod, "IS_WINDOWS", True)
+        host.mp.setattr(stack_mod, "_TORCH_BACKEND", "")
+        for name in (
+            "_explicit_unknown_family_torch_index_url",
+            "_explicit_rocm_torch_index_url",
+            "_explicit_torch_index_family",
+        ):
+            host.mp.setattr(stack_mod, name, lambda: None)
+        host.mp.setattr(stack_mod, "_explicit_torch_index_is_unusable", lambda: False)
+        host.mp.setattr(
+            stack_mod,
+            "_probe_torch_runtime",
+            lambda: (True, True, "2.14.0+rocm10.1.0", "7.16.26385", ""),
+        )
+        host.mp.setattr(
+            stack_mod,
+            "_install_bnb_windows_rocm",
+            lambda: pytest.fail("bnb after a failed restore"),
+        )
+        host.mp.setattr(stack_mod, "_rocm_windows_opt_in_fused_sdpa_gate", lambda gfx: False)
+        assert stack_mod._ensure_rocm_torch() is False
 
 
 class TestFusedAttentionProbe:
@@ -202,6 +240,18 @@ class TestFusedAttentionProbe:
             stack_mod.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout = stdout)
         )
         assert stack_mod._rocm_fused_sdpa_works() is expected
+
+    def test_the_probe_script_compiles_and_checks_gradients(self, monkeypatch):
+        seen = {}
+
+        def capture(cmd, **k):
+            seen["code"] = cmd[2]
+            return SimpleNamespace(stdout = "")
+
+        monkeypatch.setattr(stack_mod.subprocess, "run", capture)
+        stack_mod._rocm_fused_sdpa_works()
+        compile(seen["code"], "<probe>", "exec")
+        assert "t.grad" in seen["code"] and "SDPBackend.MATH" in seen["code"]
 
     def test_a_timeout_is_no_answer(self, monkeypatch):
         def boom(*a, **k):

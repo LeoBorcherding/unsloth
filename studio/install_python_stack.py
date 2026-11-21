@@ -5975,8 +5975,9 @@ _FUSED_SDPA_PROBE_MARKER = "UNSLOTH_FUSED_SDPA="
 
 
 def _rocm_fused_sdpa_works() -> "bool | None":
-    """Flash and efficient SDPA forward+backward on the GPU, checked against math. None when no
-    answer (no GPU, timeout): only a run that reached the GPU and failed counts as False."""
+    """Flash and efficient SDPA forward+backward on the GPU: output and q/k/v gradients checked
+    against fp32 math. None when no answer (no GPU, timeout): only a run that reached the GPU and
+    failed counts as False."""
     code = textwrap.dedent(
         f"""
         import sys, torch
@@ -5985,16 +5986,24 @@ def _rocm_fused_sdpa_works() -> "bool | None":
         if not torch.cuda.is_available():
             sys.exit(0)
         print('{_FUSED_SDPA_PROBE_MARKER}start', flush=True)
-        q = torch.randn(1, 4, 256, 64, device='cuda', dtype=torch.bfloat16, requires_grad=True)
-        ref = F.scaled_dot_product_attention(q.float(), q.float(), q.float(), is_causal=True)
+        g = torch.Generator(device='cuda').manual_seed(0)
+        base = [torch.randn(1, 4, 256, 64, device='cuda', generator=g) for _ in range(3)]
+        dout = torch.randn(1, 4, 256, 64, device='cuda', generator=g)
+        def run(dtype, backends):
+            qkv = [t.to(dtype).requires_grad_() for t in base]
+            with sdpa_kernel(backends):
+                o = F.scaled_dot_product_attention(*qkv, is_causal=True)
+                o.backward(dout.to(dtype))
+            torch.cuda.synchronize()
+            return [o] + [t.grad for t in qkv]
+        def rel(a, b):
+            return float((a.float() - b).norm() / b.norm().clamp_min(1e-6))
+        ref = run(torch.float32, [SDPBackend.MATH])
         bad = []
         for b in (SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION):
             try:
-                with sdpa_kernel([b]):
-                    o = F.scaled_dot_product_attention(q, q, q, is_causal=True)
-                    o.float().sum().backward()
-                torch.cuda.synchronize()
-                if not bool(torch.isfinite(o).all()) or float((o.float() - ref).abs().max()) > 0.05:
+                got = run(torch.bfloat16, [b])
+                if not all(bool(torch.isfinite(t).all()) and rel(t, r) < 0.05 for t, r in zip(got, ref)):
                     bad.append(b.name)
             except Exception:
                 bad.append(b.name)
@@ -6026,7 +6035,7 @@ def _rocm_fused_sdpa_works() -> "bool | None":
 
 def _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch: "str | None") -> bool:
     """An opt-in trio is kept only if fused attention runs on this GPU; otherwise the default trio
-    goes back. True when the installed torch may stay."""
+    goes back. False only when the failing trio is still installed (the restore failed)."""
     if _installed_torch_local_tag() not in {s.tag for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS}:
         return True
     works = _rocm_fused_sdpa_works()
@@ -6047,13 +6056,20 @@ def _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch: "str | None") -> bool:
         )
     )
     os.environ["UNSLOTH_ROCM_TORCH"] = "default"
-    pip_install_try(
+    if pip_install_try(
         f"ROCm torch (Windows, {gfx or 'default'}, default trio)",
         "--force-reinstall",
         "--index-url",
         _windows_rocm_index_url(gfx_arch) or f"{d.index_base.rstrip('/')}/",
         *_windows_multiarch_torch_pkg_specs(gfx),
         constrain = False,
+    ):
+        return True
+    _safe_print(
+        _red(
+            f"   could not reinstall {d.torch}+{d.tag}, so the torch that failed the fused attention check is "
+            "still installed. Set UNSLOTH_ROCM_TORCH=default and re-run once the index is reachable."
+        )
     )
     return False
 
@@ -6087,8 +6103,8 @@ def _ensure_rocm_torch() -> "bool | None":
                     and _marker_tag not in _ROCM_MULTIARCH_BROKEN_TAGS
                     and not _rocm_windows_torch_set_switch_pending(_marker_tag)
                 )
-                if _torch_ok:
-                    _rocm_windows_opt_in_fused_sdpa_gate(_marker_gfx)
+                if _torch_ok and not _rocm_windows_opt_in_fused_sdpa_gate(_marker_gfx):
+                    return False
         if _torch_ok:
             _rocm_windows_torch_installed = True
             # bnb still needs the ROCm build (pre-release wheel, else PyPI >=0.50.0).
@@ -6199,8 +6215,12 @@ def _ensure_rocm_torch() -> "bool | None":
                     "later to retry ROCm."
                 )
                 return
-        if _win_rocm_pin is None and _windows_routes_multiarch(gfx_arch):
-            _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch)
+        if (
+            _win_rocm_pin is None
+            and _windows_routes_multiarch(gfx_arch)
+            and not _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch)
+        ):
+            return False
         # Flag ROCm torch installed so later phases keep it; a BNB failure must not roll it back.
         _rocm_windows_torch_installed = True
         # Always reinstall AMD Windows bnb so `studio update` repairs a broken one.
