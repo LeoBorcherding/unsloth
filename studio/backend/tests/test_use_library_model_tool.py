@@ -614,3 +614,60 @@ def test_another_gguf_of_the_same_repo_is_not_taken_for_the_prior_model(world, m
     monkeypatch.setattr(tool, "_load_media", load_other_file)
     _call(world, {"model": "org/image-model", "prompt": "a fox"})
     assert ("unload",) in world.calls
+
+
+def test_only_the_last_chat_on_a_shared_model_puts_things_back(monkeypatch):
+    _preflight_world(monkeypatch)
+    calls = []
+
+    async def unload_media(owner, subject):
+        calls.append("unload")
+
+    async def restore_chat(swap, subject):
+        calls.append(("restore", swap.chat_identity))
+
+    monkeypatch.setattr(tool, "_unload_media", unload_media)
+    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+
+    async def scenario():
+        loader, reader = tool._Swap(), tool._Swap()
+        loader.loaded_media, loader.chat_identity, loader.chat_unloaded = True, CHAT, True
+        tool._enter_shared(loader)
+        tool._enter_shared(reader)
+        # The chat that loaded the model finishes first: the other chat is still rendering on it.
+        await tool._put_back(loader, "alice")
+        assert calls == [] and loader.deferred
+        await tool._put_back(reader, "bob")
+        assert tool._SHARED == {}
+
+    asyncio.run(scenario())
+    assert calls == ["unload", ("restore", CHAT)]
+
+
+def test_put_back_waits_for_another_render_on_the_backend(monkeypatch):
+    backend = _preflight_world(monkeypatch)
+    state = {"active": True}
+    backend.generate_progress = lambda: {"active": state["active"]}
+    calls = []
+
+    async def unload_media(owner, subject):
+        calls.append("unload")
+
+    async def restore_chat(swap, subject):
+        calls.append("restore")
+
+    monkeypatch.setattr(tool, "_unload_media", unload_media)
+    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+
+    async def scenario():
+        swap = tool._Swap()
+        swap.loaded_media = True
+        tool._enter_shared(swap)
+        put_back = asyncio.ensure_future(tool._put_back(swap, "alice"))
+        await asyncio.sleep(0.1)
+        assert calls == []
+        state["active"] = False
+        await put_back
+
+    asyncio.run(scenario())
+    assert calls == ["unload", "restore"]

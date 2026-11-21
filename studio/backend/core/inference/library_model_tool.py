@@ -174,8 +174,28 @@ class _Swap:
         self.chat_identity = None
         self.chat_launch = None
         self.chat_unloaded = False
+        self.shared: Optional["_Shared"] = None
+        # Another chat was still rendering on the model when this call ended, so it puts things back.
+        self.deferred = False
         # Set when putting things back failed, appended to the tool result.
         self.note = ""
+
+
+class _Shared:
+    """The calls using one media backend right now: only the last one out puts things back."""
+
+    def __init__(self) -> None:
+        self.users = 0
+        self.loader: Optional[_Swap] = None
+
+
+# Keyed by owner. Touched only on the server loop, never across an await, so no lock.
+_SHARED: dict = {}
+
+
+def _enter_shared(swap: "_Swap") -> None:
+    swap.shared = _SHARED.setdefault(swap.owner, _Shared())
+    swap.shared.users += 1
 
 
 _IDENTITY_KEYS = ("repo_id", "gguf_filename", "gguf_variant", "h3_task")
@@ -203,10 +223,16 @@ def _switch_lock(owner: str):
 
 
 async def _setup_settled(owner: str, limit: float) -> None:
-    """Waits out a switch setup still in preflight, so its load can't start after the put back."""
+    """Waits out a switch setup still in preflight, and any other render on the backend, before the put back."""
+    from core.inference.media_switch_backends import backend_for
+
     end = time.monotonic() + limit
     lock = _switch_lock(owner)
-    while lock.locked() and time.monotonic() < end:
+    while time.monotonic() < end:
+        progress = getattr(backend_for(owner), "generate_progress", None)
+        rendering = bool(progress and ((await asyncio.to_thread(progress)) or {}).get("active"))
+        if not lock.locked() and not rendering:
+            return
         await asyncio.sleep(_LOAD_POLL_S)
 
 
@@ -348,6 +374,7 @@ async def _swap_and_render_as(
             orchestrator = await asyncio.to_thread(get_inference_backend)
             if getattr(orchestrator, "active_model_name", None):
                 return ERR_NON_GGUF_CHAT
+    _enter_shared(swap)
     try:
         if not resident:
             if mode == "always" and swap.chat_identity is not None and not keeps_chat:
@@ -429,6 +456,17 @@ async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
 
 
 async def _put_back(swap: _Swap, subject: str) -> str:
+    shared = swap.shared
+    if shared is not None:
+        shared.users -= 1
+        if swap.loaded_media and shared.loader is None:
+            shared.loader = swap
+        if shared.users > 0:
+            # Unloading or bringing the chat model back now would end that other render.
+            swap.deferred = swap.chat_unloaded
+            return ""
+        _SHARED.pop(swap.owner, None)
+        swap = shared.loader or swap
     if swap.loaded_media:
         await _setup_settled(swap.owner, _RESTORE_WAIT_S)
     if swap.loaded_media and not await _prior_still_resident(swap):
@@ -487,7 +525,12 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
         isinstance(result, _Clip) and not result.startswith("Error")
     ):
         return result + (" " + note if note else "")
-    if swap.chat_unloaded:
+    if swap.deferred:
+        note = (
+            f"The chat model was unloaded for this {swap.kind}. It comes back when another chat's "
+            f"render on the same model finishes. {note}"
+        ).strip()
+    elif swap.chat_unloaded:
         note = f"The chat model was unloaded for this {swap.kind} and loaded back. {note}".strip()
     elif swap.loaded_media and swap.chat_identity is not None:
         note = f"The chat model stayed loaded beside the {swap.kind} model. {note}".strip()
