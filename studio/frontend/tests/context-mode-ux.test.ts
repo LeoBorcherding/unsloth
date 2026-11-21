@@ -66,7 +66,7 @@ test("the Auto number editor opens at the fitted or safe offload context", () =>
 test("the existing info hint owns the mode explanation and fitted result", () => {
   assert.match(
     panelCode,
-    /<InfoHint> The model&apos;s context window\. Auto \(a full bar\) picks one that fits[\s\S]*the reset button returns to it\. A number requests an exact context window,[\s\S]*Auto currently selected \$\{activeLoadedContext\.toLocaleString\(\)\} tokens\.[\s\S]*<\/InfoHint>/,
+    /<InfoHint> Auto fits the most context your GPU can hold, up to\{" "\} \{max\.toLocaleString\(\)\}\.[\s\S]*Auto picked \$\{activeLoadedContext\.toLocaleString\(\)\}\.[\s\S]*<\/InfoHint>/,
   );
   assert.match(
     panelCode,
@@ -75,7 +75,7 @@ test("the existing info hint owns the mode explanation and fitted result", () =>
   assert.match(panelCode, /\{renderWarning\(shown\)\}/);
   assert.match(
     panelCode,
-    /Loaded at \$\{refitsLoadedContext\.toLocaleString\(\)\} tokens for your previous settings\. Reload to let Auto resize based on your changes\./,
+    /A setting has changed\. Reload to have Auto resize your context from \$\{refitsLoadedContext\.toLocaleString\(\)\}\./,
   );
   assert.doesNotMatch(
     panelCode,

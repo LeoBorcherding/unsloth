@@ -632,18 +632,13 @@ function GgufContextLengthSetting({
       <span className={LABEL_CLASS}>Context</span>
       <span className="absolute left-full ml-1.5 flex items-center gap-1">
         <InfoHint>
-          The model&apos;s context window. Auto (a full bar) picks one that
-          fits while keeping GPU speed; the reset button returns to it. A
-          number requests an exact context window, up to{" "}
-          {max.toLocaleString()} tokens; larger ones use more memory.
+          Auto fits the most context your GPU can hold, up to{" "}
+          {max.toLocaleString()}.
           {isAuto && activeLoadedContext != null
-            ? ` Auto currently selected ${activeLoadedContext.toLocaleString()} tokens.`
+            ? ` Auto picked ${activeLoadedContext.toLocaleString()}.`
             : ""}
           {isAuto && refitsLoadedContext != null
-            ? ` Loaded at ${refitsLoadedContext.toLocaleString()} tokens for your previous settings. Reload to let Auto resize based on your changes.`
-            : ""}
-          {nativeContextLength != null
-            ? ` This model's native context is ${nativeContextLength.toLocaleString()} tokens.`
+            ? ` A setting has changed. Reload to have Auto resize your context from ${refitsLoadedContext.toLocaleString()}.`
             : ""}
         </InfoHint>
         {stacked ? null : reset}
