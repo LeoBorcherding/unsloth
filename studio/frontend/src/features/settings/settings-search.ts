@@ -101,6 +101,8 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsTab, TranslationKey[]> = {
     "settings.appearance.custom.elementOutline.label",
     "settings.appearance.custom.codeFontSize.label",
     "settings.appearance.custom.fontSmoothing.label",
+    "settings.appearance.profiles.title",
+    "settings.appearance.profiles.saveLabel",
     "settings.appearance.themeFile.title",
     "settings.appearance.themeFile.importLabel",
     "settings.appearance.themeFile.exportLabel",
