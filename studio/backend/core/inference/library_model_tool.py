@@ -373,18 +373,27 @@ async def _swap_and_render(
         if decision is not None:
             return await _decide_with(decision, prompt, arguments, swap)
         row = await _catalog_row(name)
-        task = getattr(row, "task", None) if row is not None else "missing"
+        task, model = (getattr(row, "task", None), row.id) if row is not None else ("missing", name)
+        if task == "missing":
+            # audio.cpp voices and Whisper are listed apart from the catalog, as /v1/models does.
+            tts, stt = await asyncio.to_thread(_speech_ids)
+            wanted = name.strip().lower()
+            for ids, kind in ((tts, _TTS_TASK), (stt, _STT_TASK)):
+                hit = next((i for i in ids if i.lower() == wanted), None)
+                if hit is not None:
+                    task, model = kind, hit
+                    break
         if task in _LLM_TASKS:
-            return await _ask_llm(arguments, prompt, row.id, swap)
+            return await _ask_llm(arguments, prompt, model, swap)
         if task == _TTS_TASK:
             return await _on_chat_seat(
                 arguments,
-                row.id,
+                model,
                 swap,
-                lambda beside: _speak_tts(row.id, prompt, subject, workdir, beside = beside),
+                lambda beside: _speak_tts(model, prompt, subject, workdir, beside = beside),
             )
         if task == _STT_TASK:
-            return await _transcribe(row.id, arguments, workdir)
+            return await _transcribe(model, arguments, workdir)
         return f"Error: no downloaded model matches '{name}'. " + await _full_listing()
     valid, mode = _unload_mode(arguments)
     if not valid:
@@ -651,10 +660,25 @@ async def _downloaded_llms() -> tuple:
     )
     music = await asyncio.to_thread(_music_ids)
     decisions = await asyncio.to_thread(_decision_ids)
-    return tuple(
-        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks])
-        for kind, tasks in groups
-    ) + (("music", music), ("decision", decisions))
+    tts, stt = await asyncio.to_thread(_speech_ids)
+    extra = {"text-to-speech": tts, "speech-to-text": stt}
+    out = []
+    for kind, tasks in groups:
+        ids = [row.id for row in rows if getattr(row, "task", None) in tasks]
+        out.append((kind, ids + [i for i in extra.get(kind, ()) if i not in ids]))
+    return tuple(out) + (("music", music), ("decision", decisions))
+
+
+def _speech_ids() -> tuple[list[str], list[str]]:
+    """(tts, stt) ids the catalog skips: audio.cpp voices and the STT sidecars' models."""
+    from routes.inference import _stt_model_objects
+
+    try:
+        from core.inference.audio_cpp_models import downloaded_models
+        tts = [model.id for model in downloaded_models("tts")]
+    except Exception:  # noqa: BLE001 - no audio.cpp here
+        tts = []
+    return tts, [obj["id"] for obj in _stt_model_objects(0)]
 
 
 def _evict_chat_model() -> None:
@@ -764,6 +788,8 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
         await asyncio.to_thread(_evict_chat_model)
         with multi_model_mode_for_request("off"):
             text, _ = await run(False)
+        # It holds the chat seat now, and an unload there would wait on this chat's own request.
+        await asyncio.to_thread(_evict_chat_model)
         await _unload_llm(name, subject)
     finally:
         # Shielded: a stop must never leave the chat without its model.

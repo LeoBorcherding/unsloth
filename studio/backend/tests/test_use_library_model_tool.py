@@ -137,6 +137,7 @@ def world(monkeypatch, server_loop, tmp_path):
     monkeypatch.setattr(tool, "_downloaded_llms", no_llms)
     monkeypatch.setattr(tool, "_music_model", lambda name: None)
     monkeypatch.setattr(tool, "_decision_model", lambda name: None)
+    monkeypatch.setattr(tool, "_speech_ids", lambda: ([], []))
     monkeypatch.setattr(tool, "_load_media", load_image)
     monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
@@ -733,7 +734,12 @@ def llm(world, monkeypatch):
 
 def test_an_llm_with_unload_true_runs_after_the_chat_model_leaves(world, llm):
     result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "true"})
-    assert llm.calls == [("evict",), ("ask", "org/other-llm", False), ("unload", "org/other-llm")]
+    assert llm.calls == [
+        ("evict",),
+        ("ask", "org/other-llm", False),
+        ("evict",),
+        ("unload", "org/other-llm"),
+    ]
     assert llm.modes == ["off"]
     assert result.startswith("org/other-llm answered:\necho: hi")
     assert result.endswith(
@@ -766,6 +772,7 @@ def test_auto_falls_back_to_unloading_when_the_llm_does_not_fit(world, llm):
         ("refused", "org/other-llm"),
         ("evict",),
         ("ask", "org/other-llm", False),
+        ("evict",),
         ("unload", "org/other-llm"),
     ]
     assert "loaded back" in result
@@ -830,9 +837,6 @@ def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(
 ):
     from core.inference import stt_registry
 
-    async def row(name):
-        return SimpleNamespace(id = "org/asr", task = "automatic-speech-recognition")
-
     async def transcribe(
         raw,
         model,
@@ -845,7 +849,8 @@ def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(
         return {"text": f"heard {len(raw)} bytes"}
 
     loaded, unloaded = {}, []
-    monkeypatch.setattr(tool, "_catalog_row", row)
+    # Whisper is not a catalog row; it comes from the STT sidecars' list.
+    monkeypatch.setattr(tool, "_speech_ids", lambda: ([], ["org/asr"]))
     monkeypatch.setattr(inference, "_transcribe_audio_result", transcribe)
     monkeypatch.setattr(
         stt_registry, "resident", lambda: {"model": loaded.get("model")} if loaded else {}
@@ -856,7 +861,7 @@ def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(
     os.makedirs(world.workdir, exist_ok = True)
     with open(os.path.join(world.workdir, "clip.wav"), "wb") as f:
         f.write(b"12345")
-    result = _call(world, {"model": "org/asr", "audio": "clip.wav"})
+    result = _call(world, {"model": "Org/ASR", "audio": "clip.wav"})
     assert result == "org/asr transcribed clip.wav:\nheard 5 bytes"
     assert unloaded == [{"expected_model": "org/asr"}]
     assert world.calls == []
@@ -901,7 +906,12 @@ def test_a_music_model_uses_the_chat_seat_and_returns_its_track(world, monkeypat
         world,
         {"model": "org/music", "prompt": "lofi beat", "seconds": 20, "unload_chat_model": "true"},
     )
-    assert made == [("evict",), ("org/music", "lofi beat", 20, False), ("unload", "org/music")]
+    assert made == [
+        ("evict",),
+        ("org/music", "lofi beat", 20, False),
+        ("evict",),
+        ("unload", "org/music"),
+    ]
     body, files = result.split("\n__FILES__")
     assert body.endswith("The chat model was unloaded so org/music could run, and loaded back.")
     assert world.chat == CHAT
