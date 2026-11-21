@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 _STUDIO_DIR = Path(__file__).resolve().parent
 _BACKEND_DIR = _STUDIO_DIR / "backend"
@@ -333,6 +334,96 @@ _ROCM_MULTIARCH_BROKEN_TAGS = frozenset({"rocm7.14.1"})
 _ROCM_MULTIARCH_TORCH_VERSION = "2.11.0"
 _ROCM_MULTIARCH_TORCHVISION_VERSION = "0.26.0"
 _ROCM_MULTIARCH_TORCHAUDIO_VERSION = "2.11.0"
+
+
+class _RocmWindowsTorchSet(NamedTuple):
+    name: str
+    index_base: str
+    tag: str
+    torch: str
+    torchvision: str
+    torchaudio: str
+
+
+# UNSLOTH_ROCM_TORCH picks one exact trio; unset keeps the installed one, else the default. install.ps1 and
+# setup.ps1 carry the same table (Get-RocmWindowsTorchSet).
+def _rocm_windows_default_torch_set() -> "_RocmWindowsTorchSet":
+    return _RocmWindowsTorchSet(
+        "rocm7.14",
+        _ROCM_WINDOWS_MULTIARCH_INDEX_BASE,
+        _ROCM_MULTIARCH_TAG,
+        _ROCM_MULTIARCH_TORCH_VERSION,
+        _ROCM_MULTIARCH_TORCHVISION_VERSION,
+        _ROCM_MULTIARCH_TORCHAUDIO_VERSION,
+    )
+
+
+_ROCM_WINDOWS_OPT_IN_TORCH_SETS: "tuple[_RocmWindowsTorchSet, ...]" = (
+    # torch.version.hip reads 7.16 here, so bnb's rocm715 DLL loads (4-bit measured on gfx1201).
+    _RocmWindowsTorchSet(
+        "rocm10.1",
+        os.environ.get("UNSLOTH_ROCM_WINDOWS_MULTIARCH_MIRROR")
+        or "https://stable.repo.amd.com/rocm/whl-next",
+        "rocm10.1.0",
+        "2.14.0",
+        "0.29.0a0",
+        "2.11.0.3",
+    ),
+)
+_ROCM_TORCH_SET_WARNED = False
+
+
+def _rocm_windows_torch_set_by_name(name: str) -> "_RocmWindowsTorchSet | None":
+    want = name.strip().lower()
+    if want in ("default", "rocm7.14", _ROCM_MULTIARCH_TAG):
+        return _rocm_windows_default_torch_set()
+    for torch_set in _ROCM_WINDOWS_OPT_IN_TORCH_SETS:
+        if want in (torch_set.name, torch_set.tag):
+            return torch_set
+    return None
+
+
+def _installed_torch_local_tag() -> str:
+    try:
+        from importlib import metadata
+        return metadata.version("torch").lower().rpartition("+")[2]
+    except Exception:
+        return ""
+
+
+def _rocm_windows_torch_set() -> _RocmWindowsTorchSet:
+    """The Windows multi-arch trio this run installs or keeps."""
+    global _ROCM_TORCH_SET_WARNED
+    requested = os.environ.get("UNSLOTH_ROCM_TORCH", "").strip()
+    if requested:
+        chosen = _rocm_windows_torch_set_by_name(requested)
+        if chosen is not None:
+            return chosen
+        if not _ROCM_TORCH_SET_WARNED:
+            _ROCM_TORCH_SET_WARNED = True
+            _known = ", ".join(s.name for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS)
+            _safe_print(
+                f"   UNSLOTH_ROCM_TORCH={requested} is not a known set (known: default, {_known}); "
+                f"using {_ROCM_MULTIARCH_TORCH_VERSION}+{_ROCM_MULTIARCH_TAG}"
+            )
+        return _rocm_windows_default_torch_set()
+    installed = _installed_torch_local_tag()
+    for torch_set in _ROCM_WINDOWS_OPT_IN_TORCH_SETS:
+        if installed == torch_set.tag:
+            return torch_set
+    return _rocm_windows_default_torch_set()
+
+
+def _rocm_windows_torch_set_switch_pending(installed_tag: str) -> bool:
+    """An opt-in set is selected but not installed, or one is installed and the run asked for another.
+    Other tags (an older default) are left to the existing repairs."""
+    want = _rocm_windows_torch_set()
+    opt_in_tags = {s.tag for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS}
+    if want.tag in opt_in_tags or installed_tag in opt_in_tags:
+        return installed_tag != want.tag
+    return False
+
+
 # gfx1033 excluded: in _ROCM_MISCOMPUTING_GFX, keeps its family route. CDNA stays on the family map.
 _WINDOWS_MULTIARCH_GFX: "frozenset[str]" = frozenset(
     {
@@ -434,10 +525,11 @@ def _multiarch_device_pack_installed(gfx_arch: "str | None") -> bool:
 
 def _windows_multiarch_torch_pkg_specs(gfx_arch: str) -> tuple[str, str, str]:
     gfx = _bare_gfx(gfx_arch)
+    s = _rocm_windows_torch_set()
     return (
-        f"torch[device-{gfx}]=={_ROCM_MULTIARCH_TORCH_VERSION}+{_ROCM_MULTIARCH_TAG}",
-        f"torchvision[device-{gfx}]=={_ROCM_MULTIARCH_TORCHVISION_VERSION}+{_ROCM_MULTIARCH_TAG}",
-        f"torchaudio=={_ROCM_MULTIARCH_TORCHAUDIO_VERSION}+{_ROCM_MULTIARCH_TAG}",
+        f"torch[device-{gfx}]=={s.torch}+{s.tag}",
+        f"torchvision[device-{gfx}]=={s.torchvision}+{s.tag}",
+        f"torchaudio=={s.torchaudio}+{s.tag}",
     )
 
 
@@ -451,7 +543,9 @@ def _index_is_multiarch(index_url: "str | None") -> bool:
         return re.split(r"[?#]", u, maxsplit = 1)[0].rstrip("/")
 
     _p = _path(index_url)
-    return _p == _path(_ROCM_WINDOWS_MULTIARCH_INDEX_BASE) or _p.endswith("/whl-multi-arch")
+    _bases = {_path(_ROCM_WINDOWS_MULTIARCH_INDEX_BASE)}
+    _bases.update(_path(s.index_base) for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS)
+    return _p in _bases or _p.endswith(("/whl-multi-arch", "/whl-next"))
 
 
 def _windows_rocm_torch_pkg_specs_for(
@@ -2573,7 +2667,7 @@ def _windows_rocm_index_url(gfx_arch: str | None) -> str | None:
     repo.amd.com family."""
     if _windows_routes_multiarch(gfx_arch):
         # Slash on the path, not after a ?token= query (as _index_url_join splits).
-        _base = _ROCM_WINDOWS_MULTIARCH_INDEX_BASE
+        _base = _rocm_windows_torch_set().index_base
         _cut = min([_base.index(_c) for _c in "?#" if _c in _base] or [len(_base)])
         return f"{_base[:_cut].rstrip('/')}/{_base[_cut:]}"
     arch_family = _GFX_TO_AMD_INDEX_ARCH.get(_bare_gfx(gfx_arch))
@@ -5870,7 +5964,114 @@ def _windows_rocm_device_packs_need_dependency_pass() -> bool:
         return False
     if not tag.startswith("rocm"):
         return False
-    return tag in _ROCM_MULTIARCH_BROKEN_TAGS or not _multiarch_device_pack_installed(gfx_arch)
+    return (
+        tag in _ROCM_MULTIARCH_BROKEN_TAGS
+        or _rocm_windows_torch_set_switch_pending(tag)
+        or not _multiarch_device_pack_installed(gfx_arch)
+    )
+
+
+_FUSED_SDPA_PROBE_MARKER = "UNSLOTH_FUSED_SDPA="
+
+
+def _rocm_fused_sdpa_works() -> "bool | None":
+    """Flash and efficient SDPA forward+backward on the GPU: output and q/k/v gradients checked
+    against fp32 math. None when no answer (no GPU, timeout): only a run that reached the GPU and
+    failed counts as False."""
+    code = textwrap.dedent(
+        f"""
+        import sys, torch
+        import torch.nn.functional as F
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+        if not torch.cuda.is_available():
+            sys.exit(0)
+        print('{_FUSED_SDPA_PROBE_MARKER}start', flush=True)
+        g = torch.Generator(device='cuda').manual_seed(0)
+        base = [torch.randn(1, 4, 256, 64, device='cuda', generator=g) for _ in range(3)]
+        dout = torch.randn(1, 4, 256, 64, device='cuda', generator=g)
+        def run(dtype, backends):
+            qkv = [t.detach().clone().to(dtype).requires_grad_() for t in base]
+            with sdpa_kernel(backends):
+                o = F.scaled_dot_product_attention(*qkv, is_causal=True)
+                o.backward(dout.to(dtype))
+            torch.cuda.synchronize()
+            return [o] + [t.grad for t in qkv]
+        def rel(a, b):
+            return float((a.float() - b).norm() / b.norm().clamp_min(1e-6))
+        ref = run(torch.float32, [SDPBackend.MATH])
+        bad = []
+        for b in (SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION):
+            try:
+                got = run(torch.bfloat16, [b])
+                if not all(bool(torch.isfinite(t).all()) and rel(t, r) < 0.05 for t, r in zip(got, ref)):
+                    bad.append(b.name)
+            except Exception:
+                bad.append(b.name)
+        print('{_FUSED_SDPA_PROBE_MARKER}' + ('ok' if not bad else 'fail:' + ','.join(bad)), flush=True)
+        """
+    )
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            stdout = subprocess.PIPE,
+            stderr = subprocess.DEVNULL,
+            text = True,
+            errors = "replace",
+            timeout = 180,
+            **_windows_hidden_subprocess_kwargs(),
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    marks = [
+        l.strip()[len(_FUSED_SDPA_PROBE_MARKER) :]
+        for l in out.splitlines()
+        if l.strip().startswith(_FUSED_SDPA_PROBE_MARKER)
+    ]
+    if not marks:
+        return None
+    # A process that reached the GPU and then died inside a fused kernel is a failure, not silence.
+    return marks[-1] == "ok"
+
+
+def _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch: "str | None") -> bool:
+    """An opt-in trio is kept only if fused attention runs on this GPU; otherwise the default trio
+    goes back. False only when the failing trio is still installed (the restore failed)."""
+    if _installed_torch_local_tag() not in {s.tag for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS}:
+        return True
+    works = _rocm_fused_sdpa_works()
+    if works:
+        _safe_print(_dim("   fused attention runs on the GPU with the opted-in torch"))
+        return True
+    if works is None:
+        _safe_print(
+            "   could not run the fused attention check on the GPU; keeping the installed torch"
+        )
+        return True
+    d = _rocm_windows_default_torch_set()
+    gfx = _bare_gfx(gfx_arch)
+    _safe_print(
+        _red(
+            f"   fused attention (flash / efficient SDPA) fails on {gfx or 'this GPU'} with the opted-in torch; "
+            f"reinstalling {d.torch}+{d.tag}. Unset UNSLOTH_ROCM_TORCH to stop retrying it."
+        )
+    )
+    os.environ["UNSLOTH_ROCM_TORCH"] = "default"
+    if pip_install_try(
+        f"ROCm torch (Windows, {gfx or 'default'}, default trio)",
+        "--force-reinstall",
+        "--index-url",
+        _windows_rocm_index_url(gfx_arch) or f"{d.index_base.rstrip('/')}/",
+        *_windows_multiarch_torch_pkg_specs(gfx),
+        constrain = False,
+    ):
+        return True
+    _safe_print(
+        _red(
+            f"   could not reinstall {d.torch}+{d.tag}, so the torch that failed the fused attention check is "
+            "still installed. Set UNSLOTH_ROCM_TORCH=default and re-run once the index is reachable."
+        )
+    )
+    return False
 
 
 def _ensure_rocm_torch() -> "bool | None":
@@ -5896,11 +6097,14 @@ def _ensure_rocm_torch() -> "bool | None":
         if _torch_ok and IS_WINDOWS and _explicit_rocm_torch_index_url() is None:
             _marker_gfx = _detect_windows_gfx_arch()
             if _windows_routes_multiarch(_marker_gfx):
+                _marker_tag = (_version or "").lower().rpartition("+")[2]
                 _torch_ok = (
                     _multiarch_device_pack_installed(_marker_gfx)
-                    and (_version or "").lower().rpartition("+")[2]
-                    not in _ROCM_MULTIARCH_BROKEN_TAGS
+                    and _marker_tag not in _ROCM_MULTIARCH_BROKEN_TAGS
+                    and not _rocm_windows_torch_set_switch_pending(_marker_tag)
                 )
+                if _torch_ok and not _rocm_windows_opt_in_fused_sdpa_gate(_marker_gfx):
+                    return False
         if _torch_ok:
             _rocm_windows_torch_installed = True
             # bnb still needs the ROCm build (pre-release wheel, else PyPI >=0.50.0).
@@ -5942,9 +6146,22 @@ def _ensure_rocm_torch() -> "bool | None":
             and _windows_routes_multiarch(gfx_arch)
             and (_version or "").lower().rpartition("+")[2] in _ROCM_MULTIARCH_BROKEN_TAGS
         ):
+            _want_set = _rocm_windows_torch_set()
             _safe_print(
                 f"   installed ROCm torch {_version} cannot run fused attention -- reinstalling "
-                f"{_ROCM_MULTIARCH_TORCH_VERSION}+{_ROCM_MULTIARCH_TAG}"
+                f"{_want_set.torch}+{_want_set.tag}"
+            )
+            _torch_already_rocm = False
+        if (
+            _torch_already_rocm
+            and _win_rocm_pin is None
+            and _windows_routes_multiarch(gfx_arch)
+            and _rocm_windows_torch_set_switch_pending((_version or "").lower().rpartition("+")[2])
+        ):
+            _want_set = _rocm_windows_torch_set()
+            _safe_print(
+                f"   installed ROCm torch is {_version}, this run selects {_want_set.torch}+{_want_set.tag} "
+                "(UNSLOTH_ROCM_TORCH) -- reinstalling"
             )
             _torch_already_rocm = False
         # A multi-arch route is judged by its packs alone: a migrated venv keeps the orphaned family runtime.
@@ -5978,9 +6195,10 @@ def _ensure_rocm_torch() -> "bool | None":
                 _rocm_trio = [_torch_pkg, _vision_pkg]
             if _index_is_multiarch(index_url):
                 # Not _bare_gfx(): a later local of that name shadows it (UnboundLocalError).
+                _set = _rocm_windows_torch_set()
                 _safe_print(
                     f"   {(gfx_arch or '').split(':')[0].lower()}: AMD's multi-arch index, pinned to "
-                    f"{_ROCM_MULTIARCH_TORCH_VERSION}+{_ROCM_MULTIARCH_TAG} (torch, torchvision, torchaudio)"
+                    f"{_set.torch}+{_set.tag} (torch, torchvision, torchaudio)"
                 )
             # Nonfatal: --force-reinstall resolves before uninstalling, so a failed index keeps the build.
             if not pip_install_try(
@@ -5997,6 +6215,12 @@ def _ensure_rocm_torch() -> "bool | None":
                     "later to retry ROCm."
                 )
                 return
+        if (
+            _win_rocm_pin is None
+            and _windows_routes_multiarch(gfx_arch)
+            and not _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch)
+        ):
+            return False
         # Flag ROCm torch installed so later phases keep it; a BNB failure must not roll it back.
         _rocm_windows_torch_installed = True
         # Always reinstall AMD Windows bnb so `studio update` repairs a broken one.

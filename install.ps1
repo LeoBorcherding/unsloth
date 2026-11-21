@@ -9323,6 +9323,34 @@ main()
     $MultiArchTorchVersion = "2.11.0"
     $MultiArchTorchvisionVersion = "0.26.0"
     $MultiArchTorchaudioVersion = "2.11.0"
+    # UNSLOTH_ROCM_TORCH picks one exact multi-arch trio; unset keeps an installed opt-in trio, else the default.
+    # Same table as _ROCM_WINDOWS_OPT_IN_TORCH_SETS in studio/install_python_stack.py; both files carry this function.
+    function Get-RocmWindowsTorchSet {
+        param([string]$Requested, [string]$InstalledTorchVersion, [string]$DefaultIndexBase, [string]$MultiArchMirror)
+        $default = @{ Name = "rocm7.14"; IndexBase = $DefaultIndexBase; Tag = "rocm7.14.0"; Torch = "2.11.0"; Vision = "0.26.0"; Audio = "2.11.0"; OptIn = $false; Unknown = $false }
+        $nextBase = if ($MultiArchMirror) { $MultiArchMirror.TrimEnd('/') } else { "https://stable.repo.amd.com/rocm/whl-next" }
+        # torch.version.hip reads 7.16 on this set, so bitsandbytes' rocm715 library loads (4-bit measured on gfx1201).
+        $optIn = @(
+            @{ Name = "rocm10.1"; IndexBase = $nextBase; Tag = "rocm10.1.0"; Torch = "2.14.0"; Vision = "0.29.0a0"; Audio = "2.11.0.3"; OptIn = $true; Unknown = $false }
+        )
+        $want = "$Requested".Trim().ToLowerInvariant()
+        if ($want) {
+            if (@("default", "rocm7.14", "rocm7.14.0") -contains $want) { return $default }
+            foreach ($s in $optIn) { if ($want -eq $s.Name -or $want -eq $s.Tag) { return $s } }
+            $default.Unknown = $true
+            return $default
+        }
+        $installedTag = ((("$InstalledTorchVersion").Trim() -split '\+', 2) + @(''))[1].ToLowerInvariant()
+        foreach ($s in $optIn) { if ($installedTag -eq $s.Tag) { return $s } }
+        return $default
+    }
+    $RocmTorchSet = Get-RocmWindowsTorchSet -Requested $env:UNSLOTH_ROCM_TORCH -InstalledTorchVersion $script:PrevTorchVer `
+        -DefaultIndexBase $MultiArchIndexBase -MultiArchMirror $env:UNSLOTH_ROCM_WINDOWS_MULTIARCH_MIRROR
+    $MultiArchIndexBase = $RocmTorchSet.IndexBase
+    $MultiArchTag = $RocmTorchSet.Tag
+    $MultiArchTorchVersion = $RocmTorchSet.Torch
+    $MultiArchTorchvisionVersion = $RocmTorchSet.Vision
+    $MultiArchTorchaudioVersion = $RocmTorchSet.Audio
     # "AMD gets GPU wheels here", not "AMD GPU present": unmapped arches install CPU torch.
     $AmdHasGpuWheels = [bool]($ROCmGfxArch -and ($archFamilyMap.ContainsKey($ROCmGfxArch) -or $multiArchGfx -contains $ROCmGfxArch))
 
@@ -9979,6 +10007,11 @@ main()
             $PinnedRocmVisionSpec = "torchvision[device-$ROCmGfxArch]==$MultiArchTorchvisionVersion+$MultiArchTag"
             $PinnedRocmAudioSpec = "torchaudio==$MultiArchTorchaudioVersion+$MultiArchTag"
             substep "$ROCmGfxArch -- AMD multi-arch index, pinned to $MultiArchTorchVersion+$MultiArchTag (torch, torchvision, torchaudio)" "Cyan"
+            if ($RocmTorchSet.Unknown) {
+                substep "UNSLOTH_ROCM_TORCH=$($env:UNSLOTH_ROCM_TORCH) is not a known set (known: default, rocm10.1); using the default" "Yellow"
+            } elseif ($RocmTorchSet.OptIn) {
+                substep "  opted in ($($RocmTorchSet.Name)): fused attention is checked on the GPU after install, and the default 2.11.0+rocm7.14.0 comes back if it fails" "Cyan"
+            }
         } elseif ($archFamily) {
             $ROCmIndexUrl = "$amdIndexBase/$archFamily/"
             $ROCmTorchFloor = if ($ROCmGfxArch -and $torchFloorMap.ContainsKey($ROCmGfxArch)) { $torchFloorMap[$ROCmGfxArch] } else { $null }
