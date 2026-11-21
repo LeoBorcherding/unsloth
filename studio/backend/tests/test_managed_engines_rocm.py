@@ -51,7 +51,13 @@ def amd_host(rocm, monkeypatch, tmp_path):
     return SimpleNamespace(rocm = tmp_path, targets = targets, libraries = libraries, arches = arches)
 
 
-def test_amd_host_installs_vllms_rocm_build(rocm):
+@pytest.fixture
+def rocm72(rocm, monkeypatch):
+    """A host whose /opt/rocm is ROCm 7.2.1, which keeps the build that loads it."""
+    monkeypatch.setattr(install, "rocm_version", lambda: (7, 2))
+
+
+def test_amd_host_installs_vllms_rocm_build(rocm72):
     chosen = install.profile("vllm")
     pins = install._pins("vllm")
     assert chosen["lock"] == "vllm-linux-rocm723" and chosen["cuda"] is None
@@ -71,6 +77,47 @@ def test_amd_host_installs_vllms_rocm_build(rocm):
     ]
 
 
+def test_amd_host_without_rocm_7_installs_the_rocm_10_build(rocm, monkeypatch):
+    # vLLM 0.34 publishes ROCm 10.0 builds only, and their torch brings ROCm as wheels.
+    monkeypatch.setattr(install, "rocm_version", lambda: None)
+    chosen = install.profile("vllm")
+    pins = install._pins("vllm")
+    assert chosen["lock"] == "vllm-linux-rocm100" and chosen["rocm"] is None
+    assert chosen["python"] == (3, 12) and chosen["glibc"] == (2, 35)
+    assert pins["vllm"][0] == "0.34.0+rocm100"
+    assert pins["torch"][0] == "2.13.0+rocm10.0.0" and chosen["torch"] == "2.13.0"
+    # The libraries torch preloads (rocm_sdk) come from these, not from /opt/rocm.
+    assert {"rocm", "rocm-sdk-core", "rocm-sdk-libraries"} <= pins.keys()
+    assert "torchao" in pins and "bitsandbytes" not in pins
+    assert "--python-platform x86_64-manylinux_2_35" in install.requirements("vllm").read_text()
+    assert install._compat_file("vllm").get("sizes"), "regenerate with engine_compat.py"
+    assert install._index_arguments("vllm")[-1] == "https://wheels.vllm.ai/rocm/0.34.0/rocm100"
+    smoke = install._smoke_source("vllm")
+    assert "assert torch.version.hip" in smoke and "'2.13.0'" in smoke
+
+
+def test_rocm_10_build_compiles_only_amds_rocm_sdist(rocm, monkeypatch):
+    monkeypatch.setattr(install, "rocm_version", lambda: None)
+    arguments = install._build_arguments("vllm")
+    wheels = arguments[arguments.index("--only-binary") + 1].split(",")
+    assert "rocm" not in wheels and set(wheels) == install._pins("vllm").keys() - {"rocm"}
+    assert "--require-build-hashes" in arguments
+    build = Path(arguments[arguments.index("--build-constraints") + 1])
+    assert build.name == "vllm-linux-rocm100.build.txt"
+    assert "setuptools==" in build.read_text() and "--hash=sha256:" in build.read_text()
+    # Every other release stays wheels only.
+    monkeypatch.setattr(install, "rocm_version", lambda: (7, 2))
+    assert install._build_arguments("vllm") == ["--only-binary", ":all:"]
+
+
+def test_wsl_keeps_the_build_for_the_guests_rocm_7(rocm, monkeypatch):
+    from core.inference import wsl_host
+
+    monkeypatch.setattr(wsl_host, "active", lambda: True)
+    monkeypatch.setattr(install, "rocm_version", lambda: pytest.fail("read the host's /opt/rocm"))
+    assert install.profile("vllm")["lock"] == "vllm-linux-rocm723"
+
+
 def test_nvidia_host_keeps_the_cuda_profile(monkeypatch):
     monkeypatch.setattr(install, "gpu_platform", lambda: "cuda")
     monkeypatch.setattr(install, "_studio_packages", lambda: {})
@@ -86,10 +133,14 @@ def test_rocm_engine_never_shares_studios_torch(rocm, monkeypatch):
     monkeypatch.setattr(install, "_studio_packages", lambda: {"torch": "2.11.0+rocm7.13.0"})
     plan = install.install_plan("vllm")
     assert not plan["shared"] and not plan["provided"]
-    assert install.download_bytes("vllm") == sum(install._compat_file("vllm")["sizes"].values())
+    # A null size is an sdist (AMD's rocm meta package), which downloads next to nothing.
+    sizes = install._compat_file("vllm")["sizes"].values()
+    assert install.download_bytes("vllm") == sum(size or 0 for size in sizes)
 
 
-def test_rocm_engine_stays_isolated_even_when_studio_matches_its_lock(rocm, monkeypatch):
+@pytest.mark.parametrize("host", [(7, 2), None])
+def test_rocm_engine_stays_isolated_even_when_studio_matches_its_lock(rocm, monkeypatch, host):
+    monkeypatch.setattr(install, "rocm_version", lambda: host)
     # The ROCm torch loads /opt/rocm, so Studio's packages never stand in, even with identical builds.
     pins = {name: version for name, (version, _) in install._pins("vllm").items()}
     monkeypatch.setattr(install, "_studio_packages", lambda: dict(pins))
@@ -104,7 +155,10 @@ def test_windows_uses_installed_build_metadata_before_hardware_detection(monkeyp
     from core import _torchao_stub
     from utils.hardware import hardware
 
+    from core.inference import wsl_host
+
     monkeypatch.setattr(install.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(wsl_host, "active", lambda: True)
     monkeypatch.setattr(hardware, "IS_ROCM", False)
     monkeypatch.setattr(hardware, "DETECTION_COMPLETE", threading.Event())
     monkeypatch.delitem(install.sys.modules, "torch", raising = False)
@@ -116,7 +170,7 @@ def test_windows_uses_installed_build_metadata_before_hardware_detection(monkeyp
     assert install.profile("vllm")["lock"] == "vllm-linux-rocm723"
 
 
-def test_rocm_smoke_imports_the_hip_torch(rocm):
+def test_rocm_smoke_imports_the_hip_torch(rocm72):
     smoke = install._smoke_source("vllm")
     assert "assert torch.version.hip" in smoke and "import torchao" in smoke
     assert "bitsandbytes" not in smoke and "'2.12.0'" in smoke
@@ -124,22 +178,35 @@ def test_rocm_smoke_imports_the_hip_torch(rocm):
 
 
 @pytest.mark.parametrize(
-    ("version", "reason"),
+    ("version", "lock"),
     [
-        (None, "Requires ROCm 7.2 or a newer 7.x release installed in /opt/rocm."),
-        ("6.4.1", "Requires ROCm 7.2 or a newer 7.x release installed in /opt/rocm (found 6.4)."),
-        ("7.1.0", "Requires ROCm 7.2 or a newer 7.x release installed in /opt/rocm (found 7.1)."),
-        ("8.0.0", "Requires ROCm 7.2 or a newer 7.x release installed in /opt/rocm (found 8.0)."),
-        ("7.2.1", None),
-        ("7.13.0", None),
+        (None, "vllm-linux-rocm100"),
+        ("6.4.1", "vllm-linux-rocm100"),
+        ("7.1.0", "vllm-linux-rocm100"),
+        ("8.0.0", "vllm-linux-rocm100"),
+        ("10.1.0", "vllm-linux-rocm100"),
+        ("7.2.1", "vllm-linux-rocm723"),
+        ("7.13.0", "vllm-linux-rocm723"),
     ],
 )
-def test_amd_support_needs_a_rocm_7_runtime(amd_host, version, reason):
+def test_amd_host_rocm_picks_the_build(amd_host, version, lock):
+    # ROCm 7.2+ in /opt/rocm keeps the build that loads it; any other host gets the one that brings its own.
     if version is None:
         (amd_host.rocm / ".info" / "version").unlink()
     else:
         (amd_host.rocm / ".info" / "version").write_text(version)
-    assert install.support_reason("vllm", wait = False) == reason
+    assert install.profile("vllm")["lock"] == lock
+    assert install.support_reason("vllm", wait = False) is None
+
+
+def test_rocm_10_build_needs_nothing_from_opt_rocm(amd_host):
+    # Its torch preloads ROCm from the rocm-sdk wheels; a missing or partial /opt/rocm is irrelevant.
+    (amd_host.rocm / ".info" / "version").unlink()
+    for soname in install.ROCM_LIBRARIES:
+        (amd_host.rocm / "lib" / soname).unlink()
+    amd_host.libraries.clear()
+    assert install.profile("vllm")["lock"] == "vllm-linux-rocm100"
+    assert install.support_reason("vllm", wait = False) is None
 
 
 def test_amd_support_checks_the_selected_gpus_architecture(amd_host):
@@ -240,6 +307,12 @@ def test_amd_support_reports_an_unopenable_kfd_and_old_glibc(amd_host, monkeypat
     assert "/dev/kfd" in install.support_reason("vllm", wait = False)
     monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.35"))
     assert install.support_reason("vllm", wait = False) == "vLLM requires glibc 2.39 or newer."
+    # The ROCm 10 build is manylinux_2_35 (its Triton), so Ubuntu 22.04 qualifies without ROCm 7.2.
+    (amd_host.rocm / ".info" / "version").unlink()
+    monkeypatch.setattr(install.os, "access", lambda *_: True)
+    assert install.support_reason("vllm", wait = False) is None
+    monkeypatch.setattr(install.platform, "libc_ver", lambda: ("glibc", "2.34"))
+    assert install.support_reason("vllm", wait = False) == "vLLM requires glibc 2.35 or newer."
 
 
 def test_amd_support_needs_a_render_node_as_well_as_kfd(amd_host, monkeypatch):
