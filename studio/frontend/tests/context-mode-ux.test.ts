@@ -75,7 +75,13 @@ test("the existing info hint owns the mode explanation and fitted result", () =>
   assert.match(panelCode, /\{renderWarning\(shown\)\}/);
   assert.match(
     panelCode,
-    /A setting has changed\. Reload to have Auto resize your context from \$\{refitsLoadedContext\.toLocaleString\(\)\}\./,
+    /A setting has changed\. Reload to have Auto resize your context with the new settings\./,
+  );
+  assert.match(
+    panelCode,
+    /pinnedByLayers \? ` Kept at \$\{activeLoadedContext\.toLocaleString\(\)\} by your fixed GPU layers\.` : ` Auto picked/,
+  );
+  assert.match(panelCode, /pinnedByLayers=\{!atBaseline && fixedLayerPin != null\}/
   );
   assert.doesNotMatch(
     panelCode,

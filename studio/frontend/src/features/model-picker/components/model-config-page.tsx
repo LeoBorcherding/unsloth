@@ -579,6 +579,7 @@ function GgufContextLengthSetting({
   nativeContextLength,
   activeLoadedContext,
   refitsLoadedContext = null,
+  pinnedByLayers = false,
   inputRef,
   onChange,
   renderWarning,
@@ -592,6 +593,8 @@ function GgufContextLengthSetting({
   activeLoadedContext: number | null;
   /** The loaded window when it was fitted to other settings, so the next load fits again. */
   refitsLoadedContext?: number | null;
+  /** The window is kept by fixed GPU layers, so Auto did not pick it. */
+  pinnedByLayers?: boolean;
   inputRef?: Ref<NumericValueInputHandle>;
   onChange: (value: number) => void;
   renderWarning: (value: number) => ReactNode;
@@ -635,10 +638,12 @@ function GgufContextLengthSetting({
           Auto fits the most context your GPU can hold, up to{" "}
           {max.toLocaleString()}.
           {isAuto && activeLoadedContext != null
-            ? ` Auto picked ${activeLoadedContext.toLocaleString()}.`
+            ? pinnedByLayers
+              ? ` Kept at ${activeLoadedContext.toLocaleString()} by your fixed GPU layers.`
+              : ` Auto picked ${activeLoadedContext.toLocaleString()}.`
             : ""}
           {isAuto && refitsLoadedContext != null
-            ? ` A setting has changed. Reload to have Auto resize your context from ${refitsLoadedContext.toLocaleString()}.`
+            ? " A setting has changed. Reload to have Auto resize your context with the new settings."
             : ""}
         </InfoHint>
         {stacked ? null : reset}
@@ -4570,6 +4575,7 @@ export function ModelConfigPage({
               nativeContextLength={nativeContextLength}
               activeLoadedContext={autoLoadedContext}
               refitsLoadedContext={autoLoadedContext == null ? activeLoadedContext : null}
+              pinnedByLayers={!atBaseline && fixedLayerPin != null}
               inputRef={contextInputRef}
               onChange={(v) => update({ customContextLength: v === 0 ? null : v })}
               stacked={variant === "sidebar"}
