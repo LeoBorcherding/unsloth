@@ -6,7 +6,6 @@
 
 import { ModelSelector } from "@/features/model-picker";
 import type {
-  LoraModelOption,
   ModelOption,
   ModelSelectorChangeMeta,
 } from "@/features/model-picker/components/model-selector/types";
@@ -15,7 +14,6 @@ import type { ReactElement } from "react";
 
 export function BenchModelPicker({
   models,
-  loraModels,
   value,
   ggufVariant,
   loaded,
@@ -26,8 +24,6 @@ export function BenchModelPicker({
   onPick,
 }: {
   models: ModelOption[];
-  /** Fine-tuned / exported checkpoints, shown as their own section (Evals offers them). */
-  loraModels?: LoraModelOption[];
   /** The picked model id, or undefined for the placeholder. */
   value?: string;
   /** Quant shown as the "GGUF · <quant>" suffix on the trigger. */
@@ -45,7 +41,6 @@ export function BenchModelPicker({
     <div className={cn("min-w-0", locked && "pointer-events-none opacity-60")}>
       <ModelSelector
         models={models}
-        loraModels={loraModels}
         value={value ?? undefined}
         activeGgufVariant={ggufVariant ?? null}
         loaded={loaded}
