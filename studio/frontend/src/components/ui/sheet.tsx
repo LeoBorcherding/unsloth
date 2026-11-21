@@ -122,7 +122,7 @@ function SheetContent({
         )}
         onInteractOutside={(event) => {
           onInteractOutside?.(event);
-          if ((event.target as Element | null)?.closest?.("[data-sonner-toaster], [data-overlay-rail]")) {
+          if ((event.target as Element | null)?.closest?.("[data-sonner-toaster], [data-overlay-rail], [data-floating-panel]")) {
             event.preventDefault();
           }
         }}

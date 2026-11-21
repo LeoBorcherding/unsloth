@@ -132,8 +132,8 @@ function DialogContent({
           )}
           onInteractOutside={(event) => {
             onInteractOutside?.(event);
-            // toasts and the corner cards render outside every dialog, so using one must not dismiss the dialog under it.
-            if ((event.target as Element | null)?.closest?.("[data-sonner-toaster], [data-overlay-rail]")) {
+            // toasts, the corner cards and the floating panels render outside every dialog, so using one must not dismiss the dialog under it.
+            if ((event.target as Element | null)?.closest?.("[data-sonner-toaster], [data-overlay-rail], [data-floating-panel]")) {
               event.preventDefault();
             }
           }}

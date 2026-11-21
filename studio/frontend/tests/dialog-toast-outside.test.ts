@@ -2,6 +2,7 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   type StubElement,
@@ -85,15 +86,18 @@ test("an interaction on a toast or a corner card does not dismiss the dialog und
 
   const onToast = outsideEvent("[data-sonner-toaster]");
   const onRail = outsideEvent("[data-overlay-rail]");
+  const onPanel = outsideEvent("[data-floating-panel]");
   const elsewhere = outsideEvent(null);
   onInteractOutside(onToast);
   onInteractOutside(onRail);
+  onInteractOutside(onPanel);
   onInteractOutside(elsewhere);
 
   assert.equal(onToast.defaultPrevented, true, "a toast click closed the dialog");
   assert.equal(onRail.defaultPrevented, true, "a Downloads card click closed the dialog");
+  assert.equal(onPanel.defaultPrevented, true, "grabbing the Live monitor closed the dialog");
   assert.equal(elsewhere.defaultPrevented, false, "a real outside click must still dismiss");
-  assert.deepEqual(seen, [onToast, onRail, elsewhere], "the caller's handler was dropped");
+  assert.deepEqual(seen, [onToast, onRail, onPanel, elsewhere], "the caller's handler was dropped");
 });
 
 test("an interaction on a toast or a corner card does not dismiss the sheet under it", () => {
@@ -143,13 +147,26 @@ test("an interaction on a toast or a corner card does not dismiss the sheet unde
 
   const onToast = outsideEvent("[data-sonner-toaster]");
   const onRail = outsideEvent("[data-overlay-rail]");
+  const onPanel = outsideEvent("[data-floating-panel]");
   const elsewhere = outsideEvent(null);
   onInteractOutside(onToast);
   onInteractOutside(onRail);
+  onInteractOutside(onPanel);
   onInteractOutside(elsewhere);
 
   assert.equal(onToast.defaultPrevented, true, "a toast click closed the sheet");
   assert.equal(onRail.defaultPrevented, true, "a Downloads card click closed the sheet");
+  assert.equal(onPanel.defaultPrevented, true, "grabbing the Live monitor closed the sheet");
   assert.equal(elsewhere.defaultPrevented, false, "a real outside click must still dismiss");
-  assert.deepEqual(seen, [onToast, onRail, elsewhere], "the caller's handler was dropped");
+  assert.deepEqual(seen, [onToast, onRail, onPanel, elsewhere], "the caller's handler was dropped");
+});
+
+test("both floating panels carry the marker the modals exempt", () => {
+  for (const path of [
+    "../src/components/floating-monitor.tsx",
+    "../src/features/api-monitor/api-monitor-overlay.tsx",
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.match(source, /<motion\.div[\s\S]*?ref=\{monitorRef\}[\s\S]*?data-floating-panel=""/, path);
+  }
 });

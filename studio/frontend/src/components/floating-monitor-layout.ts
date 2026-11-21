@@ -121,19 +121,35 @@ export function floatingMonitorRightInset({
         (Number.isFinite(uiSpaceScale) && uiSpaceScale > 0 ? uiSpaceScale : 1);
 }
 
+/** Past the column the sidebar holds, so a drag stops at its edge instead of covering it. */
+export function floatingMonitorLeftInset({
+  sidebarWidth,
+  uiSpaceScale = 1,
+}: {
+  sidebarWidth: number;
+  uiSpaceScale?: number;
+}): number {
+  const scale = Number.isFinite(uiSpaceScale) && uiSpaceScale > 0 ? uiSpaceScale : 1;
+  return (Number.isFinite(sidebarWidth) ? Math.max(0, sidebarWidth) : 0) +
+    FLOATING_MONITOR_EDGE_INSET * scale;
+}
+
 export function floatingMonitorConstraintStyle({
   zIndex,
   dockedBesideRunSettings,
   settingsWidth,
+  sidebarWidth = 0,
   uiSpaceScale,
 }: {
   zIndex: number;
   dockedBesideRunSettings: boolean;
   settingsWidth: number;
+  sidebarWidth?: number;
   uiSpaceScale?: number;
-}): { zIndex: number; right: number } {
+}): { zIndex: number; left: number; right: number } {
   return {
     zIndex,
+    left: floatingMonitorLeftInset({ sidebarWidth, uiSpaceScale }),
     right: floatingMonitorRightInset({
       dockedBesideRunSettings,
       settingsWidth,

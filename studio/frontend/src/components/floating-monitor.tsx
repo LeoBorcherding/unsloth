@@ -140,6 +140,7 @@ interface FloatingMonitorPanelProps {
   dockedBesideRunSettings: boolean;
   onClose: () => void;
   settingsWidth: number;
+  sidebarColumnWidth: number;
   onRenderedWidth: (width: number) => void;
   suppressed: boolean;
   systemInfo: ReturnType<typeof useSystemInfo>;
@@ -150,6 +151,7 @@ function FloatingMonitorPanel({
   onClose,
   onRenderedWidth,
   settingsWidth,
+  sidebarColumnWidth,
   suppressed,
   systemInfo,
   uiSpaceScale,
@@ -316,7 +318,7 @@ function FloatingMonitorPanel({
       // Stays mounted while suppressed so the user's position and resize dimensions survive.
       aria-hidden={suppressed || undefined}
       className={cn(
-        "pointer-events-none fixed inset-y-4 left-4",
+        "pointer-events-none fixed inset-y-4",
         suppressed && "invisible",
         dockedBesideRunSettings ? undefined : "right-4",
       )}
@@ -324,12 +326,15 @@ function FloatingMonitorPanel({
         zIndex,
         dockedBesideRunSettings,
         settingsWidth,
+        sidebarWidth: sidebarColumnWidth,
         uiSpaceScale,
       })}
     >
       <motion.div
         {...{ [FIND_PORTAL_ATTRIBUTE]: "" }}
         ref={monitorRef}
+        // Grabbing it must not dismiss a modal under it (dialog.tsx, sheet.tsx).
+        data-floating-panel=""
         onPointerDownCapture={() => raisePanel("resource-monitor")}
         // The whole card is a grip; controls, resize edges and the grip itself keep their own pointer.
         onPointerDown={(event) => {
@@ -817,6 +822,8 @@ export function FloatingMonitor() {
           suppressed={suppressed}
           dockedBesideRunSettings={dockedBesideRunSettings}
           settingsWidth={settingsWidth}
+          // The column the sidebar holds in layout; a peek floats over it and leaves it as is.
+          sidebarColumnWidth={isMobile ? 0 : paintedSidebarWidth}
           uiSpaceScale={uiSpaceScale}
           onRenderedWidth={setMonitorWidth}
           systemInfo={systemInfo}

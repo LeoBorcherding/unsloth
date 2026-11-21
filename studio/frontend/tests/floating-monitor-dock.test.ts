@@ -11,6 +11,7 @@ import {
   dockedMonitorFits,
   floatingMonitorConstraintStyle,
   floatingMonitorHandleClearance,
+  floatingMonitorLeftInset,
   getFloatingMonitorLayout,
 } from "../src/components/floating-monitor-layout.ts";
 import { UI_FONT_SIZE_RANGE } from "../src/features/settings/stores/appearance-custom-store.ts";
@@ -83,7 +84,11 @@ test("the dock inset follows every panel width and supported UI font scale", () 
         settingsWidth,
         uiSpaceScale,
       });
-      assert.deepEqual(style, { zIndex: 9100, right: settingsWidth + clearance });
+      assert.deepEqual(style, {
+        zIndex: 9100,
+        left: FLOATING_MONITOR_EDGE_INSET * uiSpaceScale,
+        right: settingsWidth + clearance,
+      });
       assert.equal(floatingMonitorHandleClearance(uiSpaceScale), clearance);
       assert.ok(1440 - style.right < 1440 - settingsWidth);
     }
@@ -201,4 +206,32 @@ test("docking never remounts the monitor or loses its drag geometry", () => {
   assert.match(layoutSource, /useLayoutEffect\(\(\) => \{\s*if \(narrowedRef\.current === narrowed\)/);
   assert.match(layoutSource, /placeAxis\(intentRef\.current\.left, maxLeft\)/);
   assert.match(source, /const unpinnedSidebarWidth = sidebarHoldsRail \? paintedSidebarWidth : 0/);
+});
+
+test("the drag box starts past the sidebar's column, not under it", () => {
+  // Pinned sidebar, the web shell's icon rail, Desktop's collapse-to-zero.
+  for (const [sidebarWidth, left] of [[280, 296], [48, 64], [0, 16]] as const) {
+    assert.equal(floatingMonitorLeftInset({ sidebarWidth }), left);
+    assert.equal(
+      floatingMonitorConstraintStyle({
+        zIndex: 9100,
+        dockedBesideRunSettings: false,
+        settingsWidth: 272,
+        sidebarWidth,
+      }).left,
+      left,
+    );
+  }
+  assert.equal(floatingMonitorLeftInset({ sidebarWidth: 280, uiSpaceScale: 1.25 }), 300);
+  for (const bad of [-40, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(floatingMonitorLeftInset({ sidebarWidth: bad }), FLOATING_MONITOR_EDGE_INSET);
+  }
+});
+
+test("the container takes its left from the sidebar column, and a peek does not move it", () => {
+  const container = source.slice(source.indexOf("ref={setConstraintsElement}"));
+  assert.doesNotMatch(container.slice(0, container.indexOf("<motion.div")), /\bleft-4\b/);
+  assert.match(container, /sidebarWidth: sidebarColumnWidth,/);
+  // The wrapper's painted width: a peeking sidebar floats over the rail without widening it.
+  assert.match(source, /sidebarColumnWidth=\{isMobile \? 0 : paintedSidebarWidth\}/);
 });
