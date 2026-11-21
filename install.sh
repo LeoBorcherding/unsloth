@@ -7958,7 +7958,12 @@ if [ "$_MIGRATED" = true ]; then
     fi
     # AMD's ROCm 10 index is no pip ROCm family leaf either, but its torch is HIP 7.x and needs the same bitsandbytes.
     if [ "$SKIP_TORCH" = false ] && [ "$_torch_index_leaf" = whl-next ]; then
-        _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
+        if _is_gfx906_bnb_skip; then
+            substep "gfx906: skipping prebuilt bitsandbytes (no gfx906 kernels); build from source for 4-bit QLoRA -- https://unsloth.ai/docs/get-started/install/amd" "$C_WARN"
+        else
+            _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
+        fi
+        _gfx906_bnb_prune
     fi
 elif [ -n "$TORCH_INDEX_URL" ]; then
     if [ "$SKIP_TORCH" = true ]; then
