@@ -5990,7 +5990,7 @@ def _rocm_fused_sdpa_works() -> "bool | None":
         base = [torch.randn(1, 4, 256, 64, device='cuda', generator=g) for _ in range(3)]
         dout = torch.randn(1, 4, 256, 64, device='cuda', generator=g)
         def run(dtype, backends):
-            qkv = [t.to(dtype).requires_grad_() for t in base]
+            qkv = [t.detach().clone().to(dtype).requires_grad_() for t in base]
             with sdpa_kernel(backends):
                 o = F.scaled_dot_product_attention(*qkv, is_causal=True)
                 o.backward(dout.to(dtype))

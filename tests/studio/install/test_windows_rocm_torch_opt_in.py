@@ -252,6 +252,8 @@ class TestFusedAttentionProbe:
         stack_mod._rocm_fused_sdpa_works()
         compile(seen["code"], "<probe>", "exec")
         assert "t.grad" in seen["code"] and "SDPBackend.MATH" in seen["code"]
+        # .to(float32) on an fp32 tensor is the same tensor: without the clone the bf16 leaves have no .grad.
+        assert "t.detach().clone().to(dtype).requires_grad_()" in seen["code"]
 
     def test_a_timeout_is_no_answer(self, monkeypatch):
         def boom(*a, **k):
