@@ -449,6 +449,7 @@ async def _swap_and_render_as(
                 return ERR_KEEP_NO_FIT.format(model = pick.model_id, kind = swap.kind)
             swap.loaded_media = True
             swap.name, swap.pick = name, pick
+            _mark_loaded(swap)
             try:
                 await _load_media(swap.owner, name, pick, subject, deadline, abort)
             finally:
@@ -524,15 +525,23 @@ async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
     )
 
 
+def _mark_loaded(swap: _Swap) -> None:
+    """At the load, so the first loader (the one holding the chat model to bring back) wins even if
+    a later call finishes first."""
+    shared = swap.shared
+    if shared is not None and swap not in shared.loaded:
+        shared.loaded.append(swap)
+        if shared.loader is None:
+            shared.loader = swap
+
+
 async def _put_back(swap: _Swap, subject: str) -> str:
     shared = swap.shared
     loaded = [swap] if swap.loaded_media else []
     if shared is not None:
         shared.users -= 1
         if swap.loaded_media:
-            shared.loaded.append(swap)
-            if shared.loader is None:
-                shared.loader = swap
+            _mark_loaded(swap)
         if shared.users > 0:
             # Unloading or bringing the chat model back now would end that other render.
             swap.deferred = swap.chat_unloaded

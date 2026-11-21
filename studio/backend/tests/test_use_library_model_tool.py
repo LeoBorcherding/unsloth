@@ -1272,3 +1272,33 @@ def test_the_last_shared_call_unloads_a_later_calls_model(monkeypatch):
 
     asyncio.run(scenario())
     assert calls == ["unload", ("restore", CHAT)]
+
+
+def test_the_first_loader_restores_the_chat_model_even_if_it_finishes_last(monkeypatch):
+    _preflight_world(monkeypatch)
+    calls = []
+
+    async def unload_media(owner, subject):
+        calls.append("unload")
+
+    async def restore_chat(swap, subject):
+        calls.append(("restore", swap.chat_identity))
+
+    monkeypatch.setattr(tool, "_unload_media", unload_media)
+    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
+
+    async def scenario():
+        first, later = tool._Swap(), tool._Swap()
+        tool._enter_shared(first)
+        tool._enter_shared(later)
+        first.loaded_media, first.chat_identity = True, CHAT
+        tool._mark_loaded(first)
+        # The later call saw the chat model already gone, loaded its own model and ended first.
+        later.loaded_media = True
+        tool._mark_loaded(later)
+        await tool._put_back(later, "bob")
+        await tool._put_back(first, "alice")
+
+    asyncio.run(scenario())
+    assert calls == ["unload", ("restore", CHAT)]
