@@ -4365,28 +4365,75 @@ def _imatrix_is_enabled(imatrix_file):
     return imatrix_file is not None and imatrix_file is not False
 
 
-def _gguf_reuses_loaded_checkpoint(model, state_dict = None):
-    """Whether a non-PEFT GGUF export converts the folder the model was loaded from. Only when the weights to export are that folder's: full finetuning trains them in place, and a `state_dict` replaces them."""
+def _has_meta_parameters(model):
+    try:
+        return any(
+            getattr(getattr(tensor, "device", None), "type", None) == "meta"
+            for _name, tensor in model.named_parameters()
+        )
+    except Exception:
+        return False
+
+
+def _offloaded_hub_snapshot(model, repo_id):
+    """The cached Hub snapshot an offloaded model was loaded from, else None. Accelerate leaves offloaded parameters on the meta device, where `save_pretrained` cannot read them, but the load read every shard into the cache, so the converter can read them there."""
+    if not _has_meta_parameters(model):
+        return None
+    try:
+        from huggingface_hub import hf_hub_download
+
+        config = hf_hub_download(
+            str(repo_id),
+            "config.json",
+            revision = getattr(getattr(model, "config", None), "_commit_hash", None),
+            local_files_only = True,
+        )
+        snapshot = os.path.dirname(config)
+        index = os.path.join(snapshot, "model.safetensors.index.json")
+        if os.path.isfile(index):
+            with open(index, "r", encoding = "utf-8") as file:
+                shards = set(json.load(file).get("weight_map", {}).values())
+            return (
+                snapshot
+                if shards and all(os.path.isfile(os.path.join(snapshot, shard)) for shard in shards)
+                else None
+            )
+        return snapshot if os.path.isfile(os.path.join(snapshot, "model.safetensors")) else None
+    except Exception:
+        return None
+
+
+def _gguf_reused_checkpoint_dir(model, state_dict = None):
+    """The folder a non-PEFT GGUF export converts instead of saving the model, else None. Only when the weights to export are that folder's: full finetuning trains them in place, and a `state_dict` replaces them."""
     if isinstance(model, (PeftModel, PeftModelForCausalLM)):
-        return False
+        return None
     if state_dict is not None or getattr(model, "_unsloth_full_finetuning", False):
-        return False
+        return None
     # REAP pruned in memory: the loaded folder still holds every expert.
     if getattr(model, "_unsloth_reap_report", None) and not getattr(
         model, "_unsloth_reap_saved", None
     ):
-        return False
+        return None
     # The loaded folder holds the stock MTP head; a trained one needs a fresh checkpoint.
     if _attached_mtp_head(model) is not None:
-        return False
+        return None
     # A ModelScope load keeps its snapshot here, since `_name_or_path` holds the repo id (#3726).
     name_or_path = getattr(model, "_unsloth_modelscope_snapshot", None) or getattr(
         getattr(model, "config", None), "_name_or_path", None
     )
     try:
-        return bool(name_or_path and os.path.isdir(str(name_or_path)))
+        if not name_or_path:
+            return None
+        if os.path.isdir(str(name_or_path)):
+            return str(name_or_path)
+        return _offloaded_hub_snapshot(model, name_or_path)
     except Exception:
-        return False
+        return None
+
+
+def _gguf_reuses_loaded_checkpoint(model, state_dict = None):
+    """Whether a non-PEFT GGUF export converts the folder the model was loaded from."""
+    return _gguf_reused_checkpoint_dir(model, state_dict) is not None
 
 
 def _gguf_writes_16bit_checkpoint(model, state_dict = None):
@@ -4430,9 +4477,7 @@ def _staged_checkpoint_copy_bytes(
     try:
         if not _gguf_reuses_loaded_checkpoint(model, state_dict):
             return 0
-        source = os.path.abspath(
-            str(getattr(model, "_unsloth_modelscope_snapshot", None) or model.config._name_or_path)
-        )
+        source = os.path.abspath(_gguf_reused_checkpoint_dir(model, state_dict))
         linked = []
         for root, _dirs, files in os.walk(source):
             for name in files:
@@ -5343,10 +5388,8 @@ def unsloth_save_pretrained_gguf(
             ) from e
     else:
         # Non-PEFT model: convert the loaded checkpoint in place when it still holds the weights to export.
-        original_path = getattr(self, "_unsloth_modelscope_snapshot", None) or getattr(
-            self.config, "_name_or_path", None
-        )
-        if _gguf_reuses_loaded_checkpoint(self, state_dict):
+        original_path = _gguf_reused_checkpoint_dir(self, state_dict)
+        if original_path is not None:
             print(
                 f"Unsloth: Model is not a PEFT model. Using existing checkpoint at {original_path}"
             )
