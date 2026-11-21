@@ -90,6 +90,7 @@ import { ToolGroup } from "@/components/assistant-ui/tool-group";
 import { CodeExecutionToolUI } from "@/components/assistant-ui/tool-ui-code-execution";
 import {
   ImageGenerationToolUI,
+  LibraryModelToolUI,
   VideoGenerationToolUI,
 } from "@/components/assistant-ui/tool-ui-image-generation";
 import { KnowledgeBaseToolUI } from "@/components/assistant-ui/tool-ui-knowledge-base";
@@ -8283,6 +8284,7 @@ const ImageGenerationToolUIConfirmable = withToolConfirmation(
 const VideoGenerationToolUIConfirmable = withToolConfirmation(
   VideoGenerationToolUI,
 );
+const LibraryModelToolUIConfirmable = withToolConfirmation(LibraryModelToolUI);
 const RenderHtmlToolUIConfirmable = withToolConfirmation(RenderHtmlToolUI);
 // Read at render time, not module scope: the skill modules reach the chat barrel.
 const ReadSkillToolUIConfirmable = withToolConfirmation((props) => (
@@ -8312,6 +8314,7 @@ const ASSISTANT_PART_COMPONENTS = {
       code_execution: CodeExecutionToolUIConfirmable,
       image_generation: ImageGenerationToolUIConfirmable,
       generate_image: ImageGenerationToolUIConfirmable,
+      use_library_model: LibraryModelToolUIConfirmable,
       generate_video: VideoGenerationToolUIConfirmable,
       render_html: RenderHtmlToolUIConfirmable,
     },

@@ -111,6 +111,7 @@ const TOOL_CALL_LABELS: Record<string, string> = {
   edit_file: "Edit",
   image_generation: "Images",
   generate_image: "Images",
+  use_library_model: "Media",
   generate_video: "Video",
   search_knowledge_base: "Docs",
   render_html: "Canvas",
@@ -135,6 +136,7 @@ function toolCategoryFromCall(toolName: string): string | null {
   if (
     normalized === "image_generation" ||
     normalized === "generate_image" ||
+    normalized === "use_library_model" ||
     normalized === "generate_video"
   ) {
     return "images";

@@ -16,7 +16,11 @@ export const SANDBOX_RUN_TOOLS = new Set(["python", "terminal"]);
  * write their output into the sandbox and answer with the file envelope. Keep in step
  * with MEDIA_CHAT_TOOLS in studio/backend/core/inference/media_chat_tools.py.
  */
-export const MEDIA_CHAT_TOOLS: ReadonlySet<string> = new Set(["generate_image", "generate_video"]);
+export const MEDIA_CHAT_TOOLS: ReadonlySet<string> = new Set([
+  "generate_image",
+  "generate_video",
+  "use_library_model",
+]);
 
 /** The tools that emit the file envelope; edit_file only for a file it created. Nothing else's output is an envelope. */
 export const SANDBOX_FILE_TOOLS = new Set([
@@ -35,6 +39,7 @@ export const IMAGE_SENTINEL_TOOLS = new Set([
   ...SANDBOX_RUN_TOOLS,
   "code_execution",
   "generate_image",
+  "use_library_model",
 ]);
 
 function isSandboxFile(entry: unknown): entry is SandboxFile {

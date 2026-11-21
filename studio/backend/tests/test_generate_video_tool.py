@@ -333,3 +333,10 @@ def test_a_ref2va_video_model_is_not_offered_to_chat(monkeypatch):
     assert [
         t["function"]["name"] for t in media_chat_tools.offered_media_chat_tools({"generate_video"})
     ] == ["generate_video"]
+
+
+def test_a_create_timeout_waits_a_slow_create_out(tmp_path, backend, keepwarm, monkeypatch):
+    _slow_create(monkeypatch, keepwarm, 0.4)
+    monkeypatch.setattr(tool, "_CREATE_TIMEOUT_S", 0.1)
+    result = _run(tmp_path, {"prompt": "slow create"}, timeout = 30, create_timeout = 30)
+    assert result.startswith("Generated a video")

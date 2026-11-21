@@ -1132,6 +1132,7 @@ type LocalMediaToolState = Pick<
   | "supportsBuiltinImageGeneration"
   | "localImageModelReady"
   | "localVideoModelReady"
+  | "localImageSwapReady"
 >;
 
 /**
@@ -1143,7 +1144,7 @@ export function localImageTool(s: LocalMediaToolState): boolean {
   return (
     !s.supportsBuiltinImageGeneration &&
     s.supportsTools &&
-    (s.localImageModelReady || s.localVideoModelReady)
+    (s.localImageModelReady || s.localVideoModelReady || s.localImageSwapReady)
   );
 }
 
@@ -1167,6 +1168,7 @@ export function localMediaToolsForTurn(
   return [
     ...(s.localImageModelReady ? ["generate_image"] : []),
     ...(s.localVideoModelReady ? ["generate_video"] : []),
+    ...(s.localImageSwapReady ? ["use_library_model"] : []),
   ];
 }
 
@@ -2576,6 +2578,8 @@ type ChatRuntimeStore = {
   localImageModelReady: boolean;
   /** A video model is loaded in Unsloth, so the Images pill can offer generate_video. Not persisted. */
   localVideoModelReady: boolean;
+  /** "Switch model by request" for images is on, so the Images pill can offer use_library_model. Not persisted. */
+  localImageSwapReady: boolean;
   toolsEnabled: boolean;
   /** persisted Code preference; codeToolsOn() gives the effective value. */
   codeToolsEnabled: boolean;
@@ -2859,6 +2863,7 @@ type ChatRuntimeStore = {
   setToolsEnabled: (enabled: boolean, options?: { persist?: boolean }) => void;
   setKeepModelsLoaded: (keep: boolean) => void;
   setLocalMediaModelsReady: (ready: { image: boolean; video: boolean }) => void;
+  setLocalImageSwapReady: (ready: boolean) => void;
   setCodeToolsEnabled: (enabled: boolean) => void;
   setImageToolsEnabled: (enabled: boolean) => void;
   setDeepResearchEnabled: (enabled: boolean) => void;
@@ -4444,6 +4449,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
   keepModelsLoaded: false,
   localImageModelReady: false,
   localVideoModelReady: false,
+  localImageSwapReady: false,
   codeToolsEnabled: loadBool(CHAT_CODE_TOOLS_ENABLED_KEY, pillDefault("codeToolsEnabled")),
   codeToolsDeclinedUnderFullAccess: false,
   imageToolsEnabled: loadBool(CHAT_IMAGE_TOOLS_ENABLED_KEY, false),
@@ -5693,6 +5699,10 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
       state.localImageModelReady === image && state.localVideoModelReady === video
         ? state
         : { localImageModelReady: image, localVideoModelReady: video },
+    ),
+  setLocalImageSwapReady: (localImageSwapReady) =>
+    set((state) =>
+      state.localImageSwapReady === localImageSwapReady ? state : { localImageSwapReady },
     ),
   setCodeToolsEnabled: (codeToolsEnabled) =>
     set((state) => {

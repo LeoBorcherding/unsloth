@@ -6892,7 +6892,8 @@ _ALWAYS_SAFE_TOOLS = frozenset(
         # Gated in the chat tab instead, which knows what each ref on the live page is: submits,
         # purchases, sign-ins and new sites ask there, in every permission mode.
         *BROWSER_TOOL_NAMES,
-        # Render on the resident image/video model; never load/unload a model or reach the network.
+        # Render on an image/video model, never reach the network; use_library_model swaps one in
+        # and puts the chat model back, and is offered only under "Switch model by request".
         *MEDIA_CHAT_TOOLS,
     }
 )
@@ -15170,6 +15171,8 @@ def execute_tool(
     if name in MEDIA_CHAT_TOOLS:
         if name == "generate_image":
             from .generate_image_tool import run_generate_image as run_media_tool
+        elif name == "use_library_model":
+            from .library_model_tool import run_use_library_model as run_media_tool
         else:
             from .generate_video_tool import run_generate_video as run_media_tool
         with _session_in_flight(session_id):
