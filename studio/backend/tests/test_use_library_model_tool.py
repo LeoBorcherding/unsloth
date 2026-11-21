@@ -1006,3 +1006,24 @@ def test_music_models_are_named_by_their_own_id_not_the_umbrella_repo(monkeypatc
     assert tool._music_ids() == [m.id for m in models]
     assert tool._music_model(f"{umbrella}/ace-step1.5-gguf") == models[1].id
     assert tool._music_model(umbrella) is None
+
+
+def test_a_music_run_asks_for_a_song_and_is_instrumental_without_lyrics(monkeypatch, tmp_path):
+    seen = []
+
+    async def run(req, request, subject):
+        seen.append(req)
+        return SimpleNamespace(clips = [])
+
+    monkeypatch.setattr(inference, "_run_music_workflow", run)
+    for lyrics in (None, "la la"):
+        asyncio.run(
+            tool._compose_music(
+                "org/music", "lofi", {"seconds": 10, "lyrics": lyrics}, "owner", str(tmp_path),
+                beside = False,
+            )
+        )
+    assert [(r.mode, r.instrumental, r.lyrics) for r in seen] == [
+        ("song", True, None),
+        ("song", False, "la la"),
+    ]

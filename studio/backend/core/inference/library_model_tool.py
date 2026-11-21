@@ -998,11 +998,14 @@ async def _compose_music(
     allow_model_switch_for_request(request.scope)
     if beside:
         load_alongside_for_request(request.scope)
-    fields = {"workflow": "music", "model": name, "text": prompt}
+    lyrics = str(arguments.get("lyrics") or "")
+    # The music workflow needs a mode; with no lyrics a song is instrumental.
+    fields = {"workflow": "music", "model": name, "text": prompt, "mode": "song"}
+    fields["instrumental"] = not lyrics
     if arguments.get("seconds") is not None:
         fields["duration_s"] = float(arguments["seconds"])
-    if arguments.get("lyrics"):
-        fields["lyrics"] = str(arguments["lyrics"])
+    if lyrics:
+        fields["lyrics"] = lyrics
     response = None
     try:
         response = await _run_music_workflow(AudioRunRequest(**fields), request, subject)
