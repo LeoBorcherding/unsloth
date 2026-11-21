@@ -1019,7 +1019,11 @@ def test_a_music_run_asks_for_a_song_and_is_instrumental_without_lyrics(monkeypa
     for lyrics in (None, "la la"):
         asyncio.run(
             tool._compose_music(
-                "org/music", "lofi", {"seconds": 10, "lyrics": lyrics}, "owner", str(tmp_path),
+                "org/music",
+                "lofi",
+                {"seconds": 10, "lyrics": lyrics},
+                "owner",
+                str(tmp_path),
                 beside = False,
             )
         )

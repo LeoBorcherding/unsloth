@@ -1033,6 +1033,7 @@ async def _compose_music(
 def _music_ids() -> list[str]:
     try:
         from core.inference.audio_cpp_models import downloaded_models
+
         # The id names the model; repo_id is audio.cpp's umbrella repo, the same for every model.
         return [model.id for model in downloaded_models("music")]
     except Exception:  # noqa: BLE001 - no audio.cpp here means no music models
