@@ -160,8 +160,20 @@ test("delete removes one profile and restore puts it back in place", () => {
   const b = store.getState().profiles[1];
   store.getState().remove(b.id);
   assert.deepEqual(store.getState().profiles.map(profileName), ["A", "C"]);
-  store.getState().restore(b, 1);
+  assert.equal(store.getState().restore(b, 1), "saved");
   assert.deepEqual(store.getState().profiles.map(profileName), ["A", "B", "C"]);
+});
+
+test("undoing a delete never evicts a profile saved since", () => {
+  for (let i = 0; i < MAX_PROFILES; i++) saveLook(`P${i}`);
+  const gone = store.getState().profiles[0];
+  store.getState().remove(gone.id);
+  saveLook("New");
+  assert.equal(store.getState().restore(gone, 0), "full");
+  const names = store.getState().profiles.map(profileName);
+  assert.equal(names.length, MAX_PROFILES);
+  assert.ok(names.includes("New"));
+  assert.ok(!names.includes("P0"));
 });
 
 test("export embeds only the imported fonts the profile still selects", () => {

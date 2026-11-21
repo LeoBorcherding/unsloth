@@ -195,8 +195,14 @@ export function ProfilesSection() {
     toast(t(`${K}.deleted`, { name: names[index] }), {
       action: {
         label: t(`${F}.undo`),
-        onClick: () =>
-          useAppearanceProfilesStore.getState().restore(profile, index),
+        onClick: () => {
+          const result = useAppearanceProfilesStore
+            .getState()
+            .restore(profile, index);
+          if (result === "full")
+            toast.error(t(`${K}.full`, { count: MAX_PROFILES }));
+          else if (result === "storage") toast.error(t(`${K}.storageFull`));
+        },
       },
     });
   }

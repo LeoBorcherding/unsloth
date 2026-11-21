@@ -134,7 +134,7 @@ type ProfilesState = {
   save: (theme: Record<string, unknown>) => SaveProfileResult;
   rename: (id: string, name: string) => boolean;
   remove: (id: string) => void;
-  restore: (profile: AppearanceProfile, index: number) => void;
+  restore: (profile: AppearanceProfile, index: number) => SaveProfileResult;
 };
 
 export const useAppearanceProfilesStore = create<ProfilesState>()(
@@ -172,8 +172,10 @@ export const useAppearanceProfilesStore = create<ProfilesState>()(
         },
         restore: (profile, index) => {
           const profiles = get().profiles.filter((p) => p.id !== profile.id);
+          // A save made since the delete can fill the list; never evict it to undo.
+          if (profiles.length >= MAX_PROFILES) return "full";
           profiles.splice(Math.min(index, profiles.length), 0, profile);
-          commit(profiles.slice(0, MAX_PROFILES));
+          return commit(profiles) ? "saved" : "storage";
         },
       };
     },
