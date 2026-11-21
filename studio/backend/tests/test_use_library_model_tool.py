@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1062,3 +1063,41 @@ def test_questions_without_a_model_use_the_decision_model_from_settings(world, m
     assert result.startswith("laya decided:")
     assert seen == ["an email"]
     assert world.chat == CHAT
+
+
+def test_a_stop_reaches_a_non_media_model_call(world, monkeypatch):
+    from core.inference import stt_registry
+
+    saw = []
+
+    async def transcribe(
+        raw,
+        model,
+        language,
+        fast,
+        request = None,
+        **kwargs,
+    ):
+        event = request.scope["state"]["generation_cancel_event"]
+        for _ in range(60):
+            if event.is_set():
+                break
+            await asyncio.sleep(0.05)
+        saw.append(event.is_set())
+        return {"text": ""}
+
+    monkeypatch.setattr(tool, "_speech_ids", lambda: ([], ["org/asr"]))
+    monkeypatch.setattr(inference, "_transcribe_audio_result", transcribe)
+    monkeypatch.setattr(stt_registry, "resident", lambda: {})
+    import os
+
+    os.makedirs(world.workdir, exist_ok = True)
+    with open(os.path.join(world.workdir, "clip.wav"), "wb") as f:
+        f.write(b"1")
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    _call(world, {"model": "org/asr", "audio": "clip.wav"}, cancel_event = cancel)
+    deadline = time.monotonic() + 5
+    while not saw and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert saw == [True]

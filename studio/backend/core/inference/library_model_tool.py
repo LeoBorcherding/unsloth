@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import json
 import threading
 import time
@@ -334,9 +335,18 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
     return None if restored else "it did not come back up"
 
 
+# The call's Stop/deadline event, handed to the in-process requests a non-media model runs on.
+_ABORT: contextvars.ContextVar = contextvars.ContextVar("library_model_abort", default = None)
+
+
+def _abort_event() -> threading.Event:
+    return _ABORT.get() or threading.Event()
+
+
 async def _swap_and_render(
     arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float, workdir: str
 ):
+    _ABORT.set(abort)
     from core.inference.gpu_arbiter import VIDEO
     from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, resolve_local_media_model
     from utils.multi_model_settings import multi_model_mode_for_request
@@ -716,9 +726,7 @@ async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -
         produce_openai_chat_completions,
     )
 
-    request = _producer_request(
-        None, "library-model-ask", threading.Event(), "UTC", loaded_only = False
-    )
+    request = _producer_request(None, "library-model-ask", _abort_event(), "UTC", loaded_only = False)
     allow_model_switch_for_request(request.scope)
     if beside:
         load_alongside_for_request(request.scope)
@@ -843,7 +851,7 @@ async def _speak_tts(
     )
 
     request = _producer_request(
-        None, "library-model-speak", threading.Event(), "UTC", loaded_only = False
+        None, "library-model-speak", _abort_event(), "UTC", loaded_only = False
     )
     allow_model_switch_for_request(request.scope)
     if beside:
@@ -901,7 +909,7 @@ async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
     raw = await asyncio.to_thread(lambda: open(path, "rb").read())
     before = (await asyncio.to_thread(stt_registry.resident)).get("model")
     request = _producer_request(
-        None, "library-model-transcribe", threading.Event(), "UTC", loaded_only = False
+        None, "library-model-transcribe", _abort_event(), "UTC", loaded_only = False
     )
     try:
         result = await _transcribe_audio_result(raw, name, None, False, request = request)
@@ -996,7 +1004,7 @@ async def _compose_music(
     )
 
     request = _producer_request(
-        None, "library-model-music", threading.Event(), "UTC", loaded_only = False
+        None, "library-model-music", _abort_event(), "UTC", loaded_only = False
     )
     allow_model_switch_for_request(request.scope)
     if beside:
