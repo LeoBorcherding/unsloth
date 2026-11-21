@@ -1101,3 +1101,64 @@ def test_a_stop_reaches_a_non_media_model_call(world, monkeypatch):
     while not saw and time.monotonic() < deadline:
         time.sleep(0.05)
     assert saw == [True]
+
+
+def test_the_stt_watcher_cancels_on_the_request_event_without_a_disconnect():
+    stop = threading.Event()
+    cancelled = []
+
+    class Req:
+        state = SimpleNamespace(generation_cancel_event = stop)
+
+        async def is_disconnected(self):
+            return False
+
+    sidecar = SimpleNamespace(cancel_transcription = lambda event: cancelled.append(event))
+
+    async def main():
+        watcher = asyncio.create_task(
+            inference._await_stt_disconnect_then_cancel(Req(), sidecar, "ev")
+        )
+        await asyncio.sleep(0.2)
+        stop.set()
+        await asyncio.wait_for(watcher, 2)
+
+    asyncio.run(main())
+    assert cancelled == ["ev"]
+
+
+def test_tts_and_music_see_the_calls_stop_event(world, monkeypatch):
+    from core.scheduled_tasks import scheduler
+
+    saw = []
+
+    async def speak(name, text, subject, workdir, *, beside):
+        event = inference._audio_run_event()
+        for _ in range(60):
+            if event.is_set():
+                break
+            await asyncio.sleep(0.05)
+        saw.append(event.is_set())
+        return "Spoke it.", False
+
+    async def row(name):
+        return SimpleNamespace(id = "org/tts", task = "text-to-speech")
+
+    async def unload(name, subject):
+        return None
+
+    monkeypatch.setattr(tool, "_catalog_row", row)
+    monkeypatch.setattr(tool, "_speak_tts", speak)
+    monkeypatch.setattr(tool, "_unload_llm", unload)
+    monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: False)
+    cancel = threading.Event()
+    threading.Timer(0.3, cancel.set).start()
+    _call(
+        world,
+        {"model": "org/tts", "prompt": "hi", "unload_chat_model": "false"},
+        cancel_event = cancel,
+    )
+    deadline = time.monotonic() + 5
+    while not saw and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert saw == [True]

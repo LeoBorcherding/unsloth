@@ -346,7 +346,11 @@ def _abort_event() -> threading.Event:
 async def _swap_and_render(
     arguments: dict, prompt: str, swap: "_Swap", ticket, abort, deadline: float, workdir: str
 ):
+    from routes.inference import _AUDIO_RUN_CANCEL
+
     _ABORT.set(abort)
+    # TTS and music read their stop from the audio run's event.
+    _AUDIO_RUN_CANCEL.set(abort)
     from core.inference.gpu_arbiter import VIDEO
     from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, resolve_local_media_model
     from utils.multi_model_settings import multi_model_mode_for_request
