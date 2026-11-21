@@ -690,7 +690,11 @@ def llm(world, monkeypatch):
     state = SimpleNamespace(calls = [], fits = True, loaded = set(), setting = "off", modes = [])
 
     async def row(name):
-        return SimpleNamespace(id = "org/other-llm", task = "text-generation") if name == "org/other-llm" else None
+        return (
+            SimpleNamespace(id = "org/other-llm", task = "text-generation")
+            if name == "org/other-llm"
+            else None
+        )
 
     async def llms():
         return ["org/other-llm"]
@@ -730,7 +734,9 @@ def test_an_llm_with_unload_true_runs_after_the_chat_model_leaves(world, llm):
     assert llm.calls == [("evict",), ("ask", "org/other-llm", False), ("unload", "org/other-llm")]
     assert llm.modes == ["off"]
     assert result.startswith("org/other-llm answered:\necho: hi")
-    assert result.endswith("The chat model was unloaded so org/other-llm could run, and loaded back.")
+    assert result.endswith(
+        "The chat model was unloaded so org/other-llm could run, and loaded back."
+    )
     assert world.chat == CHAT
     assert ("restore", CHAT) in world.calls
 
@@ -779,4 +785,6 @@ def test_an_llm_already_loaded_is_asked_without_a_swap(world, llm):
 
 
 def test_the_listing_includes_chat_models(world, llm):
-    assert _call(world, {}).startswith("Downloaded chat models: org/other-llm. Downloaded image models")
+    assert _call(world, {}).startswith(
+        "Downloaded chat models: org/other-llm. Downloaded image models"
+    )

@@ -69,7 +69,10 @@ def use_library_model_schema() -> dict:
                         "type": "string",
                         "description": "Id of a downloaded chat, image or video model. Omit to list them.",
                     },
-                    "prompt": {"type": "string", "description": "For a chat model, the message to send it; for an image or video model, the full prompt."},
+                    "prompt": {
+                        "type": "string",
+                        "description": "For a chat model, the message to send it; for an image or video model, the full prompt.",
+                    },
                     "width": {"type": "integer", "description": "Width in pixels. Default 1024."},
                     "height": {"type": "integer", "description": "Height in pixels. Default 1024."},
                     "seconds": {
@@ -114,7 +117,10 @@ def _listing(groups: tuple = ()) -> str:
     from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, available_media_model_ids
 
     parts = []
-    found = [(kind, available_media_model_ids(task)) for kind, task in (("image", IMAGE_TASK), ("video", VIDEO_TASK))]
+    found = [
+        (kind, available_media_model_ids(task))
+        for kind, task in (("image", IMAGE_TASK), ("video", VIDEO_TASK))
+    ]
     for kind, ids in [*groups, *found]:
         if ids:
             more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
@@ -594,7 +600,6 @@ async def _catalog_row(name: str):
 
 async def _downloaded_llms() -> list[str]:
     from routes.inference import _cached_local_catalog
-
     return [
         row.id for row in await _cached_local_catalog() if getattr(row, "task", None) in _LLM_TASKS
     ]
@@ -632,7 +637,9 @@ async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -
         produce_openai_chat_completions,
     )
 
-    request = _producer_request(None, "library-model-ask", threading.Event(), "UTC", loaded_only = False)
+    request = _producer_request(
+        None, "library-model-ask", threading.Event(), "UTC", loaded_only = False
+    )
     allow_model_switch_for_request(request.scope)
     if beside:
         load_alongside_for_request(request.scope)
@@ -692,7 +699,6 @@ async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> st
     swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
     if swap.chat_identity is None:
         from core.inference import get_inference_backend
-
         orchestrator = await asyncio.to_thread(get_inference_backend)
         if getattr(orchestrator, "active_model_name", None):
             return ERR_NON_GGUF_CHAT
