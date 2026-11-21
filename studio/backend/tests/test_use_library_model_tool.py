@@ -135,6 +135,8 @@ def world(monkeypatch, server_loop, tmp_path):
 
     monkeypatch.setattr(tool, "_catalog_row", no_row)
     monkeypatch.setattr(tool, "_downloaded_llms", no_llms)
+    monkeypatch.setattr(tool, "_music_model", lambda name: None)
+    monkeypatch.setattr(tool, "_decision_model", lambda name: None)
     monkeypatch.setattr(tool, "_load_media", load_image)
     monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
@@ -867,3 +869,64 @@ def test_an_stt_model_refuses_a_path_outside_the_chat(world, monkeypatch):
     monkeypatch.setattr(tool, "_catalog_row", row)
     result = _call(world, {"model": "org/asr", "audio": "../../etc/passwd"})
     assert result == "Error: no audio file named '../../etc/passwd' in this chat."
+
+
+def test_a_music_model_uses_the_chat_seat_and_returns_its_track(world, monkeypatch):
+    from core.scheduled_tasks import scheduler
+
+    made = []
+
+    async def compose(name, prompt, arguments, subject, workdir, *, beside):
+        made.append((name, prompt, arguments.get("seconds"), beside))
+        return 'Made a track with org/music and saved it as t.wav.\n__FILES__:[{"name": "t.wav", "size": 1}]', False
+
+    async def unload(name, subject):
+        made.append(("unload", name))
+
+    def evict():
+        made.append(("evict",))
+        world.chat = None
+
+    monkeypatch.setattr(tool, "_music_model", lambda name: "org/music" if name == "org/music" else None)
+    monkeypatch.setattr(tool, "_compose_music", compose)
+    monkeypatch.setattr(tool, "_unload_llm", unload)
+    monkeypatch.setattr(tool, "_evict_chat_model", evict)
+    monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: False)
+    result = _call(world, {"model": "org/music", "prompt": "lofi beat", "seconds": 20, "unload_chat_model": "true"})
+    assert made == [("evict",), ("org/music", "lofi beat", 20, False), ("unload", "org/music")]
+    body, files = result.split("\n__FILES__")
+    assert body.endswith("The chat model was unloaded so org/music could run, and loaded back.")
+    assert world.chat == CHAT
+
+
+def test_a_decision_model_unloads_the_chat_model_unless_told_to_keep_it(world, monkeypatch):
+    from core.systemone import catalog, laya_runtime
+    from routes import systemone
+
+    seen = []
+
+    async def decide(checkpoint, state, questions):
+        seen.append((state, sorted(questions)))
+        return {"urgent": {"p": 0.9}, "_backend": "x"}
+
+    def evict():
+        seen.append("evict")
+        world.chat = None
+
+    monkeypatch.setattr(tool, "_decision_model", lambda name: "laya" if name == "laya" else None)
+    monkeypatch.setattr(tool, "_evict_chat_model", evict)
+    monkeypatch.setattr(systemone, "_decide", decide)
+    monkeypatch.setattr(systemone, "_require_enabled", lambda: None)
+    monkeypatch.setattr(catalog, "resolve", lambda name: object())
+    monkeypatch.setattr(laya_runtime, "unload", lambda: seen.append("unload"))
+    questions = {"urgent": {"type": "noul", "instructions": "Reply today?"}}
+
+    kept = _call(world, {"model": "laya", "prompt": "an email", "questions": questions, "unload_chat_model": "false"})
+    assert kept == tool.ERR_KEEP_NO_FIT.format(model = "laya", kind = "model")
+    assert seen == []
+
+    result = _call(world, {"model": "laya", "prompt": "an email", "questions": questions, "unload_chat_model": "auto"})
+    assert seen == ["evict", ("an email", ["urgent"]), "unload"]
+    assert result.startswith('laya decided:\n{"urgent": {"p": 0.9}}')
+    assert "loaded back" in result
+    assert world.chat == CHAT

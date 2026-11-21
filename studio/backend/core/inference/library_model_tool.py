@@ -67,7 +67,7 @@ def use_library_model_schema() -> dict:
                 "properties": {
                     "model": {
                         "type": "string",
-                        "description": "Id of a downloaded model (chat, image, video, text-to-speech, speech-to-text). Omit to list them.",
+                        "description": "Id of a downloaded model (chat, image, video, music, text-to-speech, speech-to-text, decision). Omit to list them.",
                     },
                     "prompt": {
                         "type": "string",
@@ -78,6 +78,15 @@ def use_library_model_schema() -> dict:
                     "audio": {
                         "type": "string",
                         "description": "For a speech-to-text model: the name of an audio file in this chat.",
+                    },
+                    "lyrics": {"type": "string", "description": "Song lyrics, for a music model."},
+                    "questions": {
+                        "type": "object",
+                        "description": (
+                            "For a decision model: a name per question mapped to {type, instructions, "
+                            "criteria}; type noul is yes/no, choice needs criteria per option, score "
+                            "needs criteria from 1 to 10."
+                        ),
                     },
                     "seconds": {
                         "type": "number",
@@ -347,13 +356,25 @@ async def _swap_and_render(
         if pick is not None:
             swap.owner, swap.kind = VIDEO, "video"
     if pick is None:
+        from utils.account_context import current_account
+
+        subject = current_account().username
+        music = await asyncio.to_thread(_music_model, name)
+        if music is not None:
+            return await _on_chat_seat(
+                arguments,
+                music,
+                swap,
+                lambda beside: _compose_music(music, prompt, arguments, subject, workdir, beside = beside),
+            )
+        decision = await asyncio.to_thread(_decision_model, name)
+        if decision is not None:
+            return await _decide_with(decision, prompt, arguments, swap)
         row = await _catalog_row(name)
         task = getattr(row, "task", None) if row is not None else "missing"
         if task in _LLM_TASKS:
             return await _ask_llm(arguments, prompt, row.id, swap)
         if task == _TTS_TASK:
-            from utils.account_context import current_account
-            subject = current_account().username
             return await _on_chat_seat(
                 arguments,
                 row.id,
@@ -617,19 +638,16 @@ async def _catalog_row(name: str):
 
 
 async def _downloaded_llms() -> tuple:
-    """(kind, ids) groups the media index does not list: chat, text-to-speech, speech-to-text."""
+    """(kind, ids) groups the media index does not list."""
     from routes.inference import _cached_local_catalog
 
     rows = await _cached_local_catalog()
-    groups = (
-        ("chat", _LLM_TASKS),
-        ("text-to-speech", (_TTS_TASK,)),
-        ("speech-to-text", (_STT_TASK,)),
-    )
+    groups = (("chat", _LLM_TASKS), ("text-to-speech", (_TTS_TASK,)), ("speech-to-text", (_STT_TASK,)))
+    music = await asyncio.to_thread(_music_ids)
+    decisions = await asyncio.to_thread(_decision_ids)
     return tuple(
-        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks])
-        for kind, tasks in groups
-    )
+        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks]) for kind, tasks in groups
+    ) + (("music", music), ("decision", decisions))
 
 
 def _evict_chat_model() -> None:
@@ -857,3 +875,142 @@ async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
 
 async def _full_listing() -> str:
     return await asyncio.to_thread(_listing, await _downloaded_llms())
+
+
+async def _decide_with(name: str, prompt: str, arguments: dict, swap: "_Swap") -> str:
+    """A decision model cannot load while the chat model holds the GPU, so only false keeps it loaded,
+    and false is then refused."""
+    from fastapi import HTTPException
+
+    from core.inference.llama_keepwarm import launch_to_replay, loaded_identity
+    from core.systemone import catalog, laya_runtime
+    from routes.systemone import QuestionIn, _decide, _require_enabled
+    from utils.account_context import current_account
+    from utils.multi_model_settings import get_multi_model_mode
+
+    questions = arguments.get("questions")
+    if not isinstance(questions, dict) or not questions:
+        return (
+            "Error: a decision model needs questions, for example "
+            '{"urgent": {"type": "noul", "instructions": "Does this need a reply today?"}}.'
+        )
+    valid, mode = _unload_mode(arguments)
+    if not valid:
+        return ERR_UNLOAD_ARG
+    mode = mode or await asyncio.to_thread(get_multi_model_mode)
+    try:
+        await asyncio.to_thread(_require_enabled)
+        parsed = {key: QuestionIn.model_validate(value) for key, value in questions.items()}
+    except HTTPException as exc:
+        return "Error: " + _detail(exc)
+    except Exception as exc:  # noqa: BLE001 - a malformed question from the model
+        return f"Error: invalid questions: {exc}"
+    checkpoint = await asyncio.to_thread(catalog.resolve, name)
+    holds_gpu = loaded_identity() is not None
+    if holds_gpu and mode == "always":
+        return ERR_KEEP_NO_FIT.format(model = name, kind = "model")
+    subject = current_account().username
+    if holds_gpu:
+        swap.chat_identity = loaded_identity()
+        swap.chat_launch = launch_to_replay()
+    try:
+        if holds_gpu:
+            await asyncio.to_thread(_evict_chat_model)
+        result = await _decide(checkpoint, prompt, parsed)
+        result.pop("_backend", None)
+    except HTTPException as exc:
+        return "Error: " + _detail(exc)
+    finally:
+        await asyncio.to_thread(laya_runtime.unload)
+        swap.note = await asyncio.shield(_put_back(swap, subject))
+    text = f"{name} decided:\n{json.dumps(result, ensure_ascii = False)}"
+    if holds_gpu:
+        return _with_note(text, f"The chat model was unloaded so {name} could run, and loaded back.")
+    return text
+
+
+async def _compose_music(name: str, prompt: str, arguments: dict, subject: str, workdir: str, *, beside: bool) -> tuple[str, bool]:
+    """(result, refused): one track from music model ``name``, copied into the chat's sandbox."""
+    import os
+    import shutil
+
+    from fastapi import HTTPException
+
+    from core.inference import audio_gallery
+    from core.inference.gpu_arbiter import MULTI_MODEL_REFUSAL_MARKERS
+    from core.inference.llama_keepwarm import end_in_process_request
+    from core.scheduled_tasks.scheduler import _producer_request
+    from models.inference import AudioRunRequest
+    from routes.inference import (
+        _run_music_workflow,
+        allow_model_switch_for_request,
+        load_alongside_for_request,
+    )
+
+    request = _producer_request(None, "library-model-music", threading.Event(), "UTC", loaded_only = False)
+    allow_model_switch_for_request(request.scope)
+    if beside:
+        load_alongside_for_request(request.scope)
+    fields = {"workflow": "music", "model": name, "text": prompt}
+    if arguments.get("seconds") is not None:
+        fields["duration_s"] = float(arguments["seconds"])
+    if arguments.get("lyrics"):
+        fields["lyrics"] = str(arguments["lyrics"])
+    response = None
+    try:
+        response = await _run_music_workflow(AudioRunRequest(**fields), request, subject)
+    except HTTPException as exc:
+        detail = _detail(exc)
+        if any(marker in detail for marker in MULTI_MODEL_REFUSAL_MARKERS):
+            return detail, True
+        return "Error: " + detail, False
+    finally:
+        end_in_process_request(request.scope, answered = response is not None)
+    clips = [getattr(clip, "id", None) for clip in (getattr(response, "clips", None) or [])]
+    source = audio_gallery.audio_path(clips[0]) if clips and clips[0] else None
+    if source is None or not os.path.isfile(str(source)):
+        return "Error: the music model returned no track.", False
+    root = os.path.realpath(workdir)
+    os.makedirs(root, exist_ok = True)
+    file = f"generated-music-{str(clips[0])[:8]}{os.path.splitext(str(source))[1] or '.wav'}"
+    shutil.copyfile(str(source), os.path.join(root, file))
+    saved = {"name": file, "size": os.path.getsize(os.path.join(root, file))}
+    return f"Made a track with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps([saved]), False
+
+
+def _music_ids() -> list[str]:
+    try:
+        from core.inference.audio_cpp_models import downloaded_models
+
+        return [model.repo_id or model.id for model in downloaded_models("music")]
+    except Exception:  # noqa: BLE001 - no audio.cpp here means no music models
+        return []
+
+
+def _music_model(name: str) -> Optional[str]:
+    wanted = name.strip().lower()
+    try:
+        from core.inference.audio_cpp_models import downloaded_models
+
+        for model in downloaded_models("music"):
+            if wanted in (str(model.id).lower(), str(model.repo_id or "").lower()):
+                return model.repo_id or model.id
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _decision_ids() -> list[str]:
+    try:
+        from core.systemone import catalog, laya_runtime
+        from utils import systemone_settings
+
+        if not systemone_settings.get_enabled():
+            return []
+        return [name for name in catalog.CHECKPOINTS if laya_runtime.is_cached(catalog.resolve(name))]
+    except Exception:  # noqa: BLE001 - no decision runtime here
+        return []
+
+
+def _decision_model(name: str) -> Optional[str]:
+    return name if name in _decision_ids() else None
