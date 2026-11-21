@@ -32,11 +32,11 @@ ERR_NON_GGUF_CHAT = (
 ERR_RESTORE = "The chat model could not be loaded back ({detail}); reload it from the model picker."
 
 _DESCRIPTION = (
-    "Render one image or video clip with any downloaded image or video model from the Unsloth "
-    "Studio library, even when it is not loaded. Unsloth Studio loads that model, renders, "
-    "unloads it and, if it had to unload the chat model, loads that back, so this can take a "
-    "minute or more. Prefer generate_image or generate_video when offered: that model is "
-    "already loaded. Call without model to list the downloaded models."
+    "Use any model downloaded in Unsloth Studio, even when it is not loaded: ask another chat "
+    "model (LLM) a question and get its answer, or render an image or a video clip. Unsloth "
+    "Studio loads that model, runs it, unloads it and, if it had to unload the chat model, loads "
+    "that back, so this can take a minute or more. Prefer generate_image or generate_video when "
+    "offered: that model is already loaded. Call without model to list the downloaded models."
 )
 
 # The tool's choice, as the Keep multiple models loaded mode the load runs under.
@@ -67,9 +67,9 @@ def use_library_model_schema() -> dict:
                 "properties": {
                     "model": {
                         "type": "string",
-                        "description": "Id of a downloaded image or video model. Omit to list them.",
+                        "description": "Id of a downloaded chat, image or video model. Omit to list them.",
                     },
-                    "prompt": {"type": "string", "description": "The full image or video prompt."},
+                    "prompt": {"type": "string", "description": "For a chat model, the message to send it; for an image or video model, the full prompt."},
                     "width": {"type": "integer", "description": "Width in pixels. Default 1024."},
                     "height": {"type": "integer", "description": "Height in pixels. Default 1024."},
                     "seconds": {
@@ -88,7 +88,7 @@ def use_library_model_schema() -> dict:
                         "type": "string",
                         "enum": ["auto", "true", "false"],
                         "description": (
-                            "true: unload the chat model while the image or video model runs, then load "
+                            "true: unload the chat model while the other model runs, then load "
                             "it back. false: keep it loaded, and refuse if both do not fit. auto: "
                             "keep it only if both fit. Omit to follow Keep multiple models loaded "
                             "in Settings."
@@ -109,19 +109,20 @@ def offers_use_library_model() -> bool:
     return is_owner_context() and get_media_auto_switch_enabled()
 
 
-def _listing() -> str:
+def _listing(groups: tuple = ()) -> str:
+    """``groups`` adds (kind, ids) pairs the media index does not cover, such as chat models."""
     from core.inference.media_model_index import IMAGE_TASK, VIDEO_TASK, available_media_model_ids
 
     parts = []
-    for kind, task in (("image", IMAGE_TASK), ("video", VIDEO_TASK)):
-        ids = available_media_model_ids(task)
+    found = [(kind, available_media_model_ids(task)) for kind, task in (("image", IMAGE_TASK), ("video", VIDEO_TASK))]
+    for kind, ids in [*groups, *found]:
         if ids:
             more = f" (and {len(ids) - _LIST_LIMIT} more)" if len(ids) > _LIST_LIMIT else ""
             parts.append(f"Downloaded {kind} models: {', '.join(ids[:_LIST_LIMIT])}{more}.")
     if not parts:
         return (
-            "Error: no image or video model is downloaded in Unsloth Studio. Download one on "
-            "the Images or Video page."
+            "Error: no model is downloaded in Unsloth Studio. Download one from the model "
+            "picker, the Images page or the Video page."
         )
     return " ".join(parts) + " Call use_library_model again with one as model."
 
@@ -323,7 +324,7 @@ async def _swap_and_render(
 
     name = str(arguments.get("model") or "").strip()
     if not name:
-        listing = await asyncio.to_thread(_listing)
+        listing = await _full_listing()
         # A prompt with no model is a dropped argument, not a request for the list.
         return (
             listing
@@ -336,10 +337,10 @@ async def _swap_and_render(
         if pick is not None:
             swap.owner, swap.kind = VIDEO, "video"
     if pick is None:
-        return (
-            f"Error: no downloaded image or video model matches '{name}'. "
-            + await asyncio.to_thread(_listing)
-        )
+        row = await _catalog_row(name)
+        if row is not None and getattr(row, "task", None) in _LLM_TASKS:
+            return await _ask_llm(arguments, prompt, row.id, swap)
+        return f"Error: no downloaded model matches '{name}'. " + await _full_listing()
     valid, mode = _unload_mode(arguments)
     if not valid:
         return ERR_UNLOAD_ARG
@@ -574,3 +575,139 @@ def run_use_library_model(
     except Exception as exc:  # noqa: BLE001 - a tool result, never a crashed turn
         logger.warning("use_library_model failed: %s", exc, exc_info = True)
         return f"Error: use_library_model failed: {exc}"
+
+
+_LLM_TASKS = (None, "", "text-generation", "image-text-to-text")
+
+
+async def _catalog_row(name: str):
+    """The downloaded model row Studio's picker shows for ``name``, or None."""
+    from routes.inference import _cached_local_catalog
+
+    wanted = name.strip().lower()
+    for row in await _cached_local_catalog():
+        ids = (getattr(row, "id", None), getattr(row, "model_id", None))
+        if any(str(i or "").strip().lower() == wanted for i in ids):
+            return row
+    return None
+
+
+async def _downloaded_llms() -> list[str]:
+    from routes.inference import _cached_local_catalog
+
+    return [
+        row.id for row in await _cached_local_catalog() if getattr(row, "task", None) in _LLM_TASKS
+    ]
+
+
+def _evict_chat_model() -> None:
+    """As an image load does mid tool call: the chat switch would wait on this chat's own request."""
+    from core.inference import gpu_arbiter
+
+    gpu_arbiter._evict_chat()
+    gpu_arbiter.release(gpu_arbiter.CHAT)
+
+
+async def _unload_llm(name: str, subject: str) -> None:
+    from core.scheduled_tasks.scheduler import _model_is_loaded
+    from models.inference import UnloadRequest
+    from routes.inference import _unload_model_impl
+
+    if _model_is_loaded(name):
+        # Its own task, so the unload's slot routing cannot stick to this context.
+        await asyncio.ensure_future(_unload_model_impl(UnloadRequest(model_path = name), subject))
+
+
+async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -> tuple[str, bool]:
+    """(text, refused): one completion on ``name``, loaded by the chat switch as scheduled tasks do."""
+    from fastapi import HTTPException
+
+    from core.inference.gpu_arbiter import MULTI_MODEL_REFUSAL_MARKERS
+    from core.inference.llama_keepwarm import end_in_process_request
+    from core.scheduled_tasks.scheduler import _producer_request
+    from models.inference import ChatCompletionRequest
+    from routes.inference import (
+        allow_model_switch_for_request,
+        load_alongside_for_request,
+        produce_openai_chat_completions,
+    )
+
+    request = _producer_request(None, "library-model-ask", threading.Event(), "UTC", loaded_only = False)
+    allow_model_switch_for_request(request.scope)
+    if beside:
+        load_alongside_for_request(request.scope)
+    payload = ChatCompletionRequest.model_validate(
+        {"model": name, "messages": [{"role": "user", "content": prompt}], "stream": False}
+    )
+    reply = None
+    try:
+        reply = await produce_openai_chat_completions(
+            payload, request, subject, cancel_on_disconnect = False
+        )
+    except HTTPException as exc:
+        text = _detail(exc)
+        if any(marker in text for marker in MULTI_MODEL_REFUSAL_MARKERS):
+            return text, True
+        return "Error: " + text, False
+    finally:
+        end_in_process_request(
+            request.scope,
+            answered = reply is not None and int(getattr(reply, "status_code", 200)) < 400,
+        )
+    data = json.loads(bytes(getattr(reply, "body", b"") or b"{}"))
+    if int(getattr(reply, "status_code", 200)) >= 400:
+        text = str((data.get("error") or {}).get("message") or data.get("detail") or data)
+        refused = any(marker in text for marker in MULTI_MODEL_REFUSAL_MARKERS)
+        return (text if refused else "Error: " + text), refused
+    message = ((data.get("choices") or [{}])[0].get("message")) or {}
+    return str(message.get("content") or "").strip(), False
+
+
+async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> str:
+    """Ask another downloaded LLM. Beside the chat model when it stays, else after unloading it."""
+    from core.inference.llama_keepwarm import launch_to_replay, loaded_identity
+    from core.scheduled_tasks.scheduler import _model_is_loaded
+    from utils.account_context import current_account
+    from utils.multi_model_settings import get_multi_model_mode, multi_model_mode_for_request
+
+    subject = current_account().username
+    valid, mode = _unload_mode(arguments)
+    if not valid:
+        return ERR_UNLOAD_ARG
+    mode = mode or await asyncio.to_thread(get_multi_model_mode)
+    if _model_is_loaded(name):
+        text, _ = await _complete_llm(name, prompt, subject, beside = True)
+        return text if text.startswith("Error") else f"{name} answered:\n{text}"
+    if mode in ("always", "fit"):
+        with multi_model_mode_for_request("always"):
+            text, refused = await _complete_llm(name, prompt, subject, beside = True)
+        if not refused:
+            await _unload_llm(name, subject)
+            if text.startswith("Error"):
+                return text
+            return f"{name} answered:\n{text}\n\nIt ran beside the chat model, which stayed loaded."
+        if mode == "always":
+            return ERR_KEEP_NO_FIT.format(model = name, kind = "model")
+    swap.chat_identity = loaded_identity()
+    swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
+    if swap.chat_identity is None:
+        from core.inference import get_inference_backend
+
+        orchestrator = await asyncio.to_thread(get_inference_backend)
+        if getattr(orchestrator, "active_model_name", None):
+            return ERR_NON_GGUF_CHAT
+    try:
+        await asyncio.to_thread(_evict_chat_model)
+        with multi_model_mode_for_request("off"):
+            text, _ = await _complete_llm(name, prompt, subject, beside = False)
+        await _unload_llm(name, subject)
+    finally:
+        # Shielded: a stop must never leave the chat without its model.
+        swap.note = await asyncio.shield(_put_back(swap, subject))
+    if text.startswith("Error"):
+        return text
+    return f"{name} answered:\n{text}\n\nThe chat model was unloaded so {name} could run, and loaded back."
+
+
+async def _full_listing() -> str:
+    return await asyncio.to_thread(_listing, (("chat", await _downloaded_llms()),))

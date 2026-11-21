@@ -127,6 +127,14 @@ def world(monkeypatch, server_loop, tmp_path):
             images = [SimpleNamespace(id = "abcdef0123", width = 1024, height = 1024, seed = 7)]
         )
 
+    async def no_row(name):
+        return None
+
+    async def no_llms():
+        return []
+
+    monkeypatch.setattr(tool, "_catalog_row", no_row)
+    monkeypatch.setattr(tool, "_downloaded_llms", no_llms)
     monkeypatch.setattr(tool, "_load_media", load_image)
     monkeypatch.setattr(tool, "_unload_media", unload_image)
     monkeypatch.setattr(tool, "_restore_chat", restore_chat)
@@ -188,7 +196,7 @@ def test_no_model_lists_the_downloaded_ones(world):
 
 def test_an_unknown_model_is_refused_with_the_list(world):
     result = _call(world, {"model": "org/nope", "prompt": "a red fox"})
-    assert result.startswith("Error: no downloaded image or video model matches 'org/nope'.")
+    assert result.startswith("Error: no downloaded model matches 'org/nope'.")
     assert "org/image-model" in result
     assert world.calls == []
 
@@ -671,3 +679,104 @@ def test_put_back_waits_for_another_render_on_the_backend(monkeypatch):
 
     asyncio.run(scenario())
     assert calls == ["unload", "restore"]
+
+
+@pytest.fixture
+def llm(world, monkeypatch):
+    """org/other-llm is a downloaded chat model; records loads, evictions and unloads."""
+    from core.scheduled_tasks import scheduler
+    from utils import multi_model_settings
+
+    state = SimpleNamespace(calls = [], fits = True, loaded = set(), setting = "off", modes = [])
+
+    async def row(name):
+        return SimpleNamespace(id = "org/other-llm", task = "text-generation") if name == "org/other-llm" else None
+
+    async def llms():
+        return ["org/other-llm"]
+
+    async def complete(name, prompt, subject, *, beside):
+        mode = multi_model_settings.get_multi_model_mode()
+        state.modes.append(mode)
+        if beside and mode == "always" and not state.fits:
+            state.calls.append(("refused", name))
+            return "Keep multiple models loaded is set to Always", True
+        state.calls.append(("ask", name, beside))
+        state.loaded.add(name)
+        return f"echo: {prompt}", False
+
+    async def unload(name, subject):
+        state.calls.append(("unload", name))
+        state.loaded.discard(name)
+
+    def evict():
+        state.calls.append(("evict",))
+        world.chat = None
+
+    monkeypatch.setattr(tool, "_catalog_row", row)
+    monkeypatch.setattr(tool, "_downloaded_llms", llms)
+    monkeypatch.setattr(tool, "_complete_llm", complete)
+    monkeypatch.setattr(tool, "_unload_llm", unload)
+    monkeypatch.setattr(tool, "_evict_chat_model", evict)
+    monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: name in state.loaded)
+    monkeypatch.setattr(multi_model_settings, "_read_mode", lambda: state.setting)
+    multi_model_settings.invalidate_multi_model_cache()
+    yield state
+    multi_model_settings.invalidate_multi_model_cache()
+
+
+def test_an_llm_with_unload_true_runs_after_the_chat_model_leaves(world, llm):
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "true"})
+    assert llm.calls == [("evict",), ("ask", "org/other-llm", False), ("unload", "org/other-llm")]
+    assert llm.modes == ["off"]
+    assert result.startswith("org/other-llm answered:\necho: hi")
+    assert result.endswith("The chat model was unloaded so org/other-llm could run, and loaded back.")
+    assert world.chat == CHAT
+    assert ("restore", CHAT) in world.calls
+
+
+def test_an_llm_with_unload_false_runs_beside_the_chat_model(world, llm):
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "false"})
+    assert llm.calls == [("ask", "org/other-llm", True), ("unload", "org/other-llm")]
+    assert llm.modes == ["always"]
+    assert result.endswith("It ran beside the chat model, which stayed loaded.")
+    assert world.chat == CHAT
+
+
+def test_an_llm_that_does_not_fit_is_refused_under_false(world, llm):
+    llm.fits = False
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "false"})
+    assert result.startswith(tool.ERR_KEEP_NO_FIT.format(model = "org/other-llm", kind = "model"))
+    assert ("evict",) not in llm.calls
+    assert world.chat == CHAT
+
+
+def test_auto_falls_back_to_unloading_when_the_llm_does_not_fit(world, llm):
+    llm.fits = False
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "auto"})
+    assert llm.calls == [
+        ("refused", "org/other-llm"),
+        ("evict",),
+        ("ask", "org/other-llm", False),
+        ("unload", "org/other-llm"),
+    ]
+    assert "loaded back" in result
+    assert world.chat == CHAT
+
+
+def test_omitted_follows_the_setting_for_an_llm(world, llm):
+    llm.setting = "fit"
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi"})
+    assert llm.calls[0] == ("ask", "org/other-llm", True)
+    assert "stayed loaded" in result
+
+
+def test_an_llm_already_loaded_is_asked_without_a_swap(world, llm):
+    llm.loaded.add("org/other-llm")
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "true"})
+    assert llm.calls == [("ask", "org/other-llm", True)]
+    assert result == "org/other-llm answered:\necho: hi"
+
+
+def test_the_listing_includes_chat_models(world, llm):
+    assert _call(world, {}).startswith("Downloaded chat models: org/other-llm. Downloaded image models")
