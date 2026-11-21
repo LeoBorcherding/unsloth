@@ -7956,6 +7956,10 @@ if [ "$_MIGRATED" = true ]; then
         substep "reinstalling torch from the pinned index (UNSLOTH_TORCH_EXTRA=$_TORCH_EXTRA)..."
         _install_torch_default_index --force-reinstall
     fi
+    # AMD's ROCm 10 index is no pip ROCm family leaf either, but its torch is HIP 7.x and needs the same bitsandbytes.
+    if [ "$SKIP_TORCH" = false ] && [ "$_torch_index_leaf" = whl-next ]; then
+        _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
+    fi
 elif [ -n "$TORCH_INDEX_URL" ]; then
     if [ "$SKIP_TORCH" = true ]; then
         substep "skipping PyTorch (--no-torch or Intel Mac x86_64)." "$C_WARN"
@@ -8113,7 +8117,8 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
         substep "installing PyTorch ($(_strip_index_url_credentials "$TORCH_INDEX_URL"))..."
         _install_torch_default_index
     fi
-    if [ "$SKIP_TORCH" = false ] && [ "$_torch_index_is_rocm_family" = true ]; then
+    # whl-next: AMD's ROCm 10 index, HIP 7.x torch, same bitsandbytes as the ROCm family leaves.
+    if [ "$SKIP_TORCH" = false ] && { [ "$_torch_index_is_rocm_family" = true ] || [ "$_torch_index_leaf" = whl-next ]; }; then
         if _is_gfx906_bnb_skip; then
             substep "gfx906: skipping prebuilt bitsandbytes (no gfx906 kernels); build from source for 4-bit QLoRA -- https://unsloth.ai/docs/get-started/install/amd" "$C_WARN"
         else
