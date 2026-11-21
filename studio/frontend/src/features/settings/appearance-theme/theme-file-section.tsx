@@ -21,23 +21,17 @@ import { useId, useMemo, useRef, useState } from "react";
 import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 import { COLOR_THEMES } from "../lib/color-themes";
+import { applyTheme } from "./apply-theme";
 import {
-  applyAppearanceSnapshot,
-  applyThemeBackground,
   exportThemeFile,
-  portableGlass,
   readAppearanceSnapshot,
-  readLoadedAppearanceSnapshot,
   readThemeFile,
-  restoreBackground,
-  withLoadableFonts,
 } from "./snapshot";
 import {
   type AppearanceTheme,
   MAX_THEME_NAME,
   planThemeApply,
   type ThemeWarning,
-  undoTarget,
 } from "./theme-file";
 
 type T = ReturnType<typeof useT>;
@@ -52,7 +46,7 @@ function warningText(t: T, w: ThemeWarning): string {
   return t(`${K}.warning.${w.kind}`);
 }
 
-function Toggle({
+export function Toggle({
   id,
   label,
   checked,
@@ -227,46 +221,7 @@ function ImportForm({
   async function apply() {
     setBusy(true);
     try {
-      const before = await readLoadedAppearanceSnapshot();
-      const [loadable, badFonts] = applyAssets
-        ? await withLoadableFonts(theme)
-        : [theme, []];
-      for (const path of badFonts)
-        toast.warning(t(`${K}.warning.invalid`, { path }));
-      const next = portableGlass(
-        planThemeApply(before, loadable, { applyLayout, applyAssets }),
-      );
-      applyAppearanceSnapshot(next);
-      if (
-        next.background !== "keep" &&
-        !(await applyThemeBackground(next.background))
-      ) {
-        toast.warning(t(`${K}.warning.backgroundSkipped`));
-      }
-      onClose();
-      toast.success(
-        t(`${K}.applied`, { name: theme.name || t(`${K}.importTitle`) }),
-        {
-          action: {
-            label: t(`${K}.undo`),
-            // Undo puts back the whole look from before the import.
-            onClick: () => {
-              applyAppearanceSnapshot(
-                undoTarget(before, readAppearanceSnapshot()),
-              );
-              const restoring =
-                next.background === "keep"
-                  ? Promise.resolve(true)
-                  : restoreBackground(before.background);
-              void restoring.then((ok) =>
-                ok
-                  ? toast(t(`${K}.undone`))
-                  : toast.warning(t(`${K}.undoneWithoutBackground`)),
-              );
-            },
-          },
-        },
-      );
+      await applyTheme(t, theme, { applyLayout, applyAssets }, onClose);
     } finally {
       setBusy(false);
     }

@@ -38,6 +38,7 @@ import { SettingsRow } from "../components/settings-row";
 import { SidebarMenuCustomizer } from "../components/sidebar-menu-customizer";
 import { SidebarNavCustomizer } from "../components/sidebar-nav-customizer";
 import { SettingsSection } from "../components/settings-section";
+import { ProfilesSection } from "../appearance-theme/profiles-section";
 import { ThemeFileSection } from "../appearance-theme/theme-file-section";
 import { ThemeSegmented } from "../components/theme-segmented";
 import { gpuRenderingNotes } from "../gpu-rendering-notes";
@@ -312,6 +313,8 @@ export function AppearanceTab() {
           </SettingsRow>
         ))}
       </SettingsSection>
+
+      <ProfilesSection />
 
       <ThemeFileSection />
 

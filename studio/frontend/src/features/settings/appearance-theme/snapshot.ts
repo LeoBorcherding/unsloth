@@ -164,13 +164,20 @@ export async function exportThemeFile(opts: {
       ? await blobToDataUrl(blob)
       : null;
   if (dataUrl) text = serialize(dataUrl);
-  const fileName = `${slugify(opts.name)}${THEME_FILE_EXTENSION}`;
+  const fileName = await downloadThemeText(text, opts.name);
+  return fileName === null
+    ? null
+    : { fileName, backgroundOmitted: blob !== null && dataUrl === null };
+}
+
+/** Resolves the saved file name, or null when the save dialog was cancelled. */
+export async function downloadThemeText(
+  text: string,
+  name: string,
+): Promise<string | null> {
+  const fileName = `${slugify(name)}${THEME_FILE_EXTENSION}`;
   try {
-    const savedName = await downloadFile(text, fileName, "application/json");
-    return {
-      fileName: savedName ?? fileName,
-      backgroundOmitted: blob !== null && dataUrl === null,
-    };
+    return (await downloadFile(text, fileName, "application/json")) ?? fileName;
   } catch (error) {
     if (isDownloadCancelled(error)) return null;
     throw error;
