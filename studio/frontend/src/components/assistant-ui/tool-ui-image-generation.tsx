@@ -25,6 +25,7 @@ import {
   type SandboxFile,
   sandboxFilePath,
 } from "./sandbox-files";
+import { ToolFallback } from "./tool-fallback";
 import { isToolCallRunning, toolArgText } from "./tool-arg-text";
 import {
   ToolFallbackContent,
@@ -636,15 +637,16 @@ export const VideoGenerationToolUI = memo(
 VideoGenerationToolUI.displayName = "VideoGenerationToolUI";
 
 /** `use_library_model`: renders an image or a clip, so the result's file picks the card. */
+// The image or video card for a render; any other kind (an answer, speech, a track) is a plain tool card.
 const LibraryModelToolUIImpl: ToolCallMessagePartComponent = (props) => {
-  const isVideo = sandboxMediaResult(props.result)?.files?.some((file) =>
-    VIDEO_FILE.test(file.name),
-  );
-  return isVideo ? (
-    <VideoGenerationToolUI {...props} />
-  ) : (
-    <ImageGenerationToolUI {...props} />
-  );
+  const media = sandboxMediaResult(props.result);
+  if (media?.files?.some((file) => VIDEO_FILE.test(file.name))) {
+    return <VideoGenerationToolUI {...props} />;
+  }
+  if (media?.images?.length) {
+    return <ImageGenerationToolUI {...props} />;
+  }
+  return <ToolFallback {...props} />;
 };
 
 export const LibraryModelToolUI = memo(
