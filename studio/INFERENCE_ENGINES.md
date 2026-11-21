@@ -123,6 +123,7 @@ Each engine has one locked release per PyTorch build it can share, newest first:
 | vLLM | 0.26.0 | 2.11.0 (CUDA 13.0) | `vllm-linux-cu130.txt` |
 | SGLang | 0.5.20 | 2.13.0 (CUDA 13.0) | `sglang-linux-cu130-torch213.txt` |
 | SGLang | 0.5.17 | 2.11.0 (CUDA 13.0) | `sglang-linux-cu130.txt` |
+| vLLM on AMD | 0.34.0 | 2.13.0 (ROCm 10.0, bundled) | `vllm-linux-rocm100.txt` |
 | vLLM on AMD | 0.30.0 | 2.12.0 (ROCm 7.2) | `vllm-linux-rocm723.txt` |
 
 Unsloth installs the release built on its own PyTorch, so a new install (torch 2.13) and an
@@ -195,17 +196,24 @@ cards with different memory capacities without treating their VRAM as a pool.
 
 ## AMD GPUs
 
-vLLM runs on AMD GPUs from vLLM's own ROCm build: vLLM 0.30.0 with the PyTorch 2.12 it
-publishes for ROCm 7.2 (`vllm-linux-rocm723.txt`). SGLang stays NVIDIA only. Unsloth picks the
+vLLM runs on AMD GPUs from vLLM's own ROCm builds. SGLang stays NVIDIA only. Unsloth picks a
 ROCm build when its own PyTorch is a ROCm build, or on Linux when the kernel lists an AMD GPU and
-no NVIDIA driver is loaded.
+no NVIDIA driver is loaded. Which one depends on `/opt/rocm`:
+
+- ROCm 7.2 or a newer 7.x release there (and always in WSL, whose guest gets ROCm 7.2): vLLM 0.30.0
+  with the PyTorch 2.12 vLLM publishes for ROCm 7.2 (`vllm-linux-rocm723.txt`). That PyTorch links
+  the host's ROCm.
+- Anything else, including no ROCm at all: vLLM 0.34.0 with its PyTorch 2.13 for ROCm 10.0
+  (`vllm-linux-rocm100.txt`). That PyTorch preloads ROCm 10.0 from the `rocm-sdk-*` wheels in the
+  same environment, so `/opt/rocm` is unused. vLLM 0.34 publishes ROCm 10.0 builds only.
 
 On Linux the host needs:
 
-- x86_64 and glibc 2.39 or newer: the wheels are `manylinux_2_39`, as on Ubuntu 24.04.
-- ROCm 7.2 or a newer 7.x release in `/opt/rocm`, with its math libraries. vLLM's PyTorch links
-  the host's ROCm (MIOpen, rocBLAS, hipBLASLt, RCCL and the rest) instead of bundling it.
-- Open MPI 4 and libnuma, which that PyTorch also links (`libopenmpi3t64 libnuma1` on Ubuntu 24.04).
+- x86_64 and glibc 2.39 or newer for the ROCm 7.2 build (`manylinux_2_39`, as on Ubuntu 24.04),
+  2.35 or newer for the ROCm 10.0 build (its Triton is `manylinux_2_35`, as on Ubuntu 22.04).
+- For the ROCm 7.2 build only: ROCm's math libraries in `/opt/rocm` (MIOpen, rocBLAS, hipBLASLt,
+  RCCL and the rest), plus Open MPI 4 and libnuma, which that PyTorch also links
+  (`libopenmpi3t64 libnuma1` on Ubuntu 24.04).
 - A C compiler: Triton builds its HIP driver module when the engine first compiles a kernel.
 - Access to `/dev/kfd` (the `render` and `video` groups).
 - A GPU whose gfx target vLLM's ROCm kernels are built for: gfx90a, gfx942, gfx950, gfx1100,
@@ -249,13 +257,20 @@ for lock in vllm-linux-cu130-torch213 vllm-linux-cu130 sglang-linux-cu130-torch2
 done
 ```
 
-The ROCm lock resolves vLLM's own index beside PyPI; its hashes pin every wheel, whichever index
+The ROCm locks resolve vLLM's own index beside PyPI; their hashes pin every file, whichever index
 serves it:
 
 ```sh
 uv pip compile vllm-linux-rocm723.in --python-version 3.12 --python-platform x86_64-manylinux_2_39 --extra-index-url https://wheels.vllm.ai/rocm/0.30.0/rocm723 --generate-hashes -o vllm-linux-rocm723.txt
 python engine_compat.py vllm-linux-rocm723
+uv pip compile vllm-linux-rocm100.in --python-version 3.12 --python-platform x86_64-manylinux_2_35 --extra-index-url https://wheels.vllm.ai/rocm/0.34.0/rocm100 --generate-hashes -o vllm-linux-rocm100.txt
+uv pip compile vllm-linux-rocm100.build.in --python-version 3.12 --python-platform x86_64-manylinux_2_35 --generate-hashes -o vllm-linux-rocm100.build.txt
+python engine_compat.py vllm-linux-rocm100
 ```
+
+AMD publishes the `rocm` package (PyTorch's `rocm_sdk` loader) only as an sdist, so the ROCm 10.0
+install builds that one package from its hash-pinned sdist with the hash-pinned setuptools in
+`vllm-linux-rocm100.build.txt`; every other package stays wheels only.
 
 Keep each lock's torch, torchvision, torchaudio and CUDA pins equal to the Unsloth
 install it serves, or no installation can share them. `engine_compat.py` also records

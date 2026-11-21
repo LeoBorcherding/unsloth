@@ -1,0 +1,11 @@
+# Optional Linux x86_64, Python 3.12 serving environment for AMD GPUs: vLLM's own ROCm 10.0 build
+# from https://wheels.vllm.ai/rocm/0.34.0/rocm100. Its torch brings ROCm 10.0 as wheels, so /opt/rocm is unused.
+vllm==0.34.0+rocm100
+# vLLM 0.34 needs transformers>=5.16.1,<5.23.
+transformers==5.22.2
+
+# Native load-time INT8 and FP8 conversion.
+torchao==0.17.0
+
+# CA trust floor, as in no-torch-runtime.txt: certifi 2026.10.19 drops the distrusted emSign ECC Root CA - G3.
+certifi>=2026.10.19

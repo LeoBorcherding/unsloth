@@ -41,14 +41,11 @@ PROFILES = {
             {"version": "0.30.0", "torch": "2.13.0", "lock": "vllm-linux-cu130-torch213"},
             {"version": "0.26.0", "torch": "2.11.0", "lock": "vllm-linux-cu130"},
         ),
-        # AMD: vLLM's ROCm build, Python 3.12 only; its torch loads /opt/rocm, so always isolated.
+        # AMD: vLLM's ROCm builds, Python 3.12 only, always isolated.
         "rocm": {
             "cuda": None,
             "driver": None,
-            "index": "https://wheels.vllm.ai/rocm/0.30.0/rocm723",
             "python": (3, 12),
-            "glibc": (2, 39),
-            "rocm": (7, 2),
             "gfx": (
                 "gfx90a",
                 "gfx942",
@@ -65,7 +62,28 @@ PROFILES = {
             # The ROCm build has no bitsandbytes quantization, and TorchAO's packed INT4 is CUDA-only.
             "bitsandbytes": False,
             "precisions": tuple(p for p in PRECISIONS if p != "int4"),
-            "releases": ({"version": "0.30.0", "torch": "2.12.0", "lock": "vllm-linux-rocm723"},),
+            # "rocm": the /opt/rocm release the build loads, or None when it brings its own as wheels.
+            # vLLM 0.34 publishes ROCm 10 builds only; a host with ROCm 7.2+ keeps the build that loads it.
+            "releases": (
+                {
+                    "version": "0.34.0",
+                    "torch": "2.13.0",
+                    "lock": "vllm-linux-rocm100",
+                    "index": "https://wheels.vllm.ai/rocm/0.34.0/rocm100",
+                    "glibc": (2, 35),
+                    "rocm": None,
+                    # AMD publishes its `rocm` meta package (torch's `rocm_sdk` loader) only as an sdist.
+                    "sdists": ("rocm",),
+                },
+                {
+                    "version": "0.30.0",
+                    "torch": "2.12.0",
+                    "lock": "vllm-linux-rocm723",
+                    "index": "https://wheels.vllm.ai/rocm/0.30.0/rocm723",
+                    "glibc": (2, 39),
+                    "rocm": (7, 2),
+                },
+            ),
         },
     },
     "sglang": {
@@ -201,7 +219,9 @@ def _release(engine: str) -> dict:
 
     flavor = _flavor(engine)
     releases = flavor["releases"]
-    if wsl_host.active() or flavor["platform"] == "rocm":
+    if flavor["platform"] == "rocm":
+        return _rocm_release(releases)
+    if wsl_host.active():
         # The WSL guest has no Studio torch to share, so it always gets the newest.
         return releases[0]
     torch = _studio_packages().get("torch")
@@ -209,6 +229,19 @@ def _release(engine: str) -> dict:
         if _same_build(torch, release["torch"], flavor["cuda"]):
             return release
     return releases[0]
+
+
+def _rocm_release(releases: tuple[dict, ...]) -> dict:
+    """The build that loads the host's ROCm when /opt/rocm has the release it needs (always in WSL,
+    whose guest gets ROCm 7.2), else the newest that brings its own."""
+    from . import wsl_host
+
+    found = None if wsl_host.active() else rocm_version()
+    for release in releases:
+        wanted = release["rocm"]
+        if wanted and (wsl_host.active() or (found and found[0] == wanted[0] and found >= wanted)):
+            return release
+    return next(release for release in releases if release["rocm"] is None)
 
 
 def profile(engine: str) -> dict:
@@ -452,7 +485,7 @@ def install_plan(engine: str) -> dict:
             and all(SpecifierSet(spec).contains(studio[name], prereleases = True) for spec in specs)
         )
 
-    # The ROCm build's torch loads /opt/rocm rather than bundled libraries: never Studio's.
+    # vLLM's ROCm torch is another build than Studio's (AMD's per-arch index): never Studio's.
     shared = (
         profile(engine)["platform"] == "cuda"
         and sys.implementation.name == "cpython"
@@ -697,7 +730,7 @@ def support_reason(
 
 
 ROCM_HOME = Path("/opt/rocm")
-# What vLLM's ROCm torch and kernels load from the host (their RUNPATH is /opt/rocm/lib).
+# What the ROCm 7.2 build's torch and kernels load from the host (their RUNPATH is /opt/rocm/lib).
 ROCM_LIBRARIES = (
     "libamdhip64.so.7",
     "libhiprtc.so.7",
@@ -815,6 +848,31 @@ def _unsupported_amd_gpu(found: list[str]) -> str:
     )
 
 
+def _host_rocm_reason() -> str | None:
+    """What the build that loads /opt/rocm lacks there, or None."""
+    from utils.hardware.amd import _a_bare_soname_resolves
+
+    missing = [soname for soname in ROCM_LIBRARIES if not (ROCM_HOME / "lib" / soname).exists()]
+    if missing:
+        return (
+            f"The ROCm installation in /opt/rocm is missing {', '.join(missing)}. Install the full "
+            "ROCm package (on Ubuntu: sudo apt install rocm), then retry."
+        )
+    missing = {
+        soname: package
+        for soname, package in ROCM_SYSTEM_LIBRARIES.items()
+        # The install and the engine both run without the caller's LD_LIBRARY_PATH.
+        if not (ROCM_HOME / "lib" / soname).exists()
+        and not _a_bare_soname_resolves(soname, with_ld_library_path = False, when_unknown = False)
+    }
+    if missing:
+        return (
+            f"Requires {', '.join(missing)}, which vLLM's AMD build links. "
+            f"On Ubuntu: sudo apt install {' '.join(dict.fromkeys(missing.values()))}"
+        )
+    return None
+
+
 def _rocm_reason(
     engine: str,
     gpu_id: int | None,
@@ -844,36 +902,11 @@ def _rocm_reason(
                 [target for target in known if target not in wanted["gfx"]] if unmapped else known
             )
         return None
-    found = rocm_version()
-    # The ROCm 7 libraries the engine links keep one soname for every 7.x release.
-    if found is None or found[0] != wanted["rocm"][0] or found < wanted["rocm"]:
-        return "Requires ROCm {}.{} or a newer {}.x release installed in /opt/rocm".format(
-            *wanted["rocm"], wanted["rocm"][0]
-        ) + (" (found {}.{}).".format(*found) if found else ".")
-    from utils.hardware.amd import (
-        _a_bare_soname_resolves,
-        amd_kfd_gpu_gfx_targets,
-        hsa_override_gfx_target,
-    )
+    from utils.hardware.amd import amd_kfd_gpu_gfx_targets, hsa_override_gfx_target
 
-    missing = [soname for soname in ROCM_LIBRARIES if not (ROCM_HOME / "lib" / soname).exists()]
-    if missing:
-        return (
-            f"The ROCm installation in /opt/rocm is missing {', '.join(missing)}. Install the full "
-            "ROCm package (on Ubuntu: sudo apt install rocm), then retry."
-        )
-    missing = {
-        soname: package
-        for soname, package in ROCM_SYSTEM_LIBRARIES.items()
-        # The install and the engine both run without the caller's LD_LIBRARY_PATH.
-        if not (ROCM_HOME / "lib" / soname).exists()
-        and not _a_bare_soname_resolves(soname, with_ld_library_path = False, when_unknown = False)
-    }
-    if missing:
-        return (
-            f"Requires {', '.join(missing)}, which vLLM's AMD build links. "
-            f"On Ubuntu: sudo apt install {' '.join(dict.fromkeys(missing.values()))}"
-        )
+    # The ROCm 10 build preloads its own ROCm wheels; only the 7.2 build reads /opt/rocm.
+    if wanted["rocm"] and (reason := _host_rocm_reason()):
+        return reason
     if not (os.environ.get("CC") or shutil.which("gcc") or shutil.which("clang")):
         # Triton builds its HIP driver module the first time the engine compiles a kernel.
         return "Requires a C compiler, which vLLM's AMD build uses at run time (on Ubuntu: sudo apt install gcc)."
@@ -1329,6 +1362,21 @@ def _run(
         proc.stdout.close()
 
 
+def _build_arguments(engine: str) -> list[str]:
+    """Wheels only, except the sdists the release names, built from hash-pinned build requirements."""
+    sdists = profile(engine).get("sdists", ())
+    if not sdists:
+        return ["--only-binary", ":all:"]
+    wheels = sorted(name for name in _pins(engine) if name not in sdists)
+    return [
+        "--only-binary",
+        ",".join(wheels),
+        "--build-constraints",
+        str(_REQUIREMENTS / f"{profile(engine)['lock']}.build.txt"),
+        "--require-build-hashes",
+    ]
+
+
 def _index_arguments(engine: str) -> list[str]:
     """PyPI, plus the engine's own index first for the builds only it publishes (vLLM's ROCm torch)."""
     extra = profile(engine).get("index")
@@ -1516,8 +1564,7 @@ def _install(
                     "--link-mode",
                     package_link_mode(destination),
                     "--require-hashes",
-                    "--only-binary",
-                    ":all:",
+                    *_build_arguments(engine),
                     *_index_arguments(engine),
                     str(packages),
                 ],
