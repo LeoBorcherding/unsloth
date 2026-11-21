@@ -55,8 +55,13 @@ def pick_bnb_rocm_dll_suffix(
     major_str = str(major) if major is not None else ""
 
     def _split(s):
-        if major is not None and major >= 10 and s.startswith(major_str) and len(s) > len(major_str):
-            return major, int(s[len(major_str):])
+        if (
+            major is not None
+            and major >= 10
+            and s.startswith(major_str)
+            and len(s) > len(major_str)
+        ):
+            return major, int(s[len(major_str) :])
         return int(s[:1]), int(s[1:] or 0)
 
     ranked = [(_split(s), s) for s in suffixes]

@@ -258,7 +258,6 @@ if sys.platform == "win32":
                         pick_bnb_rocm_dll_suffix,
                         torch_hip_version,
                     )
-
                     _bnb_rocm_ver = pick_bnb_rocm_dll_suffix(_all_vers_main, torch_hip_version())
         except Exception as _e:
             _logging.getLogger(__name__).warning(

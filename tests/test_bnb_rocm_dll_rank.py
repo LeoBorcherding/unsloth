@@ -92,9 +92,9 @@ def test_shared_pick(shared, suffixes, hip, expected):
 @pytest.mark.parametrize("suffixes, hip, expected", _CASES)
 def test_import_fixes_pick_matches_shared(import_fixes, shared, suffixes, hip, expected):
     assert import_fixes._pick_bnb_rocm_dll_suffix(suffixes, hip) == expected
-    assert import_fixes._pick_bnb_rocm_dll_suffix(
+    assert import_fixes._pick_bnb_rocm_dll_suffix(suffixes, hip) == shared.pick_bnb_rocm_dll_suffix(
         suffixes, hip
-    ) == shared.pick_bnb_rocm_dll_suffix(suffixes, hip)
+    )
 
 
 def test_torch_hip_version_read_without_import(shared, tmp_path, monkeypatch):
