@@ -473,6 +473,7 @@ def _entrypoint(
     python_body = None,
     env_extra = None,
     build_info_gfx = "",
+    build_info_text = None,
     command = "echo ran",
 ):
     bindir = tmp_path / "bin"
@@ -491,7 +492,9 @@ def _entrypoint(
     )
     _stub(str(bindir / "python"), python_body or "cat > /dev/null\nexit 0\n")
     build_info = tmp_path / "build-info"
-    build_info.write_text(f"TORCH_INDEX_URL=x\nROCM_GFX={build_info_gfx}\nROCM_VERSION=7.2.4\n")
+    build_info.write_text(
+        build_info_text or f"TORCH_INDEX_URL=x\nROCM_GFX={build_info_gfx}\nROCM_VERSION=7.2.4\n"
+    )
     dump = tmp_path / "ran"
     env = {
         "PATH": str(bindir) + ":/usr/bin:/bin",
@@ -1186,3 +1189,215 @@ class TestStudioRocmGgufOnTheGpu:
             1
         )
         assert "libvulkan1" in apt and "mesa-vulkan-drivers" in apt, apt
+
+
+def _resolve_torch_source(
+    tmp_path,
+    rocm_version,
+    rocm_gfx = "",
+):
+    """Run Dockerfile.rocm's torch-source RUN step as the build would, writing the
+    build record into tmp_path instead of /etc."""
+    lines = open(_DOCKERFILE, encoding = "utf-8").read().splitlines()
+    start = next(
+        i for i, ln in enumerate(lines) if ln.startswith("RUN set -eu;") and "IDX=" in lines[i + 1]
+    )
+    step = []
+    for ln in lines[start:]:
+        step.append(ln[:-1] if ln.endswith("\\") else ln)
+        if not ln.endswith("\\"):
+            break
+    record = tmp_path / f"record{len(os.listdir(tmp_path))}"
+    script = "".join(step)[len("RUN ") :].replace("/etc/unsloth-rocm-build", str(record))
+    env = {
+        "PATH": os.environ["PATH"],
+        "ROCM_VERSION": rocm_version,
+        "ROCM_GFX": rocm_gfx,
+        "TORCH_INDEX_URL": "https://download.pytorch.org/whl/rocm7.2",
+    }
+    proc = subprocess.run(["sh", "-c", script], env = env, capture_output = True, text = True)
+    return proc.returncode, record.read_text() if record.exists() else "", proc.stderr
+
+
+_WHL_NEXT = "https://stable.repo.amd.com/rocm/whl-next/"
+_ROCM10_SET = (
+    "torch[{x}]==2.14.0+rocm10.1.0",
+    "torchvision[{x}]==0.29.0a0+rocm10.1.0",
+    "torchaudio==2.11.0.3+rocm10.1.0",
+)
+
+
+@_posix_shell
+class TestRocm10:
+    def test_build_sh_takes_rocm101_to_the_full_base_and_whl_next(self, tmp_path):
+        proc, argv = _build_sh(tmp_path, ["--rocm"], extra_env = {"ROCM_VERSION": "10.1.0"})
+        assert _build_arg(argv, "ROCM_VERSION") == "10.1.0"
+        assert _build_arg(argv, "TORCH_INDEX_URL") == _WHL_NEXT
+        assert _build_arg(argv, "ROCM_BASE_SUFFIX") == "-full"
+        assert "rocm/dev-ubuntu-24.04:10.1.0-full" in proc.stdout
+        _, argv = _build_sh(
+            tmp_path, ["--rocm", "--gfx", "gfx1200"], extra_env = {"ROCM_VERSION": "10.1.0"}
+        )
+        assert _build_arg(argv, "ROCM_GFX") == "gfx1200"
+
+    def test_the_default_build_passes_no_base_suffix(self, tmp_path):
+        """The 7.2.4 base has no -full tag: the default command must not change."""
+        _, argv = _build_sh(tmp_path, ["--rocm"])
+        assert not any(a.startswith("ROCM_BASE_SUFFIX=") for a in argv), argv
+
+    @pytest.mark.parametrize("version", ["10.0.0", "10.2.0", "10.1", "10.3.0"])
+    def test_build_sh_refuses_a_rocm10_release_with_no_pinned_set(self, tmp_path, version):
+        proc, argv = _build_sh(
+            tmp_path, ["--rocm"], extra_env = {"ROCM_VERSION": version}, expect_rc = 2
+        )
+        assert argv == [], "docker build ran anyway"
+        assert "no pinned torch set" in proc.stderr and "10.1" in proc.stderr, proc.stderr
+
+    def test_build_sh_refuses_another_index_or_gfx906_on_rocm10(self, tmp_path):
+        proc, argv = _build_sh(
+            tmp_path,
+            ["--rocm"],
+            extra_env = {
+                "ROCM_VERSION": "10.1.0",
+                "TORCH_INDEX_URL": "https://download.pytorch.org/whl/rocm10.1",
+            },
+            expect_rc = 2,
+        )
+        assert argv == [] and _WHL_NEXT in proc.stderr, proc.stderr
+        proc, argv = _build_sh(
+            tmp_path,
+            ["--rocm", "--gfx", "gfx906"],
+            extra_env = {"ROCM_VERSION": "10.1.0"},
+            expect_rc = 2,
+        )
+        assert argv == [] and "6.3" in proc.stderr, proc.stderr
+
+    def test_the_default_build_record_is_unchanged(self, tmp_path):
+        """Byte for byte what upstream main writes for the default, gfx906 and per-arch builds."""
+        cases = {
+            (
+                "7.2.4",
+                "",
+            ): 'TORCH_INDEX_URL=https://download.pytorch.org/whl/rocm7.2\nTORCH_SPEC="torch torchvision torchaudio"\nROCM_GFX=\nROCM_VERSION=7.2.4\n',
+            (
+                "6.3.4",
+                "gfx906",
+            ): 'TORCH_INDEX_URL=https://download.pytorch.org/whl/rocm7.2\nTORCH_SPEC="torch torchvision torchaudio"\nROCM_GFX=gfx906\nROCM_VERSION=6.3.4\n',
+            (
+                "7.2.4",
+                "gfx1201",
+            ): 'TORCH_INDEX_URL=https://repo.amd.com/rocm/whl/gfx120X-all/\nTORCH_SPEC="torch>=2.11.0,<2.12.0 torchvision>=0.26.0,<0.27.0 torchaudio>=2.11.0,<2.12.0"\nROCM_GFX=gfx1201\nROCM_VERSION=7.2.4\n',
+        }
+        for (ver, gfx), want in cases.items():
+            rc, record, err = _resolve_torch_source(tmp_path, ver, gfx)
+            assert rc == 0 and record == want, (ver, gfx, record, err)
+        rc, _, err = _resolve_torch_source(tmp_path, "7.2.4", "gfx1100")
+        assert rc == 1 and "no per-arch wheel index" in err, err
+
+    def test_rocm101_pins_amds_set_on_whl_next_with_a_device_extra_per_arch(self, tmp_path):
+        rc, record, err = _resolve_torch_source(tmp_path, "10.1.0")
+        assert rc == 0, err
+        assert f"TORCH_INDEX_URL={_WHL_NEXT}\n" in record, record
+        spec = re.search(r'^TORCH_SPEC="(.*)"$', record, re.M).group(1).split()
+        devs = re.search(r"torch\[(.*?)\]", spec[0]).group(1)
+        assert spec == [t.format(x = devs) for t in _ROCM10_SET], spec
+        archs = {d.removeprefix("device-") for d in devs.split(",")}
+        assert {"gfx1030", "gfx1100", "gfx1151", "gfx1200", "gfx1201", "gfx942"} <= archs, archs
+        assert "gfx906" not in archs and "gfx1033" not in archs, archs
+        rc, record, err = _resolve_torch_source(tmp_path, "10.1.0", "gfx1151")
+        assert rc == 0 and 'TORCH_SPEC="torch[device-gfx1151]==2.14.0+rocm10.1.0 ' in record, (
+            record,
+            err,
+        )
+        assert "ROCM_GFX=gfx1151\nROCM_VERSION=10.1.0\n" in record, record
+
+    @pytest.mark.parametrize(
+        "version, gfx, msg",
+        [
+            ("10.2.0", "", "no pinned torch set"),
+            ("10.0.0", "", "no pinned torch set"),
+            ("10.1.0", "gfx906", "no torch device extra"),
+            ("10.1.0", "gfx1300", "no torch device extra"),
+        ],
+    )
+    def test_the_dockerfile_fails_fast_on_what_whl_next_cannot_serve(
+        self, tmp_path, version, gfx, msg
+    ):
+        rc, record, err = _resolve_torch_source(tmp_path, version, gfx)
+        assert rc == 1 and record == "" and msg in err, (record, err)
+
+    def test_the_base_tag_takes_the_suffix(self):
+        body = open(_DOCKERFILE, encoding = "utf-8").read()
+        assert "ARG ROCM_BASE_SUFFIX=\n" in body
+        assert "FROM rocm/dev-ubuntu-24.04:${ROCM_VERSION}${ROCM_BASE_SUFFIX}\n" in body
+
+    def test_a_rocm10_image_carries_no_bitsandbytes(self, tmp_path):
+        """bitsandbytes ships no ROCm 10 library, so 4-bit cannot load on 10.x torch."""
+        docker = open(_DOCKERFILE, encoding = "utf-8").read()
+        assert "elif grep -q '^ROCM_VERSION=10\\.' /etc/unsloth-rocm-build; then" in docker
+        assert 'WANT_BNB = BUILD_GFX != "gfx906" and not BUILD_ROCM.startswith("10.")' in docker
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("smoke_test_rocm", _SMOKE)
+        smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smoke)
+        for record, want in [
+            ("TORCH_INDEX_URL=x\nROCM_GFX=\nROCM_VERSION=7.2.4\n", True),
+            ("TORCH_INDEX_URL=x\nROCM_GFX=gfx906\nROCM_VERSION=6.3.4\n", False),
+            ("TORCH_INDEX_URL=x\nROCM_GFX=\nROCM_VERSION=10.1.0\n", False),
+            ("TORCH_INDEX_URL=x\nROCM_GFX=gfx1151\nROCM_VERSION=10.1.0\n", False),
+        ]:
+            path = tmp_path / f"rec{len(os.listdir(tmp_path))}"
+            path.write_text(record)
+            real_open = open
+            smoke.open = lambda p, *a, _path = path, **k: real_open(
+                _path if p == "/etc/unsloth-rocm-build" else p, *a, **k
+            )
+            assert smoke._bnb_expected() is want, record
+
+    def test_the_local_script_routes_rocm10_to_whl_next(self):
+        local = open(os.path.join(_DOCKER, "test_locally-rocm.sh"), encoding = "utf-8").read()
+        assert f'10.*) TORCH_INDEX_URL="${{TORCH_INDEX_URL:-{_WHL_NEXT}}}"' in local
+
+    def _fake_torch(self, tmp_path, arch):
+        fake = tmp_path / "fake"
+        (fake / "torch" / "cuda").mkdir(parents = True)
+        (fake / "torch" / "__init__.py").write_text(
+            "__version__ = '2.14.0+rocm10.1.0'\nclass version:\n    hip = '10.1.0'\nfrom . import cuda\n"
+        )
+        (fake / "torch" / "cuda" / "__init__.py").write_text(
+            f"class _P:\n    gcnArchName = '{arch}'\n"
+            "def is_available(): return True\ndef device_count(): return 1\n"
+            "def get_device_name(i): return 'AMD GPU'\ndef get_device_properties(i): return _P()\n"
+            "def is_bf16_supported(): return True\n"
+        )
+        return f'PYTHONPATH="{fake}" exec python3 "$@"\n'
+
+    def test_the_entrypoint_reads_the_device_extras_not_the_rocm7_per_arch_advice(self, tmp_path):
+        """A ROCm 10 image already is AMD's wheels, so "build the per-arch image" is wrong advice."""
+        rc, record, _ = _resolve_torch_source(tmp_path, "10.1.0")
+        assert rc == 0
+        (tmp_path / "a").mkdir()
+        rc, ran, err = _entrypoint(
+            tmp_path / "a",
+            python_body = self._fake_torch(tmp_path / "a", "gfx1201"),
+            build_info_text = record,
+        )
+        assert rc == 0 and ran, err
+        assert "AMD device kernels for gfx1201 on ROCm 10.1.0" in err, err
+        assert "runs best on AMD's per-arch wheels" not in err, err
+        assert "load_in_4bit is unavailable" in err, err
+        (tmp_path / "b").mkdir()
+        _, record_one, _ = _resolve_torch_source(tmp_path, "10.1.0", "gfx1151")
+        rc, ran, err = _entrypoint(
+            tmp_path / "b",
+            python_body = self._fake_torch(tmp_path / "b", "gfx1100"),
+            build_info_text = record_one,
+        )
+        assert rc == 0 and ran, err
+        assert "ROCM_VERSION=10.1.0 ROCM_GFX=gfx1100 bash docker/build.sh --rocm" in err, err
+
+    def test_a_rocm7_image_keeps_its_advice(self, tmp_path):
+        rc, ran, err = _entrypoint(tmp_path, python_body = self._fake_torch(tmp_path, "gfx1201"))
+        assert rc == 0 and ran, err
+        assert "runs best on AMD's per-arch wheels" in err and "load_in_4bit" not in err, err
