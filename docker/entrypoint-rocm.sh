@@ -38,9 +38,11 @@ DEV_ROOT="${UNSLOTH_DEV_ROOT:-}"
 BUILD_INFO="${UNSLOTH_ROCM_BUILD_INFO:-/etc/unsloth-rocm-build}"
 IMAGE_ROCM=""
 IMAGE_GFX=""
+IMAGE_TORCH_SPEC=""
 if [[ -r "$BUILD_INFO" ]]; then
     IMAGE_ROCM="$(sed -n 's/^ROCM_VERSION=//p' "$BUILD_INFO")"
     IMAGE_GFX="$(sed -n 's/^ROCM_GFX=//p' "$BUILD_INFO")"
+    IMAGE_TORCH_SPEC="$(sed -n 's/^TORCH_SPEC=//p' "$BUILD_INFO")"
 fi
 # A per-arch image has native kernels; a leftover HSA_OVERRIDE_GFX_VERSION would present
 # an arch the image lacks.
@@ -273,8 +275,9 @@ sys.exit(1)
 PY
 
 # Check 4 (not a gate): the card's gfx arch vs this image's wheels.
-IMAGE_ROCM="$IMAGE_ROCM" IMAGE_GFX="$IMAGE_GFX" python - >&2 <<'PY' || exit 1
+IMAGE_ROCM="$IMAGE_ROCM" IMAGE_GFX="$IMAGE_GFX" IMAGE_TORCH_SPEC="$IMAGE_TORCH_SPEC" python - >&2 <<'PY' || exit 1
 import os
+import re
 import sys
 
 import torch
@@ -291,6 +294,11 @@ def rocm_tuple(v):
 
 
 here = rocm_tuple(image_rocm)
+# A ROCm 10 image carries AMD's device kernels for the arches named by its torch extras.
+rocm10_devices = set(re.findall(r"device-(gfx[0-9a-z]+)", os.environ.get("IMAGE_TORCH_SPEC", "")))
+if here >= (10, 0):
+    print(f"NOTE: ROCm {image_rocm} image: no bitsandbytes (it has no ROCm 10 library yet), so")
+    print("      load_in_4bit is unavailable; train 16-bit LoRA (load_in_4bit=False).")
 
 # gfx -> (family, note). Families only: the marketing-name tables live in
 # install.sh and studio/, and are kept in parity by their own test.
@@ -372,7 +380,13 @@ for i in range(torch.cuda.device_count()):
         print("       with UNSLOTH_ALLOW_CPU=1) or llama.cpp over Vulkan for inference.")
         print("       UNSLOTH_SKIP_GPU_CHECK=1 bypasses this check; the results stay wrong.")
         sys.exit(1)
-    if image_gfx:
+    if here >= (10, 0):
+        if arch in rocm10_devices:
+            print(f"  -> {fam or arch}: AMD device kernels for {arch} on ROCm {image_rocm}")
+        else:
+            print(f"  NOTE: this ROCm {image_rocm} image carries device kernels for {' '.join(sorted(rocm10_devices))},")
+            print(f"        not {arch}. Rebuild: ROCM_VERSION={image_rocm} ROCM_GFX={arch} bash docker/build.sh --rocm")
+    elif image_gfx:
         if arch == image_gfx or (arch in RDNA4 and image_gfx in RDNA4):
             print(f"  -> {fam}: this image was built for {image_gfx}")
             if image_gfx == "gfx906":

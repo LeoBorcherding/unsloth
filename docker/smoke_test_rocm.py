@@ -85,7 +85,7 @@ def check_imports() -> None:
         import bitsandbytes as bnb
         print(f"bnb         {bnb.__version__}")
     else:
-        print("bnb         not part of a gfx906 build (no prebuilt kernels)")
+        print("bnb         not part of a gfx906 or ROCm 10 build (no prebuilt library)")
 
     import transformers
 
@@ -117,12 +117,12 @@ def check_unsloth_import() -> None:
 
 
 def _bnb_expected() -> bool:
-    """A gfx906 build (ROCM_GFX=gfx906 in the build record) ships no bitsandbytes."""
+    """gfx906 and ROCm 10 builds (by the build record) ship no bitsandbytes."""
     try:
         record = open("/etc/unsloth-rocm-build", encoding = "utf-8").read()
     except OSError:
         return True
-    return "ROCM_GFX=gfx906\n" not in record
+    return "ROCM_GFX=gfx906\n" not in record and "\nROCM_VERSION=10." not in "\n" + record
 
 
 def check_tiny_train() -> None:

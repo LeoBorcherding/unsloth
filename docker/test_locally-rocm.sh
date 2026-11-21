@@ -26,7 +26,10 @@ LOG_DIR="${LOG_DIR:-/tmp/unsloth-rocm-test}"
 SKIP_BUILD=0
 SKIP_NOTEBOOK=0
 ROCM_VERSION="${ROCM_VERSION:-7.2.4}"
-TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/rocm${ROCM_VERSION%.*}}"
+case "$ROCM_VERSION" in
+    10.*) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://stable.repo.amd.com/rocm/whl-next/}" ;;  # no pytorch.org leaf
+    *) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/rocm${ROCM_VERSION%.*}}" ;;
+esac
 ROCM_GFX="${ROCM_GFX:-}"
 
 while [[ $# -gt 0 ]]; do

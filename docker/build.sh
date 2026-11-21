@@ -17,6 +17,9 @@
 # gfx906 (Radeon VII / MI50) needs the last base that carries it, and --gfx gfx906
 # leaves out bitsandbytes (no prebuilt gfx906 kernels):
 #   ROCM_VERSION=6.3.4 ./build.sh --rocm --gfx gfx906
+# ROCm 10.1 (opt-in, no bitsandbytes so no load_in_4bit) builds on the 10.1.0-full
+# base with torch 2.14 from AMD's whl-next index; --gfx narrows it to one arch:
+#   ROCM_VERSION=10.1.0 ./build.sh --rocm
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -47,6 +50,25 @@ if [[ $ROCM -eq 1 ]]; then
     IMAGE_NAME="${IMAGE_NAME:-unsloth-rocm}"
     # 7.2 is the floor: rocm6.4 tops out below what unsloth-zoo needs, and RDNA4 needs 7.x.
     ROCM_VERSION="${ROCM_VERSION:-7.2.4}"
+    ROCM_BASE_SUFFIX=""
+    case "$ROCM_VERSION" in
+        10.1.[0-9]*)
+            # pytorch.org has no rocm10.x leaf; the Dockerfile pins AMD's whl-next set.
+            ROCM_WHL_NEXT="https://stable.repo.amd.com/rocm/whl-next/"
+            if [[ -n "${TORCH_INDEX_URL:-}" && "$TORCH_INDEX_URL" != "$ROCM_WHL_NEXT" ]]; then
+                echo "ROCM_VERSION=${ROCM_VERSION} takes torch from ${ROCM_WHL_NEXT} only (TORCH_INDEX_URL=${TORCH_INDEX_URL})" >&2
+                exit 2
+            fi
+            TORCH_INDEX_URL="$ROCM_WHL_NEXT"
+            ROCM_BASE_SUFFIX="-full" ;;
+        10.*)
+            echo "ROCM_VERSION=${ROCM_VERSION}: no pinned torch set for this ROCm 10 release (known: 10.1.x, e.g. 10.1.0; 10.2's supported torch is 2.15, above Unsloth's <2.15 cap)" >&2
+            exit 2 ;;
+    esac
+    if [[ "$ROCM_GFX" == gfx906 && -n "$ROCM_BASE_SUFFIX" ]]; then
+        echo "gfx906 has no kernels after ROCm 6.3; use ROCM_VERSION=6.3.4" >&2
+        exit 2
+    fi
     # the index follows the base unless named (7.2.4 -> rocm7.2)
     TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/rocm${ROCM_VERSION%.*}}"
 else
@@ -99,7 +121,10 @@ fi
 if [[ $ROCM -eq 1 ]]; then
     echo "Building ${IMAGE_NAME}:${TAG}  [AMD ROCm]"
     echo "  ROCm           ${ROCM_VERSION}  Python ${PYTHON_VERSION}"
-    if [[ "$ROCM_GFX" == gfx906 ]]; then
+    if [[ -n "$ROCM_BASE_SUFFIX" ]]; then
+        echo "  base           rocm/dev-ubuntu-24.04:${ROCM_VERSION}${ROCM_BASE_SUFFIX}"
+        echo "  torch index    ${TORCH_INDEX_URL} (device extras: ${ROCM_GFX:-every arch in Dockerfile.rocm}; no bitsandbytes)"
+    elif [[ "$ROCM_GFX" == gfx906 ]]; then
         echo "  torch index    ${TORCH_INDEX_URL} (gfx906: no bitsandbytes)"
     elif [[ -n "$ROCM_GFX" ]]; then
         echo "  torch index    AMD per-arch wheels for ${ROCM_GFX} (repo.amd.com/rocm/whl)"
@@ -117,6 +142,7 @@ if [[ $ROCM -eq 1 ]]; then
         --build-arg PYTHON_VERSION="${PYTHON_VERSION}" \
         --build-arg TORCH_INDEX_URL="${TORCH_INDEX_URL}" \
         --build-arg ROCM_GFX="${ROCM_GFX}" \
+        ${ROCM_BASE_SUFFIX:+--build-arg ROCM_BASE_SUFFIX="${ROCM_BASE_SUFFIX}"} \
         --build-arg UNSLOTH_REF="${UNSLOTH_REF}" \
         --build-arg UNSLOTH_ZOO_REF="${UNSLOTH_ZOO_REF}" \
         -t "${IMAGE_NAME}:${TAG}" \
