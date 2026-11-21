@@ -26,6 +26,13 @@ ERR_NO_PROMPT = "Error: use_library_model needs a prompt."
 ERR_NO_LOOP = "Error: Unsloth Studio could not reach its server loop to run this tool. Try again."
 ERR_STOPPED = "Error: the model swap was stopped; the chat model was put back."
 ERR_TIMEOUT = "Error: the model swap took too long and was stopped."
+ERR_BUSY = (
+    "Error: another chat is still using the {kind} model, so this call ran out of time waiting."
+)
+ERR_CLIP_LATE = (
+    "Error: the clip did not finish within this call's time limit, and the video model is unloaded "
+    "to bring the chat model back, which stops it."
+)
 ERR_NON_GGUF_CHAT = (
     "Error: this model cannot run beside the chat model, and only a GGUF chat model can be "
     "unloaded and put back mid-chat. Run it from its own page instead."
@@ -196,31 +203,17 @@ class _Swap:
         self.chat_identity = None
         self.chat_launch = None
         self.chat_unloaded = False
-        self.shared: Optional["_Shared"] = None
-        # Another chat was still rendering on the model when this call ended, so it puts things back.
-        self.deferred = False
         # Set when putting things back failed, appended to the tool result.
         self.note = ""
 
 
-class _Shared:
-    """The calls using one media backend right now: only the last one out puts things back."""
-
-    def __init__(self) -> None:
-        self.users = 0
-        # The first call that loaded holds the chat model to bring back; every call that loaded is
-        # checked at the end, since a later one may have switched the backend to its own pick.
-        self.loader: Optional[_Swap] = None
-        self.loaded: list = []
+# One media call per backend at a time, from load through put back: two would unload each other's
+# model. Touched only on the server loop.
+_CALL_LOCKS: dict = {}
 
 
-# Keyed by owner. Touched only on the server loop, never across an await, so no lock.
-_SHARED: dict = {}
-
-
-def _enter_shared(swap: "_Swap") -> None:
-    swap.shared = _SHARED.setdefault(swap.owner, _Shared())
-    swap.shared.users += 1
+def _call_lock(owner: str) -> asyncio.Lock:
+    return _CALL_LOCKS.setdefault((owner, asyncio.get_running_loop()), asyncio.Lock())
 
 
 async def _ours_resident(swap: "_Swap") -> bool:
@@ -412,10 +405,20 @@ async def _swap_and_render(
     valid, mode = _unload_mode(arguments)
     if not valid:
         return ERR_UNLOAD_ARG
-    with multi_model_mode_for_request(mode):
-        return await _swap_and_render_as(
-            arguments, prompt, swap, ticket, abort, deadline, name, pick, mode, workdir
-        )
+    lock = _call_lock(swap.owner)
+    try:
+        await asyncio.wait_for(lock.acquire(), max(0.0, deadline - time.monotonic()))
+    except asyncio.TimeoutError:
+        return ERR_BUSY.format(kind = swap.kind)
+    try:
+        if abort.is_set():
+            return ERR_STOPPED
+        with multi_model_mode_for_request(mode):
+            return await _swap_and_render_as(
+                arguments, prompt, swap, ticket, abort, deadline, name, pick, mode, workdir
+            )
+    finally:
+        lock.release()
 
 
 async def _swap_and_render_as(
@@ -442,14 +445,12 @@ async def _swap_and_render_as(
             orchestrator = await asyncio.to_thread(get_inference_backend)
             if getattr(orchestrator, "active_model_name", None):
                 return ERR_NON_GGUF_CHAT
-    _enter_shared(swap)
     try:
         if not resident:
             if mode == "always" and swap.chat_identity is not None and not keeps_chat:
                 return ERR_KEEP_NO_FIT.format(model = pick.model_id, kind = swap.kind)
             swap.loaded_media = True
             swap.name, swap.pick = name, pick
-            _mark_loaded(swap)
             try:
                 await _load_media(swap.owner, name, pick, subject, deadline, abort)
             finally:
@@ -457,7 +458,13 @@ async def _swap_and_render_as(
         if abort.is_set():
             return ERR_STOPPED
         if swap.kind == "video":
-            return _Clip(await _render_video(arguments, prompt, abort, deadline, workdir))
+            from core.inference.generate_video_tool import STILL_RENDERING_MSG
+
+            clip = await _render_video(arguments, prompt, abort, deadline, workdir)
+            if clip == STILL_RENDERING_MSG and swap.loaded_media:
+                # Not on the Video page later: the put back unloads the model under it.
+                return ERR_CLIP_LATE
+            return _Clip(clip)
         return await _render_image(arguments, prompt, pick, ticket, abort)
     except asyncio.TimeoutError:
         return ERR_TIMEOUT
@@ -525,33 +532,10 @@ async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
     )
 
 
-def _mark_loaded(swap: _Swap) -> None:
-    """At the load, so the first loader (the one holding the chat model to bring back) wins even if
-    a later call finishes first."""
-    shared = swap.shared
-    if shared is not None and swap not in shared.loaded:
-        shared.loaded.append(swap)
-        if shared.loader is None:
-            shared.loader = swap
-
-
 async def _put_back(swap: _Swap, subject: str) -> str:
-    shared = swap.shared
-    loaded = [swap] if swap.loaded_media else []
-    if shared is not None:
-        shared.users -= 1
-        if swap.loaded_media:
-            _mark_loaded(swap)
-        if shared.users > 0:
-            # Unloading or bringing the chat model back now would end that other render.
-            swap.deferred = swap.chat_unloaded
-            return ""
-        _SHARED.pop(swap.owner, None)
-        loaded = shared.loaded
-        swap = shared.loader or swap
-    if loaded:
+    if swap.loaded_media:
         await _setup_settled(swap.owner, _RESTORE_WAIT_S)
-    if loaded and any([await _ours_resident(each) for each in loaded]):
+    if swap.loaded_media and await _ours_resident(swap):
         try:
             await _unload_media(swap.owner, subject)
         except Exception as exc:  # noqa: BLE001
@@ -607,12 +591,7 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
         isinstance(result, _Clip) and not result.startswith("Error")
     ):
         return result + (" " + note if note else "")
-    if swap.deferred:
-        note = (
-            f"The chat model was unloaded for this {swap.kind}. It comes back when another chat's "
-            f"render on the same model finishes. {note}"
-        ).strip()
-    elif swap.chat_unloaded:
+    if swap.chat_unloaded:
         note = f"The chat model was unloaded for this {swap.kind} and loaded back. {note}".strip()
     elif swap.loaded_media and swap.chat_identity is not None:
         note = f"The chat model stayed loaded beside the {swap.kind} model. {note}".strip()

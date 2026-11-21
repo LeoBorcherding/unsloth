@@ -661,35 +661,6 @@ def test_another_gguf_of_the_same_repo_is_not_taken_for_the_prior_model(world, m
     assert ("unload",) in world.calls
 
 
-def test_only_the_last_chat_on_a_shared_model_puts_things_back(monkeypatch):
-    _preflight_world(monkeypatch)
-    calls = []
-
-    async def unload_media(owner, subject):
-        calls.append("unload")
-
-    async def restore_chat(swap, subject):
-        calls.append(("restore", swap.chat_identity))
-
-    monkeypatch.setattr(tool, "_unload_media", unload_media)
-    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
-    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
-
-    async def scenario():
-        loader, reader = tool._Swap(), tool._Swap()
-        loader.loaded_media, loader.chat_identity, loader.chat_unloaded = True, CHAT, True
-        tool._enter_shared(loader)
-        tool._enter_shared(reader)
-        # The chat that loaded the model finishes first: the other chat is still rendering on it.
-        await tool._put_back(loader, "alice")
-        assert calls == [] and loader.deferred
-        await tool._put_back(reader, "bob")
-        assert tool._SHARED == {}
-
-    asyncio.run(scenario())
-    assert calls == ["unload", ("restore", CHAT)]
-
-
 def test_put_back_waits_for_another_render_on_the_backend(monkeypatch):
     backend = _preflight_world(monkeypatch)
     state = {"active": True}
@@ -709,7 +680,6 @@ def test_put_back_waits_for_another_render_on_the_backend(monkeypatch):
     async def scenario():
         swap = tool._Swap()
         swap.loaded_media = True
-        tool._enter_shared(swap)
         put_back = asyncio.ensure_future(tool._put_back(swap, "alice"))
         await asyncio.sleep(0.1)
         assert calls == []
@@ -1244,61 +1214,39 @@ def test_the_put_back_leaves_a_newer_image_model_another_request_switched_in(wor
     assert ("unload",) not in world.calls
 
 
-def test_the_last_shared_call_unloads_a_later_calls_model(monkeypatch):
-    _preflight_world(monkeypatch)
-    calls = []
+def test_a_clip_still_rendering_at_the_deadline_is_reported_as_stopped(world, video, monkeypatch):
+    from core.inference import generate_video_tool
 
-    async def unload_media(owner, subject):
-        calls.append("unload")
-
-    async def restore_chat(swap, subject):
-        calls.append(("restore", swap.chat_identity))
-
-    async def resident(swap):
-        return swap.name == "org/later"  # the later call switched the backend to its own pick
-
-    monkeypatch.setattr(tool, "_unload_media", unload_media)
-    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
-    monkeypatch.setattr(tool, "_ours_resident", resident)
-
-    async def scenario():
-        first, later = tool._Swap(), tool._Swap()
-        first.loaded_media, first.name, first.chat_identity = True, "org/first", CHAT
-        later.loaded_media, later.name = True, "org/later"
-        tool._enter_shared(first)
-        tool._enter_shared(later)
-        await tool._put_back(first, "alice")
-        await tool._put_back(later, "bob")
-
-    asyncio.run(scenario())
-    assert calls == ["unload", ("restore", CHAT)]
+    monkeypatch.setattr(
+        generate_video_tool,
+        "run_generate_video",
+        lambda *a, **k: generate_video_tool.STILL_RENDERING_MSG,
+    )
+    result = _call(world, {"model": "org/video-model", "prompt": "waves"})
+    assert result.startswith(tool.ERR_CLIP_LATE)
+    assert video.owners == [("load", VIDEO), ("unload", VIDEO)]
+    assert world.chat == CHAT
 
 
-def test_the_first_loader_restores_the_chat_model_even_if_it_finishes_last(monkeypatch):
-    _preflight_world(monkeypatch)
-    calls = []
+def test_two_chats_on_one_backend_take_turns_from_load_to_put_back(world, monkeypatch):
+    render = tool._render_image
 
-    async def unload_media(owner, subject):
-        calls.append("unload")
+    async def slow(*args, **kwargs):
+        world.calls.append(("render-start",))
+        await asyncio.sleep(0.3)
+        return await render(*args, **kwargs)
 
-    async def restore_chat(swap, subject):
-        calls.append(("restore", swap.chat_identity))
-
-    monkeypatch.setattr(tool, "_unload_media", unload_media)
-    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
-    monkeypatch.setattr(tool, "_ours_resident", _still_ours)
-
-    async def scenario():
-        first, later = tool._Swap(), tool._Swap()
-        tool._enter_shared(first)
-        tool._enter_shared(later)
-        first.loaded_media, first.chat_identity = True, CHAT
-        tool._mark_loaded(first)
-        # The later call saw the chat model already gone, loaded its own model and ended first.
-        later.loaded_media = True
-        tool._mark_loaded(later)
-        await tool._put_back(later, "bob")
-        await tool._put_back(first, "alice")
-
-    asyncio.run(scenario())
-    assert calls == ["unload", ("restore", CHAT)]
+    monkeypatch.setattr(tool, "_render_image", slow)
+    out = []
+    first = threading.Thread(
+        target = lambda: out.append(_call(world, {"model": "org/image-model", "prompt": "a"}))
+    )
+    first.start()
+    time.sleep(0.1)
+    out.append(_call(world, {"model": "org/image-model", "prompt": "b"}))
+    first.join(10)
+    kinds = [c[0] for c in world.calls]
+    # The second call's load starts only after the first call put the chat model back.
+    assert kinds.index("load", 1) > kinds.index("restore")
+    assert all(r.startswith("Generated a") for r in out)
+    assert world.chat == CHAT
