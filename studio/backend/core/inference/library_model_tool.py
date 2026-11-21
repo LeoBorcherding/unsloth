@@ -365,7 +365,9 @@ async def _swap_and_render(
                 arguments,
                 music,
                 swap,
-                lambda beside: _compose_music(music, prompt, arguments, subject, workdir, beside = beside),
+                lambda beside: _compose_music(
+                    music, prompt, arguments, subject, workdir, beside = beside
+                ),
             )
         decision = await asyncio.to_thread(_decision_model, name)
         if decision is not None:
@@ -642,11 +644,16 @@ async def _downloaded_llms() -> tuple:
     from routes.inference import _cached_local_catalog
 
     rows = await _cached_local_catalog()
-    groups = (("chat", _LLM_TASKS), ("text-to-speech", (_TTS_TASK,)), ("speech-to-text", (_STT_TASK,)))
+    groups = (
+        ("chat", _LLM_TASKS),
+        ("text-to-speech", (_TTS_TASK,)),
+        ("speech-to-text", (_STT_TASK,)),
+    )
     music = await asyncio.to_thread(_music_ids)
     decisions = await asyncio.to_thread(_decision_ids)
     return tuple(
-        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks]) for kind, tasks in groups
+        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks])
+        for kind, tasks in groups
     ) + (("music", music), ("decision", decisions))
 
 
@@ -925,11 +932,15 @@ async def _decide_with(name: str, prompt: str, arguments: dict, swap: "_Swap") -
         swap.note = await asyncio.shield(_put_back(swap, subject))
     text = f"{name} decided:\n{json.dumps(result, ensure_ascii = False)}"
     if holds_gpu:
-        return _with_note(text, f"The chat model was unloaded so {name} could run, and loaded back.")
+        return _with_note(
+            text, f"The chat model was unloaded so {name} could run, and loaded back."
+        )
     return text
 
 
-async def _compose_music(name: str, prompt: str, arguments: dict, subject: str, workdir: str, *, beside: bool) -> tuple[str, bool]:
+async def _compose_music(
+    name: str, prompt: str, arguments: dict, subject: str, workdir: str, *, beside: bool
+) -> tuple[str, bool]:
     """(result, refused): one track from music model ``name``, copied into the chat's sandbox."""
     import os
     import shutil
@@ -947,7 +958,9 @@ async def _compose_music(name: str, prompt: str, arguments: dict, subject: str, 
         load_alongside_for_request,
     )
 
-    request = _producer_request(None, "library-model-music", threading.Event(), "UTC", loaded_only = False)
+    request = _producer_request(
+        None, "library-model-music", threading.Event(), "UTC", loaded_only = False
+    )
     allow_model_switch_for_request(request.scope)
     if beside:
         load_alongside_for_request(request.scope)
@@ -975,13 +988,14 @@ async def _compose_music(name: str, prompt: str, arguments: dict, subject: str, 
     file = f"generated-music-{str(clips[0])[:8]}{os.path.splitext(str(source))[1] or '.wav'}"
     shutil.copyfile(str(source), os.path.join(root, file))
     saved = {"name": file, "size": os.path.getsize(os.path.join(root, file))}
-    return f"Made a track with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps([saved]), False
+    return f"Made a track with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps(
+        [saved]
+    ), False
 
 
 def _music_ids() -> list[str]:
     try:
         from core.inference.audio_cpp_models import downloaded_models
-
         return [model.repo_id or model.id for model in downloaded_models("music")]
     except Exception:  # noqa: BLE001 - no audio.cpp here means no music models
         return []
@@ -991,7 +1005,6 @@ def _music_model(name: str) -> Optional[str]:
     wanted = name.strip().lower()
     try:
         from core.inference.audio_cpp_models import downloaded_models
-
         for model in downloaded_models("music"):
             if wanted in (str(model.id).lower(), str(model.repo_id or "").lower()):
                 return model.repo_id or model.id
@@ -1007,7 +1020,9 @@ def _decision_ids() -> list[str]:
 
         if not systemone_settings.get_enabled():
             return []
-        return [name for name in catalog.CHECKPOINTS if laya_runtime.is_cached(catalog.resolve(name))]
+        return [
+            name for name in catalog.CHECKPOINTS if laya_runtime.is_cached(catalog.resolve(name))
+        ]
     except Exception:  # noqa: BLE001 - no decision runtime here
         return []
 

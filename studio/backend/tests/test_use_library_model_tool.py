@@ -878,7 +878,10 @@ def test_a_music_model_uses_the_chat_seat_and_returns_its_track(world, monkeypat
 
     async def compose(name, prompt, arguments, subject, workdir, *, beside):
         made.append((name, prompt, arguments.get("seconds"), beside))
-        return 'Made a track with org/music and saved it as t.wav.\n__FILES__:[{"name": "t.wav", "size": 1}]', False
+        return (
+            'Made a track with org/music and saved it as t.wav.\n__FILES__:[{"name": "t.wav", "size": 1}]',
+            False,
+        )
 
     async def unload(name, subject):
         made.append(("unload", name))
@@ -887,12 +890,17 @@ def test_a_music_model_uses_the_chat_seat_and_returns_its_track(world, monkeypat
         made.append(("evict",))
         world.chat = None
 
-    monkeypatch.setattr(tool, "_music_model", lambda name: "org/music" if name == "org/music" else None)
+    monkeypatch.setattr(
+        tool, "_music_model", lambda name: "org/music" if name == "org/music" else None
+    )
     monkeypatch.setattr(tool, "_compose_music", compose)
     monkeypatch.setattr(tool, "_unload_llm", unload)
     monkeypatch.setattr(tool, "_evict_chat_model", evict)
     monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: False)
-    result = _call(world, {"model": "org/music", "prompt": "lofi beat", "seconds": 20, "unload_chat_model": "true"})
+    result = _call(
+        world,
+        {"model": "org/music", "prompt": "lofi beat", "seconds": 20, "unload_chat_model": "true"},
+    )
     assert made == [("evict",), ("org/music", "lofi beat", 20, False), ("unload", "org/music")]
     body, files = result.split("\n__FILES__")
     assert body.endswith("The chat model was unloaded so org/music could run, and loaded back.")
@@ -921,11 +929,27 @@ def test_a_decision_model_unloads_the_chat_model_unless_told_to_keep_it(world, m
     monkeypatch.setattr(laya_runtime, "unload", lambda: seen.append("unload"))
     questions = {"urgent": {"type": "noul", "instructions": "Reply today?"}}
 
-    kept = _call(world, {"model": "laya", "prompt": "an email", "questions": questions, "unload_chat_model": "false"})
+    kept = _call(
+        world,
+        {
+            "model": "laya",
+            "prompt": "an email",
+            "questions": questions,
+            "unload_chat_model": "false",
+        },
+    )
     assert kept == tool.ERR_KEEP_NO_FIT.format(model = "laya", kind = "model")
     assert seen == []
 
-    result = _call(world, {"model": "laya", "prompt": "an email", "questions": questions, "unload_chat_model": "auto"})
+    result = _call(
+        world,
+        {
+            "model": "laya",
+            "prompt": "an email",
+            "questions": questions,
+            "unload_chat_model": "auto",
+        },
+    )
     assert seen == ["evict", ("an email", ["urgent"]), "unload"]
     assert result.startswith('laya decided:\n{"urgent": {"p": 0.9}}')
     assert "loaded back" in result
