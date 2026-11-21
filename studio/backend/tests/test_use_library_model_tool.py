@@ -992,3 +992,17 @@ def test_a_decision_model_unloads_the_chat_model_unless_told_to_keep_it(world, m
     assert result.startswith('laya decided:\n{"urgent": {"p": 0.9}}')
     assert "loaded back" in result
     assert world.chat == CHAT
+
+
+def test_music_models_are_named_by_their_own_id_not_the_umbrella_repo(monkeypatch):
+    from core.inference import audio_cpp_models
+
+    umbrella = "audio-cpp/audio.cpp-gguf"
+    models = [
+        SimpleNamespace(id = f"{umbrella}/Stable-Audio-3-Small-Music-GGUF", repo_id = umbrella),
+        SimpleNamespace(id = f"{umbrella}/ACE-Step1.5-GGUF", repo_id = umbrella),
+    ]
+    monkeypatch.setattr(audio_cpp_models, "downloaded_models", lambda task = None: models)
+    assert tool._music_ids() == [m.id for m in models]
+    assert tool._music_model(f"{umbrella}/ace-step1.5-gguf") == models[1].id
+    assert tool._music_model(umbrella) is None

@@ -1030,7 +1030,8 @@ async def _compose_music(
 def _music_ids() -> list[str]:
     try:
         from core.inference.audio_cpp_models import downloaded_models
-        return [model.repo_id or model.id for model in downloaded_models("music")]
+        # The id names the model; repo_id is audio.cpp's umbrella repo, the same for every model.
+        return [model.id for model in downloaded_models("music")]
     except Exception:  # noqa: BLE001 - no audio.cpp here means no music models
         return []
 
@@ -1040,8 +1041,8 @@ def _music_model(name: str) -> Optional[str]:
     try:
         from core.inference.audio_cpp_models import downloaded_models
         for model in downloaded_models("music"):
-            if wanted in (str(model.id).lower(), str(model.repo_id or "").lower()):
-                return model.repo_id or model.id
+            if wanted == str(model.id).lower():
+                return model.id
     except Exception:  # noqa: BLE001
         return None
     return None
