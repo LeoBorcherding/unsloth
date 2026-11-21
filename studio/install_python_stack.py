@@ -6030,11 +6030,13 @@ def _rocm_windows_opt_in_fused_sdpa_gate(gfx_arch: "str | None") -> bool:
     if _installed_torch_local_tag() not in {s.tag for s in _ROCM_WINDOWS_OPT_IN_TORCH_SETS}:
         return True
     works = _rocm_fused_sdpa_works()
-    if works is not False:
-        if works is None:
-            _safe_print(
-                "   could not run the fused attention check on the GPU; keeping the installed torch"
-            )
+    if works:
+        _safe_print(_dim("   fused attention runs on the GPU with the opted-in torch"))
+        return True
+    if works is None:
+        _safe_print(
+            "   could not run the fused attention check on the GPU; keeping the installed torch"
+        )
         return True
     d = _rocm_windows_default_torch_set()
     gfx = _bare_gfx(gfx_arch)
