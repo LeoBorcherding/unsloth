@@ -1031,3 +1031,34 @@ def test_a_music_run_asks_for_a_song_and_is_instrumental_without_lyrics(monkeypa
         ("song", True, None),
         ("song", False, "la la"),
     ]
+
+
+def test_questions_without_a_model_use_the_decision_model_from_settings(world, monkeypatch):
+    from core.systemone import catalog, laya_runtime
+    from routes import systemone
+    from utils import systemone_settings
+
+    seen = []
+
+    async def decide(checkpoint, state, questions):
+        seen.append(state)
+        return {"urgent": {"p": 0.9}}
+
+    monkeypatch.setattr(tool, "_decision_model", lambda name: "laya" if name == "laya" else None)
+    monkeypatch.setattr(tool, "_evict_chat_model", lambda: setattr(world, "chat", None))
+    monkeypatch.setattr(systemone_settings, "get_model", lambda: "laya")
+    monkeypatch.setattr(systemone, "_decide", decide)
+    monkeypatch.setattr(systemone, "_require_enabled", lambda: None)
+    monkeypatch.setattr(catalog, "resolve", lambda name: object())
+    monkeypatch.setattr(laya_runtime, "unload", lambda: None)
+    result = _call(
+        world,
+        {
+            "prompt": "an email",
+            "questions": {"urgent": {"type": "noul"}},
+            "unload_chat_model": "true",
+        },
+    )
+    assert result.startswith("laya decided:")
+    assert seen == ["an email"]
+    assert world.chat == CHAT

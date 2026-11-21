@@ -342,6 +342,9 @@ async def _swap_and_render(
     from utils.multi_model_settings import multi_model_mode_for_request
 
     name = str(arguments.get("model") or "").strip()
+    if not name and arguments.get("questions"):
+        # Only a decision model takes questions, so a dropped model means the one in Settings.
+        name = await asyncio.to_thread(_settings_decision_model) or ""
     if not name:
         listing = await _full_listing()
         # A prompt with no model is a dropped argument, not a request for the list.
@@ -1064,6 +1067,14 @@ def _decision_ids() -> list[str]:
         ]
     except Exception:  # noqa: BLE001 - no decision runtime here
         return []
+
+
+def _settings_decision_model() -> Optional[str]:
+    try:
+        from utils import systemone_settings
+        return _decision_model(systemone_settings.get_model())
+    except Exception:  # noqa: BLE001 - no decision runtime here
+        return None
 
 
 def _decision_model(name: str) -> Optional[str]:
