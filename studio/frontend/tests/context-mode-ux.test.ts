@@ -66,13 +66,23 @@ test("the Auto number editor opens at the fitted or safe offload context", () =>
 test("the existing info hint owns the mode explanation and fitted result", () => {
   assert.match(
     panelCode,
-    /<InfoHint> The model&apos;s context window\. Auto \(a full bar\) picks one that fits[\s\S]*the reset button returns to it\. A number requests an exact context window,[\s\S]*Auto currently selected \$\{activeLoadedContext\.toLocaleString\(\)\} tokens\.[\s\S]*<\/InfoHint>/,
+    /<InfoHint> Auto fits the most context your GPU can hold, up to\{" "\} \{max\.toLocaleString\(\)\}\.[\s\S]*Auto picked \$\{activeLoadedContext\.toLocaleString\(\)\}\.[\s\S]*<\/InfoHint>/,
   );
   assert.match(
     panelCode,
     /renderWarning=\{\(v\) => resolvedIsDiffusion \? \( <DiffusionContextNote [^)]*\) : isActiveModel && loadedMaxContextLength != null && v > loadedMaxContextLength && \(/,
   );
   assert.match(panelCode, /\{renderWarning\(shown\)\}/);
+  assert.match(
+    panelCode,
+    /A setting has changed\. Reload to have Auto resize your context with the new settings\./,
+  );
+  assert.match(
+    panelCode,
+    /pinnedByLayers \? ` Kept at \$\{activeLoadedContext\.toLocaleString\(\)\} by your fixed GPU layers\.` : ` Auto picked/,
+  );
+  assert.match(panelCode, /pinnedByLayers=\{!atBaseline && fixedLayerPin != null\}/
+  );
   assert.doesNotMatch(
     panelCode,
     /<p className="text-ui-11 leading-relaxed text-muted-foreground">/,
