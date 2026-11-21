@@ -245,6 +245,34 @@ def test_a_non_gguf_chat_that_would_be_evicted_is_refused_before_anything_loads(
     assert world.calls == []
 
 
+def test_a_decision_model_is_refused_while_a_non_gguf_chat_holds_the_gpu(world, monkeypatch):
+    import core.inference as core_inference
+    from core.systemone import catalog, laya_runtime
+    from routes import systemone
+
+    seen = []
+
+    async def decide(checkpoint, state, questions):
+        seen.append("decide")
+        return {}
+
+    world.chat = None
+    monkeypatch.setattr(
+        core_inference, "get_inference_backend", lambda: SimpleNamespace(active_model_name = "hf/x")
+    )
+    monkeypatch.setattr(tool, "_decision_model", lambda name: "laya" if name == "laya" else None)
+    monkeypatch.setattr(systemone, "_decide", decide)
+    monkeypatch.setattr(systemone, "_require_enabled", lambda: None)
+    monkeypatch.setattr(catalog, "resolve", lambda name: object())
+    monkeypatch.setattr(laya_runtime, "unload", lambda: seen.append("unload"))
+    args = {"model": "laya", "prompt": "an email", "questions": {"urgent": {"type": "noul"}}}
+    assert _call(world, {**args, "unload_chat_model": "false"}) == tool.ERR_KEEP_NO_FIT.format(
+        model = "laya", kind = "model"
+    )
+    assert _call(world, {**args, "unload_chat_model": "auto"}) == tool.ERR_NON_GGUF_CHAT
+    assert seen == []
+
+
 def test_restore_chat_is_a_no_op_when_nothing_was_evicted_or_the_chat_is_back(monkeypatch):
     swap = tool._Swap()
     assert asyncio.run(tool._restore_chat(swap, "owner")) is None

@@ -26,8 +26,8 @@ ERR_NO_LOOP = "Error: Unsloth Studio could not reach its server loop to run this
 ERR_STOPPED = "Error: the model swap was stopped; the chat model was put back."
 ERR_TIMEOUT = "Error: the model swap took too long and was stopped."
 ERR_NON_GGUF_CHAT = (
-    "Error: this model does not fit beside the chat model, and only a GGUF chat model can be "
-    "unloaded and put back mid-chat. Load it on the Images or Video page instead."
+    "Error: this model cannot run beside the chat model, and only a GGUF chat model can be "
+    "unloaded and put back mid-chat. Run it from its own page instead."
 )
 ERR_RESTORE = "The chat model could not be loaded back ({detail}); reload it from the model picker."
 
@@ -779,11 +779,8 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
             return ERR_KEEP_NO_FIT.format(model = name, kind = "model")
     swap.chat_identity = loaded_identity()
     swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
-    if swap.chat_identity is None:
-        from core.inference import get_inference_backend
-        orchestrator = await asyncio.to_thread(get_inference_backend)
-        if getattr(orchestrator, "active_model_name", None):
-            return ERR_NON_GGUF_CHAT
+    if swap.chat_identity is None and await _non_gguf_chat():
+        return ERR_NON_GGUF_CHAT
     try:
         await asyncio.to_thread(_evict_chat_model)
         with multi_model_mode_for_request("off"):
@@ -797,6 +794,14 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
     if text.startswith("Error"):
         return text
     return _with_note(text, f"The chat model was unloaded so {name} could run, and loaded back.")
+
+
+async def _non_gguf_chat() -> bool:
+    """A Transformers chat model holds the GPU but has no launch to restore it from."""
+    from core.inference import get_inference_backend
+
+    orchestrator = await asyncio.to_thread(get_inference_backend)
+    return bool(getattr(orchestrator, "active_model_name", None))
 
 
 async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> str:
@@ -940,8 +945,11 @@ async def _decide_with(name: str, prompt: str, arguments: dict, swap: "_Swap") -
         return f"Error: invalid questions: {exc}"
     checkpoint = await asyncio.to_thread(catalog.resolve, name)
     holds_gpu = loaded_identity() is not None
-    if holds_gpu and mode == "always":
+    non_gguf = not holds_gpu and await _non_gguf_chat()
+    if (holds_gpu or non_gguf) and mode == "always":
         return ERR_KEEP_NO_FIT.format(model = name, kind = "model")
+    if non_gguf:
+        return ERR_NON_GGUF_CHAT
     subject = current_account().username
     if holds_gpu:
         swap.chat_identity = loaded_identity()
