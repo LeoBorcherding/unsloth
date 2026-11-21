@@ -11897,9 +11897,48 @@ def _is_hip_torch_build():
         return False
 
 
+_TORCH_HIP_RE = re.compile(r"^hip\s*(?::[^=]*)?=\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
+
+
+def _torch_hip_version():
+    """torch.version.hip, read from torch/version.py when torch is not imported yet."""
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        return getattr(getattr(torch, "version", None), "hip", None) or None
+    try:
+        spec = importlib.util.find_spec("torch")
+        if spec is None or not spec.submodule_search_locations:
+            return None
+        for pkg_dir in spec.submodule_search_locations:
+            path = os.path.join(pkg_dir, "version.py")
+            if os.path.isfile(path):
+                with open(path, encoding = "utf-8") as f:
+                    match = _TORCH_HIP_RE.search(f.read())
+                return match.group(1) if match else None
+    except Exception:
+        pass
+    return None
+
+
+def _pick_bnb_rocm_dll_suffix(suffixes, hip_version = None):
+    """Mirror of studio/backend/utils/bnb_rocm_version.py (parity: tests/test_bnb_rocm_dll_rank.py).
+    Highest (major, minor) within torch's HIP major, one-digit major like bnb's own parser."""
+    suffixes = [s for s in suffixes if s and s.isdigit()]
+    if not suffixes:
+        return None
+    major = None
+    try:
+        major = int(str(hip_version).split(".")[0]) if hip_version else None
+    except ValueError:
+        pass
+    ranked = [((int(s[:1]), int(s[1:] or 0)), s) for s in suffixes]
+    same_major = [r for r in ranked if r[0][0] == major]
+    return max(same_major or ranked)[1]
+
+
 def _detect_installed_bnb_rocm_version():
-    """Highest installed ``libbitsandbytes_rocm<NN>.dll`` suffix ("72", "713")
-    or ``None``. Listing order is unordered, so take the numeric max."""
+    """Installed ``libbitsandbytes_rocm<NN>.dll`` suffix ("72", "713") that
+    ranks highest for torch's HIP version, or ``None``."""
     try:
         spec = importlib.util.find_spec("bitsandbytes")
     except Exception:
@@ -11917,9 +11956,7 @@ def _detect_installed_bnb_rocm_version():
             match = _BNB_ROCM_DLL_RE.fullmatch(entry)
             if match is not None:
                 suffixes.append(match.group(1))
-    if not suffixes:
-        return None
-    return max(suffixes, key = lambda value: int(value))
+    return _pick_bnb_rocm_dll_suffix(suffixes, _torch_hip_version())
 
 
 def maybe_set_windows_rocm_bnb_version():
