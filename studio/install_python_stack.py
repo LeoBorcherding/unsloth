@@ -2677,7 +2677,7 @@ def _detect_bnb_rocm_dll_ver() -> str | None:
             m = re.search(r"libbitsandbytes_rocm(\d+)\.dll", os.path.basename(dll))
             if m:
                 all_vers.append(m.group(1))
-    # Highest (major, minor) within torch's HIP major ("715" over "72", "101" on HIP 10.x).
+    # Highest (major, minor) within torch's HIP major; glob order is not guaranteed.
     return _pick_bnb_rocm_dll_suffix(all_vers, _torch_hip_version())
 
 

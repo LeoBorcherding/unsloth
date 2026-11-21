@@ -72,14 +72,16 @@ _CASES = [
     (["72", "714"], "7.13.0", "714"),
     (["72", "713"], None, "713"),
     (["72"], "7.2.0", "72"),
-    # ROCm 10: "101" is 10.1, not 1.01 below 7.x.
-    (["715", "101"], "10.1.0", "101"),
-    (["72", "714", "101", "102"], "10.2.0", "102"),
-    (["715", "101"], "7.14.0", "715"),
+    # ROCm 10.1 / 10.2 torch report HIP 7.16 / 7.17, so their DLLs are 7.x suffixes.
+    (["72", "714", "715"], "7.16.26385", "715"),
+    (["72", "714", "715", "716", "717"], "7.17.26434", "717"),
+    # Hypothetical next HIP major: the integer max kept "715" over "80".
+    (["715", "80"], "8.0.0", "80"),
+    (["715", "80"], "7.15.0", "715"),
     # Across 6.x/7.x the integer max picked "613" on a 7.x torch.
     (["613", "72"], "7.2.0", "72"),
     # No DLL for torch's major: highest overall, as before.
-    (["72", "714"], "10.1.0", "714"),
+    (["72", "714"], "8.0.0", "714"),
     ([], "7.14.0", None),
 ]
 
@@ -120,9 +122,10 @@ def test_torch_hip_version_read_without_import(shared, tmp_path, monkeypatch):
     "suffixes, hip, expected",
     [
         (["72", "714", "715"], "7.14.60850", "715"),
-        (["715", "101"], "10.1.0", "101"),
+        (["72", "714", "715"], "7.16.26385", "715"),
+        (["715", "80"], "8.0.0", "80"),
     ],
-    ids = ["rocm7-today", "rocm10-cross-major"],
+    ids = ["rocm7-today", "rocm10.1-hip7.16", "hip8-cross-major"],
 )
 def test_install_python_stack_detect(stack, tmp_path, monkeypatch, suffixes, hip, expected):
     _fake_bnb(tmp_path, monkeypatch, suffixes, hip)
@@ -133,9 +136,10 @@ def test_install_python_stack_detect(stack, tmp_path, monkeypatch, suffixes, hip
     "suffixes, hip, expected",
     [
         (["72", "714", "715"], "7.14.60850", "715"),
-        (["715", "101"], "10.1.0", "101"),
+        (["72", "714", "715"], "7.16.26385", "715"),
+        (["715", "80"], "8.0.0", "80"),
     ],
-    ids = ["rocm7-today", "rocm10-cross-major"],
+    ids = ["rocm7-today", "rocm10.1-hip7.16", "hip8-cross-major"],
 )
 def test_import_fixes_detect(import_fixes, tmp_path, monkeypatch, suffixes, hip, expected):
     _fake_bnb(tmp_path, monkeypatch, suffixes, hip)
