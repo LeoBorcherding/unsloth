@@ -74,6 +74,10 @@ from backend.utils.wheel_utils import (
 )
 from backend.utils.uv_path_safety import uv_safe_path as _uv_safe_path
 from backend.utils import rocm_flash_attn as _rocm_flash_attn
+from backend.utils.bnb_rocm_version import (
+    pick_bnb_rocm_dll_suffix as _pick_bnb_rocm_dll_suffix,
+    torch_hip_version as _torch_hip_version,
+)
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
@@ -2673,8 +2677,8 @@ def _detect_bnb_rocm_dll_ver() -> str | None:
             m = re.search(r"libbitsandbytes_rocm(\d+)\.dll", os.path.basename(dll))
             if m:
                 all_vers.append(m.group(1))
-    # Highest numeric suffix wins ("713" over "72"); glob order is not guaranteed.
-    return max(all_vers, key = lambda v: int(v)) if all_vers else None
+    # Highest (major, minor) within torch's HIP major ("715" over "72", "101" on HIP 10.x).
+    return _pick_bnb_rocm_dll_suffix(all_vers, _torch_hip_version())
 
 
 # Set before the base unsloth install; lets _ensure_rocm_torch drop a freshly pulled generic bnb on

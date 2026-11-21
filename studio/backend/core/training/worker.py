@@ -4787,9 +4787,16 @@ def run_training_process(*, event_queue: Any, stop_queue: Any, config: dict) -> 
                                 )
                                 if _m:
                                     _all_vers.append(_m.group(1))
-                        # Highest numeric suffix wins (glob order isn't sorted).
+                        # Highest (major, minor) within torch's HIP major; glob order isn't sorted.
                         if _all_vers:
-                            _bnb_rocm_ver = max(_all_vers, key = lambda v: int(v))
+                            from utils.bnb_rocm_version import (
+                                pick_bnb_rocm_dll_suffix,
+                                torch_hip_version,
+                            )
+
+                            _bnb_rocm_ver = pick_bnb_rocm_dll_suffix(
+                                _all_vers, torch_hip_version()
+                            )
                 except Exception:
                     pass
                 # Set BNB_ROCM_VERSION only if a ROCm bnb DLL exists, so later fixes can still redetect or opt out.
