@@ -2733,6 +2733,7 @@ export const tr = {
         saved: "“{name}” profili kaydedildi",
         full: "En fazla {count} profil tutabilirsiniz. Yenisini kaydetmek için birini silin.",
         storageFull: "Bu profili kaydetmek için tarayıcıda yeterli depolama alanı kalmadı.",
+        storageError: "Tarayıcı depolaması güncellenemedi, bu yüzden değişiklik kaydedilmedi.",
         empty: "Henüz kayıtlı profil yok.",
         listLabel: "Kayıtlı profiller",
         apply: "Uygula",

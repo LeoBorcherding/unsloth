@@ -2673,6 +2673,7 @@ export const sv = {
         saved: "Profilen ”{name}” sparad",
         full: "Du kan ha upp till {count} profiler. Ta bort en för att spara en till.",
         storageFull: "Det finns inte tillräckligt med lagringsutrymme i webbläsaren för att spara profilen.",
+        storageError: "Webbläsarens lagring kunde inte uppdateras, så ändringen sparades inte.",
         empty: "Inga sparade profiler än.",
         listLabel: "Sparade profiler",
         apply: "Använd",

@@ -2456,6 +2456,7 @@ export const it = {
         saved: "Profilo “{name}” salvato",
         full: "Puoi tenere fino a {count} profili. Eliminane uno per salvarne un altro.",
         storageFull: "Lo spazio di archiviazione del browser non basta per salvare questo profilo.",
+        storageError: "Non è stato possibile aggiornare lo spazio di archiviazione del browser, quindi la modifica non è stata salvata.",
         empty: "Nessun profilo salvato.",
         listLabel: "Profili salvati",
         apply: "Applica",

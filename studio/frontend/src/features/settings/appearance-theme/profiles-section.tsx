@@ -71,7 +71,7 @@ function NameForm({
     if (editing.kind === "rename") {
       if (!name.trim()) return;
       if (!rename(editing.profile.id, name)) {
-        toast.error(t(`${K}.storageFull`));
+        toast.error(t(`${K}.storageError`));
         return;
       }
       onClose();
@@ -190,8 +190,10 @@ export function ProfilesSection() {
   }
 
   function remove(profile: AppearanceProfile, index: number) {
-    const store = useAppearanceProfilesStore.getState();
-    store.remove(profile.id);
+    if (!useAppearanceProfilesStore.getState().remove(profile.id)) {
+      toast.error(t(`${K}.storageError`));
+      return;
+    }
     toast(t(`${K}.deleted`, { name: names[index] }), {
       action: {
         label: t(`${F}.undo`),
@@ -201,7 +203,7 @@ export function ProfilesSection() {
             .restore(profile, index);
           if (result === "full")
             toast.error(t(`${K}.full`, { count: MAX_PROFILES }));
-          else if (result === "storage") toast.error(t(`${K}.storageFull`));
+          else if (result === "storage") toast.error(t(`${K}.storageError`));
         },
       },
     });

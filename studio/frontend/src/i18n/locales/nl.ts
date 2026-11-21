@@ -2777,6 +2777,7 @@ export const nl = {
         saved: "Profiel ‘{name}’ opgeslagen",
         full: "Je kunt maximaal {count} profielen bewaren. Verwijder er een om een nieuw profiel op te slaan.",
         storageFull: "Er is niet genoeg browseropslag over om dit profiel op te slaan.",
+        storageError: "De browseropslag kon niet worden bijgewerkt, dus de wijziging is niet opgeslagen.",
         empty: "Nog geen opgeslagen profielen.",
         listLabel: "Opgeslagen profielen",
         apply: "Toepassen",

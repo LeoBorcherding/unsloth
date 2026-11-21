@@ -2521,6 +2521,7 @@ export const zhCN = {
         saved: "已保存配置“{name}”",
         full: "最多可保留 {count} 个配置。删除一个后才能保存新的。",
         storageFull: "浏览器存储空间不足，无法保存此配置。",
+        storageError: "无法更新浏览器存储，因此未保存更改。",
         empty: "还没有已保存的配置。",
         listLabel: "已保存的配置",
         apply: "应用",

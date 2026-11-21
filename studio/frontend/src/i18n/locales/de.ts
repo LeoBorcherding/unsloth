@@ -2576,6 +2576,7 @@ export const de = {
         saved: "Profil „{name}“ gespeichert",
         full: "Du kannst bis zu {count} Profile behalten. Lösche eines, um ein weiteres zu speichern.",
         storageFull: "Der Browser-Speicher reicht nicht aus, um dieses Profil zu speichern.",
+        storageError: "Der Browser-Speicher konnte nicht aktualisiert werden, daher wurde die Änderung nicht gespeichert.",
         empty: "Noch keine gespeicherten Profile.",
         listLabel: "Gespeicherte Profile",
         apply: "Anwenden",

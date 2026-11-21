@@ -2740,6 +2740,7 @@ export const id = {
         saved: "Profil “{name}” disimpan",
         full: "Anda dapat menyimpan hingga {count} profil. Hapus satu untuk menyimpan yang lain.",
         storageFull: "Penyimpanan browser tidak cukup untuk menyimpan profil ini.",
+        storageError: "Penyimpanan browser tidak dapat diperbarui, jadi perubahan tidak disimpan.",
         empty: "Belum ada profil tersimpan.",
         listLabel: "Profil tersimpan",
         apply: "Terapkan",

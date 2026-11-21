@@ -2563,6 +2563,7 @@ export const ptBR = {
         saved: "Perfil “{name}” salvo",
         full: "Você pode manter até {count} perfis. Exclua um para salvar outro.",
         storageFull: "Não há armazenamento suficiente no navegador para salvar este perfil.",
+        storageError: "Não foi possível atualizar o armazenamento do navegador, então a alteração não foi salva.",
         empty: "Nenhum perfil salvo ainda.",
         listLabel: "Perfis salvos",
         apply: "Aplicar",

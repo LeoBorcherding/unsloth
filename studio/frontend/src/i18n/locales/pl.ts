@@ -2772,6 +2772,7 @@ export const pl = {
         saved: "Zapisano profil „{name}”",
         full: "Możesz mieć do {count} profili. Usuń jeden, aby zapisać kolejny.",
         storageFull: "W przeglądarce brakuje miejsca, aby zapisać ten profil.",
+        storageError: "Nie udało się zaktualizować pamięci przeglądarki, więc zmiana nie została zapisana.",
         empty: "Brak zapisanych profili.",
         listLabel: "Zapisane profile",
         apply: "Zastosuj",

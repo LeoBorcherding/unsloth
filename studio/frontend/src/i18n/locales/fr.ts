@@ -2574,6 +2574,7 @@ export const fr = {
         saved: "Profil « {name} » enregistré",
         full: "Vous pouvez garder jusqu’à {count} profils. Supprimez-en un pour en enregistrer un autre.",
         storageFull: "Il ne reste pas assez de stockage dans le navigateur pour enregistrer ce profil.",
+        storageError: "Le stockage du navigateur n'a pas pu être mis à jour, la modification n'a donc pas été enregistrée.",
         empty: "Aucun profil enregistré pour l’instant.",
         listLabel: "Profils enregistrés",
         apply: "Appliquer",

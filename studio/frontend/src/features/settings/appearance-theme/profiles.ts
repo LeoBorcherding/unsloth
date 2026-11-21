@@ -133,7 +133,7 @@ type ProfilesState = {
   profiles: AppearanceProfile[];
   save: (theme: Record<string, unknown>) => SaveProfileResult;
   rename: (id: string, name: string) => boolean;
-  remove: (id: string) => void;
+  remove: (id: string) => boolean;
   restore: (profile: AppearanceProfile, index: number) => SaveProfileResult;
 };
 
@@ -167,9 +167,7 @@ export const useAppearanceProfilesStore = create<ProfilesState>()(
             ),
           );
         },
-        remove: (id) => {
-          commit(get().profiles.filter((p) => p.id !== id));
-        },
+        remove: (id) => commit(get().profiles.filter((p) => p.id !== id)),
         restore: (profile, index) => {
           const profiles = get().profiles.filter((p) => p.id !== profile.id);
           // A save made since the delete can fill the list; never evict it to undo.

@@ -2567,6 +2567,7 @@ export const en = {
         saved: "Profile “{name}” saved",
         full: "You can keep up to {count} profiles. Delete one to save another.",
         storageFull: "There isn't enough browser storage left to save this profile.",
+        storageError: "Browser storage couldn't be updated, so the change wasn't saved.",
         empty: "No saved profiles yet.",
         listLabel: "Saved profiles",
         apply: "Apply",

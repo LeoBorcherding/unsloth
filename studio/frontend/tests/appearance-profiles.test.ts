@@ -244,6 +244,8 @@ test("a save that storage refuses is rolled back and reported", () => {
   const { id } = store.getState().profiles[0];
   assert.equal(store.getState().rename(id, "Renamed"), false);
   assert.equal(profileName(store.getState().profiles[0]), "Kept");
+  assert.equal(store.getState().remove(id), false);
+  assert.deepEqual(store.getState().profiles.map(profileName), ["Kept"]);
 });
 
 test("the list is capped", () => {

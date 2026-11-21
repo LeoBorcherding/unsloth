@@ -2621,6 +2621,7 @@ export const zhTW = {
         saved: "已儲存設定檔「{name}」",
         full: "最多可保留 {count} 個設定檔。刪除一個後才能儲存新的。",
         storageFull: "瀏覽器儲存空間不足，無法儲存此設定檔。",
+        storageError: "無法更新瀏覽器儲存空間，因此未儲存變更。",
         empty: "還沒有已儲存的設定檔。",
         listLabel: "已儲存的設定檔",
         apply: "套用",

@@ -2756,6 +2756,7 @@ export const cs = {
         saved: "Profil „{name}“ uložen",
         full: "Můžete mít až {count} profilů. Smažte jeden, abyste mohli uložit další.",
         storageFull: "V prohlížeči nezbývá dost místa pro uložení tohoto profilu.",
+        storageError: "Úložiště prohlížeče se nepodařilo aktualizovat, takže změna nebyla uložena.",
         empty: "Zatím žádné uložené profily.",
         listLabel: "Uložené profily",
         apply: "Použít",

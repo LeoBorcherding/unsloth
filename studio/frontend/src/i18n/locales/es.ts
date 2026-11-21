@@ -2571,6 +2571,7 @@ export const es = {
         saved: "Perfil «{name}» guardado",
         full: "Puedes guardar hasta {count} perfiles. Elimina uno para guardar otro.",
         storageFull: "No queda suficiente almacenamiento en el navegador para guardar este perfil.",
+        storageError: "No se pudo actualizar el almacenamiento del navegador, así que el cambio no se guardó.",
         empty: "Aún no hay perfiles guardados.",
         listLabel: "Perfiles guardados",
         apply: "Aplicar",

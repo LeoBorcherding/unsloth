@@ -2743,6 +2743,7 @@ export const vi = {
         saved: "Đã lưu hồ sơ “{name}”",
         full: "Bạn có thể giữ tối đa {count} hồ sơ. Hãy xóa một hồ sơ để lưu hồ sơ khác.",
         storageFull: "Bộ nhớ trình duyệt không còn đủ để lưu hồ sơ này.",
+        storageError: "Không thể cập nhật bộ nhớ trình duyệt nên thay đổi chưa được lưu.",
         empty: "Chưa có hồ sơ nào được lưu.",
         listLabel: "Hồ sơ đã lưu",
         apply: "Áp dụng",
