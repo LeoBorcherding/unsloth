@@ -208,7 +208,10 @@ class _Shared:
 
     def __init__(self) -> None:
         self.users = 0
+        # The first call that loaded holds the chat model to bring back; every call that loaded is
+        # checked at the end, since a later one may have switched the backend to its own pick.
         self.loader: Optional[_Swap] = None
+        self.loaded: list = []
 
 
 # Keyed by owner. Touched only on the server loop, never across an await, so no lock.
@@ -523,19 +526,23 @@ async def _render_video(arguments, prompt, abort, deadline, workdir) -> str:
 
 async def _put_back(swap: _Swap, subject: str) -> str:
     shared = swap.shared
+    loaded = [swap] if swap.loaded_media else []
     if shared is not None:
         shared.users -= 1
-        if swap.loaded_media and shared.loader is None:
-            shared.loader = swap
+        if swap.loaded_media:
+            shared.loaded.append(swap)
+            if shared.loader is None:
+                shared.loader = swap
         if shared.users > 0:
             # Unloading or bringing the chat model back now would end that other render.
             swap.deferred = swap.chat_unloaded
             return ""
         _SHARED.pop(swap.owner, None)
+        loaded = shared.loaded
         swap = shared.loader or swap
-    if swap.loaded_media:
+    if loaded:
         await _setup_settled(swap.owner, _RESTORE_WAIT_S)
-    if swap.loaded_media and await _ours_resident(swap):
+    if loaded and any([await _ours_resident(each) for each in loaded]):
         try:
             await _unload_media(swap.owner, subject)
         except Exception as exc:  # noqa: BLE001

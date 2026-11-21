@@ -1242,3 +1242,33 @@ def test_the_put_back_leaves_a_newer_image_model_another_request_switched_in(wor
     )
     assert result.startswith("Generated a")
     assert ("unload",) not in world.calls
+
+
+def test_the_last_shared_call_unloads_a_later_calls_model(monkeypatch):
+    _preflight_world(monkeypatch)
+    calls = []
+
+    async def unload_media(owner, subject):
+        calls.append("unload")
+
+    async def restore_chat(swap, subject):
+        calls.append(("restore", swap.chat_identity))
+
+    async def resident(swap):
+        return swap.name == "org/later"  # the later call switched the backend to its own pick
+
+    monkeypatch.setattr(tool, "_unload_media", unload_media)
+    monkeypatch.setattr(tool, "_restore_chat", restore_chat)
+    monkeypatch.setattr(tool, "_ours_resident", resident)
+
+    async def scenario():
+        first, later = tool._Swap(), tool._Swap()
+        first.loaded_media, first.name, first.chat_identity = True, "org/first", CHAT
+        later.loaded_media, later.name = True, "org/later"
+        tool._enter_shared(first)
+        tool._enter_shared(later)
+        await tool._put_back(first, "alice")
+        await tool._put_back(later, "bob")
+
+    asyncio.run(scenario())
+    assert calls == ["unload", ("restore", CHAT)]
