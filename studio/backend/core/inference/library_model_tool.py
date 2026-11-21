@@ -353,7 +353,6 @@ async def _swap_and_render(
             return await _ask_llm(arguments, prompt, row.id, swap)
         if task == _TTS_TASK:
             from utils.account_context import current_account
-
             subject = current_account().username
             return await _on_chat_seat(
                 arguments,
@@ -622,9 +621,14 @@ async def _downloaded_llms() -> tuple:
     from routes.inference import _cached_local_catalog
 
     rows = await _cached_local_catalog()
-    groups = (("chat", _LLM_TASKS), ("text-to-speech", (_TTS_TASK,)), ("speech-to-text", (_STT_TASK,)))
+    groups = (
+        ("chat", _LLM_TASKS),
+        ("text-to-speech", (_TTS_TASK,)),
+        ("speech-to-text", (_STT_TASK,)),
+    )
     return tuple(
-        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks]) for kind, tasks in groups
+        (kind, [row.id for row in rows if getattr(row, "task", None) in tasks])
+        for kind, tasks in groups
     )
 
 
@@ -728,7 +732,6 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
     swap.chat_launch = launch_to_replay() if swap.chat_identity is not None else None
     if swap.chat_identity is None:
         from core.inference import get_inference_backend
-
         orchestrator = await asyncio.to_thread(get_inference_backend)
         if getattr(orchestrator, "active_model_name", None):
             return ERR_NON_GGUF_CHAT
@@ -752,12 +755,16 @@ async def _ask_llm(arguments: dict, prompt: str, name: str, swap: "_Swap") -> st
 
     async def run(beside: bool) -> tuple[str, bool]:
         text, refused = await _complete_llm(name, prompt, subject, beside = beside)
-        return (text if refused or text.startswith("Error") else f"{name} answered:\n{text}"), refused
+        return (
+            text if refused or text.startswith("Error") else f"{name} answered:\n{text}"
+        ), refused
 
     return await _on_chat_seat(arguments, name, swap, run)
 
 
-async def _speak_tts(name: str, text: str, subject: str, workdir: str, *, beside: bool) -> tuple[str, bool]:
+async def _speak_tts(
+    name: str, text: str, subject: str, workdir: str, *, beside: bool
+) -> tuple[str, bool]:
     """(result, refused): one clip from TTS model ``name``, saved into the chat's sandbox."""
     import hashlib
     import os
@@ -776,7 +783,9 @@ async def _speak_tts(name: str, text: str, subject: str, workdir: str, *, beside
         load_alongside_for_request,
     )
 
-    request = _producer_request(None, "library-model-speak", threading.Event(), "UTC", loaded_only = False)
+    request = _producer_request(
+        None, "library-model-speak", threading.Event(), "UTC", loaded_only = False
+    )
     allow_model_switch_for_request(request.scope)
     if beside:
         load_alongside_for_request(request.scope)
@@ -786,7 +795,12 @@ async def _speak_tts(name: str, text: str, subject: str, workdir: str, *, beside
     wav = None
     try:
         wav, rate, served, audio_type = await _generate_tts_wav(
-            text, payload, request, subject, speech_api_default_max_tokens = True, requested_model = name
+            text,
+            payload,
+            request,
+            subject,
+            speech_api_default_max_tokens = True,
+            requested_model = name,
         )
     except HTTPException as exc:
         detail = _detail(exc)
@@ -803,7 +817,9 @@ async def _speak_tts(name: str, text: str, subject: str, workdir: str, *, beside
     with open(os.path.join(root, file), "wb") as out:
         out.write(wav)
     saved = {"name": file, "size": len(wav)}
-    return f"Spoke the text with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps([saved]), False
+    return f"Spoke the text with {name} and saved it as {file}." + "\n__FILES__:" + json.dumps(
+        [saved]
+    ), False
 
 
 async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
@@ -825,7 +841,9 @@ async def _transcribe(name: str, arguments: dict, workdir: str) -> str:
         return f"Error: no audio file named '{audio}' in this chat."
     raw = await asyncio.to_thread(lambda: open(path, "rb").read())
     before = (await asyncio.to_thread(stt_registry.resident)).get("model")
-    request = _producer_request(None, "library-model-transcribe", threading.Event(), "UTC", loaded_only = False)
+    request = _producer_request(
+        None, "library-model-transcribe", threading.Event(), "UTC", loaded_only = False
+    )
     try:
         result = await _transcribe_audio_result(raw, name, None, False, request = request)
     except HTTPException as exc:

@@ -790,7 +790,9 @@ def test_the_listing_includes_chat_models(world, llm):
     )
 
 
-def test_a_tts_model_speaks_beside_the_chat_model_and_keeps_the_file_envelope_last(world, monkeypatch):
+def test_a_tts_model_speaks_beside_the_chat_model_and_keeps_the_file_envelope_last(
+    world, monkeypatch
+):
     from core.scheduled_tasks import scheduler
 
     async def row(name):
@@ -800,7 +802,10 @@ def test_a_tts_model_speaks_beside_the_chat_model_and_keeps_the_file_envelope_la
 
     async def speak(name, text, subject, workdir, *, beside):
         spoken.append((name, text, beside))
-        return 'Spoke the text with org/tts and saved it as a.wav.\n__FILES__:[{"name": "a.wav", "size": 1}]', False
+        return (
+            'Spoke the text with org/tts and saved it as a.wav.\n__FILES__:[{"name": "a.wav", "size": 1}]',
+            False,
+        )
 
     async def unload(name, subject):
         spoken.append(("unload", name))
@@ -809,27 +814,40 @@ def test_a_tts_model_speaks_beside_the_chat_model_and_keeps_the_file_envelope_la
     monkeypatch.setattr(tool, "_speak_tts", speak)
     monkeypatch.setattr(tool, "_unload_llm", unload)
     monkeypatch.setattr(scheduler, "_model_is_loaded", lambda name: False)
-    result = _call(world, {"model": "org/tts", "prompt": "hello there", "unload_chat_model": "false"})
+    result = _call(
+        world, {"model": "org/tts", "prompt": "hello there", "unload_chat_model": "false"}
+    )
     assert spoken == [("org/tts", "hello there", True), ("unload", "org/tts")]
     body, files = result.split("\n__FILES__")
     assert body.endswith("org/tts ran beside the chat model, which stayed loaded.")
     assert "a.wav" in files
 
 
-def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(world, monkeypatch, tmp_path):
+def test_an_stt_model_transcribes_an_audio_file_from_the_chat_and_is_unloaded(
+    world, monkeypatch, tmp_path
+):
     from core.inference import stt_registry
 
     async def row(name):
         return SimpleNamespace(id = "org/asr", task = "automatic-speech-recognition")
 
-    async def transcribe(raw, model, language, fast, request = None, **kwargs):
+    async def transcribe(
+        raw,
+        model,
+        language,
+        fast,
+        request = None,
+        **kwargs,
+    ):
         loaded["model"] = model
         return {"text": f"heard {len(raw)} bytes"}
 
     loaded, unloaded = {}, []
     monkeypatch.setattr(tool, "_catalog_row", row)
     monkeypatch.setattr(inference, "_transcribe_audio_result", transcribe)
-    monkeypatch.setattr(stt_registry, "resident", lambda: {"model": loaded.get("model")} if loaded else {})
+    monkeypatch.setattr(
+        stt_registry, "resident", lambda: {"model": loaded.get("model")} if loaded else {}
+    )
     monkeypatch.setattr(stt_registry, "unload", lambda **kw: unloaded.append(kw))
     import os
 
