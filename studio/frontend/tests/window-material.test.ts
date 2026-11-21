@@ -276,7 +276,7 @@ test("glass frosts the chat model controls and gives the account row the row hov
 	assert.match(page, /data-wallpaper-chrome-controls="" data-chat-model-controls=""/);
 });
 
-test("glass tints the user's bubble and thread code blocks like the composer, with no blur", () => {
+test("glass tints the user's bubble and thread code blocks like the composer, with its edge and no blur", () => {
 	const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 	const host = String.raw`html\[data-glass\] :is\(\[data-wallpaper-workspace\], \[data-chat-content-root\]\)\[data-wallpaper-ready\]\[data-wallpaper-ready\]`;
 	const rule = (target: string) => new RegExp(`${host} ${target} \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
@@ -290,6 +290,11 @@ test("glass tints the user's bubble and thread code blocks like the composer, wi
 	// Strength 0% clears both; with no --glass-on set, the fill is unchanged.
 	for (const block of [bubble, code])
 		assert.match(block, /\* var\(--glass-opacity, 1\) \* var\(--glass-on, 1\)\)\), transparent\)/);
+	// The composer's edge in place of the solid border, cleared at 0% with the fill.
+	for (const block of [bubble, code]) {
+		assert.match(block, /border-color: transparent;/);
+		assert.match(block, /box-shadow: inset 0 0 0 1px color-mix\(in srgb, var\(--foreground\) calc\(14% \* var\(--glass-on, 1\)\), transparent\), inset 0 1px 0 rgb\(255 255 255 \/ calc\(\.08 \* var\(--glass-on, 1\)\)\);/);
+	}
 });
 
 test("glass frosts sticky bars in panels and popups, floating buttons, and softens shared shadows", () => {
