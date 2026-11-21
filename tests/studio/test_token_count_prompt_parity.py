@@ -122,7 +122,19 @@ const useBrowserAgentStore: any = { getState: () => state.browserAgent };
 const useSkillsSwitchStore: any = { getState: () => ({ on: null }) };
 
 // Browser use off: the count must match a turn that offers no browser tools.
+// An ordinary chat: no character run, as for every chat these cases build.
+async function prepareCharacterRun(_args: any): Promise<any> {
+  return null;
+}
+function isKnownCharacterChat(_threadId: any): boolean {
+  return false;
+}
 function browserAgentToolsForTurn(): string[] {
+  return [];
+}
+
+// Computer use off too; the count and the request both call computerUseToolsForTurn().
+function computerUseToolsForTurn(): string[] {
   return [];
 }
 

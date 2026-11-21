@@ -10,24 +10,28 @@ export type PlusMenuItemId =
   | "deepResearch"
   | "chatWithFiles"
   | "browserUse"
+  | "computerUse"
   | "mcp"
   | "skills"
   | "savedPrompts"
   | "compareChat"
   | "exportChat"
-  | "projects";
+  | "projects"
+  | "characters";
 
 // Default order; Settings > Chat lets the user reorder it.
 export const PLUS_MENU_ORDER: PlusMenuItemId[] = [
   "deepResearch",
   "chatWithFiles",
   "browserUse",
+  "computerUse",
   "mcp",
   "skills",
   "savedPrompts",
   "compareChat",
   "exportChat",
   "projects",
+  "characters",
 ];
 
 // Chat with files and Skills sit at the top level; everything else, MCP included, lives under
@@ -36,12 +40,14 @@ const DEFAULT_PINS: Record<PlusMenuItemId, boolean> = {
   deepResearch: true,
   chatWithFiles: true,
   browserUse: true,
+  computerUse: true,
   mcp: false,
   skills: true,
   projects: false,
   savedPrompts: false,
   compareChat: false,
   exportChat: false,
+  characters: false,
 };
 
 export function plusMenuAtDefaults(

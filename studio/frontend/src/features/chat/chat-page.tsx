@@ -79,7 +79,7 @@ import {
   useDeviceInventorySources,
 } from "@/features/hub/inventory";
 import { modelIdsMatch } from "@/features/hub/lib/model-identity";
-import { ChatHeaderMenu } from "./components/chat-header-menu";
+import { ChatHeaderMenu, ChatTitleMenu } from "./components/chat-header-menu";
 import { DeleteChatFilesSwitch } from "./components/delete-chat-files-switch";
 import { chatLocalModelOptions } from "./local-model-options";
 import {
@@ -204,7 +204,9 @@ import { cloudCompactionTrigger } from "./utils/auto-compaction";
 import { contextUsageRows } from "./lib/context-usage-bar-state";
 import { ModelLoadInlineStatus } from "./components/model-load-status";
 import { ProjectSwitcher } from "./components/project-switcher";
+import { CastChip, CharacterStage, ChatViewMenu } from "@/features/characters";
 import { EditProjectDialog } from "./components/edit-project-dialog";
+import { ProjectFolderChip } from "./components/project-folder-chip";
 import {
   buildExternalModelId,
   isDecisionConnection,
@@ -355,6 +357,7 @@ import {
 } from "./prompt-storage/prompt-storage-dialog";
 import { ExportFormatItems } from "./components/export-format-items";
 import { providerModelDisplayName, useModelDisplayNamesVersion } from "./model-display-names";
+import { syncThreadScroll, trackThreadScroll } from "./thread-scroll-flag";
 import { lazyWithoutSuspense, preloadWhenIdle } from "@/lib/lazy-without-suspense";
 
 // Not lazy(): a Suspense reveal is held up to 300 ms, which was most of the pane's first open.
@@ -520,6 +523,12 @@ function BrowserOverlay(): ReactElement {
 const ProjectSourcesPanel = lazy(() =>
   import("@/features/rag/components/project-sources-panel").then((module) => ({
     default: module.ProjectSourcesPanel,
+  })),
+);
+
+const ProjectFilesPanel = lazy(() =>
+  import("@/features/chat/components/project-files-panel").then((module) => ({
+    default: module.ProjectFilesPanel,
   })),
 );
 
@@ -949,11 +958,13 @@ const SingleContent = memo(function SingleContent({
         browserFullView && chatDock === "minimized" && "hidden",
       )}
     >
-      {/* A floating chat has no welcome screen, so its composer shows in a new chat too. */}
-      <Thread
-        hideWelcome={Boolean(threadId) || browserFullView}
-        targetThreadId={threadId}
-      />
+      <CharacterStage threadId={threadId}>
+        {/* A floating chat has no welcome screen, so its composer shows in a new chat too. */}
+        <Thread
+          hideWelcome={Boolean(threadId) || browserFullView}
+          targetThreadId={threadId}
+        />
+      </CharacterStage>
     </div>
   );
 
@@ -1324,7 +1335,10 @@ function ComparePane({
       )}
     >
       {header}
-      <div className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden [&_.aui-thread-viewport]:px-6 lg:[&_.aui-thread-viewport]:px-10">
+      <div
+        ref={trackThreadScroll}
+        data-thread-scroll-host=""
+        className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden [&_.aui-thread-viewport]:px-6 lg:[&_.aui-thread-viewport]:px-10">
         <div
           aria-hidden={true}
           className="compare-pane-fade pointer-events-none absolute top-0 left-0 right-[var(--thread-scrollbar-gutter,10px)] z-20 h-6 bg-gradient-to-b from-background to-transparent"
@@ -1649,7 +1663,7 @@ function GeneralCompareHeader({
   return (
     <div
       className={cn(
-        "pointer-events-none relative z-40 flex h-[calc(48px*var(--ui-space-scale,1))] shrink-0 items-start gap-2 bg-background pt-[var(--studio-chat-header-padding-top,11px)]",
+        "pointer-events-none relative z-40 flex h-[calc(48px*var(--ui-space-scale,1))] shrink-0 items-start gap-2 bg-background pt-[var(--studio-chat-header-padding-top,11px)] compare-pane-header",
         side === "left"
           ? pinned
             ? "pl-12 pr-3 md:pl-2"
@@ -2094,7 +2108,7 @@ function ProjectLanding({
   const [initialActiveThreadId] = useState(
     () => useChatRuntimeStore.getState().activeThreadId,
   );
-  const [projectTab, setProjectTab] = useState<"chats" | "sources">(() =>
+  const [projectTab, setProjectTab] = useState<"chats" | "sources" | "files">(() =>
     hasProjectSourcesPending(projectId) ? "sources" : "chats",
   );
   // Drop the marker once committed: React may replay the initializer above.
@@ -2418,7 +2432,9 @@ function ProjectLanding({
         </div>
       ) : (
         <div
+          ref={syncThreadScroll}
           data-wallpaper-reading-surface=""
+          data-header-fade-scroller=""
           className="relative flex min-h-0 min-w-0 flex-1 basis-0 overflow-y-auto px-5"
           style={
             {
@@ -2435,9 +2451,19 @@ function ProjectLanding({
                   className="size-6.5"
                 />
               </span>
-              <h1 className="min-w-0 flex-1 truncate font-sans text-ui-30 font-medium leading-tight tracking-normal text-foreground">
-                {projectName}
-              </h1>
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+                <h1 className="max-w-full truncate font-sans text-ui-30 font-medium leading-tight tracking-normal text-foreground">
+                  {projectName}
+                </h1>
+                {currentProject && (
+                  <div className="-ml-2.5 flex max-w-full min-w-0">
+                    <ProjectFolderChip
+                      project={currentProject}
+                      onChange={() => setEditingProject(true)}
+                    />
+                  </div>
+                )}
+              </div>
               <NonModalDropdownMenu
                 side="bottom"
                 align="end"
@@ -2487,6 +2513,14 @@ function ProjectLanding({
               >
                 Sources
               </button>
+              <button
+                type="button"
+                onClick={() => setProjectTab("files")}
+                data-active={projectTab === "files"}
+                className="h-10 rounded-full px-5 text-ui-14 font-semibold transition-colors data-[active=true]:bg-muted data-[active=true]:text-foreground data-[active=false]:text-muted-foreground data-[active=false]:hover:bg-nav-surface-hover"
+              >
+                Files
+              </button>
             </div>
 
             {projectTab === "sources" ? (
@@ -2498,6 +2532,19 @@ function ProjectLanding({
                 }
               >
                 <ProjectSourcesPanel projectId={projectId} />
+              </Suspense>
+            ) : projectTab === "files" ? (
+              <Suspense
+                fallback={
+                  <div className="mt-8 rounded-2xl bg-muted/30 px-6 py-10 text-center text-sm text-muted-foreground">
+                    Loading files…
+                  </div>
+                }
+              >
+                <ProjectFilesPanel
+                  key={`${currentProject?.workingFolder ?? ""}|${currentProject?.workingFolderStatus ?? ""}`}
+                  projectId={projectId}
+                />
               </Suspense>
             ) : (
               <div className="mt-8 flex flex-col gap-1">
@@ -3036,7 +3083,11 @@ export function ChatPage({
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(
     search.project ?? null,
   );
-  const { projects, isLoading: projectsLoading } = useChatProjects();
+  const {
+    projects,
+    isLoading: projectsLoading,
+    loadFailed: projectsLoadFailed,
+  } = useChatProjects();
   const currentProject = currentProjectId
     ? (projects.find((project) => project.id === currentProjectId) ?? null)
     : null;
@@ -3663,6 +3714,14 @@ export function ChatPage({
   const baseAttachmentTargetKey =
     keptBaseViewRef.current?.attachmentTargetKey ?? nativeAttachmentTargetKey;
   const baseBackgrounded = view.mode === "compare";
+  // Sidebar rows, links and Back reach compare without enterCompare; the hidden chat is not the open one.
+  const comparePairId = view.mode === "compare" ? view.pairId : null;
+  useLayoutEffect(() => {
+    if (!active || comparePairId === null) return;
+    const store = useChatRuntimeStore.getState();
+    store.setActiveThreadId(null);
+    store.setContextUsage(null);
+  }, [active, comparePairId]);
 
   // Keyed by project, not a boolean: the hoisted provider is not remounted on project change.
   const projectLandingId =
@@ -4923,6 +4982,8 @@ export function ChatPage({
       {/* Mounted always: its chord must work before MCP is on, and it closes itself on route change. */}
       <McpServersDialogMount />
       <div
+        ref={trackThreadScroll}
+        data-thread-scroll-host=""
         data-chat-content-root=""
         className="relative flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden"
       >
@@ -4967,6 +5028,9 @@ export function ChatPage({
                 />
               </Button>
             )}
+            {view.mode === "single" && !currentProjectId && !incognito && (
+              <ChatTitleMenu threadId={activeThreadId} />
+            )}
             {view.mode === "single" && (
               <ChatModelNotice
                 active={active}
@@ -4988,18 +5052,33 @@ export function ChatPage({
                   currentProject={currentProject}
                   projects={projects}
                   isLoading={projectsLoading}
+                  loadFailed={projectsLoadFailed}
                   onSelectProject={openProjectLanding}
                   onViewAllProjects={openProjectsList}
                   open={projectPickerOpen}
                   onOpenChange={setProjectPickerOpen}
                 />
                 {currentProject && activeThreadId ? (
-                  <span className="min-w-0 truncate">
-                    {currentChatTitle ?? "New chat"}
-                  </span>
+                  <ChatTitleMenu
+                    threadId={incognito ? null : activeThreadId}
+                    fallback={
+                      <span className="min-w-0 truncate">
+                        {currentChatTitle ?? "New chat"}
+                      </span>
+                    }
+                  />
                 ) : null}
               </nav>
             )}
+            {view.mode === "single" ? (
+              <CastChip
+                threadId={activeThreadId}
+                onOpen={() => {
+                  useResearchRunStore.getState().closePanel();
+                  setSettingsOpen(true);
+                }}
+              />
+            ) : null}
             {pendingNativeModelIntent && view.mode !== "compare" ? (
               <NativeModelChip
                 intent={pendingNativeModelIntent}
@@ -5052,7 +5131,7 @@ export function ChatPage({
                 // Keyed like the adapter's run (resolvedThreadId || "__default"), local ids included.
                 liveThreadKey={activeThreadId ?? "__default"}
                 compactUnknownAsIcon={view.mode === "single"}
-                used={contextUsage?.contextTokens ?? contextUsage?.totalTokens ?? null}
+                used={contextUsage?.recountedTokens ?? contextUsage?.contextTokens ?? contextUsage?.totalTokens ?? null}
                 // A cloud model shows its catalogued window; null when the catalogue has none.
                 total={isExternalModel ? cloudContextWindow : loadedContextLength}
                 cloud={isExternalModel}
@@ -5082,6 +5161,7 @@ export function ChatPage({
                 onDiscard={toggleIncognito}
               />
             ) : null}
+            {view.mode === "single" ? <ChatViewMenu threadId={activeThreadId} /> : null}
             {view.mode === "single" && (
               <ChatHeaderMenu temporary={incognito} onToggleTemporary={toggleIncognito} />
             )}

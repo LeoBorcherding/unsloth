@@ -46,7 +46,9 @@ import {
   TestTube01Icon,
   ApiIcon,
   Clock01Icon,
+  WinkingIcon,
   Download01Icon,
+  AiTranslateIcon,
 } from "@hugeicons/core-free-icons";
 import { AiSpeechIcon, Settings01Icon } from "@/lib/hugeicons-derived";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -158,6 +160,7 @@ const SETTINGS_TAB_LABELS: Record<SettingsTab, TranslationKey> = {
   agents: "settings.tabs.agents",
   "keyboard-shortcuts": "settings.tabs.keyboardShortcuts",
   browser: "browser.settingsTitle",
+  "computer-use": "computerUse.settings.title",
   debugging: "settings.tabs.debugging",
   about: "settings.tabs.about",
 };
@@ -309,6 +312,20 @@ function PaletteContent() {
           >
             <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.75} />
             <span>{t("shell.navigation.tasks")}</span>
+          </PaletteItem>
+          <PaletteItem
+            onSelect={runAndClose(() => void navigate({ to: "/translate" }))}
+            keywords={["translate", "translation", "language"]}
+          >
+            <HugeiconsIcon icon={AiTranslateIcon} strokeWidth={1.75} />
+            <span>{t("shell.navigation.translate")}</span>
+          </PaletteItem>
+          <PaletteItem
+            onSelect={runAndClose(() => void navigate({ to: "/characters" }))}
+            keywords={["characters", "roleplay", "persona", "card", "group chat"]}
+          >
+            <HugeiconsIcon icon={WinkingIcon} strokeWidth={1.75} />
+            <span>{t("shell.navigation.characters")}</span>
           </PaletteItem>
           <PaletteItem
             onSelect={runAndClose(() => void navigate({ to: "/api-monitor" }))}

@@ -70,7 +70,6 @@ import { useTrainingUnloadGuard } from "@/features/training/hooks/use-training-u
 import { TransformersUpgradeDialog } from "@/features/transformers-upgrade";
 import { LlmCompressorConsentDialog } from "@/features/export/components/llm-compressor-consent-dialog";
 import { useNativePathLeasesSupported } from "@/features/native-intents";
-import { useRagAvailabilityStore } from "@/features/rag/api/rag-availability";
 import { useIsMobileShell } from "@/hooks/use-mobile";
 import { useSidebarPin } from "@/hooks/use-sidebar-pin";
 import { useTypeToActivate } from "@/hooks/use-type-to-activate";
@@ -368,6 +367,7 @@ const CHAT_ONLY_ALLOWED = new Set([
   "/projects",
   "/library",
   "/tasks",
+  "/translate",
   "/hub",
   "/login",
   "/signup",
@@ -391,6 +391,8 @@ function isChatOnlyAllowed(pathname: string, trainAvailable: boolean): boolean {
     return true;
   if (pathname === "/data-recipes" || pathname.startsWith("/data-recipes/"))
     return true;
+  // Characters only need a chat model, which a chat-only host runs.
+  if (pathname === "/characters" || pathname.startsWith("/characters/")) return true;
   if (pathname === "/images" || pathname.startsWith("/images/")) return true;
   if (pathname === "/audio" || pathname.startsWith("/audio/")) return true;
   if (pathname === "/video" || pathname.startsWith("/video/")) return true;
@@ -599,7 +601,6 @@ function RootLayout() {
   });
 
   const pathLeasesSupported = useNativePathLeasesSupported();
-  const ragUnavailable = useRagAvailabilityStore((s) => s.isUnavailable());
   const openingFolder = useOpeningFolder();
   const sidebarMounted = useShortcutAvailable("toggleSidebar", hasAppMenus);
   const findMounted = useShortcutAvailable("findInPage", hasAppMenus);
@@ -626,7 +627,7 @@ function RootLayout() {
       ? () => startNewChat({ incognito: true, standalone: true })
       : null,
     "open-folder":
-      routeShortcutEnabled && pathLeasesSupported && !ragUnavailable && !openingFolder
+      routeShortcutEnabled && pathLeasesSupported && !openingFolder
         ? () =>
             void openFolderAsProject().then((project) => {
               if (!project) return;

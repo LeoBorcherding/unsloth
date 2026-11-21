@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import type { CharacterReplyMeta } from "@/features/characters";
 // eslint-disable-next-line no-restricted-imports -- Avoid the auth barrel's React login page.
 import { authFetch } from "@/features/auth/api";
 import { watchStreamSilence } from "@/lib/stream-silence";
@@ -45,6 +46,8 @@ export interface CreateChatGenerationRunInput {
   requestPayload: OpenAIChatCompletionsRequest;
   /** Stop the run once no tab follows it, instead of finishing in the background. Sent only when set. */
   stopWhenUnattended?: boolean;
+  /** A character chat's speaker for this reply, stored on the reply when the run is made. */
+  assistantRoleplay?: CharacterReplyMeta;
 }
 
 export interface ChatGenerationEvent {
@@ -248,18 +251,50 @@ export function explicitStopSignal(signal: AbortSignal): {
   };
 }
 
+// Failures while hidden (a locked phone) do not count.
+const ADMISSION_VISIBLE_ATTEMPTS = 4;
+
+function pageIsHidden(): boolean {
+  return (
+    typeof document !== "undefined" && document.visibilityState === "hidden"
+  );
+}
+
 export async function supportsChatGenerationRuns(
   threadId: string,
   signal?: AbortSignal,
+  options: {
+    isHidden?: () => boolean;
+    delay?: (failures: number) => number;
+  } = {},
 ): Promise<boolean> {
   const query = new URLSearchParams({ threadId });
-  const response = await authFetch(
-    `/api/inference/chat-runs/active?${query.toString()}`,
-    { signal },
-  );
-  if (response.status === 404 || response.status === 405) return false;
-  await json<{ runs: ChatGenerationRun[] }>(response);
-  return true;
+  const isHidden = options.isHidden ?? pageIsHidden;
+  let failures = 0;
+  let visibleFailures = 0;
+  while (true) {
+    try {
+      const response = await authFetch(
+        `/api/inference/chat-runs/active?${query.toString()}`,
+        { signal },
+      );
+      if (response.status === 404 || response.status === 405) return false;
+      await json<{ runs: ChatGenerationRun[] }>(response);
+      return true;
+    } catch (error) {
+      if (signal?.aborted || isPermanent(error)) throw error;
+      failures += 1;
+      if (!isHidden()) visibleFailures += 1;
+      if (visibleFailures >= ADMISSION_VISIBLE_ATTEMPTS) throw error;
+      await waitForReconnect(
+        (options.delay ?? reconnectDelay)(failures),
+        signal,
+      );
+      if (signal?.aborted) {
+        throw signal.reason ?? new DOMException("Aborted", "AbortError");
+      }
+    }
+  }
 }
 
 export async function getActiveChatGenerationRuns(

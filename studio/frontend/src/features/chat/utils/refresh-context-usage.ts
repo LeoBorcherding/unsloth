@@ -121,7 +121,7 @@ function foldPart(part: unknown, seed: number): number {
 }
 
 /** Hashed, not measured: a run mutates a turn in place. */
-function branchSignature(messages: readonly ThreadMessage[]): string {
+export function branchSignature(messages: readonly ThreadMessage[]): string {
   let hash = 0;
   let parts = 0;
   for (const message of messages) {
@@ -345,7 +345,7 @@ export async function refreshContextUsage(
     };
 
     const payloadThreadId = threadId ?? undefined;
-    const countHistory = await buildLocalTokenCountHistory(
+    const { rolling, ...countHistory } = await buildLocalTokenCountHistory(
       runMessages,
       payloadThreadId,
     );
@@ -353,6 +353,7 @@ export async function refreshContextUsage(
     const countExtras = await buildLocalTokenCountExtras(
       payloadThreadId,
       countHistory.messages,
+      rolling,
     );
     if (!canPublish()) return;
 
