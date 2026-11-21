@@ -773,6 +773,18 @@ _result=$(run_func_stderr "$_dir")
 assert_contains "ROCm 7.14 cap is explained on stderr" "$_result" "No validated PyTorch for ROCm 7.14;"
 rm -rf "$_dir"
 
+# ROCm 10.x still caps to rocm7.2 by default, and the message names the opt-in ROCm 10 index.
+_dir=$(make_mock_amd_smi "10.1")
+_result=$(run_func "$_dir")
+assert_eq "ROCm 10.1 -> rocm7.2 (capped)" "https://download.pytorch.org/whl/rocm7.2" "$_result"
+_result=$(run_func_stderr "$_dir")
+assert_contains "ROCm 10.1 cap names the opt-in index" "$_result" "UNSLOTH_TORCH_INDEX_URL=https://stable.repo.amd.com/rocm/whl-next/"
+rm -rf "$_dir"
+_dir=$(make_mock_amd_smi "8.0")
+_result=$(run_func_stderr "$_dir")
+assert_not_contains "ROCm 8.0 cap does not name the ROCm 10 index" "$_result" "whl-next"
+rm -rf "$_dir"
+
 _dir=$(make_mock_amd_smi "7.2")
 _result=$(run_func_stderr "$_dir")
 assert_not_contains "ROCm 7.2 prints no cap note" "$_result" "No validated PyTorch"
