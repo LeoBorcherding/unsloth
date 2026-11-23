@@ -294,6 +294,13 @@ async function retryWithCurrentToken(
   }
 }
 
+/** Whether the shell can mint this document a session; a multi-account Desktop signs in in the page. */
+async function tauriShellSignsIn(): Promise<boolean> {
+  if (!isTauri) return false;
+  const { isTauriLoginRequired } = await import("./tauri-auto-auth");
+  return !isTauriLoginRequired();
+}
+
 async function retryWithTauriAutoAuth(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -512,7 +519,8 @@ export async function authFetch(
   }
 
   if (await isPasswordChangeRequiredResponse(response)) {
-    if (isTauri) {
+    // Asking the shell again would clear a managed account's setup session for a login_required.
+    if (await tauriShellSignsIn()) {
       return (
         (await retryWithTauriAutoAuth(
           resolvedInput,
@@ -531,7 +539,7 @@ export async function authFetch(
   const outcome = await refreshSessionOutcome();
   if (outcome === "unavailable") return response;
   if (outcome === "rejected") {
-    if (isTauri) {
+    if (await tauriShellSignsIn()) {
       return (
         (await retryWithTauriAutoAuth(
           resolvedInput,
@@ -541,13 +549,14 @@ export async function authFetch(
         )) ?? response
       );
     }
-    clearAuthTokensIfCurrent(refreshToken);
+    // Signed out already: a clear would fire the session event that restarts every poller.
+    if (refreshToken || getAuthToken()) clearAuthTokensIfCurrent(refreshToken);
     void redirectToAuth();
     return response;
   }
 
   if (mustChangePassword()) {
-    if (isTauri) {
+    if (await tauriShellSignsIn()) {
       return (
         (await retryWithTauriAutoAuth(
           resolvedInput,
