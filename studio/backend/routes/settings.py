@@ -73,6 +73,11 @@ from utils.device_sync_settings import (
     save_background_image,
     update_client_preferences,
 )
+from utils.onboarding_settings import (
+    account_has_history,
+    get_onboarding,
+    update_onboarding,
+)
 from utils.personalization_settings import (
     MAX_AVATAR_DATA_URL_BYTES,
     PERSONALIZATION_VERSION,
@@ -213,6 +218,11 @@ from utils.current_date_prompt_settings import (
     DEFAULT_CURRENT_DATE_PROMPT_ENABLED,
     get_current_date_prompt_enabled,
     set_current_date_prompt_enabled,
+)
+from utils.trusted_tool_folders_settings import (
+    MAX_TRUSTED_TOOL_FOLDERS,
+    get_trusted_tool_folders,
+    set_trusted_tool_folders,
 )
 from utils.lan_access_settings import (
     lan_access_status,
@@ -2682,22 +2692,26 @@ def update_openai_auto_switch(
 class ModelAliasEntry(BaseModel):
     name: str
     model: str
+    load_settings: Optional[dict[str, Any]] = None
 
 
 class ModelAliasesPayload(BaseModel):
     aliases: list[ModelAliasEntry] = Field(default_factory = list)
+    revision: Optional[str] = None
 
 
 class ModelAliasesResponse(BaseModel):
     aliases: list[ModelAliasEntry]
+    revision: str
 
 
 @_owner_settings_router.get("/model-aliases", response_model = ModelAliasesResponse)
 def get_model_aliases_setting(
     current_subject: str = Depends(get_current_subject),
 ) -> ModelAliasesResponse:
-    from utils.model_aliases import get_model_aliases
-    return ModelAliasesResponse(aliases = get_model_aliases())
+    from utils.model_aliases import get_model_aliases, model_aliases_revision
+    aliases = get_model_aliases()
+    return ModelAliasesResponse(aliases = aliases, revision = model_aliases_revision(aliases))
 
 
 @_owner_settings_router.put("/model-aliases", response_model = ModelAliasesResponse)
@@ -2706,7 +2720,7 @@ async def update_model_aliases_setting(
 ) -> ModelAliasesResponse:
     from core.systemone import catalog as decision_catalog
     from routes.inference import _openai_catalog_objects
-    from utils.model_aliases import set_model_aliases
+    from utils.model_aliases import AliasConflict, model_aliases_revision, set_model_aliases
 
     # Decision ids (clef, laya-multilingual) are reserved even while that API is off.
     objects = await _openai_catalog_objects()
@@ -2714,8 +2728,13 @@ async def update_model_aliases_setting(
     model_ids += list(decision_catalog.CHECKPOINTS)
     try:
         aliases = await asyncio.to_thread(
-            set_model_aliases, [entry.model_dump() for entry in payload.aliases], model_ids
+            set_model_aliases,
+            [entry.model_dump(exclude_unset = True) for entry in payload.aliases],
+            model_ids,
+            payload.revision,
         )
+    except AliasConflict as exc:
+        raise HTTPException(status_code = 409, detail = str(exc)) from exc
     except ValueError as exc:
         raise log_and_http_error(
             exc,
@@ -2724,7 +2743,7 @@ async def update_model_aliases_setting(
             event = "settings.update_model_aliases_failed",
             log = logger,
         ) from exc
-    return ModelAliasesResponse(aliases = aliases)
+    return ModelAliasesResponse(aliases = aliases, revision = model_aliases_revision(aliases))
 
 
 @_account_settings_router.get(
@@ -4396,6 +4415,16 @@ class CurrentDatePromptResponse(BaseModel):
     default_enabled: bool = DEFAULT_CURRENT_DATE_PROMPT_ENABLED
 
 
+class TrustedToolFoldersPayload(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+
+    folders: list[StrictStr] = Field(max_length = MAX_TRUSTED_TOOL_FOLDERS)
+
+
+class TrustedToolFoldersResponse(BaseModel):
+    folders: list[str]
+
+
 class ChatMemoryPayload(BaseModel):
     enabled: Optional[StrictBool] = None
     text: Optional[StrictStr] = None
@@ -4748,6 +4777,49 @@ def update_current_date_prompt(
     return CurrentDatePromptResponse(enabled = enabled)
 
 
+@_owner_settings_router.get("/trusted-tool-folders", response_model = TrustedToolFoldersResponse)
+def get_trusted_tool_folders_setting(
+    current_subject: str = Depends(get_current_subject),
+    # Host paths: the settings page reads them, an API-key integration has no need to.
+    _ui_session: None = Depends(_require_ui_session),
+) -> TrustedToolFoldersResponse:
+    try:
+        folders = get_trusted_tool_folders()
+    except Exception as exc:
+        raise log_and_http_error(
+            exc,
+            500,
+            "Could not read the trusted folders.",
+            event = "settings.trusted_tool_folders_read_failed",
+            log = logger,
+        ) from exc
+    return TrustedToolFoldersResponse(folders = folders)
+
+
+@_owner_settings_router.put("/trusted-tool-folders", response_model = TrustedToolFoldersResponse)
+def update_trusted_tool_folders_setting(
+    payload: TrustedToolFoldersPayload,
+    current_subject: str = Depends(get_current_subject),
+    # Widens what tool calls run without asking: set at the console, never by an API key.
+    _ui_session: None = Depends(_require_ui_session),
+) -> TrustedToolFoldersResponse:
+    """Folders whose files the owner's Python and Terminal calls may read and run without a prompt."""
+    try:
+        folders = set_trusted_tool_folders(payload.folders)
+    except ValueError as exc:
+        raise log_and_http_error(
+            exc,
+            400,
+            safe_curated_detail(exc, fallback = "Invalid trusted folders."),
+            event = "settings.update_trusted_tool_folders_failed",
+            log = logger,
+        ) from exc
+    logger.info(
+        "settings.trusted_tool_folders_updated subject=%s count=%s", current_subject, len(folders)
+    )
+    return TrustedToolFoldersResponse(folders = folders)
+
+
 def _chat_memory_response() -> ChatMemoryResponse:
     from core import agents_md
     return ChatMemoryResponse(
@@ -5032,13 +5104,13 @@ class PersonalizationImportedFont(BaseModel):
         return value
 
 
-# Boolean is each optional user-menu item's default visibility; Settings-tab shortcuts ship hidden.
+# Boolean is each optional user-menu item's default visibility; Settings-tab shortcuts except Appearance ship hidden.
 SIDEBAR_MENU_ITEM_DEFAULTS = {
     "api": True,
     "darkMode": True,
     "guidedTour": True,
     "profile": False,
-    "appearance": False,
+    "appearance": True,
     "resources": False,
     "chat": False,
     "connections": False,
@@ -5058,6 +5130,7 @@ SIDEBAR_NAV_ITEM_DEFAULTS = {
     "export": False,
     "api": False,
     "tasks": False,
+    "translate": False,
 }
 
 MAX_SIDEBAR_NAV_INPUT_ITEMS = 4 * len(SIDEBAR_NAV_ITEM_DEFAULTS)
@@ -5101,6 +5174,7 @@ SidebarNavItemId = Literal[
     "export",
     "api",
     "tasks",
+    "translate",
 ]
 
 
@@ -5446,6 +5520,47 @@ def update_client_preferences_settings(
     return _client_preferences_response(update_client_preferences(changes))
 
 
+_OnboardingPageId = Annotated[str, Field(pattern = r"^[a-z0-9-]{1,40}$")]
+
+
+class OnboardingPayload(BaseModel):
+    pages: list[_OnboardingPageId] = Field(default_factory = list, max_length = 32)
+    completed: bool = False
+
+
+class OnboardingResponse(BaseModel):
+    saved: bool = False
+    pages: list[str] = Field(default_factory = list)
+    completedAt: Optional[int] = None
+    hasHistory: bool = False
+
+
+def _onboarding_response(stored: dict, *, history: bool = False) -> OnboardingResponse:
+    pages = stored.get("pages")
+    completed_at = stored.get("completedAt")
+    return OnboardingResponse(
+        saved = bool(stored),
+        pages = [p for p in pages if isinstance(p, str)] if isinstance(pages, list) else [],
+        completedAt = completed_at if isinstance(completed_at, int) else None,
+        hasHistory = history,
+    )
+
+
+@_account_settings_router.get("/onboarding", response_model = OnboardingResponse)
+def get_onboarding_settings(
+    current_subject: str = Depends(get_current_subject),
+) -> OnboardingResponse:
+    stored = get_onboarding()
+    return _onboarding_response(stored, history = not stored and account_has_history())
+
+
+@_account_settings_router.put("/onboarding", response_model = OnboardingResponse)
+def update_onboarding_settings(
+    payload: OnboardingPayload, current_subject: str = Depends(get_current_subject)
+) -> OnboardingResponse:
+    return _onboarding_response(update_onboarding(payload.pages, payload.completed))
+
+
 class ChatBackgroundImageMeta(BaseModel):
     sha256: str
     type: str
@@ -5764,6 +5879,8 @@ class SandboxMemoryStatus(BaseModel):
     limit_gb: Optional[int] = None
     saved_gb: int
     default_gb: int
+    # True: no saved value, so the limit follows half of this machine's RAM.
+    auto: bool = True
     min_gb: int
     max_gb: int
     locked_by_environment: bool
@@ -5775,7 +5892,7 @@ class SandboxStatusResponse(BaseModel):
     terminal: SandboxToolStatus
     terminal_shell: Optional[str] = None
     windows: Optional[SandboxWindowsStatus] = None
-    # None off Linux, where the rlimit never applied.
+    # None only if the status could not be built.
     memory: Optional[SandboxMemoryStatus] = None
     setup: Optional[SandboxSetupStatus] = None
     checked_at: float
@@ -5792,6 +5909,7 @@ class SandboxSettingsPayload(BaseModel):
         ge = sandbox_memory_limit.MIN_MEMORY_LIMIT_GB,
         le = sandbox_memory_limit.MAX_MEMORY_LIMIT_GB,
     )
+    memory_limit_auto: Optional[Literal[True]] = None
 
 
 class SandboxSetupPayload(BaseModel):
@@ -5985,16 +6103,11 @@ def _sandbox_setup_status(available: bool) -> Optional[SandboxSetupStatus]:
 
 
 def _sandbox_memory_status() -> Optional[SandboxMemoryStatus]:
-    import sys
-
-    # Linux only: Windows never set this rlimit, and on macOS setrlimit(RLIMIT_AS) fails once the forked child
-    # already maps more than the cap, so tool runs there were never capped.
-    if sys.platform != "linux":
-        return None
     return SandboxMemoryStatus(
         limit_gb = sandbox_memory_limit.effective_memory_limit_gb(),
         saved_gb = sandbox_memory_limit.saved_memory_limit_gb(),
-        default_gb = sandbox_memory_limit.DEFAULT_MEMORY_LIMIT_GB,
+        default_gb = sandbox_memory_limit.default_memory_limit_gb(),
+        auto = sandbox_memory_limit.is_auto(),
         min_gb = sandbox_memory_limit.MIN_MEMORY_LIMIT_GB,
         max_gb = sandbox_memory_limit.MAX_MEMORY_LIMIT_GB,
         locked_by_environment = sandbox_memory_limit.locked_by_environment(),
@@ -6047,6 +6160,9 @@ def _sandbox_apply(payload: SandboxSettingsPayload) -> Optional[int]:
     from core.inference import mxc_policy, mxc_read_grants
     from utils import mxc_isolation_settings as saved
 
+    if payload.memory_limit_auto:
+        sandbox_memory_limit.use_auto_memory_limit()
+        return None
     if payload.memory_limit_gb is not None:
         sandbox_memory_limit.set_memory_limit_gb(payload.memory_limit_gb)
         # The route refuses it beside the Windows switches, so the MXC state below is untouched.
@@ -6096,7 +6212,7 @@ async def update_sandbox_settings(
     # Host policy: changed at the console, never by an API key the owner happens to hold.
     _ui_session: None = Depends(_require_ui_session),
 ) -> SandboxStatusResponse:
-    """Save the Windows MXC opt-in, the persistent read grant choice, or the Linux memory limit. Applies to the next
+    """Save the Windows MXC opt-in, the persistent read grant choice, or the memory limit. Applies to the next
     launch."""
     import sys
 
@@ -6106,17 +6222,17 @@ async def update_sandbox_settings(
     windows_fields = (
         payload.allow_dacl_fallback is not None or payload.persistent_read_grants is not None
     )
-    if payload.memory_limit_gb is not None:
-        if sys.platform != "linux":
-            raise HTTPException(
-                status_code = 409, detail = "The sandbox memory limit only applies on Linux."
-            )
-        if sandbox_memory_limit.locked_by_environment():
-            raise HTTPException(
-                status_code = 409,
-                detail = f"{sandbox_memory_limit.MEMORY_LIMIT_ENV} is set in the environment Unsloth runs in, which decides this.",
-            )
-    if sys.platform != "win32" and (windows_fields or payload.memory_limit_gb is None):
+    memory_fields = payload.memory_limit_gb is not None or payload.memory_limit_auto is not None
+    if payload.memory_limit_gb is not None and payload.memory_limit_auto:
+        raise HTTPException(status_code = 422, detail = "Send a memory limit or auto, not both.")
+    if memory_fields and windows_fields:
+        raise HTTPException(status_code = 422, detail = "Save the memory limit on its own.")
+    if memory_fields and sandbox_memory_limit.locked_by_environment():
+        raise HTTPException(
+            status_code = 409,
+            detail = f"{sandbox_memory_limit.MEMORY_LIMIT_ENV} is set in the environment Unsloth runs in, which decides this.",
+        )
+    if sys.platform != "win32" and not memory_fields:
         raise HTTPException(status_code = 409, detail = "These settings only apply on Windows.")
     locks = (
         (payload.allow_dacl_fallback, mxc_policy.DACL_FALLBACK_ENV),
@@ -6140,11 +6256,12 @@ async def update_sandbox_settings(
             log = logger,
         ) from exc
     logger.info(
-        "settings.sandbox_updated subject=%s dacl=%s grants=%s memory_gb=%s",
+        "settings.sandbox_updated subject=%s dacl=%s grants=%s memory_gb=%s memory_auto=%s",
         current_subject,
         payload.allow_dacl_fallback,
         payload.persistent_read_grants,
         payload.memory_limit_gb,
+        payload.memory_limit_auto,
     )
     status = await asyncio.to_thread(_for_request, status, request)
     return status.model_copy(update = {"grants_restored": restored})
@@ -6291,6 +6408,69 @@ async def start_sandbox_setup(
         job.id,
     )
     return _sandbox_setup_response(job)
+
+
+class LearnedMemoryPatch(BaseModel):
+    model_config = ConfigDict(extra = "forbid")
+    enabled: Optional[StrictBool] = None
+    thread_enabled: Optional[StrictBool] = None
+    key: Optional[str] = None
+    value: Optional[str] = None
+    revision: Optional[StrictInt] = None
+    clear: StrictBool = False
+
+
+@_account_settings_router.get("/learned-memory")
+def get_learned_memory(
+    project_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    current_subject: str = Depends(get_current_subject),
+):
+    from core import chat_memory
+    from storage import studio_db
+    return {
+        **chat_memory.read(project_id),
+        "enabled": chat_memory.enabled(),
+        "thread_enabled": not studio_db.get_app_setting("memory_disabled:" + thread_id, False)
+        if thread_id
+        else True,
+    }
+
+
+@_account_settings_router.put("/learned-memory")
+def put_learned_memory(
+    payload: LearnedMemoryPatch,
+    project_id: Optional[str] = None,
+    thread_id: Optional[str] = None,
+    current_subject: str = Depends(get_current_subject),
+    _ui_session: None = Depends(_require_ui_session),
+):
+    from core import chat_memory
+    from storage import studio_db
+
+    try:
+        if payload.key is not None or payload.clear:
+            if payload.revision is None:
+                raise ValueError("Read memory before editing it.")
+            if payload.clear:
+                chat_memory.clear(project_id, payload.revision)
+            else:
+                if "value" not in payload.model_fields_set:
+                    raise ValueError("Provide a fact, or null to forget it.")
+                chat_memory.update(project_id, payload.key, payload.value, payload.revision)
+        if payload.enabled is not None:
+            studio_db.upsert_app_settings(
+                {"learned_memory_enabled": payload.enabled}, read_back = False
+            )
+        if payload.thread_enabled is not None:
+            if not thread_id or not studio_db.get_chat_thread(thread_id):
+                raise ValueError("A saved chat is required.")
+            studio_db.upsert_app_settings(
+                {"memory_disabled:" + thread_id: not payload.thread_enabled}, read_back = False
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code = 409, detail = str(exc))
+    return get_learned_memory(project_id, thread_id, current_subject)
 
 
 router.include_router(_account_settings_router)

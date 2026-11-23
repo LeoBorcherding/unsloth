@@ -34,7 +34,7 @@ import {
   ModelSelector,
   PillTabs,
 } from "@/features/model-picker";
-import { useNpuStatus } from "@/features/npu";
+import { NPU_TAG_TEXT, useNpuCompat, useNpuStatus } from "@/features/npu";
 import { useDebouncedValue } from "@/hooks";
 import { ChevronLeftStandardIcon } from "@/lib/chevron-icons";
 import { getHfEndpoint } from "@/lib/hf-endpoint";
@@ -61,11 +61,13 @@ import {
   q4nxArchFit,
   q4nxBaseModel,
   q4nxIsExpanded,
+  q4nxIsFirstChoice,
   q4nxConvertibleFiles,
   q4nxHasSplitFiles,
   q4nxIsSplitFile,
   q4nxMemoryWarning,
   q4nxNpuMemory,
+  q4nxFitQuant,
   q4nxPacking,
   q4nxParamsFromName,
   q4nxQuantName,
@@ -218,10 +220,13 @@ export function Q4nxConvertCard({
   const accessToken = hfApiToken(hfToken);
   const expandQuantizations = useChatRuntimeStore((s) => s.expandQuantizations);
   const [npuStatus] = useNpuStatus();
+  const npuCompat = useNpuCompat();
   // Reported by the backend from #17531 on; without it rows show the need alone.
   const windowGb = npuStatus?.memory_window_gb ?? null;
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Models whose re-quantized and refused files are shown too.
+  const [allFilesOf, setAllFilesOf] = useState<readonly string[]>([]);
   const [source, setSource] = useState<Source>("hub");
   const [hubQuery, setHubQuery] = useState("");
   const [repoId, setRepoId] = useState("");
@@ -292,15 +297,15 @@ export function Q4nxConvertCard({
 
   const hubRows = useMemo(() => {
     const rows: SourceRow[] = hubResults
-      .map((r) => ({ r, fit: q4nxArchFit(r.ggufArchitecture, r.id) }))
-      // An unsupported architecture is left out; an unsupported size of a supported one stays, marked.
-      .filter(({ fit }) => fit.status !== "unsupported" || fit.sized)
+      .map((r) => ({ r, fit: q4nxArchFit(r.ggufArchitecture, r.id, npuCompat) }))
+      // "Not supported" is left out; a model that runs or only converts stays, tagged.
+      .filter(({ fit }) => fit.tag !== "unsupported")
       .map(({ r, fit }) => ({
         id: r.id,
         label: r.id,
         listingKey: q4nxVariantLookup("hub", r.id, null).key,
         folder: null,
-        hint: fit.status === "unsupported" ? "Not convertible" : undefined,
+        hint: fit.tag ? NPU_TAG_TEXT[fit.tag] : undefined,
         architecture: r.ggufArchitecture,
         totalParams: r.totalParams ?? q4nxParamsFromName(r.id),
       }));
@@ -323,7 +328,7 @@ export function Q4nxConvertCard({
       });
     }
     return rows;
-  }, [hubResults, hubQuery, repoId, hubResult, lookedArchitecture]);
+  }, [hubResults, hubQuery, repoId, hubResult, lookedArchitecture, npuCompat]);
 
   const localById = useMemo(
     () => new Map(localModels.map((row) => [row.id, row])),
@@ -461,6 +466,7 @@ export function Q4nxConvertCard({
       ? sortQ4nxVariants(
           listings[row.listingKey]?.list ?? [],
           row.architecture,
+          row.id,
         )
       : [];
 
@@ -526,9 +532,10 @@ export function Q4nxConvertCard({
       ? q4nxArchFit(
           selectedArchitecture,
           `${repoId} ${selectedVariant?.filename ?? ""}`,
+          npuCompat,
         )
       : localRow
-        ? q4nxArchFit(null, `${localRow.id} ${ggufPath ?? localPath}`)
+        ? q4nxArchFit(null, `${localRow.id} ${ggufPath ?? localPath}`, npuCompat)
         : null;
   const sourceReady =
     source === "hub" ? !!(repoId && selectedVariant) : !!ggufPath;
@@ -582,8 +589,9 @@ export function Q4nxConvertCard({
       ? (selectedVariant ?? ownVariant(selectedRow)).quant
       : null;
   const selectedPacking = selectedQuant
-    ? q4nxPacking(selectedQuant, selectedArchitecture)
+    ? q4nxPacking(selectedQuant, selectedArchitecture, selectedRow?.id)
     : null;
+  const selectedFit = q4nxFitQuant(selectedArchitecture, selectedRow?.id);
   const selectedWeights =
     sourceReady && selectedRow ? weightsOf(selectedRow, selectedVariant) : null;
   const selectedMemory = q4nxNpuMemory(selectedWeights, windowGb);
@@ -642,11 +650,15 @@ export function Q4nxConvertCard({
 
   const loadingRows = source === "hub" ? searchingHub : loadingLocal;
 
-  const packingTag = (quant: string, architecture?: string | null) => {
-    const packing = q4nxPacking(quant, architecture);
+  const packingTag = (quant: string, architecture?: string | null, name?: string) => {
+    const packing = q4nxPacking(quant, architecture, name);
     return packing === "direct" ? null : (
       <span className="ml-1.5 font-sans text-ui-9 font-medium text-muted-foreground">
-        {packing === "requantized" ? "re-quantized" : "direct for Qwen3.5"}
+        {packing === "requantized"
+          ? "re-quantized"
+          : packing === "mismatch"
+            ? "won't convert"
+            : "direct for Qwen3.5"}
       </span>
     );
   };
@@ -675,53 +687,79 @@ export function Q4nxConvertCard({
         </p>
       );
     }
-    return files.map((v) => {
-      const picked = row.id === selectedId && v.filename === filename;
-      const memory = q4nxNpuMemory(weightsOf(row, v), windowGb);
-      return (
-        <div key={v.filename}>
-          <button
-            type="button"
-            data-testid="q4nx-source-file"
-            aria-pressed={picked}
-            onClick={() => {
-              pick(row.id, v.filename);
-              setSettingsOpen(true);
-            }}
-            className={cn(
-              "flex w-full min-w-0 items-center justify-between gap-2 rounded-full py-1 pl-2 pr-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              picked && "bg-sidebar-accent",
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">
-              {fileName(v.filename)}
-              {packingTag(v.quant, row.architecture)}
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5 font-mono text-ui-10 text-muted-foreground tabular-nums">
-              {memory && (
-                <span
-                  data-testid="q4nx-source-memory"
-                  className={cn(
-                    memory.fits === false &&
-                      "text-amber-600 dark:text-amber-500",
-                  )}
-                >
-                  {memory.label}
-                </span>
-              )}
-              <span>{formatFootprintBytes(v.size_bytes)}</span>
-            </span>
-          </button>
-          {picked && (
-            <NpuMemoryBar
-              memory={memory}
-              windowGb={windowGb}
-              className="mb-1 px-2"
-            />
+    const short = files.filter((v) =>
+      q4nxIsFirstChoice(q4nxPacking(v.quant, row.architecture, row.id)),
+    );
+    const showAll =
+      short.length === 0 ||
+      allFilesOf.includes(row.id) ||
+      // A picked file outside the short list stays visible.
+      (row.id === selectedId &&
+        !!filename &&
+        !short.some((v) => v.filename === filename));
+    const more = files.length - short.length;
+    return [
+      ...(showAll ? files : short).map((v) => renderFile(row, v)),
+      showAll || more === 0 ? null : (
+        <button
+          key="q4nx-more-files"
+          type="button"
+          data-testid="q4nx-more-files"
+          onClick={() => setAllFilesOf((ids) => [...ids, row.id])}
+          className="w-full rounded-full py-1 pl-2 text-left text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          {more} more {more === 1 ? "file" : "files"}, re-quantized or not readable by this model
+        </button>
+      ),
+    ];
+  };
+
+  const renderFile = (row: SourceRow, v: GgufVariantDetail) => {
+    const picked = row.id === selectedId && v.filename === filename;
+    const memory = q4nxNpuMemory(weightsOf(row, v), windowGb);
+    return (
+      <div key={v.filename}>
+        <button
+          type="button"
+          data-testid="q4nx-source-file"
+          aria-pressed={picked}
+          onClick={() => {
+            pick(row.id, v.filename);
+            setSettingsOpen(true);
+          }}
+          className={cn(
+            "flex w-full min-w-0 items-center justify-between gap-2 rounded-full py-1 pl-2 pr-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            picked && "bg-sidebar-accent",
           )}
-        </div>
-      );
-    });
+        >
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">
+            {fileName(v.filename)}
+            {packingTag(v.quant, row.architecture, row.id)}
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5 font-mono text-ui-10 text-muted-foreground tabular-nums">
+            {memory && (
+              <span
+                data-testid="q4nx-source-memory"
+                className={cn(
+                  memory.fits === false &&
+                    "text-amber-600 dark:text-amber-500",
+                )}
+              >
+                {memory.label}
+              </span>
+            )}
+            <span>{formatFootprintBytes(v.size_bytes)}</span>
+          </span>
+        </button>
+        {picked && (
+          <NpuMemoryBar
+            memory={memory}
+            windowGb={windowGb}
+            className="mb-1 px-2"
+          />
+        )}
+      </div>
+    );
   };
 
   const listPage = (
@@ -877,8 +915,21 @@ export function Q4nxConvertCard({
       {selectedQuant && selectedPacking === "requantized" && (
         <p className="text-xs text-muted-foreground">
           {q4nxQuantName(selectedQuant)} is dequantized and rounded again to
-          4-bit, so it loses some quality. Q4_0 and Q4_1 pack directly, and
-          Q4_K_M does for Qwen3.5.
+          4-bit, so it loses some quality. Q4_K_M packs directly for Qwen3.5,
+          and Q4_0 or Q4_1 does where it matches the model.
+        </p>
+      )}
+      {selectedQuant && selectedPacking === "mismatch" && (
+        <p className="text-xs text-destructive">
+          {q4nxQuantName(selectedQuant)} is packed as is, and this model reads
+          another layout, so the converter refuses it. Pick{" "}
+          {!selectedFit || selectedFit === "q4_k_m"
+            ? "a Q4_K_M"
+            : q4nxPacking("Q4_K_M", selectedArchitecture, selectedRow?.id) ===
+                "mismatch"
+              ? `a ${q4nxQuantName(selectedFit)}`
+              : `a ${q4nxQuantName(selectedFit)} or Q4_K_M`}{" "}
+          file instead.
         </p>
       )}
       {selectedQuant && selectedPacking === "by-architecture" && (
@@ -931,7 +982,7 @@ export function Q4nxConvertCard({
                     <SelectItem key={v.filename} value={v.filename}>
                       <span className="flex min-w-0 items-center">
                         <span className="truncate">{fileName(v.filename)}</span>
-                        {packingTag(v.quant, selectedRow.architecture)}
+                        {packingTag(v.quant, selectedRow.architecture, selectedRow.id)}
                       </span>
                     </SelectItem>
                   ))}
@@ -1015,7 +1066,7 @@ export function Q4nxConvertCard({
       icon={CpuIcon}
       chipTint="var(--chart-1)"
       title="Convert a GGUF to Q4NX (AMD NPU)"
-      description="Convert a Q4_0, Q4_1 or Q4_K_M GGUF to Q4NX. Only supported on AMD NPUs."
+      description="Convert a Q4_K_M GGUF, or a Q4_0 or Q4_1 that matches the model's layout, to Q4NX. Only supported on AMD NPUs."
     >
       <div className="flex flex-col gap-6">
         <div className="flex flex-col gap-2">

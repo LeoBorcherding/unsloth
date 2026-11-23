@@ -18,6 +18,7 @@ import {
   type SttDevice,
   applyDictationDictionary,
   isCuratedSttModel,
+  isModelDictationLanguage,
   recordRecentDictation,
   resolveModelDictationLanguage,
   sttContextBody,
@@ -152,6 +153,7 @@ export function openSttLive(
     onRefused: () => liveRefused.add(picked),
   });
 }
+export type TranscriptSegment = { start: number; end: number; text: string };
 
 export async function transcribeAudioBlob(
   blob: Blob,
@@ -165,6 +167,8 @@ export async function transcribeAudioBlob(
     ggufVariant?: string | null;
     providerId?: string;
     signal?: AbortSignal;
+    /** Asks for segment timings; called only when the engine reports them. */
+    onSegments?: (segments: TranscriptSegment[]) => void;
   } = {},
 ): Promise<string> {
   const settings = useVoiceSettingsStore.getState();
@@ -249,6 +253,7 @@ export async function transcribeAudioBlob(
   if (context.context_length !== undefined) {
     params.set("context_length", String(context.context_length));
   }
+  if (options.onSegments) params.set("timestamps", "true");
   const response = await authFetch(
     `/api/inference/audio/transcribe/raw?${params.toString()}`,
     {
@@ -267,7 +272,24 @@ export async function transcribeAudioBlob(
     }
     throw sttRequestError(response.status, detail);
   }
-  const data = (await response.json()) as { text?: string };
+  const data = (await response.json()) as {
+    text?: string;
+    segments?: unknown;
+  };
+  if (options.onSegments && Array.isArray(data.segments)) {
+    const segments = (data.segments as Array<Record<string, unknown>>).flatMap(
+      ({ start, end, text }) =>
+        typeof start === "number" &&
+        typeof end === "number" &&
+        Number.isFinite(start) &&
+        Number.isFinite(end) &&
+        typeof text === "string" &&
+        text.trim()
+          ? [{ start, end, text: text.trim() }]
+          : [],
+    );
+    if (segments.length > 0) options.onSegments(segments);
+  }
   return (data.text ?? "").trim();
 }
 
@@ -541,9 +563,39 @@ export function unloadSttModel(
 /** Long recordings split near whisper's 30s window; confirm or discard releases the mic. */
 export class StudioModelDictationAdapter implements DictationAdapter {
   private readonly chatId: string | null | undefined;
+  private readonly language: string | undefined;
+  private readonly detectLanguage: boolean;
 
-  constructor(options: { chatId?: string | null } = {}) {
+  constructor(
+    options: {
+      chatId?: string | null;
+      language?: string;
+      detectLanguage?: boolean;
+    } = {},
+  ) {
     this.chatId = options.chatId;
+    this.language = options.language;
+    this.detectLanguage = options.detectLanguage === true;
+  }
+
+  private sessionLanguage(
+    model: string,
+    external: boolean,
+    setting: string,
+  ): string {
+    // "" omits the language so the model detects it; "auto" means the user's.
+    if (this.detectLanguage) {
+      return "";
+    }
+    if (external) {
+      return this.language ?? setting;
+    }
+    return resolveModelDictationLanguage(
+      model,
+      this.language && isModelDictationLanguage(model, this.language)
+        ? this.language
+        : setting,
+    );
   }
 
   static isSupported(): boolean {
@@ -575,9 +627,11 @@ export class StudioModelDictationAdapter implements DictationAdapter {
       );
     }
     beginDictationSession();
-    const sessionLanguage = usesExternalEndpoint
-      ? settings.dictationLanguage
-      : resolveModelDictationLanguage(sessionModel, settings.dictationLanguage);
+    const sessionLanguage = this.sessionLanguage(
+      sessionModel,
+      usesExternalEndpoint,
+      settings.dictationLanguage,
+    );
     const sessionEngine = usesExternalEndpoint
       ? undefined
       : sttEngineFor(sessionModel);

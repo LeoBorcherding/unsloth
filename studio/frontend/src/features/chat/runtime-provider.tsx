@@ -5,7 +5,7 @@ import { readGenerationProgress } from "./lib/generation-progress";
 import { NewChatNonceContext } from "./query-draft";
 import { useAppShellReadySignal } from "@/components/app-readiness";
 import { authFetch, getAuthSessionEpoch } from "@/features/auth";
-import { isMcpToolOnly, mcpImageMappingsEnabled } from "./api/mcp-image";
+import { isMcpToolOnly, mcpImageMappingsEnabled, projectMcpServers } from "./api/mcp-image";
 import { keepVoiceHeard } from "./voice/heard-cut";
 import { writtenHeardCustom } from "./voice/voice-loop-bridge";
 import { listMcpServers } from "./api/mcp-servers-api";
@@ -56,9 +56,11 @@ import {
   findLatestUserAudioBase64,
   findLatestUserVideoBase64,
   messagesContainImage,
+  resolveProjectId,
 } from "./api/chat-adapter";
 import {
   CHAT_HISTORY_UPDATED_EVENT,
+  getChatProject,
   streamChatCompletions,
   uploadChatAttachmentOriginal,
 } from "./api/chat-api";
@@ -193,6 +195,7 @@ import {
   reconcileOrdinarySavedMessagesInView,
   subscribeThreadSwitchRecovery,
 } from "./utils/saved-history-reconciliation";
+import { watchRemoteHistory } from "./utils/remote-history-watch";
 import { createGenerationToolRecovery } from "./utils/generation-tool-recovery";
 import { providerCompactionConnectionKey } from "./utils/provider-compaction";
 import {
@@ -208,6 +211,8 @@ import {
 } from "./utils/reply-finished-notification";
 import {
   extractDeltaText,
+  markLiteralThinkTags,
+  markPendingThinkTag,
   parseAssistantContent,
 } from "./utils/parse-assistant-content";
 import {
@@ -422,7 +427,12 @@ async function mcpToolOnlyEnabled(): Promise<boolean | null> {
       });
   if (!toolsSupported || !state.mcpEnabledForChat) return false;
   try {
-    return mcpImageMappingsEnabled(await listMcpServers());
+    const projectId = await resolveProjectId(state.activeThreadId ?? undefined);
+    const [servers, project] = await Promise.all([
+      listMcpServers(),
+      projectId ? getChatProject(projectId) : null,
+    ]);
+    return mcpImageMappingsEnabled(projectMcpServers(servers, project?.mcpServerIds));
   } catch {
     return null;
   }
@@ -1537,6 +1547,9 @@ function scheduleGenerationRecovery(
     // Settled before disarmAll so an arm cannot land after the run is over.
     let seededApprovals: Promise<void> | null = null;
     let { raw, reasoningOpen } = stored;
+    let splitReasoningSeen = metadata.splitReasoningSeen === true;
+    // The live stream marked a trailing tag fragment only when reasoning arrived split out.
+    if (splitReasoningSeen) raw = markPendingThinkTag(raw);
     let parseThink = metadata.parseThinkTags !== false;
     let completionTokens: number | undefined;
     let recoveryUsage:
@@ -1826,6 +1839,8 @@ function scheduleGenerationRecovery(
                     store.setLiveDecode(threadId, progress.decode);
                   } else if (progress?.phase === "compacting") {
                     store.setLiveCompacting(threadId, true);
+                  } else if (progress?.phase === "compaction_failed") {
+                    store.setLiveCompacting(threadId, false);
                   }
                   // A frame can end the replay: show what it rebuilt, or a replayed tool result stays hidden.
                   if (update.run.status !== lastPublishedStatus) {
@@ -1915,14 +1930,22 @@ function scheduleGenerationRecovery(
                 parseThink = true;
                 currentMetadata = { ...currentMetadata, parseThinkTags: true };
               }
+              // Marked as the live stream marks them, so a recovered reply parses the same way.
               if (reasoning) {
                 if (!reasoningOpen) raw += "<think>";
-                raw += reasoning;
+                raw += markLiteralThinkTags(reasoning);
                 reasoningOpen = true;
+                if (!splitReasoningSeen) {
+                  splitReasoningSeen = true;
+                  currentMetadata = { ...currentMetadata, splitReasoningSeen: true };
+                }
               }
               if (delta) {
                 if (reasoningOpen) raw += "</think>";
-                raw += delta;
+                raw +=
+                  splitReasoningSeen && typeof deltaRecord?.content === "string"
+                    ? markLiteralThinkTags(delta)
+                    : delta;
                 reasoningOpen = false;
               }
             }
@@ -2542,23 +2565,26 @@ function useStudioRuntimeAdapters(
   useEffect(() => registerLiveThreadView(aui), [aui]);
 
   useEffect(() => {
-    const recoverCurrentThread = () => {
+    const recoverCurrentThread = (): Promise<boolean> | undefined => {
       const remoteId = aui.threadListItem().getState().remoteId;
       if (!remoteId) return;
       const generation = beginSavedHistoryReconciliation(remoteId);
       let idsAtRead: Set<string> | undefined;
+      let runningAtRead = false;
       try {
+        runningAtRead = aui.thread().getState().isRunning;
         idsAtRead = new Set(aui.thread().export().messages.map((item) => item.message.id));
       } catch {
         idsAtRead = undefined;
       }
-      void readStoredChatMessages(remoteId)
+      // False only when the server copy was never read, so the remote watcher retries.
+      return readStoredChatMessages(remoteId)
         .then(({ messages, fromBackend }) => {
           if (isSavedHistoryReconciliationSuperseded(remoteId, generation)) {
-            return;
+            return true;
           }
           if (aui.threadListItem().getState().remoteId !== remoteId) {
-            return;
+            return true;
           }
           // A legacy browser copy served during an outage is older, not an external update.
           if (fromBackend) {
@@ -2567,10 +2593,11 @@ function useStudioRuntimeAdapters(
                 useChatRuntimeStore.getState().editingMessageId ?? null,
               toThreadMessage,
               idsAtRead,
+              runningAtRead,
             });
           }
           if (isSavedHistoryReconciliationSuperseded(remoteId, generation)) {
-            return;
+            return fromBackend;
           }
           for (const message of messages) {
             if (
@@ -2581,8 +2608,9 @@ function useStudioRuntimeAdapters(
               scheduleGenerationRecovery(remoteId, message, messages, aui);
             }
           }
+          return fromBackend;
         })
-        .catch(() => {});
+        .catch(() => false);
     };
     const unsubscribeWake = subscribeGenerationRecoveryTriggers(
       globalThis,
@@ -2598,7 +2626,26 @@ function useStudioRuntimeAdapters(
       },
       recoverCurrentThread,
     );
+    const unwatchRemote = watchRemoteHistory({
+      threadId: () => aui.threadListItem().getState().remoteId ?? null,
+      isIdle: () => {
+        if (useChatRuntimeStore.getState().editingMessageId != null) {
+          return false;
+        }
+        try {
+          const state = aui.thread().getState();
+          return (
+            !state.isRunning &&
+            !state.messages.some((message) => message.composer?.isEditing)
+          );
+        } catch {
+          return false;
+        }
+      },
+      onThreadChanged: recoverCurrentThread,
+    });
     return () => {
+      unwatchRemote();
       unsubscribeSwitch();
       unsubscribeWake();
     };

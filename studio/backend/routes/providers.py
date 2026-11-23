@@ -219,6 +219,13 @@ def _provider_response(row: dict, *, hide_headers: bool = False) -> ProviderResp
         available_models = row.get("available_models") or [],
         max_output_tokens = row.get("max_output_tokens"),
         auto_compact_tokens = row.get("auto_compact_tokens"),
+        auto_compact_percent = row.get("auto_compact_percent"),
+        auto_compact_percent_by_model = row.get("auto_compact_percent_by_model") or {},
+        compaction_mode = (
+            row.get("compaction_mode")
+            if row.get("compaction_mode") in ("summary", "rolling", "checkpoint")
+            else None
+        ),
         shared = bool(row.get("shared")),
         shared_by_owner = bool(row.get("shared_by_owner")),
         created_at = row["created_at"],
@@ -434,6 +441,9 @@ async def create_provider_config(
             extra_headers = payload.extra_headers,
             shared = payload.shared,
             auto_compact_tokens = payload.auto_compact_tokens,
+            compaction_mode = payload.compaction_mode,
+            auto_compact_percent = payload.auto_compact_percent,
+            auto_compact_percent_by_model = payload.auto_compact_percent_by_model,
         )
         try:
             if api_key:
@@ -535,6 +545,9 @@ async def update_provider_config(
         "available_models",
         "max_output_tokens",
         "auto_compact_tokens",
+        "auto_compact_percent",
+        "auto_compact_percent_by_model",
+        "compaction_mode",
         "api_type",
         "reasoning_config",
         "extra_headers",
@@ -575,6 +588,14 @@ async def update_provider_config(
             metadata_updates["max_output_tokens"] = payload.max_output_tokens
         if "auto_compact_tokens" in payload.model_fields_set:
             metadata_updates["auto_compact_tokens"] = payload.auto_compact_tokens
+        if "compaction_mode" in payload.model_fields_set:
+            metadata_updates["compaction_mode"] = payload.compaction_mode
+        if "auto_compact_percent" in payload.model_fields_set:
+            metadata_updates["auto_compact_percent"] = payload.auto_compact_percent
+        if "auto_compact_percent_by_model" in payload.model_fields_set:
+            metadata_updates["auto_compact_percent_by_model"] = (
+                payload.auto_compact_percent_by_model or {}
+            )
         if reasoning_config_requested:
             metadata_updates["reasoning_config"] = (
                 payload.reasoning_config.model_dump()
@@ -593,6 +614,9 @@ async def update_provider_config(
         available_models = existing.get("available_models") or [],
         max_output_tokens = existing.get("max_output_tokens"),
         auto_compact_tokens = existing.get("auto_compact_tokens"),
+        auto_compact_percent = existing.get("auto_compact_percent"),
+        auto_compact_percent_by_model = existing.get("auto_compact_percent_by_model") or {},
+        compaction_mode = existing.get("compaction_mode"),
         api_type = existing.get("api_type", "chat_completions"),
         reasoning_config = existing.get("reasoning_config"),
         extra_headers = existing.get("extra_headers") or {},
@@ -620,6 +644,9 @@ async def update_provider_config(
             if written is None and field not in {
                 "max_output_tokens",
                 "auto_compact_tokens",
+                "auto_compact_percent",
+                "auto_compact_percent_by_model",
+                "compaction_mode",
                 "reasoning_config",
                 "extra_headers",
             }:
@@ -907,12 +934,20 @@ async def _test_custom_provider_connectivity(
                 async def consume_response_stream():
                     nonlocal received_response, model_failure
                     async for line in response_stream:
-                        if line.startswith("data: ") and line[6:].strip() != "[DONE]":
-                            event = json.loads(line[6:])
+                        if line.startswith("data:") and line[5:].strip() != "[DONE]":
+                            try:
+                                event = json.loads(line[5:])
+                            except json.JSONDecodeError:
+                                continue
+                            if not isinstance(event, dict):
+                                continue
                             received_response = received_response or bool(event.get("choices"))
                             if event.get("error"):
-                                model_failure = event["error"].get(
-                                    "message", "Responses request failed"
+                                err = event["error"]
+                                model_failure = (
+                                    err.get("message", "Responses request failed")
+                                    if isinstance(err, dict)
+                                    else str(err)
                                 )
 
                 try:

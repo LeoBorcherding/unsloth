@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from fastapi import (
@@ -267,6 +268,13 @@ def _run_finished(backend) -> bool:
     here: a stand-in without it keeps the old liveness-only behaviour."""
     check = getattr(backend, "is_run_finished", None)
     return bool(check()) if callable(check) else False
+
+
+async def _await_finished_worker_exit(backend) -> None:
+    """A run that reported terminal holds the GPU until its worker exits: give that exit the stop grace
+    before a new start reads is_training_active()."""
+    if _run_finished(backend):
+        await asyncio.to_thread(backend.wait_for_finished_worker)
 
 
 def _run_active(backend) -> bool:
@@ -1322,6 +1330,15 @@ def _reject_untrainable_model_request(
 def _validate_training_platform(request: TrainingStartRequest) -> None:
     from utils.hardware import hardware
 
+    if hardware.chat_only_mac_install():
+        raise HTTPException(
+            status_code = 400,
+            detail = (
+                "This install was set up without the training stack (Chat only), so training is "
+                "disabled. Reinstall Unsloth Studio without --no-torch, or use Upgrade to full "
+                "install in Settings, to enable training."
+            ),
+        )
     if hardware.DEVICE == hardware.DeviceType.CPU and hardware.trains_on_cpu(
         hardware.current_chat_only_verdict()[0]
     ):
@@ -1683,6 +1700,10 @@ async def get_offload_state(current_subject: str = Depends(get_current_subject))
     return {"active": True, **offload}
 
 
+# Own pool: queued 300 s probes must not hold the default executor other routes reach via asyncio.to_thread.
+_drafter_pool = ThreadPoolExecutor(max_workers = 2, thread_name_prefix = "drafter-probe")
+
+
 @router.get("/drafter-capability")
 async def get_drafter_capability(
     model_name: str,
@@ -1721,7 +1742,10 @@ async def get_drafter_capability(
     # The caller's own token comes in the header; without one, ambient credentials for the owner
     # only, anonymous for API keys and managed accounts (the owner's token must not answer for them).
     token = hf_token_arg(hf_token, allow_ambient_token = not (via_api_key is True or managed))
-    return {**await asyncio.to_thread(drafter_capability, name, token), "model_name": shown}
+    answer = await asyncio.get_running_loop().run_in_executor(
+        _drafter_pool, drafter_capability, name, token
+    )
+    return {**answer, "model_name": shown}
 
 
 @router.get("/hardware/visible")
@@ -2390,6 +2414,7 @@ async def start_training(
                 except S3DependencyUnavailable as exc:
                     raise HTTPException(status_code = 501, detail = str(exc)) from exc
 
+        await _await_finished_worker_exit(backend)
         if await asyncio.to_thread(backend.is_training_active):
             existing_job_id: Optional[str] = getattr(backend, "current_job_id", "")
             _reject_start_request(
@@ -3727,7 +3752,9 @@ async def start_diffusion_training(
 
     # Refuse while an LLM training run holds the GPU (symmetric with start_training).
     try:
-        if get_training_backend().is_training_active():
+        llm_backend = get_training_backend()
+        await _await_finished_worker_exit(llm_backend)
+        if llm_backend.is_training_active():
             raise HTTPException(
                 status_code = 409,
                 detail = (
@@ -3742,6 +3769,11 @@ async def start_diffusion_training(
 
     # Contain dataset and output paths BEFORE spawning; the trainer would resolve them against its cwd.
     config = body.model_dump()
+    # Unset leaves the trainer default (UNSLOTH_DIT_BLOCK_SWAP); a count travels as the trainer's string form.
+    if config.get("block_swap") is None:
+        config.pop("block_swap", None)
+    else:
+        config["block_swap"] = str(config["block_swap"])
     # An API key with no token of its own must not reach the operator's saved HF login.
     config["allow_ambient"] = via_api_key is not True
     try:
@@ -3760,10 +3792,15 @@ async def start_diffusion_training(
                 ),
             )
         config["output_dir"] = str(out_dir)
-        # Persistent cond cache gets the same containment; blank means in-memory, never the outputs root.
+        # Persistent cond cache gets the same containment; blank means the default cache, never the outputs root.
+        from core.training.diffusion_train_extras import cond_cache_is_off
+
         cond_cache = str(config.get("cond_cache_dir") or "").strip()
+        cond_cache_off = cond_cache_is_off(cond_cache)
+        if cond_cache_off:
+            cond_cache = ""
         cond_cache_dir = resolve_output_dir(cond_cache) if cond_cache else None
-        # A cache resolving to the trained-models dir is disabled, not one flat safetensors per latent there.
+        # A cache resolving to the trained-models dir falls back to the default, not one flat safetensors per latent there.
         if cond_cache_dir is not None and Path(cond_cache_dir).resolve() == root:
             cond_cache_dir = None
         config["cond_cache_dir"] = str(cond_cache_dir) if cond_cache_dir is not None else None
@@ -3781,19 +3818,29 @@ async def start_diffusion_training(
     except ValueError as e:
         raise HTTPException(status_code = 400, detail = str(e))
 
-    # Only the DiT trainer reads cond_cache_dir; check the RESOLVED family.
+    # The SDXL trainer never reads cond_cache_dir; check the RESOLVED family.
     if cond_cache and normalized_cfg.resolved_family == "sdxl":
         raise HTTPException(
             status_code = 400,
             detail = (
                 "cond_cache_dir is not supported for the sdxl family: its trainer uses a "
                 "per-run in-memory latent cache and would ignore the persistent one. Omit it, "
-                "or train a DiT family (flux.1, flux.2-klein, flux.2-dev, qwen-image, "
-                "z-image, krea-2), which reuses conditioning across runs."
+                "or train a DiT family (flux.1, flux.2-klein, flux.2-dev, flux.3-klein-base, "
+                "qwen-image, z-image, krea-2) or MiniMax-H3, which reuse conditioning across runs."
             ),
         )
 
-    # H3 restrictions (batch > 1, non-bf16, weighting, compile, cond cache) must 400 before eviction.
+    # Unset: this account's default persistent cache, resolved HERE because the trainer child does not carry the
+    # account context. SDXL keeps its in-memory cache; an off value or UNSLOTH_DIFFUSION_TRAIN_COND_CACHE=0 reaches
+    # the trainer as "off", so it never falls back to a default of its own.
+    if cond_cache_off:
+        config["cond_cache_dir"] = "off"
+    elif config["cond_cache_dir"] is None and normalized_cfg.resolved_family != "sdxl":
+        from core.training.diffusion_train_extras import default_cond_cache_dir
+        default_cache = default_cond_cache_dir()
+        config["cond_cache_dir"] = str(default_cache) if default_cache is not None else "off"
+
+    # H3 restrictions (batch > 1, non-bf16, weighting, compile) must 400 before eviction.
     from core.training.diffusion_train_common import h3_train_unsupported_reason
 
     _h3_reason = h3_train_unsupported_reason(normalized_cfg)
@@ -3808,6 +3855,13 @@ async def start_diffusion_training(
     )
     if _precision_reason:
         raise HTTPException(status_code = 400, detail = _precision_reason)
+
+    # The trainer refuses these only after the base loads; refuse a block_swap it cannot honour here.
+    from core.training.diffusion_block_swap import block_swap_start_error
+
+    _swap_reason = block_swap_start_error(normalized_cfg)
+    if _swap_reason:
+        raise HTTPException(status_code = 400, detail = _swap_reason)
 
     # Trainer child imports the pipeline in this interpreter; refuse a broken import before GPU teardown.
     from core.training.diffusion_train_common import training_pipeline_import_error
@@ -3857,6 +3911,7 @@ async def start_diffusion_training(
         _assert_trusted_base_model(
             config.get("base_model", ""),
             allow_modular = normalized_cfg.resolved_family in MODULAR_BASE_FAMILIES,
+            family = normalized_cfg.resolved_family,
         )
     except ValueError as e:
         raise HTTPException(status_code = 400, detail = str(e))

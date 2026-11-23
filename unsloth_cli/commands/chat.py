@@ -24,6 +24,7 @@ from unsloth_cli._inference import (
     resolve_model_config,
     server_load_opts,
     stream_markdown,
+    use_plain_tracebacks,
     user_turn,
     visible_text,
 )
@@ -212,9 +213,11 @@ def chat(
     max_seq_length: int = typer.Option(
         0,
         "--max-seq-length",
-        help = "Context length in tokens. 0 takes the checkpoint's trained window on GGUF "
-        "and MLX, and 2048 on the transformers backend. A value that differs from a "
-        "running Unsloth server's reloads the model.",
+        "--context-length",
+        help = "Runtime context length in tokens (0 = model default for GGUF and MLX; 2048 "
+        "for hub models). --context-length works too. A value that differs from a running "
+        "Unsloth server's reloads the model; left unset, an NPU model it already has loaded "
+        "keeps its context.",
     ),
     load_in_4bit: bool = typer.Option(
         True,
@@ -281,6 +284,8 @@ def chat(
     """Start an interactive chat with a model (loads once, stays warm)."""
     if not verbose:
         configure_quiet_logging()
+    else:
+        use_plain_tracebacks()
 
     from rich.console import Console
 
