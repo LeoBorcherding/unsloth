@@ -701,6 +701,7 @@ def acquire_for(
     need_mib: Optional[dict] = None,
     evict_first: bool = False,
     admit: Optional[Callable[[], None]] = None,
+    beside: bool = False,
     spare_chat: bool = False,
 ) -> Any:
     """Make ``owner`` resident, evicting every other resident under the default policy.
@@ -718,6 +719,7 @@ def acquire_for(
     ``need_mib`` is what an image or video load will hold per physical GPU (None: unknown, so it evicts first),
     and ``evict_first`` makes a chat load with no estimate before launch evict as "off" does.
     ``admit`` runs under the lock before anything is evicted; raising refuses the acquire untouched.
+    ``beside`` joins the residents without evicting any: the caller has checked that it fits.
     ``spare_chat`` (a chat's own tools loading an image or video model) raises ``GpuOwnerBusyError(CHAT)``
     instead of unloading a chat model; other residents are evicted as usual.
     """
@@ -748,7 +750,7 @@ def acquire_for(
         prev_owner, prev_pair = _owner, (_owner_account, _prior_account)
         # Read before evicting: dropping the current owner promotes a parked resident and pops its accounts.
         parked = owner in _accounts
-        others = [name for name in _residents if name != owner]
+        others = [] if beside else [name for name in _residents if name != owner]
         if others and coreside:
             from core.inference.gpu_residency import coreside_locked
             coreside_locked(
@@ -790,7 +792,7 @@ def acquire_for(
                 note_evictions(unloading, sink)
                 _drop_resident(name)
         _release_idle_restyle_server()
-        if owner != VIDEO and not (coreside and VIDEO in _residents):
+        if owner != VIDEO and not beside and not (coreside and VIDEO in _residents):
             # A resident H3 sd-server sits outside every owner's teardown.
             _release_idle_video_servers(f"GPU acquired for {owner}")
         if owner != DECISIONS and (register is not None or replacing) and policy == "off":
