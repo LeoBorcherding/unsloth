@@ -64,6 +64,10 @@ const { StudioDictationAdapter } = loadWithStubs<{
       micClipRoom: () => 0,
       micSendsAudioToModel: () => false,
     },
+    "../voice/voice-loop-bridge": {
+      getVoiceMode: () => "off",
+      startVoiceListen: () => null,
+    },
     "../utils/dictation-entry": {
       currentDictationEntryMode: () => "browser",
       insecureDictationGuidance: () => "",
