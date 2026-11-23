@@ -11,7 +11,7 @@ import {
   storeAuthTokens,
 } from "./session";
 import { refreshSession, refreshSessionOutcome } from "./api";
-import { setLoginMode } from "./login-client";
+import { getLoginMode, setLoginMode } from "./login-client";
 import {
   OWNER_BROWSER_ACCOUNT,
   transitionBrowserAccount,
@@ -45,6 +45,8 @@ export async function markDesktopSignedOut(): Promise<void> {
 export async function clearDesktopSignedOut(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("desktop_clear_signed_out");
+  // A single-account shell can mint sessions again; a multi-account one still answers login_required.
+  if (getLoginMode() !== "multi") tauriLoginRequired = false;
 }
 
 const TAURI_AUTH_FAILURE_FALLBACK =

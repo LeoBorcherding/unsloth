@@ -8,6 +8,7 @@ import test from "node:test";
 import { loadWithStubs } from "./helpers/module-stubs.ts";
 
 type AutoAuth = {
+  clearDesktopSignedOut(): Promise<void>;
   tauriAutoAuth(options?: { force?: boolean }): Promise<boolean>;
   isTauriLoginRequired(): boolean;
   getTauriAuthFailure(): string | null;
@@ -91,6 +92,7 @@ function fixture(
     "./session": session,
     "./api": session,
     "./login-client": {
+      getLoginMode: () => status.login_mode,
       setLoginMode: (mode: string, fullAccess?: boolean) => {
         loginModes.push([mode, fullAccess]);
       },
@@ -504,4 +506,20 @@ test("a second desktop window cannot auto-sign in after another window logs out"
   // API recovery in the other window, after its tokens were cleared under it.
   assert.equal(await second.auth.tauriAutoAuth(), false);
   assert.equal(second.access, null);
+});
+
+test("a password sign-in after Log out lets a single-account shell recover sessions again", async (t) => {
+  const f = fixture(t);
+  await f.auth.markDesktopSignedOut();
+  assert.equal(f.auth.isTauriLoginRequired(), true);
+  await f.auth.clearDesktopSignedOut();
+  assert.equal(f.auth.isTauriLoginRequired(), false);
+});
+
+test("a managed sign-in on a multi-account shell keeps login_required", async (t) => {
+  const f = fixture(t);
+  f.setStatus({ initialized: true, requires_password_change: false, login_mode: "multi" });
+  await f.auth.markDesktopSignedOut();
+  await f.auth.clearDesktopSignedOut();
+  assert.equal(f.auth.isTauriLoginRequired(), true);
 });
