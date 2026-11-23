@@ -995,7 +995,6 @@ def test_vad_routes_never_read_the_locked_resident_on_the_event_loop(monkeypatch
     assert seen == [("unload", False), ("loaded_model", False), ("detect", False)]
 
 
-
 def test_vad_unload_judges_the_resident_it_stops_under_the_sidecar_lock(monkeypatch):
     from core.inference.vad_audiocpp_sidecar import AudioCppVadSidecar
 

@@ -167,7 +167,13 @@ def test_a_load_right_after_a_download_finds_the_model_it_fetched(monkeypatch, t
     hub = [acm.RepoFile("PulseVAD-GGUF/pulsevad.gguf", 1024)]
     cache = []
 
-    def list_files(repo_id, folder = "", hf_token = None, *, network = True):
+    def list_files(
+        repo_id,
+        folder = "",
+        hf_token = None,
+        *,
+        network = True,
+    ):
         return (list(hub), True) if network else (list(cache), False)
 
     def download_missing(entry, hf_token):
@@ -176,7 +182,12 @@ def test_a_load_right_after_a_download_finds_the_model_it_fetched(monkeypatch, t
 
     launched = []
 
-    def start(model, path, force_cpu = False, max_threads = None):
+    def start(
+        model,
+        path,
+        force_cpu = False,
+        max_threads = None,
+    ):
         launched.append((model.id, path, force_cpu))
         return SimpleNamespace(process = SimpleNamespace(poll = lambda: None), stop = lambda: None)
 

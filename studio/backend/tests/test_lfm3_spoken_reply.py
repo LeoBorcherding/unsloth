@@ -349,7 +349,6 @@ def test_unset_spoken_budget_fits_the_served_window(monkeypatch, window, expecte
 
 
 class LiquidCodecStreamingCache:
-
     def __init__(self, config):
         self.chunks = 0
         self.finished = False
@@ -387,7 +386,6 @@ class _TokenTokenizer:
 
 
 class _StreamingModel(torch.nn.Module):
-
     config = types.SimpleNamespace(interleaved_n_audio = 12)
     device = "cpu"
 
@@ -519,7 +517,6 @@ def test_a_worker_still_alive_after_finishing_keeps_the_reply(monkeypatch):
 
 
 class _ByteTokenizer:
-
     def decode(
         self,
         ids,

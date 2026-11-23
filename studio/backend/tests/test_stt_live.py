@@ -23,7 +23,9 @@ def _runtime(reply_after_audio):
         seen["request"] = reader.readline().decode()
         while reader.readline().strip():
             pass
-        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+        )
         while True:
             size = int(reader.readline().strip() or b"0", 16)
             if size == 0:
@@ -47,7 +49,11 @@ def test_words_arrive_while_audio_is_still_being_sent():
                 b'data: {"type":"transcript.text.done","text":"Hello there."}\n\n',
                 b"data: [DONE]\n\n",
             ]
-        return [b'data: {"type":"transcript.text.delta","delta":"Hello"}\n\n'] if len(audio) == 4 else []
+        return (
+            [b'data: {"type":"transcript.text.delta","delta":"Hello"}\n\n']
+            if len(audio) == 4
+            else []
+        )
 
     port, seen = _runtime(reply)
     session = LiveTranscript(port, "studio-1", 16000, "en")

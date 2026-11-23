@@ -17,7 +17,12 @@ from utils.api_errors import install_api_error_handlers
 _WAV = b"RIFF\x24\x00\x00\x00WAVEfmt fake-payload"
 
 
-def _fake_backend(monkeypatch, *, resolve_s = 0.0, synth_s = 0.0):
+def _fake_backend(
+    monkeypatch,
+    *,
+    resolve_s = 0.0,
+    synth_s = 0.0,
+):
     class _Llama:
         is_loaded = False
         _is_audio = False

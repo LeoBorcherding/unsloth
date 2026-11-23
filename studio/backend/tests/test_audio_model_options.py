@@ -42,7 +42,14 @@ def calls(monkeypatch):
     downloaded = {KOKORO}
     known = {KOKORO, "audio-cpp/audio.cpp-gguf/OmniVoice-GGUF"}
 
-    def fake_resolve(identifier, variant = None, hf_token = None, *, network = True, **_):
+    def fake_resolve(
+        identifier,
+        variant = None,
+        hf_token = None,
+        *,
+        network = True,
+        **_,
+    ):
         seen.append((identifier, network))
         if identifier not in known or (not network and identifier not in downloaded):
             return None
@@ -52,7 +59,11 @@ def calls(monkeypatch):
     monkeypatch.setattr(
         backend,
         "model_info_fields",
-        lambda model: {"audio_family": "kokoro_tts", "audio_options": OPTIONS, "gguf_variant": "Q8_0"},
+        lambda model: {
+            "audio_family": "kokoro_tts",
+            "audio_options": OPTIONS,
+            "gguf_variant": "Q8_0",
+        },
     )
     return seen
 

@@ -317,7 +317,6 @@ def test_a_voice_load_never_replaces_the_chat_model(backends, monkeypatch):
     assert (primary.model_identifier, primary.is_active) == ("org/A-GGUF", True)
 
 
-
 def test_a_kept_model_with_no_gpu_layers_does_not_hold_the_gpu(backends):
     _, extra = backends
     assert model_slots.holds_vram()

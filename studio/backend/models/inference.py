@@ -7436,7 +7436,6 @@ class AudioVoiceListResponse(BaseModel):
 
 
 class AudioModelOptionsResponse(BaseModel):
-
     model: str
     audio_family: Optional[str] = None
     audio_options: List[Dict[str, Any]] = Field(

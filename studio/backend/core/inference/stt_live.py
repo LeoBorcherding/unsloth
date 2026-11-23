@@ -81,7 +81,11 @@ class LiveTranscript:
             self._finished = True
         self._send(b"0\r\n\r\n", ending = True)
 
-    def _send(self, data: bytes, ending: bool = False) -> None:
+    def _send(
+        self,
+        data: bytes,
+        ending: bool = False,
+    ) -> None:
         with self._send_lock:
             if self._closed.is_set() or (self._finished and not ending):
                 raise LiveTranscriptError("The live session has ended.")

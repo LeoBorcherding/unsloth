@@ -112,7 +112,9 @@ def _moss_max_tokens(duration: Optional[float]) -> Optional[int]:
     if not duration or duration <= 0:
         return None
     short = math.ceil(duration * _MOSS_TOKENS_PER_SECOND * 2) + _MOSS_SHORT_CLIP_SLACK_TOKENS
-    budget = max(min(short, _MOSS_DEFAULT_MAX_TOKENS), math.ceil(duration * _MOSS_TOKENS_PER_SECOND))
+    budget = max(
+        min(short, _MOSS_DEFAULT_MAX_TOKENS), math.ceil(duration * _MOSS_TOKENS_PER_SECOND)
+    )
     room = (
         _MOSS_CONTEXT_TOKENS
         - math.ceil(duration * _MOSS_PROMPT_TOKENS_PER_SECOND)
@@ -1137,7 +1139,10 @@ class AudioCppSttSidecar:
         return result
 
     def open_live(
-        self, model: Optional[str], sample_rate: int, language: Optional[str] = None
+        self,
+        model: Optional[str],
+        sample_rate: int,
+        language: Optional[str] = None,
     ) -> LiveTranscript:
         self._raise_if_update_in_progress()
         ensure_engine_available()
@@ -1226,7 +1231,9 @@ class AudioCppSttSidecar:
                 # The server rejected this clip or option (e.g. an unsupported language), not a broken runtime.
                 raise SttAudioDecodeError(detail) from exc
             if _looped_short_clip(exc.detail, options):
-                logger.info("audio.cpp: %s heard no words in a short clip (%s)", server.model.family, detail)
+                logger.info(
+                    "audio.cpp: %s heard no words in a short clip (%s)", server.model.family, detail
+                )
                 return {"text": ""}
             note_runtime_inference_failure(str(exc))
             raise SttEngineUnavailableError(f"The audio runtime failed: {detail}") from exc

@@ -415,7 +415,6 @@ def _softmax(x):
 
 def _onnx_feed(e, names = None) -> dict:
     import numpy as np
-
     feed = {
         "input_ids": np.array([e.ids], dtype = np.int64),
         "attention_mask": np.array([e.attention_mask], dtype = np.int64),

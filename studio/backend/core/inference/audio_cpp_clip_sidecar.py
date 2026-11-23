@@ -94,7 +94,11 @@ class AudioCppClipSidecar:
         self._on_cpu = False
 
     def _resolve(
-        self, model: Optional[str], *, network: bool, hf_token: Optional[str] = None
+        self,
+        model: Optional[str],
+        *,
+        network: bool,
+        hf_token: Optional[str] = None,
     ) -> AudioCppModel:
         raise NotImplementedError
 

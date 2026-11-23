@@ -433,7 +433,11 @@ class _FakeTokenizer:
         self.max = None
         self.direction = "right"
 
-    def enable_truncation(self, n, direction = "right"):
+    def enable_truncation(
+        self,
+        n,
+        direction = "right",
+    ):
         self.max, self.direction = n, direction
 
     def encode(self, text):
@@ -638,19 +642,16 @@ def test_voice_pickles_refuse_classes_that_open_files(tmp_path, module, name):
 
 
 class _TailSession:
-
     def get_inputs(self):
         return [type("I", (), {"name": "input_ids"})(), type("I", (), {"name": "attention_mask"})()]
 
     def run(self, _outputs, feed):
         import numpy as np
-
         ends = 104 in feed["input_ids"][0]
         return [np.array([[0.0, 2.0 if ends else -2.0]], dtype = np.float32)]
 
 
 class _HFTokenizer:
-
     truncation_side = "right"
 
     def __call__(self, texts, truncation, max_length, return_tensors):
@@ -672,7 +673,6 @@ class _HFModel:
 
     def __call__(self, input_ids, attention_mask):
         import numpy as np
-
         logits = np.array([[0.0, 2.0 if 104 in input_ids[0] else -2.0]], dtype = np.float32)
         return type("Out", (), {"logits": type("L", (), {"float": lambda s: logits})()})()
 

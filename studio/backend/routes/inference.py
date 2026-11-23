@@ -28159,7 +28159,6 @@ async def _require_hub_audio_model_access(identifier: str) -> None:
     if not account_access.managed_account():
         return
     from core.inference.audio_cpp_models import repo_of
-
     await asyncio.to_thread(account_access.require_model_access, repo_of(identifier) or identifier)
 
 
@@ -28181,7 +28180,9 @@ async def _load_clip_sidecar(
     return JSONResponse(content = {"loaded_model": loaded})
 
 
-async def _claim_clip_load(sidecar, before: Optional[str], loaded: Optional[str], modality: str) -> None:
+async def _claim_clip_load(
+    sidecar, before: Optional[str], loaded: Optional[str], modality: str
+) -> None:
     """A run that loaded the model owns it; one that only used it does not."""
     if (
         loaded
@@ -28291,7 +28292,6 @@ async def turn_load(
     hf_token: HfTokenArg = Depends(get_request_hf_token),
 ):
     from core.inference.turn_audiocpp_sidecar import get_audio_cpp_turn_sidecar
-
     await _require_turn_model_access(payload.model)
     return await _load_clip_sidecar(
         get_audio_cpp_turn_sidecar(), payload.model, hf_token, "Turn detection", "turn"

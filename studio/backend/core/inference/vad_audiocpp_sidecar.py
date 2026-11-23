@@ -195,7 +195,11 @@ class AudioCppVadSidecar(AudioCppClipSidecar):
     label = "speech detector"
 
     def _resolve(
-        self, model: Optional[str], *, network: bool, hf_token: Optional[str] = None
+        self,
+        model: Optional[str],
+        *,
+        network: bool,
+        hf_token: Optional[str] = None,
     ) -> AudioCppModel:
         return resolve_vad_model(model, network = network, hf_token = hf_token)
 

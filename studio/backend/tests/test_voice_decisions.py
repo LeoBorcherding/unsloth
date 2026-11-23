@@ -131,7 +131,11 @@ def test_unset_env_keeps_the_v1_loaders(monkeypatch, tmp_path):
         def __init__(self, path):
             pass
 
-        def enable_truncation(self, n, direction = "right"):
+        def enable_truncation(
+            self,
+            n,
+            direction = "right",
+        ):
             pass
 
         def encode(self, text):
