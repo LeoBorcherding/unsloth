@@ -5,7 +5,6 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from core.inference import audio_cpp_models as acm
 from core.inference import vad_audiocpp_sidecar as vad
