@@ -190,6 +190,7 @@ export const CHAT_EXPAND_QUANTIZATIONS_KEY =
 export const CHAT_SHOW_ALL_QUANTIZATIONS_KEY =
   "unsloth_chat_show_all_quantizations";
 export const CHAT_SHOW_MEMORY_BAR_KEY = "unsloth_chat_show_memory_bar";
+export const CHAT_SHOW_MODEL_SIZES_KEY = "unsloth_chat_show_model_sizes";
 export const PICKER_EXPAND_LOADED_KEY = "unsloth_composer_picker_expand_loaded";
 export const PICKER_MONOCHROME_ICONS_KEY =
   "unsloth_composer_picker_monochrome_icons";
@@ -2776,6 +2777,7 @@ type ChatRuntimeStore = {
   expandQuantizations: boolean;
   showAllQuantizations: boolean;
   showMemoryBar: boolean;
+  showModelSizes: boolean;
   pickerExpandLoaded: boolean;
   pickerMonochromeIcons: boolean;
   fitOnDeviceOnly: boolean;
@@ -2978,6 +2980,7 @@ type ChatRuntimeStore = {
   setExpandQuantizations: (value: boolean) => void;
   setShowAllQuantizations: (value: boolean) => void;
   setShowMemoryBar: (value: boolean) => void;
+  setShowModelSizes: (value: boolean) => void;
   setPickerExpandLoaded: (value: boolean) => void;
   setPickerMonochromeIcons: (value: boolean) => void;
   setFitOnDeviceOnly: (value: boolean) => void;
@@ -4660,6 +4663,7 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
   expandQuantizations: loadBool(CHAT_EXPAND_QUANTIZATIONS_KEY, true),
   showAllQuantizations: loadBool(CHAT_SHOW_ALL_QUANTIZATIONS_KEY, false),
   showMemoryBar: loadBool(CHAT_SHOW_MEMORY_BAR_KEY, false),
+  showModelSizes: loadBool(CHAT_SHOW_MODEL_SIZES_KEY, false),
   pickerExpandLoaded: loadBool(PICKER_EXPAND_LOADED_KEY, false),
   pickerMonochromeIcons: loadBool(PICKER_MONOCHROME_ICONS_KEY, false),
   fitOnDeviceOnly: loadBool(MODELS_FIT_ON_DEVICE_ONLY_KEY, false),
@@ -6511,6 +6515,10 @@ export const useChatRuntimeStore = create<ChatRuntimeStore>((set, get) => ({
   setShowMemoryBar: (showMemoryBar) => {
     saveBool(CHAT_SHOW_MEMORY_BAR_KEY, showMemoryBar);
     set({ showMemoryBar });
+  },
+  setShowModelSizes: (showModelSizes) => {
+    saveBool(CHAT_SHOW_MODEL_SIZES_KEY, showModelSizes);
+    set({ showModelSizes });
   },
   setPickerExpandLoaded: (pickerExpandLoaded) => {
     saveBool(PICKER_EXPAND_LOADED_KEY, pickerExpandLoaded);

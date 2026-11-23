@@ -371,6 +371,10 @@ export function ChatTab() {
   const setShowMemoryBar = useChatRuntimeStore(
     (state) => state.setShowMemoryBar,
   );
+  const showModelSizes = useChatRuntimeStore((state) => state.showModelSizes);
+  const setShowModelSizes = useChatRuntimeStore(
+    (state) => state.setShowModelSizes,
+  );
   const pickerExpandLoaded = useChatRuntimeStore(
     (state) => state.pickerExpandLoaded,
   );
@@ -926,6 +930,18 @@ export function ChatTab() {
           )}
         >
           <Switch checked={showMemoryBar} onCheckedChange={setShowMemoryBar} />
+        </SettingsRow>
+        <SettingsRow
+          label={t("settings.chat.modelSelection.showModelSizes")}
+          description={t(
+            "settings.chat.modelSelection.showModelSizesDescription",
+          )}
+        >
+          <Switch
+            aria-label={t("settings.chat.modelSelection.showModelSizes")}
+            checked={showModelSizes}
+            onCheckedChange={setShowModelSizes}
+          />
         </SettingsRow>
         <SettingsRow
           label={t("settings.chat.modelSelection.expandQuantizations")}

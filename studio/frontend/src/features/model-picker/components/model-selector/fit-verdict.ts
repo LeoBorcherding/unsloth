@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
+import { formatGiB } from "../../../../lib/memory/format.ts";
 import type { PickerFitStatus } from "./media-picker-fit";
 
 export interface FitVerdict {
@@ -68,4 +69,34 @@ export function isOverBudget(status?: PickerFitStatus | null): boolean {
     status === "oom" ||
     status === "exceeds"
   );
+}
+
+/** A fit mark's tooltip with its numbers; null when the estimate or the GPU is unknown. */
+export function fitMemoryText(
+  status: PickerFitStatus | null | undefined,
+  estGb: number | null | undefined,
+  gpuGb: number | null | undefined,
+): string | null {
+  if (!status || !estGb || estGb <= 0 || !gpuGb || gpuGb <= 0) {
+    return null;
+  }
+  if (isOverBudget(status)) {
+    // "memory", not "VRAM": a `partial` GGUF splits across VRAM and RAM.
+    return `Needs ~${formatGiB(estGb)} memory (GPU: ${formatGiB(gpuGb)})`;
+  }
+  if (status === "offload") {
+    return `~${formatGiB(estGb)} memory. Might be slower with RAM offloading.`;
+  }
+  // Over the VRAM Budget, or over Apple's unified load budget: either way, near the limit.
+  if (status === "marginal") {
+    return `~${formatGiB(estGb)} memory, near this device's limit (GPU: ${formatGiB(gpuGb)})`;
+  }
+  if (status === "tight") {
+    return `~${formatGiB(estGb)} VRAM (tight fit on ${formatGiB(gpuGb)})`;
+  }
+  // The estimate counts the lookup tables that stay on disk.
+  if (status === "streamed") {
+    return VRAM_VERDICT.streamed?.hint ?? null;
+  }
+  return `~${formatGiB(estGb)} VRAM`;
 }
