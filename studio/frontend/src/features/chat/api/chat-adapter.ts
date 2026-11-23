@@ -5,6 +5,17 @@ import { hasChatFullAccess, withChatFullAccess } from "../utils/chat-full-access
 
 import { attachedMediaUnavailableReason } from "../lib/attached-media-gate";
 import { readGenerationProgress } from "../lib/generation-progress";
+import { joinWavBase64 } from "../utils/wav-chunks";
+import { getVoiceMode, publishVoiceSpokenAudio } from "../voice/voice-loop-bridge";
+import { reasoningForTurn, wantsSpokenReply } from "../voice/voice-models";
+import { withReplyInstruction } from "../voice/voice-instruction";
+import { useVoiceSettingsStore } from "../../settings/stores/voice-settings-store";
+import {
+  consumePendingFiller,
+  consumePendingReplace,
+  replaceSystemNote,
+  fillerSystemNote,
+} from "@/features/chat/voice/thinking-filler";
 import { externalModelLabel } from "../lib/external-model-label";
 import { mlxRuntimeStateFrom } from "../lib/mlx-runtime-state";
 import { minPSamplingPayload } from "../lib/min-p-policy";
@@ -17,6 +28,8 @@ import {
   type ImageDisclosure,
   modelVisibleMessage,
   toolOnlyImages,
+  withHeardCut,
+  withHeardNotes,
 } from "./mcp-image";
 import { llamaServerLoadFields } from "../lib/load-request";
 import {
@@ -1889,9 +1902,13 @@ function pruneOutboundHistory(
   messages: RunMessages,
   includeReasoningContent: boolean,
 ): RunMessage[] {
-  const history = [...messages];
+  const history = withHeardNotes(messages);
+  // Judged on the heard cut, not the full reply.
   const abandoned = history.map((message) =>
-    isAbandonedAssistantTurn(message, includeReasoningContent),
+    isAbandonedAssistantTurn(withHeardCut(message), includeReasoningContent),
+  );
+  const heardNothing = history.map(
+    (message, index) => abandoned[index] && !isAbandonedAssistantTurn(message, includeReasoningContent),
   );
   // A prompt is only stranded when something survives after it, so a trailing abandoned turn keeps its prompt.
   let lastSurviving = -1;
@@ -1909,13 +1926,36 @@ function pruneOutboundHistory(
     if (refused || abandoned[index]) {
       if (refused || index < lastSurviving) {
         const last = surviving.at(-1);
-        if (last && last.role === "user") surviving.pop();
+        if (last && last.role === "user") {
+          surviving.pop();
+          const next = refused || !heardNothing[index] ? -1 : nextSurvivor(history, abandoned, index);
+          if (next >= 0 && history[next].role === "user") history[next] = joinedPrompts(last, history[next]);
+        }
       }
       continue;
     }
     surviving.push(message);
   }
   return surviving;
+}
+
+function nextSurvivor(history: readonly RunMessage[], abandoned: readonly boolean[], after: number): number {
+  for (let index = after + 1; index < history.length; index += 1) {
+    if (!abandoned[index] && !isAnthropicRefusalMessage(history[index])) return index;
+  }
+  return -1;
+}
+
+function joinedPrompts(first: RunMessage, next: RunMessage): RunMessage {
+  const attachments = [
+    ...(("attachments" in first && first.attachments) || []),
+    ...(("attachments" in next && next.attachments) || []),
+  ];
+  return {
+    ...next,
+    content: [...first.content, ...next.content],
+    ...(attachments.length > 0 ? { attachments } : {}),
+  } as RunMessage;
 }
 
 function extractImageBase64(input: string): string | undefined {
@@ -2037,7 +2077,7 @@ export function messagesUsePrivateContent(messages: RunMessages): boolean {
 }
 
 /** Every clip on the newest user message, in the order it was attached. */
-function latestUserAudioClips(messages: RunMessages): string[] {
+function latestUserAudioClips(messages: RunMessages, skipVoiceRecording = false): string[] {
   messages = messages.map(modelVisibleMessage);
   const clips: string[] = [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -2051,6 +2091,7 @@ function latestUserAudioClips(messages: RunMessages): string[] {
 
     if ("attachments" in message) {
       for (const attachment of message.attachments ?? []) {
+        if (skipVoiceRecording && (attachment as { name?: string }).name === "voice.wav") continue;
         for (const part of attachment.content ?? []) {
           const base64 = extractAudioPartBase64(part);
           if (base64) clips.push(base64);
@@ -2068,8 +2109,9 @@ function latestUserAudioClips(messages: RunMessages): string[] {
 export function findLatestUserAudioBase64(
   messages: RunMessages,
   includePendingAudio = true,
+  skipVoiceRecording = false,
 ): string | undefined {
-  const [first] = latestUserAudioClips(messages);
+  const [first] = latestUserAudioClips(messages, skipVoiceRecording);
   if (first) return first;
 
   const pendingAudio = includePendingAudio
@@ -2081,8 +2123,9 @@ export function findLatestUserAudioBase64(
 /** Clips after the first, for extra_audio_base64. Undefined when empty so text turns stay durable. */
 export function findLatestUserExtraAudioBase64(
   messages: RunMessages,
+  skipVoiceRecording = false,
 ): string[] | undefined {
-  const extra = latestUserAudioClips(messages).slice(1);
+  const extra = latestUserAudioClips(messages, skipVoiceRecording).slice(1);
   return extra.length > 0 ? extra : undefined;
 }
 
@@ -2280,11 +2323,13 @@ export async function buildLocalTokenCountHistory(
     resolveProjectInstructions(projectId),
     resolveAgentsMd(projectId),
   ]);
-  const combinedSystemPrompt = composeChatInstructions({
-    agentsMd,
-    projectInstructions,
-    systemPrompt: safeSystemPrompt,
-  });
+  const combinedSystemPrompt = withVoiceReplyShaping(
+    composeChatInstructions({
+      agentsMd,
+      projectInstructions,
+      systemPrompt: safeSystemPrompt,
+    }),
+  );
   if (combinedSystemPrompt) {
     prependSystemPrompt(outboundMessages, combinedSystemPrompt);
   }
@@ -2297,6 +2342,14 @@ export async function buildLocalTokenCountHistory(
   };
 }
 
+function turnReasoning(enabled: boolean): boolean {
+  return reasoningForTurn({
+    enabled,
+    voiceModeOn: getVoiceMode() === "active",
+    voiceThinking: useVoiceSettingsStore.getState().voiceThinking,
+  });
+}
+
 /** The reasoning fields a completion would send: llama-server falls back to load-time
  *  --chat-template-kwargs only for omitted keys, so sending none misreports the mode. */
 export function buildLocalTokenCountReasoning(
@@ -2305,15 +2358,16 @@ export function buildLocalTokenCountReasoning(
   const {
     supportsReasoning,
     reasoningStyle,
-    reasoningEnabled,
+    reasoningEnabled: thinkingSetting,
     reasoningEffort,
     reasoningEffortLevels,
     supportsPreserveThinking,
     preserveThinking,
   } = state;
+  const reasoningEnabled = turnReasoning(thinkingSetting);
   // Same clamp the request build applies: a level the loaded template does not offer is dropped by the backend.
   const localReasoningEffort = clampReasoningEffortToLevels(
-    reasoningEffort,
+    requestReasoningEffort(reasoningEffort, reasoningEffortLevels),
     reasoningEffortLevels,
   );
   return {
@@ -2563,11 +2617,29 @@ export async function resolveChatInstructions(
     resolveProjectInstructions(projectId),
     opts?.agentsMd ? resolveAgentsMd(projectId) : undefined,
   ]);
-  return composeChatInstructions({
+  const instructions = composeChatInstructions({
     agentsMd,
     projectInstructions,
     systemPrompt: safeSystemPrompt,
   });
+  // Model-bound only, like AGENTS.md; copies and exports keep the chat's own.
+  return opts?.agentsMd ? withVoiceReplyShaping(instructions) : instructions;
+}
+
+/** Goes last, in what is sent and in the token count alike. */
+function withVoiceReplyShaping(instructions: string): string {
+  if (getVoiceMode() !== "active") return instructions;
+  const { replyInstruction, replyInstructionCustom } = useVoiceSettingsStore.getState();
+  return withReplyInstruction(instructions, replyInstruction, replyInstructionCustom);
+}
+
+function voiceReplyShaping(): boolean {
+  return getVoiceMode() === "active" && useVoiceSettingsStore.getState().replyInstruction !== "none";
+}
+
+// Speech waits for the first non-thinking token, so use the lowest level.
+function requestReasoningEffort<T extends string>(effort: T, levels: readonly T[]): T {
+  return voiceReplyShaping() && levels.length > 0 ? levels[0] : effort;
 }
 
 // Answered once per thread and reused, so sandbox, RAG scope and instructions never mix two projects.
@@ -5681,6 +5753,12 @@ export function createOpenAIStreamAdapter(
       const videoBase64 = findLatestUserVideoBase64(survivingMessages);
 
       addSystemInstruction(outboundMessages, disabledToolGuard);
+      const spokenFiller = consumePendingFiller();
+      addSystemInstruction(
+        outboundMessages,
+        spokenFiller ? fillerSystemNote(spokenFiller.phrase) : null,
+      );
+      addSystemInstruction(outboundMessages, consumePendingReplace() ? replaceSystemNote() : null);
 
       const blockAttachmentRun = (reason: string): never => {
         toast.error(reason);
@@ -6412,6 +6490,17 @@ export function createOpenAIStreamAdapter(
             })) ?? []);
       // A spoken reply's audio, kept apart from the text so the player renders on its own.
       let spokenReplyPart: { type: "text"; text: string } | null = null;
+      const spokenAudioChunks: string[] = [];
+      let spokenJoinedCount = 0;
+      const joinSpokenPart = () => {
+        if (spokenAudioChunks.length === spokenJoinedCount) return false;
+        spokenJoinedCount = spokenAudioChunks.length;
+        spokenReplyPart = {
+          type: "text",
+          text: `<audio-player src="data:audio/wav;base64,${joinWavBase64(spokenAudioChunks)}" />`,
+        };
+        return true;
+      };
       const buildAssistantContent = (rawText: string) => {
         const positionedTools = toolCallParts
           .map((part, index) => {
@@ -6467,12 +6556,13 @@ export function createOpenAIStreamAdapter(
 
       const {
         supportsReasoning,
-        reasoningEnabled,
+        reasoningEnabled: thinkingSetting,
         reasoningAlwaysOn,
         reasoningStyle,
         reasoningEffort,
         reasoningEffortLevels,
       } = runtime;
+      const reasoningEnabled = turnReasoning(thinkingSetting);
       const externalReasoningCaps: ReturnType<
         typeof getExternalReasoningCapabilities
       > =
@@ -6508,12 +6598,12 @@ export function createOpenAIStreamAdapter(
         .reasoningEffortLevels[0] ?? "low") as RequestReasoningEffort;
       const selectedExternalEffort: RequestReasoningEffort =
         clampReasoningEffortToLevels(
-          reasoningEffort,
+          requestReasoningEffort(reasoningEffort, externalReasoningCaps.reasoningEffortLevels),
           externalReasoningCaps.reasoningEffortLevels,
         ) as RequestReasoningEffort;
       // Clamp stale values to supported levels (gpt-oss low|medium|high, GLM high|max).
       const localReasoningEffort = clampReasoningEffortToLevels(
-        reasoningEffort,
+        requestReasoningEffort(reasoningEffort, reasoningEffortLevels),
         reasoningEffortLevels,
       );
       const externalReasoningFields: ReasoningRequestFields =
@@ -7142,9 +7232,22 @@ export function createOpenAIStreamAdapter(
             };
           }
 
+          const studioToolsOn =
+            supportsTools &&
+            (toolsEnabled ||
+              codeToolsEnabled ||
+              mcpEnabledForChat ||
+              ragEnabled ||
+              projectRagEnabled ||
+              skillTools.length > 0 ||
+              stepwiseTools ||
+              localMediaTools.length > 0 ||
+              deepResearchArmed);
+          const voiceTurnAsText = getVoiceMode() === "active" && studioToolsOn;
           const turnAudioBase64 = findLatestUserAudioBase64(
             currentTurnMessages,
             !queuedRunSettings && !continuation,
+            voiceTurnAsText,
           );
           return {
             model: params.checkpoint,
@@ -7172,18 +7275,25 @@ export function createOpenAIStreamAdapter(
             repetition_penalty: params.repetitionPenalty,
             presence_penalty: params.presencePenalty,
             // Omit when unset (server draws a seed) or unread, so a stale GGUF pin is never sent.
+            // Voice omits it too: a fixed seed turns llama.cpp's prompt cache off.
             ...(params.seed == null ||
+            voiceReplyShaping() ||
             !modelReadsSamplingSeed(activeModel, runtime.loadedEngine)
               ? {}
               : { seed: params.seed }),
             // Turn-scoped: a stale screenshot here made the backend refuse every later text turn's durable run.
             image_base64: findLatestUserImageBase64(currentTurnMessages),
             audio_base64: turnAudioBase64,
-            ...(activeModel?.speaks && turnAudioBase64
+            ...(wantsSpokenReply({
+              speaks: Boolean(activeModel?.speaks),
+              turnHasAudio: Boolean(turnAudioBase64),
+              voiceModeOn: getVoiceMode() === "active",
+              selectedVoiceModelId:
+                useChatRuntimeStore.getState().selectedVoiceModelId,
+            })
               ? { modalities: ["text", "audio"] }
               : {}),
-            extra_audio_base64:
-              findLatestUserExtraAudioBase64(currentTurnMessages),
+            extra_audio_base64: findLatestUserExtraAudioBase64(currentTurnMessages, voiceTurnAsText),
             video_base64: findLatestUserVideoBase64(currentTurnMessages),
             cancel_id: cancelId,
             ...(sandboxSessionId ? { session_id: sandboxSessionId } : {}),
@@ -7209,16 +7319,7 @@ export function createOpenAIStreamAdapter(
               : { confirm_tool_calls: permissionMode === "ask" }),
             bypass_permissions: bypassPermissions,
             ...(deepResearchArmed ? { deep_research_armed: true } : {}),
-            ...(supportsTools &&
-              (toolsEnabled ||
-                codeToolsEnabled ||
-                mcpEnabledForChat ||
-                ragEnabled ||
-                projectRagEnabled ||
-                skillTools.length > 0 ||
-                stepwiseTools ||
-                localMediaTools.length > 0 ||
-                deepResearchArmed)
+            ...(studioToolsOn
               ? {
                   enable_tools: true,
                   enabled_tools: [
@@ -8216,10 +8317,11 @@ export function createOpenAIStreamAdapter(
                   | undefined
               )?.audio?.data;
               if (typeof spokenAudio === "string" && spokenAudio) {
-                spokenReplyPart = {
-                  type: "text",
-                  text: `<audio-player src="data:audio/wav;base64,${spokenAudio}" />`,
-                };
+                spokenAudioChunks.push(spokenAudio);
+                publishVoiceSpokenAudio(resolvedThreadId ?? null, spokenAudio);
+              }
+              // One WAV, at stream end: a new src mid-stream restarts playback.
+              if (Boolean(chunk.choices?.[0]?.finish_reason) && joinSpokenPart()) {
                 replayStateChanged = true;
               }
               let geminiReplayStateChanged = false;
@@ -8896,6 +8998,7 @@ export function createOpenAIStreamAdapter(
             throw streamError;
           }
         }
+        joinSpokenPart();
         // Deep Research card replaces this reply, unless the user already pressed Stop.
         if (deepResearchHandoff.question !== null && !runSignal.aborted) {
           try {
@@ -9309,6 +9412,7 @@ export function createOpenAIStreamAdapter(
         // An explicit Stop is an abort too, but must persist its latched "cancelled" reason via the replacement yield below.
         if (!abortSignal.aborted || generationStopRequested) {
           closeReasoningContent();
+          joinSpokenPart();
           const partialText = mergeContinuation(cumulativeText, { final: true });
           const partialContent = buildAssistantContent(partialText);
           const partialTiming = withPriorTiming(

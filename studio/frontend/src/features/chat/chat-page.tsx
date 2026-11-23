@@ -29,12 +29,24 @@ import {
 } from "@/features/model-picker";
 import { ProjectComposer, Thread } from "@/components/assistant-ui/thread";
 import {
+  getVoiceMode,
+  loadVoiceMode,
+  requestVoiceThreadReset,
+  requestVoicePauseToggle,
+  requestVoiceToggle,
+} from "@/features/chat/voice/voice-loop-bridge";
+import { isAudioCppFolderId } from "@/features/audio/audio-cpp-catalog";
+import { clearHeldTurn } from "@/features/chat/adapters/studio-voice-loop-adapter";
+import {
   type ComposerModelPickerSource,
   ComposerModelPickerContext,
 } from "@/components/assistant-ui/composer-model-picker/context";
 import { ComposerModelPicker } from "@/components/assistant-ui/composer-model-picker/composer-model-picker";
 import { rowReachPx } from "@/components/assistant-ui/distant-rows";
+import { createVoiceSession } from "./voice/voice-session";
+import { storeVoiceSessionPorts } from "./voice/voice-session-store";
 import { LibraryAttachmentTargetContext } from "@/features/library";
+import { isChatModelVoice } from "@/features/chat/voice/voice-models";
 import { usePlatformStore } from "@/config/env";
 import { CopyableErrorChip } from "@/components/ui/copyable-error-chip";
 import {
@@ -371,6 +383,11 @@ const FullViewChatBar = lazyWithoutSuspense(() =>
 );
 const FullViewChatButton = lazyWithoutSuspense(() =>
   import("@/features/browser/full-view-chat").then((module) => module.FullViewChatButton),
+);
+const VoicePanel = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoicePanel,
+  })),
 );
 
 // Sandboxed page frames stay outside the trap: same-origin access would weaken their isolation.
@@ -857,6 +874,28 @@ const SingleContent = memo(function SingleContent({
     closeBrowser();
     useChatRuntimeStore.getState().setSettingsPanelOpen(false);
   }, [researchMatchesThread, closeBrowser]);
+
+  // Lives here, not in VoiceEngine: SingleContent survives the first-send remount that VoiceEngine does not.
+  const prevVoiceThreadIdRef = useRef(activeThreadId);
+  useEffect(() => {
+    const current = activeThreadId;
+    const prev = prevVoiceThreadIdRef.current;
+    if (prev === current) {
+      prevVoiceThreadIdRef.current = current;
+      return;
+    }
+    // Thread birth (null -> __LOCALID_xxx) is not a switch: skip the reset but advance the ref.
+    // Birth follows a send that consumed any held fragment, so one still held belongs to a draft left for a saved chat.
+    if (prev === null && current !== null) {
+      if (getVoiceMode() !== "off") clearHeldTurn();
+      prevVoiceThreadIdRef.current = current;
+      return;
+    }
+    if (getVoiceMode() !== "off") {
+      requestVoiceThreadReset(prev);
+    }
+    prevVoiceThreadIdRef.current = current;
+  }, [activeThreadId]);
 
   // Leaving Chat closes this chat's browser. Compare keeps this view mounted but hidden, and by
   // then the panel on screen is the compare chat's: that one stays as it is.
@@ -3170,6 +3209,56 @@ export function ChatPage({
     loadProgress,
     loadToastDismissed,
   } = useChatModelRuntime();
+  const voiceMode = useChatRuntimeStore((s) => s.voiceMode);
+  const selectedVoiceModelId = useChatRuntimeStore(
+    (s) => s.selectedVoiceModelId,
+  );
+  const [voiceSession] = useState(() => createVoiceSession(storeVoiceSessionPorts, voiceMode));
+  useEffect(() => {
+    const register = useChatRuntimeStore.getState().setEnsureVoiceSlotLoaded;
+    register(voiceSession.ensureVoiceSlotLoaded);
+    return () => register(null);
+  }, [voiceSession]);
+
+  const hasChatCheckpoint = useChatRuntimeStore((s) => Boolean(s.params.checkpoint));
+  const voiceFollowsChat = useChatRuntimeStore((s) =>
+    isChatModelVoice(s.selectedVoiceModelId) ? `${s.params.checkpoint}|${s.modelLoading}` : "",
+  );
+  useEffect(() => {
+    if (voiceMode !== "active" || !hasChatCheckpoint) return;
+    voiceSession.follow(selectedVoiceModelId);
+  }, [voiceMode, selectedVoiceModelId, hasChatCheckpoint, voiceFollowsChat, voiceSession]);
+
+  useEffect(() => {
+    voiceSession.setMode(voiceMode);
+  }, [voiceMode, voiceSession]);
+  useEffect(() => {
+    voiceSession.activate();
+    return () => voiceSession.dispose();
+  }, [voiceSession]);
+
+  // Off the chat route a running voice pauses and resumes on return, unless the user paused it.
+  const pausedOffRouteRef = useRef(false);
+  useEffect(() => {
+    const mode = getVoiceMode();
+    if (mode === "configuring") {
+      if (!active) requestVoiceToggle();
+      return;
+    }
+    if (mode !== "active") {
+      pausedOffRouteRef.current = false;
+      return;
+    }
+    const paused = useChatRuntimeStore.getState().voicePaused;
+    if (!active && !paused) {
+      pausedOffRouteRef.current = true;
+      requestVoicePauseToggle();
+    } else if (active && pausedOffRouteRef.current) {
+      pausedOffRouteRef.current = false;
+      if (paused) requestVoicePauseToggle();
+    }
+  }, [active]);
+
   const prevConnectionsEnabledRef = useRef(connectionsEnabled);
   useEffect(() => {
     const turnedOff = prevConnectionsEnabledRef.current && !connectionsEnabled;
@@ -5049,6 +5138,11 @@ export function ChatPage({
                 onAutoSwitch={handleAutoSwitchToChatModel}
               />
             )}
+            <Suspense fallback={null}>
+              {view.mode !== "compare" && voiceMode === "active" && (
+                <VoicePanel />
+              )}
+            </Suspense>
             {view.mode !== "compare" && currentProjectId && (
               <nav
                 aria-label="Project location"

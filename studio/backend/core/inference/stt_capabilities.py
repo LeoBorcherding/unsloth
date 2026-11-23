@@ -114,7 +114,6 @@ def connection_takes_accent_hint(model: Optional[str]) -> bool:
 
 
 def capabilities_for(model: Optional[str], engine: Optional[str]) -> dict:
-    """``timestamps``: "on_request" | "always" | "unsupported"; ``aligner`` only for "on_request"."""
     model = str(model or "").strip()
     result = {
         "engine": None,
@@ -125,6 +124,7 @@ def capabilities_for(model: Optional[str], engine: Optional[str]) -> dict:
         "aligner": None,
         "cpu_only": False,
         "max_seconds": None,
+        "live": False,
     }
     try:
         resolved_engine = _engine_for(model, engine)
@@ -138,7 +138,10 @@ def capabilities_for(model: Optional[str], engine: Optional[str]) -> dict:
             return result
         from core.inference.audio_cpp_models import CPU_ONLY_FAMILIES
 
+        from core.inference.stt_live import family_streams
+
         result["family"] = family
+        result["live"] = family_streams(family)
         result["cpu_only"] = family in CPU_ONLY_FAMILIES
         result["speakers"] = family in _SPEAKER_FAMILIES
         if family in ALWAYS_TIMESTAMPED:
@@ -161,5 +164,7 @@ def capabilities_for(model: Optional[str], engine: Optional[str]) -> dict:
             }
     except Exception as exc:  # noqa: BLE001 - a capability probe never fails the page
         logger.info("STT capabilities for %r unavailable (%s)", model, type(exc).__name__)
-        result.update(timestamps = "unsupported", speakers = False, accent_hint = False, aligner = None)
+        result.update(
+            timestamps = "unsupported", speakers = False, accent_hint = False, aligner = None, live = False
+        )
     return result

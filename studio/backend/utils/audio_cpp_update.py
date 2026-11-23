@@ -340,6 +340,12 @@ def _unload_audio_cpp_models() -> bool:
     # A kept server that survived would run from, or lock, the tree being replaced.
     if model_slots.unload_audio_cpp_slots(strict = True):
         unloaded = True
+    # Voice sidecars share this tree (Windows locks live files); they reload on their next check.
+    from core.inference.turn_audiocpp_sidecar import get_audio_cpp_turn_sidecar
+    from core.inference.vad_audiocpp_sidecar import get_audio_cpp_vad_sidecar
+
+    get_audio_cpp_vad_sidecar().unload()
+    get_audio_cpp_turn_sidecar().unload()
     return unloaded
 
 

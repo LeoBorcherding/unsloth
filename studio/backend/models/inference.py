@@ -133,6 +133,10 @@ class LoadRequest(BaseModel):
         False,
         description = "Load alongside even when it only partly fits the free GPU memory",
     )
+    voice: bool = Field(
+        False,
+        description = "Voice mode's speaking model: kept next to the chat model even with multi-model off",
+    )
     native_path_lease: Optional[str] = Field(
         None, description = "Frontend-visible signed native path grant"
     )
@@ -694,6 +698,14 @@ class TranscribeRequest(SttContextSettings):
 
 class SttLoadRequest(SttContextSettings):
     """Warm the STT sidecar with a model without transcribing."""
+
+    live: bool = Field(
+        False,
+        description = (
+            "Voice mode: also make the model ready to transcribe speech while it is spoken, "
+            "when it can (see /audio/stt/live). Other models load as usual."
+        ),
+    )
 
     model: Optional[str] = Field(None, description = "STT model id; defaults server-side")
     engine: Optional[str] = Field(
@@ -7031,6 +7043,20 @@ class AudioGenerateRequest(ChatCompletionRequest):
             "model must clone. Language, instructions, options, seed and the token cap apply."
         ),
     )
+    reference_input_id: Optional[str] = Field(
+        None,
+        pattern = _AUDIO_ID_PATTERN,
+        description = (
+            "[x-unsloth] An uploaded clip (POST /audio/inputs) to speak in, for a model that "
+            "clones; voice_id wins when both are sent. Voice mode pins its first sentence's voice "
+            "this way, so a model with no preset speaker keeps one voice for the session."
+        ),
+    )
+    reference_text: Optional[str] = Field(
+        None,
+        max_length = 4000,
+        description = "[x-unsloth] What reference_input_id says, for models that use a transcript.",
+    )
     persist: bool = Field(
         True, description = "[x-unsloth] Keep the clip in Audio history. Read aloud sends false."
     )
@@ -7407,6 +7433,15 @@ class AudioVoicePatch(BaseModel):
 
 class AudioVoiceListResponse(BaseModel):
     voices: List[AudioVoice] = Field(default_factory = list)
+
+
+class AudioModelOptionsResponse(BaseModel):
+    model: str
+    audio_family: Optional[str] = None
+    audio_options: List[Dict[str, Any]] = Field(
+        default_factory = list,
+        description = "As in status audio_options: {name, type, description, default, min, max, values, required}.",
+    )
 
 
 class AudioCatalogModel(BaseModel):

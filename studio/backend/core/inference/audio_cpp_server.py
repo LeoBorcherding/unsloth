@@ -48,7 +48,8 @@ _PROBE_TIMEOUT_SECONDS = 2.0
 _SINK_CHUNK_BYTES = 1 << 20
 _ERROR_BODY_BYTES = 64 * 1024
 # CUDA graph replay wedges these transducers mid-request (server spins, never answers); graphs off fixes it.
-_NO_CUDA_GRAPH_FAMILIES = frozenset({"nemotron_asr", "parakeet_tdt"})
+# Kokoro hangs the same way on a repeated sentence.
+_NO_CUDA_GRAPH_FAMILIES = frozenset({"nemotron_asr", "parakeet_tdt", "kokoro_tts"})
 _GPU_HOST_THREADS = 8
 
 
@@ -489,9 +490,12 @@ class AudioCppServer:
         force_cpu: bool = False,
         cancel_event: Optional[threading.Event] = None,
         on_process: Optional[Any] = None,
+        max_threads: Optional[int] = None,
+        streaming: bool = False,
     ) -> "AudioCppServer":
         """on_process gets the Popen as soon as it exists, so training can preempt and terminate a
-        start."""
+        start. max_threads caps a small model that more threads only slow down. streaming starts
+        the model in the runtime's streaming mode, which still answers whole-file requests."""
         binary = ensure_binary()
         problem = model_runtime_problem(model, binary)
         if problem:
@@ -504,13 +508,13 @@ class AudioCppServer:
             "family": model.family,
             "path": model_path,
             "task": model.server_task,
-            "mode": "offline",
+            "mode": "streaming" if streaming else "offline",
         }
         entry.update(model.model_options)
         for attempt in range(1, _START_ATTEMPTS + 1):
             try:
                 return cls._start_once(
-                    model, model_id, backend, binary, entry, cancel_event, on_process
+                    model, model_id, backend, binary, entry, cancel_event, on_process, max_threads
                 )
             except _LostPortError as lost:
                 if (
@@ -535,6 +539,7 @@ class AudioCppServer:
         entry: dict[str, Any],
         cancel_event: Optional[threading.Event],
         on_process: Optional[Any],
+        max_threads: Optional[int] = None,
     ) -> "AudioCppServer":
         """One launch on a fresh port and config dir; ``_LostPortError`` if another process took the port."""
         config_dir = Path(tempfile.mkdtemp(prefix = "unsloth-audiocpp-"))
@@ -557,6 +562,8 @@ class AudioCppServer:
         if threads is None and backend != "cpu":
             # The runtime default (every core) thrashes on many-core hosts.
             threads = min(os.cpu_count() or 1, _GPU_HOST_THREADS)
+        if max_threads:
+            threads = min(threads or os.cpu_count() or 1, max_threads)
         if threads:
             command += ["--threads", str(threads)]
         logger.info(
@@ -573,6 +580,9 @@ class AudioCppServer:
                 "Unsloth is shutting down; not starting audiocpp_server."
             )
         env = child_env(binary)
+        if max_threads:
+            # --threads does not reach the OpenMP pool, which spins on every core.
+            env.setdefault("OMP_NUM_THREADS", str(threads))
         if model.family in _NO_CUDA_GRAPH_FAMILIES:
             env.setdefault("GGML_CUDA_DISABLE_GRAPHS", "1")
         # Released as late as possible: the server binds the port moments after this close.

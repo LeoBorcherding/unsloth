@@ -22,7 +22,7 @@ PAGES = {
 _WHAT = {
     "llm": "chat model",
     "tts": "text-to-speech model",
-    "audio": "music model",
+    "audio": "audio model",
     "stt": "speech-to-text model",
     "image": "image model",
     "video": "video model",

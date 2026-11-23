@@ -7,6 +7,7 @@ import json
 import math
 import sys
 import textwrap
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -294,10 +295,29 @@ def test_parakeet_switches_to_bounded_windows_on_long_audio(fake, side, source):
     assert "session_options" not in fake.starts[-1]["entry"]
 
 
-def test_moss_reads_the_source_in_place_with_speakers_and_no_options(fake, side, source):
+@pytest.mark.parametrize("duration, heard", [(2.0, ""), (900.0, None)])
+def test_moss_looping_on_a_short_clip_is_no_words_not_a_failure(
+    fake, side, source, monkeypatch, duration, heard
+):
+    def post_json(self, path, payload, **kwargs):
+        raise srv.AudioCppRequestError(
+            500, "MOSS-Transcribe-Diarize reached max_tokens before EOS; increase max_tokens"
+        )
+
+    monkeypatch.setattr(srv.AudioCppServer, "post_json", post_json)
+    monkeypatch.setattr(stt, "_wav_rate_and_duration", lambda _path: (16000, duration))
+    if heard is None:
+        with pytest.raises(stt.SttEngineUnavailableError):
+            side.transcribe_path(source, MOSS, None)
+    else:
+        assert side.transcribe_path(source, MOSS, None)["text"] == heard
+        assert stt.runtime_inference_failure() is None
+
+
+def test_moss_reads_the_source_in_place_with_speakers(fake, side, source):
     result = side.transcribe_path(source, MOSS, None, timestamps = True)
     (body,) = fake.bodies
-    assert body["audio"] == str(source) and "options" not in body
+    assert body["audio"] == str(source) and body["options"] == {"max_tokens": 176}
     assert source.exists()
     assert result["text"] == "Hello there. General Kenobi." and result["duration"] == 2.0
     assert result["speakers"] == ["S01", "S02"]
@@ -312,7 +332,8 @@ def test_moss_reads_the_source_in_place_with_speakers_and_no_options(fake, side,
 @pytest.mark.parametrize(
     ("duration", "expected"),
     [
-        (60.0, None),
+        (2.0, 176),
+        (60.0, 1568),
         (420.0, None),
         (900.0, 10800),
         (960.0, 11520),
@@ -650,3 +671,40 @@ def test_a_device_less_load_follows_the_saved_voice_setting(fake, side, monkeypa
     studio_db.upsert_app_settings({"stt_device": "auto"}, read_back = False)
     side.transcribe(wav_bytes(), QWEN3, "en")
     assert side.device == "cpu" and len(fake.starts) == 1
+
+
+def test_a_clip_cancelled_while_it_waits_its_turn_leaves_the_runtime_running(fake, side, source):
+    side.transcribe_path(source, QWEN3, None)
+    server, lock = side._server, side._lock
+    waiting, cancel, raised = threading.Event(), threading.Event(), []
+
+    class Lock:
+        def __enter__(self):
+            waiting.set()
+            return lock.__enter__()
+
+        def __exit__(self, *exc):
+            return lock.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(lock, name)
+
+    def queued():
+        try:
+            side.transcribe_path(source, QWEN3, None, cancel_event = cancel)
+        except Exception as exc:  # noqa: BLE001 - asserted below
+            raised.append(exc)
+
+    side._lock = Lock()
+    with lock:
+        thread = threading.Thread(target = queued)
+        thread.start()
+        assert waiting.wait(10)
+        cancel.set()
+    thread.join(10)
+    side._lock = lock
+
+    assert [type(exc) for exc in raised] == [stt.SttTranscriptionCancelledError]
+    assert side._server is server and server.process.poll() is None
+    assert side.transcribe_path(source, QWEN3, None)["text"] == "Concord returned."
+    assert len(fake.starts) == 1 and len(fake.bodies) == 2

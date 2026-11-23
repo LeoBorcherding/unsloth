@@ -17,7 +17,8 @@ import { stripSearchImageTokens } from "../search-images/search-images";
 import { useExternalProvidersStore } from "../stores/external-providers-store";
 import { markdownToSpeechText } from "../utils/speech-text";
 import { splitIntoSentences } from "../voice/speech-text";
-import { planTtsChunk } from "../voice/tts-chunk-plan";
+import type { VoiceReference } from "../voice/voice-pin";
+import { planTtsChunk, spokenChunk } from "../voice/tts-chunk-plan";
 
 /** "default" resolves to the platform's default voice; undefined lets the browser pick. */
 export function findTtsVoice(
@@ -266,6 +267,7 @@ function readAloudError(
   detail: string,
   model: string | null,
   voiceId: string,
+  readAloud: boolean,
 ): Error {
   if (/no model loaded|not an audio model/i.test(detail)) {
     return new Error(
@@ -273,14 +275,14 @@ function readAloudError(
     );
   }
   // The named model was unloaded after the listing (an image or video load, or idle unload).
-  if (model && /downloaded but not loaded|is not loaded/i.test(detail)) {
+  if (readAloud && model && /downloaded but not loaded|is not loaded/i.test(detail)) {
     return new Error(
       "The Unsloth speech model for read aloud is no longer loaded. Load it again in Audio › Text to Speech.",
     );
   }
   // Only this 404 is about the voice; another one (a model hidden from the account) must not
-  // drop the user's choice.
-  if (voiceId && /saved voice no longer exists/i.test(detail)) {
+  // drop the user's choice. Voice mode names its own voice, so the setting is not the stale one.
+  if (readAloud && voiceId && /saved voice no longer exists/i.test(detail)) {
     useVoiceSettingsStore.getState().setTtsStudioVoiceId("");
     return new Error(
       "The saved voice for read aloud no longer exists. Read aloud now uses the model's own voice.",
@@ -294,12 +296,45 @@ function readAloudError(
   return new Error(detail);
 }
 
+export type TtsTiming = { resolve_ms?: number; synth_ms?: number };
+
 export async function generateStudioTtsAudio(
   text: string,
   signal?: AbortSignal,
+  options?: StudioTtsOptions,
 ): Promise<string> {
-  const { ttsStudioVoiceId } = useVoiceSettingsStore.getState();
-  const model = await resolveReadAloudModel(Boolean(ttsStudioVoiceId), signal);
+  return (await generateStudioTtsClip(text, signal, options)).url;
+}
+
+type StudioTtsOptions = {
+  model: string;
+  voiceId: string;
+  speaker?: string;
+  reference?: VoiceReference;
+  audioOptions?: Record<string, boolean | number | string>;
+};
+
+/** The picked speaker overrides any voice in the model options. */
+export function ttsAudioOptions(
+  options: Pick<StudioTtsOptions, "speaker" | "audioOptions"> | undefined,
+): { audio_options?: Record<string, boolean | number | string> } {
+  const merged = {
+    ...options?.audioOptions,
+    ...(options?.speaker ? { voice: options.speaker } : {}),
+  };
+  return Object.keys(merged).length ? { audio_options: merged } : {};
+}
+
+export async function generateStudioTtsClip(
+  text: string,
+  signal?: AbortSignal,
+  options?: StudioTtsOptions,
+): Promise<{ url: string; timing?: TtsTiming }> {
+  const ttsStudioVoiceId =
+    options?.voiceId ?? useVoiceSettingsStore.getState().ttsStudioVoiceId;
+  const model = options
+    ? options.model
+    : await resolveReadAloudModel(Boolean(ttsStudioVoiceId), signal);
   const response = await authFetch("/api/inference/audio/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -311,6 +346,10 @@ export async function generateStudioTtsAudio(
       max_tokens: TTS_MAX_TOKENS,
       ...(model ? { model } : {}),
       ...(ttsStudioVoiceId ? { voice_id: ttsStudioVoiceId } : {}),
+      ...(!ttsStudioVoiceId && options?.reference
+        ? { reference_input_id: options.reference.inputId, reference_text: options.reference.text }
+        : {}),
+      ...ttsAudioOptions(options),
     }),
     signal,
   });
@@ -321,21 +360,38 @@ export async function generateStudioTtsAudio(
       formatApiErrorBody(body) ?? `HTTP ${response.status}`,
       model,
       ttsStudioVoiceId,
+      !options,
     );
   }
   const data = (await response.json()) as {
     audio?: { data?: string };
     choices?: { finish_reason?: string }[];
+    timing?: TtsTiming | null;
   };
   if (!data.audio?.data) {
     throw new Error("The TTS model returned no audio.");
   }
   if (data.choices?.[0]?.finish_reason === "length") {
     toast.warning(
-      "Read aloud stopped at the speech model's length limit before the end of the reply.",
+      options
+        ? "Speech stopped at the speech model's length limit before the end of the text."
+        : "Read aloud stopped at the speech model's length limit before the end of the reply.",
     );
   }
-  return `data:audio/wav;base64,${data.audio.data}`;
+  return { url: `data:audio/wav;base64,${data.audio.data}`, timing: data.timing ?? undefined };
+}
+
+export async function uploadVoiceReference(wav: ArrayBuffer, signal?: AbortSignal): Promise<string> {
+  const response = await authFetch("/api/inference/audio/inputs?name=voice-mode.wav", {
+    method: "POST",
+    headers: { "Content-Type": "audio/wav" },
+    body: wav,
+    signal,
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const record = (await response.json()) as { id?: string };
+  if (!record.id) throw new Error("The server kept no clip.");
+  return record.id;
 }
 
 export async function generateCustomTtsAudio(
@@ -453,7 +509,7 @@ export function readAloudChunks(text: string): string[] {
         waitedMs: 0,
       }),
     );
-    chunks.push(pending.splice(0, take).join(" "));
+    chunks.push(spokenChunk(pending.splice(0, take)));
   }
   return chunks;
 }

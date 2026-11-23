@@ -57,6 +57,8 @@ export {
   resolveInferenceCheckpointId,
 } from "./lib/apply-inference-status-to-store";
 export { isSpeechOnlyStatus } from "./lib/speech-only-status";
+export { heardTail, savedHeardCut } from "./voice/heard-cut";
+export { setVoiceDecision, useVoiceDecision } from "./voice/decision-checkpoint";
 export {
   ChatSettingsPanel,
   ParamSlider,

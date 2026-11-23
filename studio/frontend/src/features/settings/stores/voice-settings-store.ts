@@ -17,8 +17,24 @@ import {
   STT_MODEL_REPOS,
   type SttModel,
   migrateVoiceSettings,
+  DEFAULT_VOICE_REPLY_INSTRUCTION,
+  DEFAULT_VOICE_TURN_ENDING,
+  VOICE_TURN_ENDINGS,
+  type VoiceTurnEnding,
+  TURN_JUDGE_BAR,
+  VOICE_CUSTOM_INSTRUCTION_MAX,
+  VOICE_REPLY_INSTRUCTIONS,
+  VOICE_ROLLOUT_DEFAULTS,
+  type VoiceReplyInstruction,
+  type VoiceRolloutSetting,
 } from "./stt-model-catalog";
 import { syncSttDevicePreference } from "../api/stt-device";
+
+import {
+  DEFAULT_VOICE_ORB_OVERLAY_PREFS,
+  readVoiceOrbOverlayPrefs,
+  type VoiceOrbOverlayPrefs,
+} from "./voice-orb-overlay-prefs";
 
 export * from "./stt-model-catalog";
 export * from "./stt-context";
@@ -38,6 +54,8 @@ const QUOTA_TRIM_KEEP = 200;
 const MAX_RECENT_DICTATION_LENGTH = 2000;
 const MAX_DICTIONARY_ENTRIES = 100;
 const MAX_DICTIONARY_ENTRY_LENGTH = 120;
+// Legacy key the removed chat-header mic picker wrote; adopted once by merge().
+const LEGACY_LOOP_MIC_KEY = "unsloth_chat_mic_device_id";
 
 const HF_REPO_ID =
   /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}\/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
@@ -101,7 +119,10 @@ export function isCuratedSttModel(model: SttModel): boolean {
   return (STT_MODELS as readonly string[]).includes(model.trim());
 }
 
-export interface VoiceSettingsState {
+export interface VoiceSettingsState extends VoiceOrbOverlayPrefs {
+  setShowVoiceArcs: (value: boolean) => void;
+  setShowVoiceCaption: (value: boolean) => void;
+
   /** input device; "default" selects the system microphone. */
   micDeviceId: string;
   setMicDeviceId: (value: string) => void;
@@ -157,6 +178,13 @@ export interface VoiceSettingsState {
   autoReadAloud: boolean;
   setAutoReadAloud: (value: boolean) => void;
 
+  voiceThinking: boolean;
+  setVoiceThinking: (value: boolean) => void;
+
+  voiceTtsOptions: Record<string, VoiceTtsOptionValues>;
+  setVoiceTtsOption: (modelId: string, name: string, value: VoiceTtsOptionValue | undefined) => void;
+  resetVoiceTtsOptions: (modelId: string) => void;
+
   /** "system": speechSynthesis voices. "studio": the loaded TTS audio model.
    * "custom": a saved connection's /audio/speech endpoint. */
   ttsEngine: TtsEngine;
@@ -184,6 +212,26 @@ export interface VoiceSettingsState {
   setTtsPitch: (value: number) => void;
   ttsVolume: number;
   setTtsVolume: (value: number) => void;
+
+  voiceLogEnabled: boolean;
+  setVoiceLogEnabled: (value: boolean) => void;
+  voiceLogOptOutThreadIds: string[];
+  setVoiceLogOptOut: (threadId: string, optOut: boolean) => void;
+  voiceLogExportedAt: number | null;
+  setVoiceLogExportedAt: (value: number | null) => void;
+
+  clauseFirstChunk: boolean;
+  speechNormalize: boolean;
+  heardCut: boolean;
+  setVoiceRollout: (setting: VoiceRolloutSetting, on: boolean) => void;
+  turnEnding: VoiceTurnEnding;
+  setTurnEnding: (value: VoiceTurnEnding) => void;
+  turnJudgeBar: number;
+  setTurnJudgeBar: (value: number) => void;
+  replyInstruction: VoiceReplyInstruction;
+  setReplyInstruction: (value: VoiceReplyInstruction) => void;
+  replyInstructionCustom: string;
+  setReplyInstructionCustom: (value: string) => void;
 }
 
 /** On quota errors drop the oldest dictations instead of losing the whole save. */
@@ -355,6 +403,29 @@ export const useVoiceSettingsStore = create<VoiceSettingsState>()(
       setTtsEnabled: (ttsEnabled) => set({ ttsEnabled }),
       autoReadAloud: false,
       setAutoReadAloud: (autoReadAloud) => set({ autoReadAloud }),
+      voiceThinking: false,
+      setVoiceThinking: (voiceThinking) => set({ voiceThinking }),
+      voiceTtsOptions: {},
+      setVoiceTtsOption: (modelId, name, value) =>
+        set((s) => {
+          const key = voiceTtsOptionsKey(modelId);
+          if (!key || !name) return s;
+          const values = { ...s.voiceTtsOptions[key] };
+          if (value === undefined) delete values[name];
+          else values[name] = value;
+          const next = { ...s.voiceTtsOptions };
+          if (Object.keys(values).length === 0) delete next[key];
+          else next[key] = values;
+          return { voiceTtsOptions: next };
+        }),
+      resetVoiceTtsOptions: (modelId) =>
+        set((s) => {
+          const key = voiceTtsOptionsKey(modelId);
+          if (!key || !(key in s.voiceTtsOptions)) return s;
+          const next = { ...s.voiceTtsOptions };
+          delete next[key];
+          return { voiceTtsOptions: next };
+        }),
 
       ttsEngine: "system",
       setTtsEngine: (ttsEngine) => set({ ttsEngine }),
@@ -378,11 +449,39 @@ export const useVoiceSettingsStore = create<VoiceSettingsState>()(
       setTtsPitch: (ttsPitch) => set({ ttsPitch }),
       ttsVolume: 1,
       setTtsVolume: (ttsVolume) => set({ ttsVolume }),
+
+      ...DEFAULT_VOICE_ORB_OVERLAY_PREFS,
+      setShowVoiceArcs: (showVoiceArcs) => set({ showVoiceArcs }),
+      setShowVoiceCaption: (showVoiceCaption) => set({ showVoiceCaption }),
+
+      voiceLogEnabled: false,
+      setVoiceLogEnabled: (voiceLogEnabled) => set({ voiceLogEnabled }),
+      voiceLogOptOutThreadIds: [],
+      setVoiceLogOptOut: (threadId, optOut) =>
+        set((state) => {
+          const rest = state.voiceLogOptOutThreadIds.filter((id) => id !== threadId);
+          return { voiceLogOptOutThreadIds: optOut ? [...rest, threadId] : rest };
+        }),
+      voiceLogExportedAt: null,
+      setVoiceLogExportedAt: (voiceLogExportedAt) => set({ voiceLogExportedAt }),
+
+      ...VOICE_ROLLOUT_DEFAULTS,
+      setVoiceRollout: (setting, on) => set({ [setting]: on }),
+      turnEnding: DEFAULT_VOICE_TURN_ENDING,
+      setTurnEnding: (turnEnding) => set({ turnEnding }),
+      turnJudgeBar: TURN_JUDGE_BAR.default,
+      setTurnJudgeBar: (value) =>
+        set({ turnJudgeBar: clampNumber(value, TURN_JUDGE_BAR.min, TURN_JUDGE_BAR.max, TURN_JUDGE_BAR.default) }),
+      replyInstruction: DEFAULT_VOICE_REPLY_INSTRUCTION,
+      setReplyInstruction: (replyInstruction) => set({ replyInstruction }),
+      replyInstructionCustom: "",
+      setReplyInstructionCustom: (value) =>
+        set({ replyInstructionCustom: clipInstruction(value) }),
     }),
     {
       name: "unsloth_voice_settings",
       storage: createJSONStorage(() => quotaSafeLocalStorage),
-      version: 1,
+      version: 4,
       migrate: migrateVoiceSettings,
       merge: (persisted, current) => {
         const saved = persisted as Partial<VoiceSettingsState> | undefined;
@@ -402,9 +501,26 @@ export const useVoiceSettingsStore = create<VoiceSettingsState>()(
         )
           ? savedSttModel
           : DEFAULT_STT_MODEL;
+        // Carry over the old header picker's mic pin once (else a webcam mic box drops to another input), then drop the key.
+        let micDeviceId = asString(saved?.micDeviceId, "default");
+        try {
+          const legacyMic = localStorage.getItem(LEGACY_LOOP_MIC_KEY);
+          if (legacyMic !== null) {
+            if (micDeviceId === "default" && legacyMic) micDeviceId = legacyMic;
+            const carried = micDeviceId;
+            queueMicrotask(() => {
+              useVoiceSettingsStore.setState({ micDeviceId: carried });
+              try {
+                localStorage.removeItem(LEGACY_LOOP_MIC_KEY);
+              } catch {
+              }
+            });
+          }
+        } catch {
+        }
         return {
           ...current,
-          micDeviceId: asString(saved?.micDeviceId, "default"),
+          micDeviceId,
           dictationEngine,
           micTarget: saved?.micTarget === "model" ? "model" : "asr",
           sttModel,
@@ -427,6 +543,8 @@ export const useVoiceSettingsStore = create<VoiceSettingsState>()(
           ttsEnabled:
             typeof saved?.ttsEnabled === "boolean" ? saved.ttsEnabled : true,
           autoReadAloud: saved?.autoReadAloud === true,
+          voiceThinking: saved?.voiceThinking === true,
+          voiceTtsOptions: normalizeVoiceTtsOptions(saved?.voiceTtsOptions),
           ttsEngine:
             saved?.ttsEngine === "studio" || saved?.ttsEngine === "custom"
               ? saved.ttsEngine
@@ -439,6 +557,25 @@ export const useVoiceSettingsStore = create<VoiceSettingsState>()(
           ttsRate: clampNumber(saved?.ttsRate, 0.5, 2, 1),
           ttsPitch: clampNumber(saved?.ttsPitch, 0, 2, 1),
           ttsVolume: clampNumber(saved?.ttsVolume, 0, 1, 1),
+          ...readVoiceOrbOverlayPrefs(saved),
+          voiceLogEnabled: saved?.voiceLogEnabled === true,
+          voiceLogOptOutThreadIds: Array.isArray(saved?.voiceLogOptOutThreadIds)
+            ? saved.voiceLogOptOutThreadIds.filter((v): v is string => typeof v === "string" && !!v)
+            : [],
+          voiceLogExportedAt:
+            typeof saved?.voiceLogExportedAt === "number" ? saved.voiceLogExportedAt : null,
+          ...rolloutSettings(saved),
+          turnEnding: VOICE_TURN_ENDINGS.includes(saved?.turnEnding as VoiceTurnEnding)
+            ? (saved?.turnEnding as VoiceTurnEnding)
+            : DEFAULT_VOICE_TURN_ENDING,
+          turnJudgeBar: clampNumber(saved?.turnJudgeBar, TURN_JUDGE_BAR.min, TURN_JUDGE_BAR.max, TURN_JUDGE_BAR.default),
+          replyInstruction: VOICE_REPLY_INSTRUCTIONS.includes(saved?.replyInstruction as VoiceReplyInstruction)
+            ? (saved?.replyInstruction as VoiceReplyInstruction)
+            : DEFAULT_VOICE_REPLY_INSTRUCTION,
+          replyInstructionCustom:
+            typeof saved?.replyInstructionCustom === "string"
+              ? clipInstruction(saved.replyInstructionCustom)
+              : "",
         };
       },
     },
@@ -450,6 +587,54 @@ if (typeof window !== "undefined") {
       void useVoiceSettingsStore.persist.rehydrate();
     }
   });
+}
+
+// Never end on half a surrogate pair: a lone one is not valid UTF-8.
+function clipInstruction(value: string): string {
+  const clipped = value.slice(0, VOICE_CUSTOM_INSTRUCTION_MAX);
+  return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped;
+}
+
+function rolloutSettings(
+  saved: Partial<VoiceSettingsState> | undefined,
+): Record<VoiceRolloutSetting, boolean> {
+  const out = { ...VOICE_ROLLOUT_DEFAULTS };
+  for (const key of Object.keys(out) as VoiceRolloutSetting[]) {
+    const value = saved?.[key];
+    if (typeof value === "boolean") out[key] = value;
+  }
+  return out;
+}
+
+export type VoiceTtsOptionValue = boolean | number | string;
+export type VoiceTtsOptionValues = Record<string, VoiceTtsOptionValue>;
+
+const MAX_VOICE_TTS_MODELS = 40;
+const MAX_VOICE_TTS_OPTIONS = 40;
+const MAX_VOICE_TTS_TEXT = 2000;
+
+/** Ids differ only in case between the catalog and status. */
+export function voiceTtsOptionsKey(modelId: string | null | undefined): string {
+  return (modelId ?? "").trim().toLowerCase();
+}
+
+export function normalizeVoiceTtsOptions(raw: unknown): Record<string, VoiceTtsOptionValues> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, VoiceTtsOptionValues> = {};
+  for (const [model, entry] of Object.entries(raw).slice(0, MAX_VOICE_TTS_MODELS)) {
+    const key = voiceTtsOptionsKey(model);
+    if (!key || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const values: VoiceTtsOptionValues = {};
+    for (const [name, value] of Object.entries(entry).slice(0, MAX_VOICE_TTS_OPTIONS)) {
+      if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+        values[name] = value;
+      } else if (typeof value === "string" && value.length <= MAX_VOICE_TTS_TEXT) {
+        values[name] = value;
+      }
+    }
+    if (Object.keys(values).length) out[key] = values;
+  }
+  return out;
 }
 
 function asString(value: unknown, fallback: string): string {

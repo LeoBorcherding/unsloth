@@ -39,7 +39,7 @@ UMBRELLA = {
     "FireRedAudio-GGUF": ("firered_audio", ["clone", "edit"]),
     "FireRedTTS3-Base-GGUF": ("fireredtts3", ["clone"]),
     "FireRedTTS3-Instruct-GGUF": ("fireredtts3", ["clone"]),
-    "FireRedVAD-GGUF": ("firered_vad", []),
+    "FireRedVAD-GGUF": ("firered_vad", ["detect"]),
     "Fish-Audio-S2-Pro-GGUF": ("fish_audio", ["speak", "clone"]),
     "Fun-ASR-Nano-2512-GGUF": ("fun_asr_nano", ["transcribe"]),
     "GigaAM-ASR-GGUF": ("gigaam_asr", ["transcribe"]),
@@ -89,7 +89,7 @@ UMBRELLA = {
     "Phonon-2-GGUF": ("parakeet_tdt", []),
     "Piper-TTS-GGUF": ("piper_tts", ["speak"]),
     "PocketTTS-GGUF": ("pocket_tts", ["speak", "clone"]),
-    "PulseVAD-GGUF": ("pulsevad", []),
+    "PulseVAD-GGUF": ("pulsevad", ["detect"]),
     "Qwen3-ASR-0.6B-GGUF": ("qwen3_asr", ["transcribe"]),
     "Qwen3-ASR-1.7B-GGUF": ("qwen3_asr", ["transcribe"]),
     "Qwen3-ForcedAligner-0.6B-GGUF": ("qwen3_forced_aligner", []),
@@ -135,7 +135,13 @@ SPEC_TASKS = {
     "voxtral_tts": ["tts"],
 }
 
-TASK_PAGE = {"tts": "speak", "music": "music", "asr": "transcribe", "sep": "separate"}
+TASK_PAGE = {
+    "tts": "speak",
+    "music": "music",
+    "asr": "transcribe",
+    "sep": "separate",
+    "vad": "detect",
+}
 
 CATALOG = Path(__file__).resolve().parents[2] / "frontend/src/features/audio/audio-cpp-catalog.ts"
 
@@ -151,6 +157,9 @@ def pinned_runtime(monkeypatch):
 NEWER_RUNTIME_VARIANTS = {"Phonon-2-GGUF"}
 
 
+VOICE_HELPERS = {"Smart-Turn-v3-GGUF"}
+
+
 @pytest.mark.parametrize("folder", sorted(set(UMBRELLA) - NEWER_RUNTIME_VARIANTS))
 def test_each_folder_lands_on_its_pages(folder):
     family, pages = UMBRELLA[folder]
@@ -158,7 +167,7 @@ def test_each_folder_lands_on_its_pages(folder):
     policy = acm.family_policy(family, spec, (f"{acm.AUDIO_CPP_REPO}/{folder}", folder), folder)
     assert list(policy.workflows) == pages
     # A folder with no page is refused, should it be loaded by id.
-    assert (policy.unsupported is None) == bool(pages)
+    assert (policy.unsupported is None) == (bool(pages) or folder in VOICE_HELPERS)
 
 
 def _catalog() -> tuple[dict[str, list[str]], set[str]]:

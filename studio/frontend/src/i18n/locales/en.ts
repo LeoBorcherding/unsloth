@@ -864,6 +864,94 @@ export const en = {
     undone: "File restore undone",
     undoFailed: "Could not undo the file restore",
   },
+  // The floating orb's approval popup.
+  orbWidget: {
+    usingTool: "Using tool: {tool}",
+    more: "+{n} more",
+  },
+  voice: {
+    interrupted: {
+      spokenUpTo: "Interrupted after “…{words}”",
+      none: "Interrupted before any of it was spoken",
+      useFull: "Use the full reply",
+      restoreFailed: "Couldn't restore the full reply. Try again.",
+    },
+  },
+  // The voice orb's caption while a held voice turn waits for the user's own send.
+  voiceOrb: {
+    waitingForSend: "Waiting for you to send",
+    states: {
+      waiting: "Select a model",
+      listening: "Listening",
+      hearing: "Hearing you",
+      loading: "Warming up…",
+      transcribing: "Transcribing…",
+      thinking: "Thinking…",
+      generating: "Writing the answer…",
+      synthesizing: "Generating voice…",
+      speaking: "Speaking",
+      paused: "Paused",
+      muted: "Muted",
+      switching: "Switching chat model…",
+      downloading: "Downloading the transcriber…",
+      needsDownload: "Download the transcriber to talk",
+    },
+    help: {
+      aria: "What voice mode is detecting",
+      title: "What the ring shows",
+      turnName: "Turn",
+      turn: "how sure the turn judge is that you finished speaking. Low and it keeps listening with your words in the box.",
+      fillerName: "Filler",
+      filler: "whether it said a short line while the model thinks, like \"let me check\". Quiet on greetings and short answers.",
+      interruptName: "Interrupt",
+      interrupt: "what it did with speech that landed while the model was thinking. Restart folds it into the request, queue holds it for after the reply, ignore drops it.",
+      vad: "Every clip and every interruption is checked for a real voice first, so a cough or a door never reaches the models.",
+      button: "The composer button: tap to pause (mic off, reply held where it is), tap again to resume. Hold it until the ring fills and let go to stop everything and listen again.",
+    },
+    bar: {
+      pause: "Pause",
+      resume: "Resume",
+      stop: "Stop the reply",
+      back: "Back to Unsloth",
+    },
+    holdToStopAria: "{label}, hold to stop",
+    holdToStopTip: "{label} · hold to stop",
+    approvalGone: "This request is no longer waiting for an answer.",
+    approvalRetry: "Couldn't send your decision. Try again.",
+    decision: {
+      arcSent: "{p} sent",
+      arcWaiting: "{p} waiting",
+      arcSpoke: "spoke {p}",
+      arcQuiet: "quiet {p}",
+      turnSent: "Sent, {p} done",
+      turnWaiting: "Waiting, {p} done",
+      quiet: "Quiet",
+      kept: "Kept",
+      dropped: "Dropped",
+      droppedWhy: "Dropped, {why}",
+      withPercent: "{label}, {p}",
+      interject: {
+        restart: "Restart",
+        ignore: "Ignore",
+        queue: "Queue",
+        amend: "Amend",
+        replace: "Replace",
+      },
+    },
+  },
+  // The voice loop's composer buttons and its toasts.
+  voiceControls: {
+    mute: "Mute microphone (Ctrl+M)",
+    unmute: "Unmute microphone (Ctrl+M)",
+    backToChat: "Back to chat",
+    openOrb: "Open voice orb",
+    start: "Start voice mode",
+    setUp: "Voice mode: choose models and start",
+    holdToFloat: "{action} · hold to float",
+    synthFailed: "Could not synthesize speech. Try again.",
+    transcriptionFailed: "Transcription failed. Try again.",
+    loadFailed: "Couldn't load the voice model. Try again, or pick another voice.",
+  },
   context: {
     title: "Context",
     summary: "{used} of {window} tokens used ({percent}%)",
@@ -890,6 +978,85 @@ export const en = {
     compact: "Compact conversation",
     compactEmpty: "Nothing to compact yet",
     compactUnsupported: "Compaction requires a GGUF or MLX model with tool support",
+    voiceLogOptOut: "Don't log voice decisions in this chat",
+    voiceLogExport: "Export voice log for this chat",
+    voiceLogExported: "Exported {n} rows",
+    voiceLogEmpty: "No voice decisions logged for this chat",
+  },
+  // Voice mode's header pill and the panel it opens: one row per role.
+  voicePanel: {
+    pill: "Voice",
+    pillAria: "Voice models",
+    ready: "{n} ready",
+    loading: "loading",
+    error: "error",
+    notStarted: "not started",
+    chatModelLoading: "switching chat model…",
+    chatModelWaiting: "waiting for a chat model",
+    downloadingTranscriber: "downloading transcriber…",
+    downloadNeeded: "download needed",
+    transcriberMissing: "{model} isn't downloaded yet, so voice mode can't hear you.",
+    startHint: "Models load when you start voice mode.",
+    startHintDownload: "Start downloads the transcriber first ({size}).",
+    startHintDownloadUnsized: "Start downloads the transcriber first.",
+    back: "Back to voice models",
+    selectChatModelFirst: "Select a chat model first",
+    roles: {
+      listen: "Listen",
+      transcribe: "Transcribe",
+      decide: "Decide",
+      speak: "Speak",
+      voice: "Voice",
+    },
+    state: {
+      loaded: "Loaded",
+      loading: "Loading…",
+      notLoaded: "Not loaded",
+      loadsOnStart: "Loads on start",
+      downloadsOnStart: "Downloads on start",
+      downloading: "Downloading…",
+      notSetUp: "Not set up",
+      error: "Error",
+    },
+    builtinClassifiers: "Built-in classifiers",
+    decideNotSetUp: "The built-in classifiers aren't installed on this server. Voice mode works without them, or you can pick a decision model.",
+    speedValue: "{speed}×",
+    optionsLoading: "Loading voice options…",
+    optionsUnavailable: "Voice options show up once this model is downloaded.",
+    moreOptions: "More options",
+    moreOptionsChanged: "· {n} changed",
+    optionsApplyNext: "Changes apply from the next sentence.",
+    resetOptions: "Reset to defaults",
+    modelsOwnVoice: "Model's own voice",
+    chatModelVoice: "Chat model's voice",
+    chatModelVoiceHint: "Hears you and answers in its own voice",
+    chatModelCannotSpeak: "The chat model can't answer in speech. Load LFM3-Audio-2B or LFM3-Omni-2B, or pick another voice.",
+    speakerFemale: "Female",
+    speakerMale: "Male",
+    newVoiceEachSession: "New voice each session",
+    builtinSpeakers: "Built-in",
+    builtinDetectors: "Built-in",
+    thinkFirst: "Think before answering",
+    thinkFirstHint: "Slower to start speaking",
+    thinkNeedsChatThinking: "Turn on Thinking in the model menu first",
+    savedVoices: "Saved voices",
+    decideHint: "A switch starts loading now; the next decision uses it.",
+    decideGroupFineTunes: "Fine-tuned",
+    decideOwnerOnly: "Only the installation owner can change this",
+    decideSwitchFailed: "Couldn't switch the decision model. Try again.",
+    tabRecommended: "Recommended",
+    searchPlaceholder: "Search decision models…",
+    filterAria: "Filter by family",
+    filterAll: "All",
+    sortAria: "Sort decision models",
+    sortRecent: "Recent",
+    sortName: "Name",
+    defaultBadge: "default",
+    useLaunchDefault: "Use launch default",
+    noMatches: "No matching decision models.",
+    ggufVoicesOnly: "Voice mode speaks through the GGUF audio voices only.",
+    ggufDetectorsOnly: "Voice mode detects speech with the GGUF audio detectors only.",
+    cantListenWith: "Voice mode can't listen with that model yet.",
   },
   // The empty chat's greeting; {name} is the user's nickname or first name.
   welcome: {
@@ -1808,7 +1975,7 @@ export const en = {
         micTargetAsrDescription:
           "The mic button types what you say into the message box.",
         micTargetModelDescription:
-          "With an audio-input model loaded, the mic records a clip and attaches it to your message. Other models still get dictation.",
+          "With an audio-input model loaded, the mic records a clip and attaches it to your message, and voice mode sends each turn's speech along with its transcript. Other models still get dictation.",
         micTargetModelUnavailable:
           "Load a model that accepts audio input (for example LFM3-Omni) to send it your voice.",
         micRecordForModel: "Record audio for the model",
@@ -1872,6 +2039,10 @@ export const en = {
           "Local dictation runs entirely offline, but it needs the {model} speech model first. About {size}, fetched once into your Hugging Face cache.",
         sttDownloadConfirmBodyUnsized:
           "Local dictation runs entirely offline, but it needs the {model} speech model first. It is fetched once into your Hugging Face cache.",
+        sttDownloadConfirmBodyVoice:
+          "Voice mode needs the {model} speech model to hear you. About {size}, fetched once into your Hugging Face cache.",
+        sttDownloadConfirmBodyVoiceUnsized:
+          "Voice mode needs the {model} speech model to hear you. It is fetched once into your Hugging Face cache.",
         sttOpenVoiceSettings: "Open Voice settings",
         sttDownloadStarted: "Downloading {model}",
         sttDownloading: "Downloading… {progress}%",
@@ -1896,6 +2067,8 @@ export const en = {
           "Microphone access was blocked. Allow microphone access for this Unsloth page, then try again.",
         micAccessBlockedDesktop:
           "Microphone access was blocked. Try again and choose Allow, or enable the microphone in your system privacy settings.",
+        audioNotStarted:
+          "Your browser blocked audio for voice mode. Allow sound (autoplay) for this site, then start voice mode again.",
         micAccessUnsupported:
           "Microphone access is not supported in this browser or context.",
         systemDefault: "System default",
@@ -2001,6 +2174,142 @@ export const en = {
         stopAction: "Stop",
         ttsLabel: "Text to speech",
         notSupported: "Not supported in this browser",
+      },
+      voiceMode: {
+        sectionTitle: "Voice mode",
+        voice: {
+          label: "Speaking voice",
+          description: "How {model} sounds in voice mode. You can set it before the model loads; the voice panel shows the same choices.",
+          modelDefaultNamed: "Model default ({name})",
+        },
+        switches: {
+          clauseFirstChunk: {
+            label: "Start speaking sooner",
+            description:
+              "Starts speaking the first phrase of a reply before the sentence is finished, then pauses briefly. Replies start about 0.3 s sooner.",
+          },
+          speechNormalize: {
+            label: "Read numbers as words",
+            description:
+              "Turns prices, times, dates, fractions, phone numbers and Roman numerals into words before they're read aloud. English only.",
+          },
+          heardCut: {
+            label: "Keep only what you heard",
+            description:
+              "When you interrupt a reply, the chat model remembers only the part that was spoken before you cut in.",
+          },
+        },
+        turnEnding: {
+          label: "End of your turn",
+          options: {
+            smartTurn: {
+              label: "Smart Turn",
+              description:
+                "A small model listens for when you've finished, so replies start about 0.3 s sooner than with a fixed pause. If it can't tell you're done, it waits out the pause, then checks your words: with the decision model if you've set one, otherwise by whether they sound cut off.",
+            },
+            smartTurnJudge: {
+              label: "Smart Turn + decision model",
+              description:
+                "Also asks the decision model to confirm when Smart Turn thinks you've finished. In testing, this held back more finished turns without catching more cut-offs. Without a decision model, it works like Smart Turn.",
+            },
+            wait: {
+              label: "Fixed pause",
+              description: "One second of silence ends your turn.",
+            },
+          },
+          judgeBar: {
+            label: "How sure the decision model must be",
+            description:
+              "Higher waits more often in case you keep going, so fewer replies cut in mid-thought, but you wait longer after you've finished.",
+          },
+        },
+        decisionModel: {
+          label: "Decision model (optional)",
+          description:
+            "After a pause Smart Turn didn't treat as the end, it reads what you said and waits if you were mid-thought. It also picks filler lines and decides what happens when you talk over a reply.",
+          noneDescription:
+            "Voice mode works without one. After a pause, it waits only if your words seem cut off. A decision model catches more pauses mid-sentence.",
+          none: "None",
+          loading: "Loading the decision model",
+        },
+        replyInstruction: {
+          label: "How replies are spoken",
+          options: {
+            conversation: {
+              label: "Conversation",
+              description:
+                "Short spoken answers that lead with the answer. Copes with misheard words, says a quick line before using a tool, and only shows code or links when you ask.",
+            },
+            spoken: {
+              label: "Spoken reply",
+              description:
+                "One to three short sentences in plain speech, starting with the short version when there's more to say. Code or lists only when you ask.",
+            },
+            voice: {
+              label: "Plain sentences",
+              description:
+                "Plain sentences with no markdown, lists, code or links. Asks one question at a time and says numbers and dates the way a person would.",
+            },
+            custom: {
+              label: "Custom",
+              description: "Your own instruction, sent after the chat's instructions while voice mode is on.",
+            },
+            none: {
+              label: "None",
+              description: "The chat model gets no speaking instruction, so replies run as long as they would in a typed chat.",
+            },
+          },
+          custom: {
+            label: "Your instruction",
+            placeholder: "For example: Answer in one short sentence, like a friend would.",
+            hint: "{n} of {max} characters",
+            empty: "Nothing is sent until you write an instruction.",
+          },
+        },
+        arcsLabel: "Show decision arcs",
+        arcsDescription: "The turn, filler and interrupt arcs around the voice orb.",
+        captionLabel: "Show decision caption",
+        captionDescription: "The chip under the orb naming the latest decision.",
+        logLabel: "Keep a log of voice decisions",
+        logDescription:
+          "Stores transcripts of what you say with each turn, interrupt and filler verdict, so the voice models can be retrained on your mistakes. Stays on this computer.",
+        models: {
+          all: "All models",
+          judge: "Turn judge",
+          interject: "Interrupt",
+          filler: "Filler",
+        },
+        noRows: "No decisions logged yet",
+        noOutcomes: "No outcomes yet",
+        verdictsAndLatency: "{n} verdicts · {ms} ms",
+        errors: {
+          finished_but_continued: "Sent too early",
+          held_but_flushed: "Waited for nothing",
+          ignored_but_repeated: "Ignored, then repeated",
+          queued_but_reasked: "Queued, then asked again",
+          echoed: "Reply repeated it",
+          too_late: "Reply beat it",
+        },
+        exportLabel: "Export",
+        exportDescription: "{rows} rows, {size} on disk",
+        modelLabel: "Model",
+        onlyLabel: "Which rows",
+        onlyDisagreements: "Disagreements only",
+        onlyAll: "Everything",
+        chatLabel: "Chat",
+        allChats: "All chats",
+        sinceLabel: "Since",
+        sinceAll: "All time",
+        sinceLast: "Since last export",
+        exportButton: "Export JSONL",
+        exported: "Exported {n} rows",
+        exportFailed: "Could not export the voice log. Try again.",
+        clearLabel: "Clear log",
+        clearDescription: "Deletes every logged decision and transcript",
+        clearButton: "Clear log",
+        clearConfirmTitle: "Clear the voice decision log?",
+        clearConfirmDescription: "{rows} rows and their transcripts are deleted from this computer. This cannot be undone.",
+        clearFailed: "Could not clear the voice log. Try again.",
       },
     },
     general: {

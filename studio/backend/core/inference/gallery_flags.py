@@ -22,6 +22,8 @@ _STORE_NAME = ".flags.json"
 # Marks a store written over an illegible one: absence of a flag is not proof. See _carry_taint.
 _TAINT_KEY = "unreadable"
 _lock = threading.RLock()
+_stamp_lock = threading.Lock()
+_last_stamp_ns = 0
 
 
 def _store_path(directory: Path) -> Path:
@@ -412,3 +414,20 @@ def place_locked(
         items.pop(item_id, None)
     _save(directory, data)
     return {"pinned": entry.get("pinned_at") is not None, "archived": bool(entry.get("archived"))}
+
+
+def stamp_newest(path: Path) -> None:
+    """Bump 1 us past earlier stamps: ties let a cap drop the newer save."""
+    global _last_stamp_ns
+    try:
+        stat = path.stat()
+    except OSError:
+        return
+    with _stamp_lock:
+        stamp = max(stat.st_mtime_ns, _last_stamp_ns + 1000)
+        _last_stamp_ns = stamp
+    if stamp != stat.st_mtime_ns:
+        try:
+            os.utime(path, ns = (stat.st_atime_ns, stamp))
+        except OSError:
+            pass

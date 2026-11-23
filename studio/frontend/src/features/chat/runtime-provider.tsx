@@ -6,6 +6,8 @@ import { NewChatNonceContext } from "./query-draft";
 import { useAppShellReadySignal } from "@/components/app-readiness";
 import { authFetch, getAuthSessionEpoch } from "@/features/auth";
 import { isMcpToolOnly, mcpImageMappingsEnabled, projectMcpServers } from "./api/mcp-image";
+import { keepVoiceHeard } from "./voice/heard-cut";
+import { writtenHeardCustom } from "./voice/voice-loop-bridge";
 import { listMcpServers } from "./api/mcp-servers-api";
 import {
   classifiedAttachmentFile,
@@ -1602,11 +1604,27 @@ function scheduleGenerationRecovery(
       });
 
     /** `running` is passed in: a stalled follow settles while the run is non-terminal. */
+    // The open thread's copy: a heard cut set since this follow began lives only there.
+    const liveCustom = (): Record<string, unknown> | undefined => {
+      for (const view of views) {
+        if (view.threadListItem().getState().remoteId !== threadId) continue;
+        try {
+          const live = view.thread().export().messages.find((item) => item.message.id === storedMessage.id);
+          if (live) return (live.message.metadata?.custom ?? {}) as Record<string, unknown>;
+        } catch {
+          // Unmounted thread: no newer copy.
+        }
+      }
+      return undefined;
+    };
+
     const commit = async (
       nextMetadata: Record<string, unknown>,
       running: boolean,
       save = true,
     ) => {
+      // Off screen, the cut this session last wrote stands in for the open copy.
+      nextMetadata = keepVoiceHeard(nextMetadata, liveCustom() ?? writtenHeardCustom(storedMessage.id));
       currentMetadata = nextMetadata;
       const content = rebuild();
       if (save) {
@@ -1621,6 +1639,9 @@ function scheduleGenerationRecovery(
         }).catch(() => {
           // A newer server status can reject this save; settlement retries with full content.
         });
+        // "Use full reply" may land mid-save, so the open copy's cut is read again.
+        nextMetadata = keepVoiceHeard(nextMetadata, liveCustom() ?? writtenHeardCustom(storedMessage.id));
+        currentMetadata = nextMetadata;
       }
 
       for (const view of views) {

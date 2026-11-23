@@ -153,7 +153,7 @@ test("recommended ids are unique and name their Hub repo or package folder", () 
 });
 
 test("folders of the shared repo the pickers leave out are never seeded and say why", () => {
-  assert.equal(Object.keys(AUDIO_CPP_UNOFFERED_FOLDERS).length, 23);
+  assert.equal(Object.keys(AUDIO_CPP_UNOFFERED_FOLDERS).length, 21);
   for (const [folder, reason] of Object.entries(AUDIO_CPP_UNOFFERED_FOLDERS)) {
     assert.equal(audioCppModelFor(`${AUDIO_CPP_REPO}/${folder}`), null, folder);
     assert.match(folder, /-GGUF$/);
@@ -188,8 +188,9 @@ test("recommended models are plain GGUF Audio rows named as on the Hub", () => {
     const group = groupForRepoId(model.id, AUDIO_CATALOG);
     assert.equal(group?.canonicalId, model.id, model.id);
     assert.equal(group?.displayName, audioCppDisplayName(model.id));
-    assert.equal(group?.task, model.task === "asr" ? "stt" : "tts", model.id);
-    assert.equal(audioTaskFor(model.id), model.task === "asr" ? "stt" : "tts");
+    const studioTask = model.task === "asr" ? "stt" : model.task === "vad" ? "vad" : "tts";
+    assert.equal(group?.task, studioTask, model.id);
+    assert.equal(audioTaskFor(model.id), studioTask);
     assert.deepEqual(
       group?.artifacts.map((artifact) => [artifact.format, artifact.loadKind]),
       [["gguf", "gguf"]],
@@ -275,7 +276,7 @@ test("GGUF heuristics treat these rows like any llama.cpp GGUF", () => {
 
 test("speech and music load on the audio runtime without remote code", () => {
   for (const model of AUDIO_CPP_MODELS) {
-    if (model.task === "asr") {
+    if (model.task === "asr" || model.task === "vad") {
       assert.equal(usesNativeAudioRuntime(model.id), false);
       continue;
     }
@@ -629,8 +630,10 @@ test("every Settings dictation path carries the saved quant", () => {
 
   // the prompt fetches the requester's pin, not the current Voice setting.
   const prompt = readSrc("features/settings/components/stt-download-prompt.tsx");
-  assert.match(prompt, /hfApiToken\(hfToken\),\s*undefined,\s*request\.ggufVariant,/);
-  assert.match(prompt, /const variant = pending\?\.ggufVariant \?\? null;/);
+  const downloadNow = readSrc("features/settings/lib/stt-download-now.ts");
+  assert.match(downloadNow, /hfApiToken\(hfToken\),\s*undefined,\s*request\.ggufVariant,/);
+  assert.match(prompt, /downloadSttNow\(request\)/);
+  assert.match(prompt, /const variant = shown\?\.ggufVariant \?\? null;/);
   assert.doesNotMatch(prompt, /sttGgufVariant/);
   assert.match(prompt, /candidate\.quant === \(variant \?\? listing\.default_variant\)/);
   assert.match(adapter, /requestSttDownload\(sessionModel, \{ ggufVariant: sessionVariant \}\)/);
@@ -661,7 +664,7 @@ test("every Settings dictation path carries the saved quant", () => {
   );
   assert.match(voiceTab, /!loaded &&\s*landedPinned\s*\)/);
   assert.match(
-    prompt,
+    downloadNow,
     /trackSttDownload\(request\.model, \{\s*ggufVariant: request\.ggufVariant \?\? null,\s*downloadId: download\.download_id,/,
   );
   assert.match(mirror, /sttModelVariant\(model, sttGgufVariant\)/);

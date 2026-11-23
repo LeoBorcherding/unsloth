@@ -15,7 +15,7 @@ export const AUDIO_CPP_AUDIO_TYPES: ReadonlySet<string> = new Set([
   AUDIO_CPP_SEP_AUDIO_TYPE,
 ]);
 
-export type AudioCppTask = "tts" | "music" | "asr" | "sep";
+export type AudioCppTask = "tts" | "music" | "asr" | "sep" | "vad";
 
 /** Mirrors AudioWorkflowId; spelled out to keep this file import-free. */
 export type AudioCppWorkflow =
@@ -25,7 +25,8 @@ export type AudioCppWorkflow =
   | "convert"
   | "music"
   | "separate"
-  | "transcribe";
+  | "transcribe"
+  | "detect";
 
 export interface AudioCppModel {
   /** Hub repo id, or `${AUDIO_CPP_REPO}/<folder>` for a package in the shared repo. */
@@ -256,6 +257,8 @@ export const AUDIO_CPP_MODELS: readonly AudioCppModel[] = [
     task: "asr",
     languages: VOXTRAL_LANGUAGES,
   },
+  { id: folder("PulseVAD-GGUF"), task: "vad" },
+  { id: folder("FireRedVAD-GGUF"), task: "vad" },
 ];
 
 /** Shared-repo folders the pickers leave out, and why. The nightly catalog check warns on a folder in neither list (the backend catalog lists it). */
@@ -263,10 +266,9 @@ export const AUDIO_CPP_UNOFFERED_FOLDERS: Readonly<Record<string, string>> = {
   "Sidon-GGUF": "needs a newer audio runtime",
   // Offer it on Transcribe once the Hub's main branch carries it (only on spec-refresh-v0.9.2 for now).
   "VibeVoice-ASR-Streaming-7B-GGUF": "not on the Hub's main branch yet",
-  "Smart-Turn-v3-GGUF": "needs a newer audio runtime",
+  "Smart-Turn-v3-GGUF": "voice mode loads it itself, to hear the end of a turn",
   "AST-AudioSet-GGUF": "needs a newer audio runtime",
   "CED-GGUF": "needs a newer audio runtime",
-  "FireRedVAD-GGUF": "needs a newer audio runtime",
   "MicroWakeWord-GGUF": "needs a newer audio runtime",
   "MossFormer2-GGUF": "needs a newer audio runtime",
   "Phonon-2-GGUF": "needs a newer audio runtime",
@@ -281,7 +283,6 @@ export const AUDIO_CPP_UNOFFERED_FOLDERS: Readonly<Record<string, string>> = {
   "PersonaPlex-GGUF": "duplex speech chat has no page",
   "MMS-Forced-Aligner-GGUF": "forced alignment has no page",
   "Sortformer-Diar-4spk-v1-GGUF": "speaker diarization has no page",
-  "PulseVAD-GGUF": "voice activity detection has no page",
   "MuScriptor-Small-GGUF": "music transcription has no page",
   "Samsone-GGUF": "describes audio rather than transcribing it",
 };
@@ -432,6 +433,7 @@ const TASK_WORKFLOW: Record<AudioCppTask, AudioCppWorkflow> = {
   music: "music",
   asr: "transcribe",
   sep: "separate",
+  vad: "detect",
 };
 
 export function audioCppWorkflowsFor(

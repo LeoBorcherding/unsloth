@@ -100,12 +100,50 @@ export function migrateVoiceSettings(
   persisted: unknown,
   fromVersion: number,
 ): Record<string, unknown> | undefined {
-  const saved = persisted as Record<string, unknown> | undefined;
+  let saved = persisted as Record<string, unknown> | undefined;
   if (fromVersion < 1 && saved?.sttModel === LEGACY_DEFAULT_STT_MODEL) {
-    return { ...saved, sttModel: DEFAULT_STT_MODEL };
+    saved = { ...saved, sttModel: DEFAULT_STT_MODEL };
+  }
+  if (fromVersion < 2 && saved) {
+    saved = { ...VOICE_ROLLOUT_DEFAULTS, ...saved };
+  }
+  // Only test builds saved these keys, so drop them.
+  if (fromVersion < 3 && saved) {
+    const rest = { ...saved };
+    for (const key of ["replyShaping", "smartTurn", "smartTurnJudge"]) delete rest[key];
+    saved = rest;
+  }
+  if (fromVersion < 4 && saved) {
+    const rest = { ...saved };
+    delete rest.turnEnding;
+    saved = rest;
   }
   return saved;
 }
+
+export type VoiceRolloutSetting =
+  | "clauseFirstChunk"
+  | "speechNormalize"
+  | "heardCut";
+
+export const VOICE_ROLLOUT_DEFAULTS: Readonly<Record<VoiceRolloutSetting, boolean>> = {
+  clauseFirstChunk: true,
+  speechNormalize: true,
+  heardCut: true,
+};
+
+// Saves holding the retired "both" fall back to the default.
+export type VoiceReplyInstruction = "conversation" | "spoken" | "voice" | "custom" | "none";
+export const VOICE_REPLY_INSTRUCTIONS: readonly VoiceReplyInstruction[] = ["conversation", "spoken", "voice", "custom", "none"];
+export const DEFAULT_VOICE_REPLY_INSTRUCTION: VoiceReplyInstruction = "conversation";
+export const VOICE_CUSTOM_INSTRUCTION_MAX = 2000;
+
+/** smartTurnJudge also needs the text judge to agree the turn is finished. */
+export type VoiceTurnEnding = "smartTurnJudge" | "smartTurn" | "wait";
+export const VOICE_TURN_ENDINGS: readonly VoiceTurnEnding[] = ["smartTurn", "smartTurnJudge", "wait"];
+export const DEFAULT_VOICE_TURN_ENDING: VoiceTurnEnding = "smartTurn";
+/** Text judge's confidence bar, 0 to 1. */
+export const TURN_JUDGE_BAR = { min: 0.3, max: 0.95, step: 0.05, default: 0.65 } as const;
 
 // Separate name and size so lists can right-align the size.
 export const STT_MODEL_NAMES: Record<DefaultSttModel, string> = {

@@ -48,6 +48,7 @@ from core.inference.audio_cpp_server import (
     runtime_runs_on_cpu,
 )
 from core.inference.stt_ggml_sidecar import _pcm_to_wav_bytes
+from core.inference.stt_live import LiveTranscript, LiveTranscriptError, family_streams
 from core.inference.stt_sidecar import (
     QWEN3_ASR_LANGUAGE_NAMES,
     STT_KEEP_ALIVE_SECONDS,
@@ -104,12 +105,16 @@ _MOSS_TOKENS_PER_SECOND = 12
 _MOSS_CONTEXT_TOKENS = 131_072
 _MOSS_PROMPT_TOKENS_PER_SECOND = 13.5
 _MOSS_PROMPT_OVERHEAD_TOKENS = 512
+_MOSS_SHORT_CLIP_SLACK_TOKENS = 128
 
 
 def _moss_max_tokens(duration: Optional[float]) -> Optional[int]:
     if not duration or duration <= 0:
         return None
-    budget = max(_MOSS_DEFAULT_MAX_TOKENS, math.ceil(duration * _MOSS_TOKENS_PER_SECOND))
+    short = math.ceil(duration * _MOSS_TOKENS_PER_SECOND * 2) + _MOSS_SHORT_CLIP_SLACK_TOKENS
+    budget = max(
+        min(short, _MOSS_DEFAULT_MAX_TOKENS), math.ceil(duration * _MOSS_TOKENS_PER_SECOND)
+    )
     room = (
         _MOSS_CONTEXT_TOKENS
         - math.ceil(duration * _MOSS_PROMPT_TOKENS_PER_SECOND)
@@ -120,6 +125,15 @@ def _moss_max_tokens(duration: Optional[float]) -> Optional[int]:
     if budget <= 0 or budget == _MOSS_DEFAULT_MAX_TOKENS:
         return None
     return budget
+
+
+def _looped_short_clip(detail: str, options: dict) -> bool:
+    cap = options.get("max_tokens")
+    return (
+        isinstance(cap, int)
+        and cap < _MOSS_DEFAULT_MAX_TOKENS
+        and "max_tokens before EOS" in (detail or "")
+    )
 
 
 def _request_options(entry: AudioCppModel, aligned: bool, duration: Optional[float]) -> dict:
@@ -175,6 +189,10 @@ def _runtime_language(family: str, language: Optional[str]) -> Optional[str]:
 
 class SttEngineUnavailableError(SttUnavailableError):
     """audiocpp_server is not installed or stopped serving; the audio.cpp dictation engine is off."""
+
+
+class SttLiveUnsupportedError(ValueError):
+    """This model transcribes finished recordings only."""
 
 
 def _stt_tmp_dir() -> Path:
@@ -662,6 +680,8 @@ class AudioCppSttSidecar:
         self._launched_cpu = False
         # Tracked separately: ``model_options`` is not part of AudioCppModel equality.
         self._aligned = False
+        self._live = False
+        self._live_open = 0
         self._idle_timer: Optional[threading.Timer] = None
         self._idle_generation = 0
         self._keep_alive_seconds = keep_alive_seconds
@@ -758,6 +778,9 @@ class AudioCppSttSidecar:
         with self._lock:
             if generation != self._idle_generation:
                 return
+            if self._live_open:
+                self._schedule_idle_unload_locked()
+                return
             logger.info("Unloading idle audio.cpp STT model %s", self._model_id)
             self._release_locked()
 
@@ -771,6 +794,7 @@ class AudioCppSttSidecar:
         self._forced_cpu = False
         self._launched_cpu = False
         self._aligned = False
+        self._live = False
         if server is not None:
             server.stop()
 
@@ -919,8 +943,8 @@ class AudioCppSttSidecar:
         *,
         timestamps: bool = False,
         on_phase: Optional[Callable[[str], None]] = None,
+        live: bool = False,
     ) -> None:
-        """A server already holding the aligner keeps it for untimestamped requests (no restart)."""
         from core.inference.audio_device import stt_device_forces_cpu
 
         if request_cancel_event is not None and request_cancel_event.is_set():
@@ -928,6 +952,7 @@ class AudioCppSttSidecar:
         self._raise_if_update_in_progress()
         entry = resolve_audio_cpp_stt_model(self.keep_loaded_variant(model))
         aligned = bool(timestamps) and entry.family in _ALIGNED_FAMILIES
+        streaming = bool(live) and not aligned and family_streams(entry.family)
         with self._lock:
             if request_cancel_event is not None and request_cancel_event.is_set():
                 raise SttTranscriptionCancelledError("Transcription cancelled.")
@@ -945,6 +970,7 @@ class AudioCppSttSidecar:
                 # A server training moved to the CPU goes back to the GPU once training ends.
                 and _same_placement(self._launched_cpu, entry, force_cpu)
                 and (self._aligned or not aligned)
+                and (self._live or not streaming)
             ):
                 self._loaded_as = _reported_name(model, entry)
                 self._schedule_idle_unload_locked()
@@ -982,6 +1008,7 @@ class AudioCppSttSidecar:
                         force_cpu = run_on_cpu,
                         cancel_event = cancel_event,
                         on_process = _track,
+                        streaming = streaming,
                     )
                 except AudioCppStartCancelledError as exc:
                     raise SttLoadCancelledError(str(exc)) from exc
@@ -994,6 +1021,7 @@ class AudioCppSttSidecar:
                 self._forced_cpu = force_cpu
                 self._launched_cpu = server.backend == "cpu"
                 self._aligned = aligned
+                self._live = streaming
                 self._schedule_idle_unload_locked()
             finally:
                 with self._load_state_lock:
@@ -1110,6 +1138,42 @@ class AudioCppSttSidecar:
             result["speakers"] = list(details["speaker_ids"])
         return result
 
+    def open_live(
+        self,
+        model: Optional[str],
+        sample_rate: int,
+        language: Optional[str] = None,
+    ) -> LiveTranscript:
+        self._raise_if_update_in_progress()
+        ensure_engine_available()
+        target = self.keep_loaded_variant(model)
+        entry = resolve_audio_cpp_stt_model(target)
+        if not family_streams(entry.family):
+            raise SttLiveUnsupportedError(f"{entry.display_name} does not transcribe live.")
+        keys = entry.request_keys
+        sent = (
+            _runtime_language(entry.family, language)
+            if keys is None or "language" in keys
+            else None
+        )
+        with self._lock:
+            self.load(target, live = True)
+            server = self._server
+            if server is None or not self._live:
+                raise SttLiveUnsupportedError(f"{entry.display_name} does not transcribe live.")
+            try:
+                session = LiveTranscript(server.port, server.model_id, sample_rate, sent)
+            except LiveTranscriptError as exc:
+                raise SttEngineUnavailableError(str(exc)) from exc
+            self._live_open += 1
+        return session
+
+    def close_live(self, session: LiveTranscript) -> None:
+        session.close()
+        with self._lock:
+            self._live_open = max(0, self._live_open - 1)
+            self._schedule_idle_unload_locked()
+
     def cancel_transcription(self, cancel_event: threading.Event) -> bool:
         already_cancelled = cancel_event.is_set()
         cancel_event.set()
@@ -1166,6 +1230,11 @@ class AudioCppSttSidecar:
             if 400 <= exc.status < 500:
                 # The server rejected this clip or option (e.g. an unsupported language), not a broken runtime.
                 raise SttAudioDecodeError(detail) from exc
+            if _looped_short_clip(exc.detail, options):
+                logger.info(
+                    "audio.cpp: %s heard no words in a short clip (%s)", server.model.family, detail
+                )
+                return {"text": ""}
             note_runtime_inference_failure(str(exc))
             raise SttEngineUnavailableError(f"The audio runtime failed: {detail}") from exc
         except (AudioCppUnavailableError, ValueError) as exc:

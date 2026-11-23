@@ -102,9 +102,11 @@ import { SkillMentionPopover } from "@/components/assistant-ui/skill-mentions";
 import {
   ChatSkillsDialog,
   contextReportBranch,
+  heardTail,
   isContextCommand,
   isRewindCommand,
   isSkillsCommand,
+  savedHeardCut,
   useContextReportStore,
   useRewindDialogStore,
 } from "@/features/chat";
@@ -198,6 +200,16 @@ import {
   resolveProjectId,
   sentAudioNames,
 } from "@/features/chat/api/chat-adapter";
+import {
+  clearPendingHeardCut,
+  loadVoiceMode,
+  noteTypedSend,
+  requestVoiceToggle,
+  requestVoiceTypedSubmit,
+  useVoiceAvailable,
+  useVoiceRequested,
+} from "@/features/chat/voice/voice-loop-bridge";
+import { VoicePauseStopButton } from "@/components/assistant-ui/voice-pause-stop-button";
 import {
   PromptStorageDialog,
   exportConversationShareGPT,
@@ -537,7 +549,11 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { extractTaggedText, updateThreadMessage } from "@/features/chat/utils/update-thread-message";
+import {
+  extractTaggedText,
+  setThreadMessageVoiceHeard,
+  updateThreadMessage,
+} from "@/features/chat/utils/update-thread-message";
 import { useComposerPillFit } from "@/hooks/use-composer-pill-fit";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
@@ -704,6 +720,13 @@ function resetPromptQueues() {
   clearPromptQueuePumpTimer();
   stopPromptQueueSubscription();
   syncPromptQueueUI();
+}
+
+// Only this thread's queue: a global reset would drop prompts queued in background chats.
+export function resetPromptQueuesForThread(threadId: string) {
+  for (const run of getPromptQueueRunsForThreadIds([threadId])) {
+    deletePromptQueueRun(run);
+  }
 }
 
 function requestPromptQueuePumpIfReady(delay = 0) {
@@ -2183,6 +2206,10 @@ export const Thread: FC<{
     context: autoScrollContext,
   } = useIntentAwareAutoScroll();
 
+  const voiceActive = useChatRuntimeStore((s) => s.voiceMode === "active");
+  const effectiveHideWelcome = hideWelcome || voiceActive;
+  const voiceRequested = useVoiceRequested();
+
   const isComposerAttachPending = useAuiState(({ threads }) =>
     targetThreadId ? threads.mainThreadId !== targetThreadId : false,
   );
@@ -2418,7 +2445,7 @@ export const Thread: FC<{
           {viewportEl !== null &&
             createPortal(
               <>
-          {!hideWelcome && (
+          {!effectiveHideWelcome && (
             <AuiIf
               condition={({ thread }) => thread.isEmpty && !thread.isLoading}
             >
@@ -2445,7 +2472,7 @@ export const Thread: FC<{
           {/* Bottom slack so the last message has room above the sticky
           scroll-to-bottom button (and floating composer in single mode),
           instead of butting against the footer. */}
-          <AuiIf condition={({ thread }) => hideWelcome || !thread.isEmpty}>
+          <AuiIf condition={({ thread }) => effectiveHideWelcome || !thread.isEmpty}>
             <div
               ref={spacerRef}
               className={cn(
@@ -2460,7 +2487,7 @@ export const Thread: FC<{
             />
           </AuiIf>
 
-          <AuiIf condition={({ thread }) => hideWelcome || !thread.isEmpty}>
+          <AuiIf condition={({ thread }) => effectiveHideWelcome || !thread.isEmpty}>
             <ThreadPrimitive.ViewportFooter
               className={cn(
                 "aui-thread-viewport-footer pointer-events-none sticky z-20 flex w-full justify-center bg-transparent",
@@ -2512,11 +2539,16 @@ export const Thread: FC<{
             hideComposer={hideComposer}
             bottomOffsetPx={footerBottomPx}
           />
+          {voiceRequested && !hideComposer && (
+            <Suspense fallback={null}>
+              <VoiceOrb />
+            </Suspense>
+          )}
 
           {!hideComposer && (
             <AuiIf
               condition={({ thread }) =>
-                hideWelcome || !thread.isEmpty || composerAtBottom
+                effectiveHideWelcome || !thread.isEmpty || composerAtBottom
               }
             >
               <ThreadComposerDock
@@ -2662,6 +2694,7 @@ const ThreadComposerDock: FC<{
   onHeightChange?: (height: number | null) => void;
 }> = ({ disabled, threadId, onHeightChange }) => {
   const { overlay } = useGeneratedImageOverlay();
+  const voiceOrbActive = useChatRuntimeStore((s) => s.voiceOrbState !== null);
   const activeThreadId = useChatRuntimeStore((s) => s.activeThreadId);
   const threadListItemId = useAuiState(
     ({ threadListItem }) => threadListItem.id,
@@ -2779,7 +2812,7 @@ const ThreadComposerDock: FC<{
       className={cn(
         // Inset both sides: keeps the bottom fade off the scrollbar without shifting the centre.
         "aui-thread-composer-dock pointer-events-none absolute bottom-0 left-0 right-0 md:left-[var(--thread-scrollbar-gutter,10px)] md:right-[var(--thread-scrollbar-gutter,10px)]",
-        overlay ? "z-40" : "z-20",
+        overlay || voiceOrbActive ? "z-40" : "z-20",
       )}
     >
       {/* Column width only: across empty gutters the gradient rounds to a visible seam. */}
@@ -3114,6 +3147,8 @@ const Composer: FC<{
 }> = ({ disabled, threadId, menuSide, disableQueue }) => {
   const aui = useAui();
   const isDictating = useAuiState((s) => s.composer.dictation != null);
+  const voiceEngaged = useChatRuntimeStore((s) => s.voiceMode !== "off");
+  const showDictationUi = isDictating && !voiceEngaged;
   const pageDragging = useContext(PageDragContext);
   const nativeDragging = useContext(NativeAttachmentDragContext);
   const { overlay, closeOverlay } = useGeneratedImageOverlay();
@@ -5827,6 +5862,12 @@ const Composer: FC<{
     }
     wasDictatingRef.current = false;
     if (!sendAfterDictationRef.current) return;
+    // The loop appends the utterance itself; submitting the box too would queue a copy behind the reply.
+    if (voiceEngaged) {
+      sendAfterDictationRef.current = false;
+      heldTextRef.current = null;
+      return;
+    }
     // A partial transcript stays in the composer but must not send half a message. Settled before
     // the hold below.
     const text = composerText;
@@ -5862,7 +5903,7 @@ const Composer: FC<{
     sendAfterDictationRef.current = false;
     heldTextRef.current = null;
     formRef.current?.requestSubmit();
-  }, [isDictating, aui, composerIdentity, dictationBlocked, composerText]);
+  }, [isDictating, aui, composerIdentity, dictationBlocked, composerText, voiceEngaged]);
 
   const handleSubmit = useCallback(
     (event: {
@@ -5879,6 +5920,14 @@ const Composer: FC<{
         event.preventDefault();
         return;
       }
+      // The loop delivers the spoken words (sending the box too doubled them); typed words it sends itself.
+      if (voiceEngaged && isDictating) {
+        event.preventDefault();
+        if (requestVoiceTypedSubmit(composerText)) return;
+        aui.composer().stopDictation();
+        return;
+      }
+      noteTypedSend();
       // A command, not a prompt: ahead of the model and queue gates, so it works with no model loaded.
       if (!overlay && !hasAttachments && isRewindCommand(composerText)) {
         event.preventDefault();
@@ -6155,6 +6204,8 @@ const Composer: FC<{
       steerParkedSend,
       hasPendingQueueStart,
       threadIsRunning,
+      voiceEngaged,
+      isDictating,
     ],
   );
 
@@ -6267,14 +6318,14 @@ const Composer: FC<{
 
   const composerContent = (
     <>
-      {!isDictating ? attachments : null}
+      {!showDictationUi ? attachments : null}
       {!isDictating ? <ComposerDraftPreview text={composerText} /> : null}
-      {!isDictating ? toolStatus : null}
+      {!showDictationUi ? toolStatus : null}
       <div
         className="unsloth-composer-line"
         // The permission pill is always visible, so stay two-row unless dictating.
-        data-expanded={!isDictating ? "true" : "false"}
-        data-dictating={isDictating ? "true" : undefined}
+        data-expanded={!showDictationUi ? "true" : "false"}
+        data-dictating={showDictationUi ? "true" : undefined}
       >
         <div
           ref={pillRowRef}
@@ -6282,9 +6333,9 @@ const Composer: FC<{
           data-pill-compact={pillCompact}
         >
           {toolsMenu}
-          {!isDictating ? pills : null}
+          {!showDictationUi ? pills : null}
         </div>
-        {isDictating ? (
+        {showDictationUi ? (
           <ChatDictationBar
             onSend={sendAfterDictation}
             // Every state handleSubmit would reject after transcription; text comes from the transcript.
@@ -6450,7 +6501,7 @@ const Composer: FC<{
     >
       <PromptQueueStack queueThreadIds={promptQueueThreadIds} />
       {/* Chat with files card. Stays mounted while dictating to keep indexing state. */}
-      <div className={isDictating ? "hidden" : "contents"}>
+      <div className={showDictationUi ? "hidden" : "contents"}>
         {documentsBar}
       </div>
       {youtubeOfferUrl && !isDictating && !disabled ? (
@@ -7013,6 +7064,8 @@ const ComposerToolsMenu: FC<{
 }> = ({ inputRef, side = "bottom", researchAvailable, audioUploadBusy }) => {
   const t = useT();
   const navigate = useNavigate();
+  const voiceMode = useChatRuntimeStore((s) => s.voiceMode);
+  const voiceAvailable = useVoiceAvailable();
   const toolsEnabled = useChatRuntimeStore((s) => s.toolsEnabled);
   const setToolsEnabled = useChatRuntimeStore((s) => s.setToolsEnabled);
   const codeToolsEnabled = useChatRuntimeStore(codeToolsOn);
@@ -7523,6 +7576,29 @@ const ComposerToolsMenu: FC<{
             ) : null}
           </DropdownMenuItem>
         )}
+        {voiceAvailable && (
+          <DropdownMenuItem
+            role="menuitemcheckbox"
+            aria-checked={voiceMode === "active" ? true : voiceMode === "configuring" ? "mixed" : false}
+            className={voiceMode !== "off" ? "text-primary font-medium" : undefined}
+            onSelect={() => requestVoiceToggle()}
+          >
+            <MicIcon className="size-[calc(18px*var(--ui-space-scale,1))]" />
+            Voice
+            {voiceMode === "active" ? (
+              <HugeiconsIcon
+                icon={Tick02Icon}
+                strokeWidth={2}
+                className="ml-auto"
+              />
+            ) : voiceMode === "configuring" ? (
+              <span
+                className="ml-auto size-2 rounded-full bg-amber-500"
+                aria-hidden
+              />
+            ) : null}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         {isDictating ? <BypassPermissionsMenuItem /> : null}
         {pinnedPlusItems
@@ -7741,41 +7817,78 @@ const ComposerRightControls: FC<{
         !controlsRef.current.closest('[aria-hidden="true"], [inert]'),
     },
   );
+  const voiceEngaged = useChatRuntimeStore((s) => s.voiceMode !== "off");
+  const voiceActive = useChatRuntimeStore((s) => s.voiceMode === "active");
+  const voiceRequested = useVoiceRequested();
+  const voiceAvailable = useVoiceAvailable();
   return (
     <div
       ref={controlsRef}
       className="aui-composer-action-wrapper flex shrink-0 items-center gap-1.5"
     >
       <ComposerModelPicker side={menuSide} />
-      <ComposerPrimitive.If dictation={false}>
-        {audioUpload.busy ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-9 gap-1.5 rounded-full px-2.5 text-muted-foreground"
-            aria-label={t("settings.voice.dictation.audioUploadCancel")}
-            title={t("settings.voice.dictation.audioUploadCancel")}
-            onClick={audioUpload.cancel}
-          >
-            <Spinner className="size-4" />
-            <span>{t("settings.voice.dictation.audioUploadTranscribing")}</span>
-            <HugeiconsIcon icon={Cancel01Icon} className="size-3.5" aria-hidden="true" />
-          </Button>
-        ) : (
-          <TooltipIconButton
-            tooltip={micLabel}
-            aria-label={micLabel}
-            type="button"
-            variant="ghost"
-            className="size-9 rounded-full text-foreground"
-            disabled={dictationDisabled}
-            onClick={onDictateClick}
-          >
-            <MicIcon className="unsloth-dictate-icon size-6" />
-          </TooltipIconButton>
-        )}
-      </ComposerPrimitive.If>
+      {voiceRequested && (
+        <Suspense fallback={null}>
+          <VoiceEngine />
+          <VoiceMuteButton />
+          <VoiceControlButton />
+        </Suspense>
+      )}
+      {!voiceEngaged && (
+        <>
+          <ComposerPrimitive.If dictation={false}>
+            {audioUpload.busy ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9 gap-1.5 rounded-full px-2.5 text-muted-foreground"
+                aria-label={t("settings.voice.dictation.audioUploadCancel")}
+                title={t("settings.voice.dictation.audioUploadCancel")}
+                onClick={audioUpload.cancel}
+              >
+                <Spinner className="size-4" />
+                <span>{t("settings.voice.dictation.audioUploadTranscribing")}</span>
+                <HugeiconsIcon icon={Cancel01Icon} className="size-3.5" aria-hidden="true" />
+              </Button>
+            ) : (
+              <TooltipIconButton
+                tooltip={micLabel}
+                aria-label={micLabel}
+                type="button"
+                variant="ghost"
+                className="size-9 rounded-full text-foreground"
+                disabled={dictationDisabled}
+                onClick={onDictateClick}
+              >
+                <MicIcon className="unsloth-dictate-icon size-6" />
+              </TooltipIconButton>
+            )}
+          </ComposerPrimitive.If>
+          {voiceAvailable && (
+            <TooltipIconButton
+              tooltip={t("voiceControls.start")}
+              aria-label={t("voiceControls.start")}
+              type="button"
+              variant="ghost"
+              className="size-9 rounded-full text-foreground"
+              onClick={() => requestVoiceToggle()}
+            >
+              <HugeiconsIcon icon={AiSpeechIcon} strokeWidth={1.75} className="size-5" aria-hidden="true" />
+            </TooltipIconButton>
+          )}
+        </>
+      )}
+      {/* Voice mode owns the send slot: one button the whole time, in place of the
+          arrow, the run's stop and the stop-speaking button, so the controls never
+          change width under the orb. Tap pauses or resumes; a hold cuts whatever
+          is in flight (reply, run, held utterances) and goes back to listening.
+          Voice mode stays on; the plus-menu Voice item turns it off and unloads. */}
+      {/* A research run keeps its own Stop: the voice button cancels only a chat run. */}
+      {/* While voice is only being configured, typed Send and Stop still work. */}
+      {voiceActive && !isResearchActive ? (
+        <VoicePauseStopButton />
+      ) : (
       <AuiIf
         condition={({ thread }) =>
           !thread.isRunning && !isQueueRunning && !isResearchActive
@@ -7806,7 +7919,8 @@ const ComposerRightControls: FC<{
           </TooltipIconButton>
         </ComposerPrimitive.Send>
       </AuiIf>
-      {isQueueRunning && !isResearchActive ? (
+      )}
+      {!voiceActive && isQueueRunning && !isResearchActive ? (
         <AuiIf condition={({ thread }) => !thread.isRunning}>
           {queueEntry?.paused && queueDisabled ? (
             <TooltipIconButton
@@ -7865,7 +7979,7 @@ const ComposerRightControls: FC<{
             <HugeiconsIcon icon={StopIcon} className="composer-glyph-snap size-3.5 fill-current" />
           )}
         </Button>
-      ) : (
+      ) : voiceActive ? null : (
         <AuiIf condition={({ thread }) => thread.isRunning}>
           {/* Classed so the narrow-screen rules can treat this like the
               sibling send/stop buttons; it is the flex item, not the button. */}
@@ -8449,6 +8563,112 @@ const DiffusionCanvas: FC = () => {
 
 const ResearchMessageRunIdContext = createContext<string | null>(null);
 
+type HeardPrompts = {
+  /** Prompt id to the cut reply before it and the last words heard of it. */
+  byPrompt: Map<string, { replyId: string; words: string }>;
+  followed: Set<string>;
+};
+const HEARD_PROMPTS_KEY = "voice-heard-prompts";
+
+function heardPrompts(messages: readonly { id: string; role: string; metadata?: unknown; content: readonly unknown[] }[]): HeardPrompts {
+  return memoOnArrayByKey(messages, HEARD_PROMPTS_KEY, () => {
+    const byPrompt: HeardPrompts["byPrompt"] = new Map();
+    const followed = new Set<string>();
+    messages.forEach((reply, index) => {
+      const prompt = messages[index + 1];
+      if (reply.role !== "assistant" || prompt?.role !== "user") return;
+      followed.add(reply.id);
+      const cut = savedHeardCut(reply.metadata);
+      if (cut) {
+        byPrompt.set(prompt.id, {
+          replyId: reply.id,
+          words: heardTail(reply.content as readonly { type: string; text?: string }[], cut),
+        });
+      }
+    });
+    return { byPrompt, followed };
+  });
+}
+
+/** One look for both places the cut shows; the prompt after it carries the same fact to the model (heardNote). */
+const VoiceHeardNoteRow: FC<{ replyId: string; words: string; className?: string }> = ({ replyId, words, className }) => {
+  const t = useT();
+  const aui = useAui();
+  const [saving, setSaving] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const restoreFullReply = async () => {
+    // Unmounts on restore: focus moves off its button first or drops to the page.
+    const hadFocus = document.activeElement === buttonRef.current;
+    setSaving(true);
+    clearPendingHeardCut(replyId);
+    try {
+      await setThreadMessageVoiceHeard({
+        thread: { export: () => aui.thread().export(), import: (data) => aui.thread().import(data) },
+        messageId: replyId,
+        remoteId:
+          aui.threadListItem().getState().remoteId ||
+          useChatRuntimeStore.getState().activeThreadId ||
+          undefined,
+        isIncognito: useChatRuntimeStore.getState().incognito,
+        heard: null,
+      });
+      if (hadFocus) document.querySelector<HTMLElement>(".aui-composer-input")?.focus();
+    } catch (error) {
+      console.error("Could not restore the full voice reply.", error);
+      toast.error(t("voice.interrupted.restoreFailed"));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <p dir="auto" className={cn("text-pretty text-ui-13 text-muted-foreground [overflow-wrap:anywhere]", className)}>
+      <HugeiconsIcon
+        icon={VolumeMute02Icon}
+        strokeWidth={1.75}
+        className="me-1.5 inline-block size-3.5 align-[-0.15em]"
+        aria-hidden="true"
+      />
+      {words ? t("voice.interrupted.spokenUpTo", { words }) : t("voice.interrupted.none")}
+      <span aria-hidden="true" className="mx-1.5">·</span>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="-mx-1 whitespace-nowrap rounded-md px-1 py-0.5 font-medium text-foreground/80 underline decoration-foreground/30 underline-offset-[3px] transition-colors hover:text-foreground hover:decoration-foreground/70 focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60"
+        onClick={() => void restoreFullReply()}
+        disabled={saving}
+        aria-busy={saving || undefined}
+      >
+        {t("voice.interrupted.useFull")}
+      </button>
+    </p>
+  );
+};
+
+/** A cut reply nothing has answered yet; once a prompt follows, the note moves onto it. */
+const VoiceHeardNote: FC = () => {
+  const messageId = useAuiState(({ message }) => message.id);
+  const offset = useAuiState(({ message }) => savedHeardCut(message.metadata)?.offset ?? null);
+  const content = useAuiState(({ message }) => message.content);
+  const followed = useAuiState(({ thread, message }) => heardPrompts(thread.messages).followed.has(message.id));
+  if (offset === null || followed) return null;
+  const words = heardTail(content as readonly { type: string; text?: string }[], { offset });
+  return <VoiceHeardNoteRow replyId={messageId} words={words} className="aui-voice-heard-note mt-1" />;
+};
+
+/** Above the prompt the model reads it with, so the chat shows what the model was told. */
+const VoiceHeardPromptNote: FC = () => {
+  const replyId = useAuiState(({ thread, message }) => heardPrompts(thread.messages).byPrompt.get(message.id)?.replyId ?? null);
+  const words = useAuiState(({ thread, message }) => heardPrompts(thread.messages).byPrompt.get(message.id)?.words ?? null);
+  if (replyId === null || words === null) return null;
+  return (
+    <VoiceHeardNoteRow
+      replyId={replyId}
+      words={words}
+      className="aui-voice-heard-prompt-note max-w-[80%] text-end"
+    />
+  );
+};
+
 /** Edits use <THINK> and <TOOL> tags in a plain textarea while preserving tool-call metadata. */
 const AssistantMessage: FC = () => {
   const aui = useAui();
@@ -8598,6 +8818,8 @@ const AssistantMessage: FC = () => {
           </>
         )}
       </div>
+
+      <VoiceHeardNote />
 
       <div className="aui-assistant-message-footer mt-1.5 -ml-[var(--icon-btn-inset)] flex min-h-8 min-w-0 flex-wrap items-center gap-y-1">
         {/* First, so the action bar mounting on hover never moves it. */}
@@ -8878,6 +9100,28 @@ const MORE_MENU_CONTENT_CLASS =
   "aui-action-bar-more-content dropdown-surface z-50 min-w-32 max-h-(--radix-dropdown-menu-content-available-height) flex flex-col overflow-hidden rounded-xl bg-popover px-[calc(8px*var(--ui-space-scale,1))] py-2 text-popover-foreground shadow-[0_2px_8px_-2px_rgba(0,0,0,0.16)]";
 const MORE_MENU_ITEM_CLASS =
   "aui-action-bar-more-item flex cursor-pointer select-none items-center gap-2 rounded-md px-3 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
+// Not rendered until Voice is clicked: rendering a lazy component is what fetches its chunk.
+const VoiceEngine = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoiceEngine,
+  })),
+);
+const VoiceControlButton = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoiceControlButton,
+  })),
+);
+const VoiceMuteButton = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoiceMuteButton,
+  })),
+);
+const VoiceOrb = lazy(() =>
+  loadVoiceMode().then((module) => ({
+    default: module.VoiceOrb,
+  })),
+);
 
 // Loaded on first use: the dialog is not part of the first screen.
 const LazyRewindDialog = lazy(() =>
@@ -9307,6 +9551,7 @@ const UserMessage: FC = () => {
       {...focusReveal}
     >
       <WindowedMessageBody>
+      <VoiceHeardPromptNote />
       <ScheduledTaskSource />
       <UserMessageAttachments />
       <UserMessageAudio />

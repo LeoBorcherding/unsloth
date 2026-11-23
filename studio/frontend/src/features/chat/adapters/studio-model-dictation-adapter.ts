@@ -36,6 +36,7 @@ import { useExternalProvidersStore } from "../stores/external-providers-store";
 import { startDictationLevelMeter } from "./dictation-level";
 import { type SegmentRecorder, createAudioRecorder } from "./pcm-recorder";
 import { SttModelNotDownloadedError, sttRequestError } from "./stt-errors";
+import { type LiveTranscript, openLiveTranscript } from "../voice/live-transcript";
 // re-export preserves the public dictation entry point
 export { SttModelNotDownloadedError } from "./stt-errors";
 import {
@@ -126,6 +127,32 @@ async function sttErrorDetail(response: Response): Promise<string> {
   return body?.detail ?? body?.error?.message ?? `HTTP ${response.status}`;
 }
 
+const liveRefused = new Set<string>();
+
+/** Null when the pick is another engine or a model that refused live. */
+export function openSttLive(
+  sampleRate: number,
+  model: string | undefined,
+  onText: (text: string) => void,
+): LiveTranscript | null {
+  const settings = useVoiceSettingsStore.getState();
+  const picked = (model ?? settings.sttModel).trim();
+  const engine = sttEngineFor(picked);
+  if (engine !== "audiocpp" || liveRefused.has(picked)) return null;
+  const variant = model === undefined ? sttModelVariant(picked, settings.sttGgufVariant) : null;
+  const params = new URLSearchParams({
+    model: variant ? withSttVariant(picked, variant) : picked,
+    engine,
+  });
+  const language = resolveModelDictationLanguage(picked, settings.dictationLanguage);
+  if (language) params.set("language", language);
+  return openLiveTranscript({
+    params,
+    sampleRate,
+    onText,
+    onRefused: () => liveRefused.add(picked),
+  });
+}
 export type TranscriptSegment = { start: number; end: number; text: string };
 
 export async function transcribeAudioBlob(
@@ -407,6 +434,7 @@ export function loadSttModel(
   device?: SttDevice,
   ggufVariant?: string | null,
   contextLength?: number,
+  live = false,
 ): Promise<void> {
   const resolvedEngine = engine ?? sttEngineFor(model);
   const settings = useVoiceSettingsStore.getState();
@@ -428,6 +456,7 @@ export function loadSttModel(
         device: resolvedDevice,
         ...context,
         ...sttVariantBody(resolvedEngine, ggufVariant),
+        ...(live && { live: true }),
       }),
       signal,
     });

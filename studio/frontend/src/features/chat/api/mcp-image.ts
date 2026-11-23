@@ -2,6 +2,8 @@
 // Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 import type { McpImageInputMapping, McpServerConfig } from "./mcp-servers-api";
+import { applyHeardCut, heardNote, laterCut, savedHeardCut, type HeardCut } from "../voice/heard-cut.ts";
+import { pendingHeardCut } from "../voice/voice-loop-bridge.ts";
 
 /** Sent with a tool_start that would send the user's image; approval covers this one call. */
 export type ImageDisclosure = {
@@ -11,8 +13,10 @@ export type ImageDisclosure = {
   destination: string;
 };
 
-type Part = { type: string; image?: unknown };
+type Part = { type: string; image?: unknown; text?: string };
 type Message = {
+  id?: string;
+  metadata?: unknown;
   content: readonly Part[];
   attachments?: readonly { content?: readonly Part[] }[];
 };
@@ -44,8 +48,28 @@ export function mcpImageMappingsEnabled(
   );
 }
 
-/** The message without its tool-only images, which the model never receives. */
+function heardCutOf(message: Message): HeardCut | null {
+  return laterCut(savedHeardCut(message.metadata), message.id ? pendingHeardCut(message.id) : null);
+}
+
+export function withHeardCut<T extends Message>(message: T): T {
+  const cut = heardCutOf(message);
+  return cut ? applyHeardCut(message, cut) : message;
+}
+
+/** Each user turn right after a cut reply opens with the heard note. */
+export function withHeardNotes<T extends Message & { role: string }>(messages: readonly T[]): T[] {
+  return messages.map((message, index) => {
+    const before = messages[index - 1];
+    if (message.role !== "user" || before?.role !== "assistant") return message;
+    const cut = heardCutOf(before);
+    if (!cut) return message;
+    return { ...message, content: [{ type: "text", text: heardNote(before.content, cut) }, ...message.content] };
+  });
+}
+
 export function modelVisibleMessage<T extends Message>(message: T): T {
+  message = withHeardCut(message);
   // The part is flagged too: a reloaded thread can carry the image as message content.
   if (
     !message.attachments?.some(isMcpToolOnly) &&

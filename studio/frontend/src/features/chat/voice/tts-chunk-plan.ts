@@ -22,6 +22,41 @@ export interface TtsChunkPlanInput {
   waitedMs: number;
 }
 
+export const CLAUSE_MIN_CHARS = 20;
+export const CLAUSE_MAX_CHARS = 50;
+// Punctuation only: a cut before a bare "and" breaks the phrase.
+const CLAUSE_BOUNDARY_RE = /[,;:](?=\s)|[—–]|\s-(?=\s)|[.!?]["'”’»)\]]*(?=\s)/g;
+
+export function firstClauseCut(text: string): number | null {
+  for (const match of text.matchAll(CLAUSE_BOUNDARY_RE)) {
+    const at = match.index;
+    if (/^[.!?]/.test(match[0])) return null;
+    if (match[0] === "," && /\d$/.test(text.slice(0, at)) && /^,\s+\d{4}\b/.test(text.slice(at))) continue;
+    const cut = at + match[0].length;
+    if (cut > CLAUSE_MAX_CHARS) return null;
+    if (at >= CLAUSE_MIN_CHARS) return cut;
+  }
+  return null;
+}
+
+// A lone clause loses 350-420 ms of Kokoro's pause; 150 ms sounds natural.
+export const CLAUSE_PAUSE_MS = 150;
+const CLAUSE_END_RE = /(?:[,;:—–]|\s-)$/;
+
+export function pauseAfterChunk(chunk: string): number {
+  return CLAUSE_END_RE.test(chunk.trimEnd()) ? CLAUSE_PAUSE_MS : 0;
+}
+
+const SPOKEN_STOP_RE = /[.!?…:;,—–-]["'”’»)\]]*$/;
+
+export function spokenChunk(sentences: readonly string[]): string {
+  return sentences
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => (SPOKEN_STOP_RE.test(s) ? s : `${s}.`))
+    .join(" ");
+}
+
 /** Sentences to send now, from the head of `pending`; 0 means wait for more. */
 export function planTtsChunk(input: TtsChunkPlanInput): number {
   const { pending, first, final, playing, waitedMs } = input;
