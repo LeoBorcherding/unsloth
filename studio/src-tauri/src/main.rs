@@ -1069,6 +1069,98 @@ fn keep_resizable_across_first_configure(
     Ok(())
 }
 
+// Set once the main window can show through its corners; the page then rounds itself (index.css).
+#[cfg(target_os = "linux")]
+static LINUX_WINDOW_SEE_THROUGH: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "linux")]
+fn linux_corners_rounded(composited: bool, state: gdk::WindowState) -> bool {
+    use gdk::WindowState as S;
+    let edge_bound = S::MAXIMIZED
+        | S::FULLSCREEN
+        | S::TILED
+        | S::TOP_TILED
+        | S::RIGHT_TILED
+        | S::BOTTOM_TILED
+        | S::LEFT_TILED;
+    composited && !state.intersects(edge_bound)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_corners_rounded(window: &gtk::ApplicationWindow) -> bool {
+    use gtk::prelude::*;
+    let composited = GtkWindowExt::screen(window).is_some_and(|s| s.is_composited());
+    let state = window
+        .window()
+        .map_or(gdk::WindowState::empty(), |w| w.state());
+    LINUX_WINDOW_SEE_THROUGH.load(Ordering::Relaxed) && linux_corners_rounded(composited, state)
+}
+
+/// Whether the page should round its corners: only an undecorated Linux window that can show
+/// through them and is not maximized, tiled or fullscreen.
+#[tauri::command]
+fn window_corners_rounded(window: tauri::WebviewWindow) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        window
+            .gtk_window()
+            .is_ok_and(|gtk_window| linux_window_corners_rounded(&gtk_window))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        false
+    }
+}
+
+// The window manager only rounds windows it decorates, so the undecorated main window was square.
+// A 32-bit visual without a compositor paints transparent pixels black, so that case stays opaque.
+#[cfg(target_os = "linux")]
+fn make_linux_window_see_through(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use gtk::cairo::Operator;
+    use gtk::prelude::*;
+
+    let window = app.get_webview_window("main").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "main window not found")
+    })?;
+    let gtk_window = window.gtk_window()?;
+    // The visual only takes effect if set before the window is first realized.
+    if gtk_window.is_realized() {
+        warn!("Main window realized before setup; keeping square corners");
+        return Ok(());
+    }
+    let Some(screen) = GtkWindowExt::screen(&gtk_window) else {
+        return Ok(());
+    };
+    let Some(visual) = screen.rgba_visual().filter(|_| screen.is_composited()) else {
+        return Ok(());
+    };
+    gtk_window.set_visual(Some(&visual));
+    gtk_window.set_app_paintable(true);
+    window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))?;
+    gtk_window.connect_draw(|_, cr| {
+        cr.set_operator(Operator::Source);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        let _ = cr.paint();
+        cr.set_operator(Operator::Over);
+        glib::Propagation::Proceed
+    });
+    LINUX_WINDOW_SEE_THROUGH.store(true, Ordering::Relaxed);
+
+    let notify = window.clone();
+    gtk_window.connect_window_state_event(move |gtk_window, _| {
+        let _ = notify.emit("window-corners", linux_window_corners_rounded(gtk_window));
+        glib::Propagation::Proceed
+    });
+    let notify = window.clone();
+    screen.connect_composited_changed(move |_| {
+        if let Ok(gtk_window) = notify.gtk_window() {
+            let _ = notify.emit("window-corners", linux_window_corners_rounded(&gtk_window));
+        }
+    });
+    Ok(())
+}
+
 // WebKitGTK disables media streams and denies unhandled permission requests by default, which
 // breaks dictation. Allow only user-media requests; every other kind keeps the default deny.
 // It also ships with spell checking off and no dictionary loaded (wry turns neither on), so the
@@ -2633,6 +2725,7 @@ fn main() {
             was_launched_hidden,
             mark_in_app_relaunch,
             gpu_rendering::get_gpu_rendering,
+            window_corners_rounded,
             gpu_rendering::set_gpu_rendering,
             native_vibrancy::set_native_vibrancy,
             relaunch_to_apply_gpu_rendering,
@@ -2709,6 +2802,8 @@ fn main() {
             setup_linux_media_permissions(app)?;
             #[cfg(target_os = "linux")]
             keep_resizable_across_first_configure(app)?;
+            #[cfg(target_os = "linux")]
+            make_linux_window_see_through(app)?;
             #[cfg(all(windows, not(debug_assertions)))]
             setup_windows_browser_guards(app)?;
             #[cfg(target_os = "macos")]
@@ -2787,6 +2882,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_corners_round_only_on_a_composited_free_floating_window() {
+        use gdk::WindowState as S;
+        assert!(linux_corners_rounded(true, S::empty()));
+        assert!(linux_corners_rounded(true, S::FOCUSED | S::STICKY));
+        assert!(!linux_corners_rounded(false, S::empty()));
+        for edge_bound in [
+            S::MAXIMIZED,
+            S::FULLSCREEN,
+            S::TILED,
+            S::TOP_TILED,
+            S::RIGHT_TILED,
+            S::BOTTOM_TILED,
+            S::LEFT_TILED,
+        ] {
+            assert!(!linux_corners_rounded(true, edge_bound | S::FOCUSED));
+        }
+    }
 
     #[cfg(unix)]
     #[test]

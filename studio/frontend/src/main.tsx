@@ -45,6 +45,7 @@ import { isTauri } from "./lib/api-base";
 import { markAppSessionStart } from "./lib/app-session-start";
 import { watchClosingDialogFocus } from "./lib/closing-dialog-focus";
 import { watchDesktopFullscreen } from "./lib/desktop-fullscreen";
+import { watchWindowCorners } from "./lib/desktop-window-corners";
 import { setHubSessionRefresh } from "./lib/hf-endpoint";
 import { watchInputModality } from "./lib/input-modality";
 import { watchMacStrayKeyText } from "./lib/mac-stray-key-text";
@@ -107,6 +108,7 @@ if (isTauri && document.documentElement.classList.contains("render-linux")) {
     },
     () => undefined,
   );
+  watchWindowCorners(document.documentElement).catch(() => undefined);
 }
 
 if (uaLower.includes("windows")) {

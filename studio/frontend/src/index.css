@@ -1932,6 +1932,16 @@ html.tauri.render-linux.webkit-cpu-paint:not([data-glass], [data-glass-clear])
 	border-radius: 0 !important;
 }
 
+/* The Linux shell's window is see-through (lib/desktop-window-corners.ts), so the page rounds its own
+   corners, 8px like Windows 11. The image stops body's fill spreading to the square canvas; clip-path,
+   unlike overflow, also cuts fixed layers and portals. The CPU painter stays square, not clip every repaint. */
+html.tauri.render-linux[data-window-corners="round"]:not(.webkit-cpu-paint) {
+	background-image: linear-gradient(transparent, transparent);
+}
+html.tauri.render-linux[data-window-corners="round"]:not(.webkit-cpu-paint) body {
+	clip-path: inset(0 round 8px);
+}
+
 /* Chat font: only applies while a custom chat font is set. Elements with
    explicit font utilities (headings, code) keep their own families. */
 html[data-chat-font] .aui-root {
