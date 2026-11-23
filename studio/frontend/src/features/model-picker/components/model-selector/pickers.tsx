@@ -95,12 +95,12 @@ import {
   type NpuModel,
   type NpuPickerSource,
   NpuSetupNotice,
+  npuDeleteDescription,
   npuDisplayName,
   npuDownloadLabel,
-  npuMemoryTag,
-  npuResumeLabel,
+  npuRowDetails,
   npuRowsFor,
-  npuSizeLabel,
+  npuRowTooltip,
   useNpuCatalog,
 } from "@/features/npu";
 import {
@@ -179,6 +179,7 @@ import {
 import { audioPickSearch } from "../../../audio/route-search.ts";
 import { useChatPickerInventory } from "../../inventory/use-chat-picker-inventory";
 import { modelConfigTarget } from "../../model-config/model-config-handoff";
+import { isServedByMlx } from "../../model-config/per-model-config";
 import { useHasRememberedRunSettings } from "../../model-config/remembered-run-settings";
 import {
   type CommunityModelPolicy,
@@ -224,6 +225,7 @@ import {
   curatedSizeBytesFor,
   curatedTotalParamsFor,
   groupForRepoId,
+  videoRecommendedTierFor,
 } from "./model-catalog";
 import {
   curatedPickerFit,
@@ -260,6 +262,7 @@ import {
   hfModelFitsDevice,
   isMlxId,
   isCapableCheckpointQuant,
+  localRowIsMlx,
   isMobileVariant,
   isRecommendableFormat,
   loadScopedGpu,
@@ -601,7 +604,7 @@ export function ListLabel({
           tabIndex={-1}
           onClick={onToggle}
           aria-expanded={!collapsed}
-          className="flex cursor-pointer select-none items-center gap-1.5 text-ui-10 font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          className="flex cursor-pointer select-none items-center gap-1.5 text-ui-10 font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground max-md:flex-1 max-md:self-stretch"
         >
           {icon}
           {children}
@@ -613,14 +616,14 @@ export function ListLabel({
         </span>
       )}
       {(action || onToggle) && (
-        <div className="flex items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-0.5">
           {action}
           {onToggle && (
             <button
               type="button"
               onClick={onToggle}
               aria-label={collapsed ? "Expand section" : "Collapse section"}
-              className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+              className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground max-md:-my-1.5 max-md:p-2.5"
             >
               {collapsed ? (
                 <HugeiconsIcon icon={ChevronRightStandardIcon} className="size-3" />
@@ -1152,7 +1155,7 @@ const ROW_ACTIONS_PINNED_CLASS = cn(ROW_ACTIONS_CLASS, "opacity-100");
 
 // Same box as ModelLoadSettingsAction, so heading and row buttons align.
 const HEADING_ACTION_CLASS =
-  "flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/80 transition hover:bg-[rgb(0_0_0_/_calc(0.05*var(--contrast-wash-gain,1)))] hover:text-foreground dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))]";
+  "flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/80 transition hover:bg-[rgb(0_0_0_/_calc(0.05*var(--contrast-wash-gain,1)))] hover:text-foreground dark:hover:bg-[rgb(255_255_255_/_calc(0.1*var(--contrast-wash-gain,1)))] max-md:-my-1.5 max-md:size-8";
 
 function ConnectedGroupHeading({
   icon,
@@ -2281,7 +2284,7 @@ const DownloadedGgufDeviceRow = memo(function DownloadedGgufDeviceRow({
         ) : (
           // No chevron until the probe rules out a sole quant. The gutter is a mouse target (the row
           // has the keyboard); pr-2.5 is the heading chevron's column.
-          <span className={cn(ROW_ACTIONS_PINNED_CLASS, "h-6")}>
+          <span className={cn(ROW_ACTIONS_PINNED_CLASS, "h-6 max-md:h-auto max-md:self-stretch")}>
             {soleQuantPending ? null : (
               <button
                 type="button"
@@ -3605,6 +3608,11 @@ const FORMAT_FILTER_LABELS: Record<FormatFilter, string> = {
   npu: "NPU",
 };
 
+const VLLM_CHECKPOINT_QUANTS: ReadonlySet<string> = new Set([
+  "compressed-tensors",
+  "fbgemm_fp8",
+]);
+
 const FORMAT_FILTER_DOTS: Partial<Record<FormatFilter, string>> = {
   gguf: "bg-format-gguf",
   mlx: "bg-format-mlx",
@@ -3754,7 +3762,7 @@ function cachedRepoHasMlxTag(c: CachedModelRepo): boolean {
 
 /** MLX runs on Mac only, so callers gate visibility on the host. */
 function localModelIsMlx(m: LocalModelInfo): boolean {
-  return isMlxId(m.id) || isMlxId(m.display_name) || isMlxId(m.model_id ?? "");
+  return localRowIsMlx(m);
 }
 
 function localModelMatchesFormat(
@@ -3765,6 +3773,7 @@ function localModelMatchesFormat(
     m.model_id ?? m.display_name ?? m.id,
     localModelIsGguf(m),
     filter,
+    localModelIsMlx(m),
   );
 }
 
@@ -4467,6 +4476,12 @@ export function HubModelPicker({
   );
 
   const chatOnly = usePlatformStore((s) => s.isChatOnly());
+  const chatOnlyMeasured = usePlatformStore(
+    (s) => s.isChatOnly() && !s.capabilitiesUnknown(),
+  );
+  const servesMlx = usePlatformStore((s) =>
+    isServedByMlx(false, s.deviceType, s.chatOnlyReason, s.mlxInference),
+  );
   const deviceType = usePlatformStore((s) => s.deviceType);
   const isMac = deviceType === "mac";
   const hostClass = useHostClass();
@@ -4498,9 +4513,9 @@ export function HubModelPicker({
   const chatSupportedCheckpointQuant = useCallback(
     (r: HfModelResult) =>
       isChatSupported(r) ||
-      // Only compressed-tensors: the vLLM engine loads it; fbgemm / fine-grained FP8 stay refused.
+      // Only vLLM loads these; plain fp8 passes on Default.
       (runsCheckpointQuant(r) &&
-        r.quantMethod?.toLowerCase() === "compressed-tensors" &&
+        VLLM_CHECKPOINT_QUANTS.has(r.quantMethod?.toLowerCase() ?? "") &&
         isChatSupported({ ...r, quantMethod: undefined })),
     [isChatSupported, runsCheckpointQuant],
   );
@@ -4644,7 +4659,7 @@ export function HubModelPicker({
       // Downloaded weights keep their row.
       if (downloadedSet.has(id.toLowerCase())) return true;
       const hit = artifactForRepoId(id, catalog);
-      return hit ? curatedArtifactIsOfferable(hit.artifact.repoId, hostClass) : true;
+      return hit ? curatedArtifactIsOfferable(hit.artifact.repoId, hostClass, hit.group) : true;
     },
     [catalog, downloadedSet, hostClass],
   );
@@ -4786,6 +4801,7 @@ export function HubModelPicker({
       pinnedTogether: catalog
         ?.filter((g) => g.pinToTop && g.pinRowsTogether)
         .map((g) => g.canonicalId.toLowerCase()),
+      tierOf: videoRecommendedTierFor(catalog, hostClass, denseQuantSchemes),
     });
     if (!communityRecommendedEnabled) return unslothRows;
     // Community rows append below everything unsloth publishes, with the same gates.
@@ -4827,6 +4843,8 @@ export function HubModelPicker({
     isLoadableCommunityRepo,
     runsCheckpointQuant,
     chatSupportedCheckpointQuant,
+    hostClass,
+    denseQuantSchemes,
   ]);
 
   const moreById = useMemo(
@@ -5389,7 +5407,7 @@ export function HubModelPicker({
             (!chatOnly ||
               Boolean(task) ||
               localModelIsGguf(m) ||
-              (isMac && localModelIsMlx(m))) &&
+              servesMlx) &&
             localModelMatchesFormat(m, formatFilter) &&
             matchesLocalQuery(m) &&
             (!rowFilter ||
@@ -5412,6 +5430,7 @@ export function HubModelPicker({
       loadTimes,
       localQuery,
       chatOnly,
+      servesMlx,
       task,
       catalog,
       activeCatalogArtifactIds,
@@ -5620,7 +5639,12 @@ export function HubModelPicker({
   }, [sortedCachedModels, showHfSection, debouncedQuery, formatFilter]);
 
   // Empty-state logic must use this or the picker can go blank.
-  const visibleCachedModelRows = chatOnly && !task ? [] : visibleCachedModels;
+  const visibleCachedModelRows =
+    chatOnly && !task
+      ? servesMlx
+        ? visibleCachedModels
+        : []
+      : visibleCachedModels;
 
   const visibleAdditionalOnDeviceModels = useMemo(() => {
     const alreadyListed = new Set(
@@ -6203,7 +6227,12 @@ export function HubModelPicker({
         .filter(
           (id) =>
             !chatOnly ||
-            isRecommendableFormat(id, isKnownGgufRepo(id), isMac) ||
+            // Task pickers keep the Mac rule (Whisper runs without MLX); an unmeasured Chat only guess narrows nothing.
+            isRecommendableFormat(
+              id,
+              isKnownGgufRepo(id),
+              isMac && (Boolean(task) || !chatOnlyMeasured || servesMlx),
+            ) ||
             runsCheckpointQuant({ id }),
         )
         .filter(
@@ -6230,6 +6259,9 @@ export function HubModelPicker({
       cachedIdFor,
       searchRowFits,
       isMac,
+      chatOnlyMeasured,
+      servesMlx,
+      task,
       curatedOfferable,
       rowFilter,
       runsCheckpointQuant,
@@ -7696,12 +7728,8 @@ export function HubModelPicker({
     const reconnecting = model.id in npuCatalog.reconnecting;
     const name = npuDisplayName(model);
     const phase = npuCatalog.phases[model.id];
-    const details = [
-      "NPU",
-      npuSizeLabel(model.size_gb),
-      npuMemoryTag(model),
-      npuResumeLabel(model),
-    ].filter(Boolean);
+    const details = npuRowDetails(model);
+    const problem = model.local?.problem ?? null;
     const meta = {
       source: "local",
       isLora: false,
@@ -7711,6 +7739,7 @@ export function HubModelPicker({
     const row = (
       <ModelRow
         label={name}
+        tooltipText={npuRowTooltip(model) ?? undefined}
         meta={
           downloading
             ? `NPU · ${npuDownloadLabel(progress, reconnecting, phase)}`
@@ -7730,6 +7759,12 @@ export function HubModelPicker({
         optionProps={hubModelList.getOptionProps(optionKey, isSelected)}
         onClick={() => {
           if (downloading) return;
+          if (problem) {
+            toast.error("Can't load this model on the NPU", {
+              description: problem,
+            });
+            return;
+          }
           if (model.downloaded) {
             npuCatalog.warnMemory(model);
             pick();
@@ -7755,7 +7790,7 @@ export function HubModelPicker({
       isVision: model.supports_vision,
     };
     const settings =
-      onConfigure && model.downloaded && !downloading ? (
+      onConfigure && model.downloaded && !downloading && !problem ? (
         <ModelLoadSettingsAction
           ariaLabel={`Inference settings for ${name}`}
           onConfigure={() => onConfigure(model.model_path, configMeta)}
@@ -7775,7 +7810,7 @@ export function HubModelPicker({
             <ModelDeleteAction
               ariaLabel={`Delete ${name}`}
               title={`Delete ${name}?`}
-              description="This removes the model's NPU files from this device."
+              description={npuDeleteDescription(model)}
               successMessage={`Deleted ${name}`}
               disabled={isLoaded}
               onConfirm={() => npuCatalog.remove(model)}
@@ -8245,7 +8280,7 @@ export function HubModelPicker({
                           }
                           title={fineTunedCollapsed ? "Expand" : "Collapse"}
                           onClick={() => setFineTunedCollapsed((v) => !v)}
-                          className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+                          className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground max-md:-my-1.5 max-md:p-2.5"
                         >
                           {fineTunedCollapsed ? (
                             <HugeiconsIcon icon={ChevronRightStandardIcon} className="size-3" />
@@ -8342,7 +8377,7 @@ export function HubModelPicker({
                           }
                           title={customFoldersCollapsed ? "Expand" : "Collapse"}
                           onClick={() => setCustomFoldersCollapsed((v) => !v)}
-                          className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground"
+                          className="-mr-0.5 shrink-0 rounded p-1 text-muted-foreground/80 transition-colors hover:text-foreground max-md:-my-1.5 max-md:p-2.5"
                         >
                           {customFoldersCollapsed ? (
                             <HugeiconsIcon icon={ChevronRightStandardIcon} className="size-3" />
@@ -8506,9 +8541,10 @@ export function HubModelPicker({
                         renderLocalDeviceRow(
                           m,
                           "custom-folder",
-                          // An Ollama manifest names one blob, so it loads directly.
+                          // An Ollama GGUF manifest names one blob, so it loads directly.
                           m.path.toLowerCase().endsWith(".gguf") ||
-                            m.source === "ollama",
+                            (m.source === "ollama" &&
+                              m.model_format !== "safetensors"),
                         ),
                       )}
                     {!customFoldersCollapsed &&

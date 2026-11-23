@@ -81,17 +81,68 @@ def test_resolve_tasks_missing_files(tmp_path):
             evalmod.resolve_tasks(str(tmp_path / missing), "q", "a", tmp_path)
 
 
+def _read_dataset_task(path):
+    # Read the generated YAML without importing its !function target.
+    return yaml.load(path.read_text(), Loader = yaml.BaseLoader)
+
+
+def _indexed_task_name(path):
+    # lm-eval names a task by the group:/task: key inside the file, never by its file name.
+    cfg = _read_dataset_task(path)
+    return cfg.get("group") or cfg["task"]
+
+
+def _staged_custom_task(custom_dir):
+    (staged,) = Path(custom_dir).glob("*.yaml")
+    return staged
+
+
 def test_dataset_task_yaml(tmp_path):
     data = tmp_path / "qa.jsonl"
     data.write_text('{"question": "1+1?", "answer": "2"}\n')
     names, includes = evalmod.resolve_tasks(str(data), "question", "answer", tmp_path / "tmp")
     assert names == ["qa"]
-    spec = yaml.safe_load(Path(includes[0], "qa.yaml").read_text())
+    spec = _read_dataset_task(Path(includes[0], "qa.yaml"))
     assert spec["dataset_path"] == "json"
     assert spec["dataset_kwargs"] == {"data_files": str(data.resolve())}
     assert spec["doc_to_text"] == "{{question}}"
     assert spec["fewshot_split"] == "train"
     assert spec["metric_list"][0]["metric"] == "exact_match"
+
+
+@pytest.mark.parametrize(
+    "answer, predictions, scores",
+    [
+        ('["red", "blue"]', ('["red", "blue"]', "red"), (1.0, 0.0)),
+        ("red", ("red", "blue"), (1.0, 0.0)),
+        (2, ("2", "3"), (1.0, 0.0)),
+        (["red", "blue"], ("red", "green"), (1.0, 0.0)),
+    ],
+)
+def test_local_dataset_scores_literal_answers_and_formats_fewshot(
+    tmp_path, answer, predictions, scores
+):
+    tasks = pytest.importorskip("lm_eval.tasks")
+    data = tmp_path / "qa.jsonl"
+    other = ["green"] if isinstance(answer, list) else answer
+    rows = [{"question": "First?", "answer": answer}, {"question": "Second?", "answer": other}]
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding = "utf-8")
+
+    names, includes = evalmod.resolve_tasks(str(data), "question", "answer", tmp_path / "tasks")
+    manager = tasks.TaskManager(include_defaults = False, include_path = includes)
+    task = manager.load_task_or_group(names)["qa"]
+    first, second = task.test_docs()
+
+    assert (
+        tuple(
+            task.process_results(first, [prediction])["exact_match"] for prediction in predictions
+        )
+        == scores
+    )
+
+    task.set_fewshot_seed(0)
+    display_answer = answer[0] if isinstance(answer, list) else str(answer)
+    assert task.fewshot_context(second, num_fewshot = 1) == f"First? {display_answer}\n\nSecond?"
 
 
 def test_dataset_task_stays_clear_of_names_requested_alongside(tmp_path):
@@ -120,10 +171,10 @@ def test_dataset_task_avoids_explicit_yaml_name(tmp_path, suffix, dataset_first)
     generated = (tmp_path / "tmp" / "generated").resolve()
     custom = (tmp_path / "tmp" / "custom").resolve()
     assert includes == list(map(str, [generated, custom] if dataset_first else [custom, generated]))
-    spec = yaml.safe_load((generated / "qa_2.yaml").read_text())
+    spec = _read_dataset_task(generated / "qa_2.yaml")
     assert spec["task"] == "qa_2"
     assert spec["dataset_kwargs"] == {"data_files": str(data.resolve())}
-    assert yaml.safe_load((custom / "qa.yaml").read_text())["task"] == "qa"
+    assert yaml.safe_load(_staged_custom_task(custom).read_text())["task"] == "qa"
 
 
 @pytest.mark.parametrize("dataset_first", [True, False])
@@ -142,7 +193,7 @@ def test_dataset_task_avoids_explicit_group_name(tmp_path, dataset_first):
             [generated, tmp_path.resolve()] if dataset_first else [tmp_path.resolve(), generated],
         )
     )
-    spec = yaml.safe_load((generated / "suite_2.yaml").read_text())
+    spec = _read_dataset_task(generated / "suite_2.yaml")
     assert spec["task"] == "suite_2"
     assert spec["dataset_kwargs"] == {"data_files": str(data.resolve())}
 
@@ -161,7 +212,7 @@ def test_dataset_tasks_avoid_explicit_yaml_numeric_suffixes(tmp_path, dataset_fi
         ["qa_3", "qa_4", "qa", "qa_2"] if dataset_first else ["qa", "qa_2", "qa_3", "qa_4"]
     )
     for name, path in zip(["qa_3", "qa_4"], data):
-        spec = yaml.safe_load((tmp_path / "tmp" / "generated" / f"{name}.yaml").read_text())
+        spec = _read_dataset_task(tmp_path / "tmp" / "generated" / f"{name}.yaml")
         assert spec["task"] == name
         assert spec["dataset_kwargs"] == {"data_files": str(path.resolve())}
 
@@ -188,7 +239,9 @@ def test_standalone_yaml_is_copied_alone(tmp_path):
     task.write_text("task: my_task\ndataset_path: json\n")
     names, includes = evalmod.resolve_tasks(str(task), "q", "a", tmp_path / "tmp")
     assert names == ["my_task"]
-    assert sorted(p.name for p in Path(includes[0]).iterdir()) == ["my_task.yaml"]
+    (staged,) = Path(includes[0]).iterdir()
+    assert staged.suffix == ".yaml" and staged.read_text() == task.read_text()
+    assert _indexed_task_name(staged) == "my_task"
 
 
 def test_group_yaml_puts_its_directory_on_the_include_path(tmp_path):
@@ -350,7 +403,7 @@ def env(monkeypatch):
             calls["include_path"] = include_path
             self.all_tasks = ["gsm8k", "mmlu", "mmlu_a", "mmlu_b"]
             for directory in include_path or []:
-                self.all_tasks += [p.stem for p in Path(directory).glob("*.yaml")]
+                self.all_tasks += [_indexed_task_name(p) for p in Path(directory).glob("**/*.yaml")]
 
         def match_tasks(self, patterns):
             import fnmatch
@@ -787,6 +840,209 @@ def test_vllm_backend_keeps_default_lora_rank_and_ignores_4bit(vllm_env, tmp_pat
         "max_lora_rank" not in vllm_env["model_args"] and "tokenizer" not in vllm_env["model_args"]
     )
     assert "16-bit" in result.output
+
+
+def _rank_adapter(tmp_path, **config):
+    adapter = tmp_path / "lora"
+    adapter.mkdir()
+    (adapter / "adapter_config.json").write_text(
+        json.dumps({"base_model_name_or_path": "org/base", **config})
+    )
+    return adapter
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        ({}, None),
+        ({"r": 16}, None),
+        ({"r": 24}, 32),
+        ({"r": 32}, 32),
+        ({"r": 257}, 320),
+        ({"r": 300}, 320),
+        ({"r": 512}, 512),
+    ],
+)
+def test_vllm_backend_rounds_adapter_rank_to_a_supported_value(
+    vllm_env, tmp_path, config, expected
+):
+    result = _run(
+        str(_rank_adapter(tmp_path, **config)),
+        "--tasks",
+        "gsm8k",
+        "--backend",
+        "vllm",
+        "-o",
+        str(tmp_path / "o"),
+    )
+    assert result.exit_code == 0, result.output
+    if expected is None:
+        assert "max_lora_rank" not in vllm_env["model_args"]
+    else:
+        assert vllm_env["model_args"]["max_lora_rank"] == expected
+
+
+@pytest.mark.parametrize(
+    "config, rank",
+    [
+        ({"r": 513}, "513"),
+        ({"r": 1024}, "1024"),
+        ({"r": 16, "rank_pattern": {"down_proj": 640}}, "640"),
+    ],
+)
+def test_vllm_backend_rejects_adapter_rank_above_its_limit(vllm_env, tmp_path, config, rank):
+    result = _run(
+        str(_rank_adapter(tmp_path, **config)),
+        "--tasks",
+        "gsm8k",
+        "--backend",
+        "vllm",
+        "-o",
+        str(tmp_path / "o"),
+    )
+    assert result.exit_code == 2, result.output
+    assert f"rank {rank}" in result.output and "512" in result.output
+    assert "--backend unsloth" in result.output and "--backend hf" in result.output
+    assert "--format merged-16bit" in result.output
+    assert "model" not in vllm_env
+
+
+@pytest.mark.parametrize(
+    "config, ok",
+    [
+        ({"r": 16, "lora_alpha": 32, "rank_pattern": {}, "alpha_pattern": {}}, True),
+        ({"r": 16, "lora_alpha": 32, "rank_pattern": {"v_proj": 16}}, True),
+        (
+            {
+                "r": 16,
+                "lora_alpha": 32,
+                "rank_pattern": {"v_proj": 64},
+                "alpha_pattern": {"v_proj": 128},
+            },
+            True,
+        ),
+        ({"r": 16, "rank_pattern": {"v_proj": 64}}, True),
+        ({"r": 16, "lora_alpha": 32, "rank_pattern": {"v_proj": 64}}, False),
+        ({"r": 16, "lora_alpha": 32, "alpha_pattern": {"q_proj": 64}}, False),
+        ({"r": 16, "lora_alpha": 32, "use_rslora": True, "rank_pattern": {"v_proj": 64}}, False),
+        (
+            {
+                "r": 16,
+                "lora_alpha": 32,
+                "use_rslora": True,
+                "rank_pattern": {"v_proj": 64},
+                "alpha_pattern": {"v_proj": 64},
+            },
+            True,
+        ),
+    ],
+)
+def test_vllm_backend_rejects_per_module_lora_scale(vllm_env, tmp_path, config, ok):
+    # vLLM applies lora_alpha / r to every module, so rank_pattern / alpha_pattern that change a module's scale score wrong
+    result = _run(
+        str(_rank_adapter(tmp_path, **config)),
+        "--tasks",
+        "gsm8k",
+        "--backend",
+        "vllm",
+        "-o",
+        str(tmp_path / "o"),
+    )
+    if ok:
+        assert result.exit_code == 0, result.output
+        assert vllm_env["model"] == "vllm"
+    else:
+        assert result.exit_code == 2, result.output
+        assert "rank_pattern / alpha_pattern" in result.output and "--backend hf" in result.output
+        assert "model" not in vllm_env
+
+
+def _write_lora_header(
+    adapter,
+    modules,
+    rank = 1,
+):
+    # safetensors header only: _adapter_module_names / _adapter_rank never read tensor data
+    header = {
+        f"base_model.model.{m}.lora_{ab}.weight": {
+            "dtype": "F32",
+            "shape": [rank, 8] if ab == "A" else [8, rank],
+            "data_offsets": [0, 4],
+        }
+        for m in modules
+        for ab in "AB"
+    }
+    raw = json.dumps(header).encode()
+    (adapter / "adapter_model.safetensors").write_bytes(
+        len(raw).to_bytes(8, "little") + raw + b"\0" * 4
+    )
+
+
+_ATTN = [f"model.layers.{i}.self_attn.{p}" for i in range(2) for p in ("q_proj", "v_proj")]
+
+
+@pytest.mark.parametrize(
+    "patterns, ok",
+    [
+        # PEFT resolves each pattern against the module name, so different suffix keys hit the same module
+        ({"rank_pattern": {"v_proj": 64}, "alpha_pattern": {"self_attn.v_proj": 128}}, True),
+        (
+            {
+                "rank_pattern": {r"layers\.0\.self_attn\.v_proj": 64},
+                "alpha_pattern": {"v_proj": 128},
+            },
+            False,
+        ),
+        ({"rank_pattern": {"v_proj": 64}, "alpha_pattern": {"mlp.v_proj": 128}}, False),
+        # a pattern no module matches leaves every scale at lora_alpha / r
+        ({"rank_pattern": {"down_proj": 64}}, True),
+    ],
+)
+def test_vllm_backend_resolves_lora_patterns_per_module(vllm_env, tmp_path, patterns, ok):
+    adapter = _rank_adapter(tmp_path, r = 16, lora_alpha = 32, **patterns)
+    _write_lora_header(adapter, _ATTN)
+    result = _run(str(adapter), "--tasks", "gsm8k", "--backend", "vllm", "-o", str(tmp_path / "o"))
+    if ok:
+        assert result.exit_code == 0, result.output
+        assert vllm_env["model"] == "vllm"
+    else:
+        assert result.exit_code == 2, result.output
+        assert "rank_pattern / alpha_pattern" in result.output
+        assert "model" not in vllm_env
+
+
+@pytest.mark.parametrize(
+    "config, header_rank, expected",
+    [
+        # no adapted module matches the pattern: every saved module keeps r
+        ({"target_modules": ["q_proj"], "rank_pattern": {"down_proj": 640}}, 16, None),
+        ({"target_modules": ["q_proj"], "rank_pattern": {"down_proj": 640}}, None, None),
+        # an earlier matching key shadows the higher-rank one, as in PEFT
+        ({"rank_pattern": {"q_proj": 32, "self_attn.q_proj": 640}}, 32, 32),
+        # the saved lora_A rows are what vLLM loads
+        ({"rank_pattern": {"q_proj": 64}}, 64, 64),
+        # a fused-expert A stack has E * r rows (128 experts x r 16): the rank is still r
+        ({"target_modules": ["q_proj"]}, 128 * 16, None),
+        # adapter_model.bin: a regex pattern may match full module names that the short targets do not
+        (
+            {
+                "target_modules": ["q_proj"],
+                "rank_pattern": {r"layers\.\d+\.self_attn\.(q|v)_proj": 64},
+            },
+            None,
+            64,
+        ),
+        # adapter_model.bin: an unescaped dot is a regex wildcard, so "q.proj" matches q_proj as in PEFT
+        ({"target_modules": ["q_proj"], "rank_pattern": {"q.proj": 64}}, None, 64),
+    ],
+)
+def test_vllm_backend_reads_the_saved_lora_rank(vllm_env, tmp_path, config, header_rank, expected):
+    adapter = _rank_adapter(tmp_path, r = 16, **config)
+    if header_rank is not None:
+        _write_lora_header(adapter, [m for m in _ATTN if m.endswith("q_proj")], header_rank)
+    result = _run(str(adapter), "--tasks", "gsm8k", "--backend", "vllm", "-o", str(tmp_path / "o"))
+    assert result.exit_code == 0, result.output
+    assert vllm_env["model_args"].get("max_lora_rank") == expected
 
 
 def test_vllm_backend_refuses_multi_process(vllm_env, monkeypatch):

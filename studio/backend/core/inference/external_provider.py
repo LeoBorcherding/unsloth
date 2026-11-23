@@ -94,7 +94,10 @@ _CATALOG_WINDOW_PROVIDERS = frozenset({"anthropic", "openrouter", "gemini"})
 _SERVED_WINDOW_TTL_S = 60.0
 _SERVED_WINDOW_TIMEOUT_S = 5.0
 _GEMINI_MAX_MODEL_PAGES = 20
-_GEMINI_RESTRICTED_GENERATION = re.compile(r"^gemini-(?:3\.[78]-flash|4-argon)(?:-|$)")
+_GEMINI_RESTRICTED_GENERATION = re.compile(
+    r"^gemini-(?:3\.[78]-flash|(?:[4-9]|\d{2,})(?:\.\d+)?)(?:-|$)"
+)
+_GEMINI_DUMMY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
 _served_windows: dict[tuple[str, str, str, str], tuple[float, Optional[int]]] = {}
 _served_templates: dict[tuple[str, str, str], tuple[float, Optional[str]]] = {}
 _served_versions: dict[tuple[str, str], tuple[float, bool]] = {}
@@ -1631,6 +1634,14 @@ class ExternalProviderClient:
         # same guaranteed 400 on every provider turn.
         self._responses_compaction_rejected = False
 
+    def _stream_timeout_for(self, read_timeout: Optional[float]) -> httpx.Timeout:
+        if read_timeout is None:
+            return self._stream_timeout
+        t = self._stream_timeout
+        return httpx.Timeout(
+            connect = t.connect, read = max(t.read or 0.0, read_timeout), write = t.write, pool = t.pool
+        )
+
     def set_header_context(self, thread_id: Optional[str], model: Optional[str]) -> None:
         """Values for ``{{VAR}}`` in extra headers; set before any request of a chat turn."""
         session = (thread_id or "").strip()
@@ -1759,8 +1770,10 @@ class ExternalProviderClient:
         thread_id: Optional[str] = None,
         compaction_fallback: Optional[CompactionFallback] = None,
         compaction_uncapped: bool = False,
+        read_timeout: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
-        """tool_choice none disables all tools so they cannot bill or leak; top_k and penalties are opt-in."""
+        """tool_choice none disables all tools so they cannot bill or leak; top_k and penalties are opt-in.
+        read_timeout widens the read timeout for a server that is silent while it reads a long prompt."""
         self.set_header_context(thread_id, model)
         tool_choice_disabled = (
             isinstance(tool_choice, str) and tool_choice.strip().lower() == "none"
@@ -1852,6 +1865,7 @@ class ExternalProviderClient:
                 compaction_fallback = compaction_fallback,
                 thread_id = thread_id,
                 compaction_uncapped = compaction_uncapped,
+                read_timeout = read_timeout,
             ):
                 yield line
             return
@@ -1899,14 +1913,20 @@ class ExternalProviderClient:
             if self.provider_type == "vllm"
             else messages,
             "stream": stream,
-            "temperature": temperature,
             "presence_penalty": presence_penalty,
             **_continue_body,
         }
+        # Omitted, not null: some OpenAI-compatible servers reject a null temperature.
+        if temperature is not None:
+            body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
         # Only alongside stream=True: the field is rejected on a non-streaming request.
-        if stream and self.provider_type in _USAGE_STREAM_OPTION_PROVIDERS:
+        if stream and (
+            self.provider_type in _USAGE_STREAM_OPTION_PROVIDERS
+            # A custom server that reports a window is a llama-server or vLLM, which take the option.
+            or (self.provider_type == "custom" and self._known_served_window(model))
+        ):
             body["stream_options"] = {"include_usage": True}
         if max_tokens is not None:
             # Newer OpenAI models reject max_tokens; MiniMax counts thinking against it.
@@ -2065,7 +2085,7 @@ class ExternalProviderClient:
                 url,
                 body,
                 headers = self._chat_headers(thread_id),
-                timeout = self._stream_timeout,
+                timeout = self._stream_timeout_for(read_timeout),
             ) as response:
                 if response.status_code != 200:
                     error_body = await response.aread()
@@ -4532,6 +4552,10 @@ class ExternalProviderClient:
                     if isinstance(sig, str) and sig:
                         fc_part["thoughtSignature"] = sig
                     parts.append(fc_part)
+                # Gemini 3 400s when a step's first functionCall is unsigned; Gemini itself signs only that one.
+                _fc_parts = [p for p in parts if "functionCall" in p]
+                if _fc_parts and not any("thoughtSignature" in p for p in _fc_parts):
+                    _fc_parts[0]["thoughtSignature"] = _GEMINI_DUMMY_THOUGHT_SIGNATURE
             if role == "tool":
                 # Drop follow-up when its tool_call was dropped or replayed natively; else orphan functionResponse.
                 _tc_id_for_skip = msg.get("tool_call_id")
@@ -4937,6 +4961,11 @@ class ExternalProviderClient:
                 if _allowed:
                     _fcc["allowedFunctionNames"] = _allowed
                 body["toolConfig"] = {"functionCallingConfig": _fcc}
+        # Gemini 400s on hosted tools beside functionDeclarations unless this is set; Vertex rejects the field.
+        if function_declarations and any("functionDeclarations" not in t for t in tools_array):
+            from core.inference.providers import is_vertex_host
+            if not is_vertex_host(urlsplit(self.base_url or "").hostname):
+                body.setdefault("toolConfig", {})["includeServerSideToolInvocations"] = True
 
         # JSON mode only on tool-free turns: Gemini 400s on response mime type plus function calling.
         _rf_type = response_format.get("type") if isinstance(response_format, dict) else None
@@ -5645,6 +5674,7 @@ class ExternalProviderClient:
         compaction_fallback: Optional[CompactionFallback] = None,
         thread_id: Optional[str] = None,
         compaction_uncapped: bool = False,
+        read_timeout: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """Responses takes input and instructions, not messages; presence_penalty and top_k are dropped."""
         import json as _json
@@ -6183,7 +6213,7 @@ class ExternalProviderClient:
                     url,
                     json = attempt_body,
                     headers = self._chat_headers(thread_id),
-                    timeout = self._stream_timeout,
+                    timeout = self._stream_timeout_for(read_timeout),
                 ) as response:
                     if response.status_code != 200:
                         error_body = await response.aread()
@@ -7798,6 +7828,11 @@ class ExternalProviderClient:
             del _served_versions[stale]
         _served_versions[key] = (now + _SERVED_WINDOW_TTL_S, full)
         return full
+
+    def _known_served_window(self, model: str) -> Optional[int]:
+        key = (self.provider_type, self.base_url, self._credential_digest(), model)
+        cached = _served_windows.get(key)
+        return cached[1] if cached is not None and cached[0] > time.monotonic() else None
 
     async def served_context_window(self, model: str) -> Optional[int]:
         """cache served windows and missing results for one minute to limit silent-server reads."""

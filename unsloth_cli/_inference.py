@@ -3,6 +3,7 @@
 
 """Model loading and streaming shared by `inference` and `chat`."""
 
+import copy
 import json
 import os
 import re
@@ -188,6 +189,38 @@ def configure_quiet_logging() -> None:
     except ModuleNotFoundError:
         return
     structlog.configure(wrapper_class = structlog.make_filtering_bound_logger(level))
+    use_plain_tracebacks()
+
+
+def use_plain_tracebacks() -> None:
+    """Plain tracebacks: structlog's rich default highlights each frame's source (~2 s per llama_cpp.py frame).
+
+    Only the console renderer's exception formatter changes; levels, columns and colors are kept."""
+    try:
+        import structlog
+    except ModuleNotFoundError:
+        return
+    plain = getattr(structlog.dev, "plain_traceback", None)
+    renderer_cls = getattr(structlog.dev, "ConsoleRenderer", None)
+    if plain is None or renderer_cls is None:
+        return
+    processors = list(structlog.get_config().get("processors") or ())
+    changed = False
+    for index, processor in enumerate(processors):
+        if not isinstance(processor, renderer_cls):
+            continue
+        # A copy, so structlog's builtin default renderer (used again by reset_defaults()) stays as it was.
+        renderer = copy.copy(processor)
+        if isinstance(getattr(renderer_cls, "exception_formatter", None), property):
+            renderer.exception_formatter = plain  # public setter, structlog >= 25.5
+        elif hasattr(renderer, "_exception_formatter"):
+            renderer._exception_formatter = plain
+        else:
+            continue
+        processors[index] = renderer
+        changed = True
+    if changed:
+        structlog.configure(processors = processors)
 
 
 def _parse_nonnegative_int(value: Optional[str]) -> Optional[int]:
@@ -470,10 +503,8 @@ def _image_payload(part) -> Optional[str]:
 
 
 def _local_image_request(messages: list, several: bool):
-    """Studio's local route shape: an image marker where each image stood, plus the payloads in order.
-
-    A model that reads one image per conversation gets only the newest turn's, like the app.
-    """
+    """Studio's local route shape: an image marker where each image stood plus payloads in order; a
+    model that reads one image per conversation gets only the newest turn's image, like the app."""
     owners = []  # (message index, user ordinal, payloads)
     ordinal = 0
     for index, message in enumerate(messages):
@@ -1121,12 +1152,12 @@ class HttpChatBackend:
         trust_remote_code: bool = False,
     ) -> None:
         typer.echo(f"Loading {model} on the Unsloth server", err = True)
-        payload = {
-            "model_path": model,
-            "hf_token": hf_token,
-            "max_seq_length": max_seq_length,
-            "tensor_parallel": tensor_parallel,
-        }
+        status = self._inference_status()
+        payload = {"model_path": model, "hf_token": hf_token}
+        if max_seq_length is not None:
+            payload["max_seq_length"] = max_seq_length
+        if tensor_parallel is not None:
+            payload["tensor_parallel"] = tensor_parallel
         if load_in_4bit is not None:
             payload["load_in_4bit"] = load_in_4bit
         if llama_extra_args:
@@ -1137,10 +1168,20 @@ class HttpChatBackend:
             payload["spec_draft_n_max"] = spec_draft_n_max
         if trust_remote_code:
             payload["trust_remote_code"] = trust_remote_code
-        resident_variant = self._resident_gguf_variant(model)
+        resident = self._serves(model, status)
+        resident_variant = (
+            status.get("gguf_variant")
+            if resident and status.get("is_gguf") and not model.lower().endswith(".gguf")
+            else None
+        )
         if resident_variant:
             payload["gguf_variant"] = resident_variant
         self.gguf_variant = resident_variant
+        if resident:
+            from unsloth_cli.commands.start import _resident_reload_payload
+            payload.update(_resident_reload_payload(status, payload))
+        else:
+            payload["use_saved_settings"] = True
         try:
             # Read the whole body, not just headers: closing early discards the only in-band report of a late load failure.
             loaded = read_json_checking_deferred_error(
@@ -1154,20 +1195,21 @@ class HttpChatBackend:
             raise typer.Exit(code = 1)
         self.supports_images = isinstance(loaded, dict) and bool(loaded.get("is_vision"))
 
-    def _resident_gguf_variant(self, model: str) -> Optional[str]:
-        if model.lower().endswith(".gguf"):
-            return None
+    def _inference_status(self) -> Optional[dict]:
         try:
             with self._request("GET", "/api/inference/status", timeout = 30) as response:
                 status = json.loads(response.read())
         except Exception:
             return None
-        if not isinstance(status, dict) or not status.get("is_gguf"):
-            return None
+        return status if isinstance(status, dict) else None
+
+    def _serves(self, model: str, status: Optional[dict]) -> bool:
+        if not status:
+            return False
         # A local load's active_model is only its basename.
         loaded = status.get("model_identifier") or status.get("active_model")
         if not loaded:
-            return None
+            return False
         loaded = str(loaded)
         if model == status.get("model_identifier"):
             same = True
@@ -1178,7 +1220,7 @@ class HttpChatBackend:
             # The server loads an ownerless id as unsloth/<id> (ModelConfig.from_identifier).
             requested = model if "/" in model else f"unsloth/{model}"
             same = requested.casefold() == loaded.casefold()
-        return status.get("gguf_variant") if same else None
+        return same
 
     def stream(
         self,
@@ -1277,10 +1319,13 @@ class HttpChatBackend:
 
 
 def server_load_opts(ctx, load_opts: dict) -> dict:
-    """Drop an untyped --load-in-4bit so the server can keep a resident model's precision."""
+    """Drop untyped load options so the server keeps a resident model's settings or applies
+    the model's saved ones."""
     opts = dict(load_opts)
-    if ctx.get_parameter_source("load_in_4bit").name != "COMMANDLINE":
-        opts["load_in_4bit"] = None
+    for name in ("load_in_4bit", "max_seq_length", "tensor_parallel"):
+        source = ctx.get_parameter_source(name)
+        if source is None or source.name != "COMMANDLINE":
+            opts[name] = None
     return opts
 
 
@@ -1334,14 +1379,12 @@ def connect_studio_server(
 
     npu_path = npu_model_path(model)
     if npu_path:
-        # `unsloth inference` passes the bare id the picker shows; load it by its model path.
-        model = npu_path
         try:
-            prepare_npu_model(
+            model = prepare_npu_model(
                 lambda method, path, payload, timeout: backend._request(
                     method, path, payload, timeout = timeout
                 ),
-                model,
+                npu_path,
                 lambda line: typer.echo(line, err = True),
             )
         except RuntimeError as exc:

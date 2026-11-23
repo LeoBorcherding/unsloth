@@ -702,6 +702,7 @@ def acquire_for(
     evict_first: bool = False,
     admit: Optional[Callable[[], None]] = None,
     beside: bool = False,
+    spare_chat: bool = False,
 ) -> Any:
     """Make ``owner`` resident, evicting every other resident under the default policy.
 
@@ -719,6 +720,8 @@ def acquire_for(
     and ``evict_first`` makes a chat load with no estimate before launch evict as "off" does.
     ``admit`` runs under the lock before anything is evicted; raising refuses the acquire untouched.
     ``beside`` joins the residents without evicting any: the caller has checked that it fits.
+    ``spare_chat`` (a chat's own tools loading an image or video model) raises ``GpuOwnerBusyError(CHAT)``
+    instead of unloading a chat model; other residents are evicted as usual.
     """
     global _owner, _owner_epoch, _owner_account, _prior_account
     if owner not in _EVICTORS:
@@ -759,11 +762,16 @@ def acquire_for(
                 evict_first = evict_first,
                 acting = acting,
                 evicted = evicted,
+                spare_chat = spare_chat,
             )
             others = []
         if others:
             if not allow_evict:
                 raise GpuOwnerBusyError(others[-1])
+            if spare_chat and CHAT in others:
+                from core.inference.gpu_residency import _claim_holds_anything
+                if _claim_holds_anything(CHAT):
+                    raise GpuOwnerBusyError(CHAT)
             if policy == "always" and owner in _KEPT_UNDER_ALWAYS:
                 kept = [name for name in others if name in _KEPT_UNDER_ALWAYS]
                 slots = [slot for name in kept for slot in resident_slots(name)]

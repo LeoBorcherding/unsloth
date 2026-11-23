@@ -11,6 +11,7 @@ export { isRenderableRenderHtmlToolPart } from "./artifacts/html-fences";
 export {
   browseFolders,
   ChatThreadDeletedError,
+  createBrowseFolder,
   deleteChatAttachment,
   deleteFineTunedModel,
   fetchChatAttachmentBlob,
@@ -663,6 +664,8 @@ export {
   startSttDownload,
   sttEngineFor,
   sttEngineStatusFor,
+  transcribeAudioBlob,
+  type TranscriptSegment,
   unloadSttModel,
   validateSttModel,
   type SttDownloadStatus,

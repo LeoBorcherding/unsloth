@@ -14,10 +14,10 @@
 """DeepSeek-V4.1 text model for training, ported from deepseek-ai's reference (inference/model.py, engram.py);
 citations are model.py:<line> / engram.py:<line>."""
 
-import copy
 import json
 import math
 import os
+from copy import deepcopy
 from functools import lru_cache
 
 import torch
@@ -91,12 +91,70 @@ DSV41_STATS = {
     "o_a_ungrouped": 0,
     "sparse_attn_window": 0,
     "experts_mxfp4_packed": 0,
+    "fast_lora": 0,
 }
 
 
 def _count(key):
     if not torch.compiler.is_compiling():
         DSV41_STATS[key] += 1
+
+
+class _StaticModuleInts:
+    """Keep layer config ints constant while Dynamo traces: as SymInts (allow_unspec_int_on_nn_module), symbolic
+    floor divisions sent Inductor into sympy for an hour."""
+
+    __slots__ = ("_patch",)
+
+    def __enter__(self):
+        self._patch = None
+        config = torch._dynamo.config
+        if not torch.compiler.is_compiling() and getattr(
+            config, "allow_unspec_int_on_nn_module", False
+        ):
+            self._patch = config.patch(allow_unspec_int_on_nn_module = False)
+            self._patch.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        if self._patch is not None:
+            self._patch.__exit__(*exc)
+        return False
+
+
+# Opt-in: Unsloth's fused LoRA kernel (kernels/fast_lora.py LoRA_W) for the plain projections.
+_FAST_LORA = os.environ.get("UNSLOTH_DSV41_FAST_LORA", "0") == "1"
+_LoRA_W = None
+if _FAST_LORA:
+    try:
+        from unsloth.kernels.fast_lora import LoRA_W as _LoRA_W
+        from unsloth.kernels.fast_lora import _apply as _fast_lora_apply
+        from unsloth.kernels.fast_lora import _lora_dropout_and_bias as _fast_lora_extras
+        from unsloth.kernels.fast_lora import get_lora_parameters as _fast_lora_parameters
+        from unsloth.kernels.fast_lora import (
+            _has_activation_fake_quantizer,
+            _has_multiple_active_adapters,
+        )
+    except Exception:
+        _LoRA_W = None
+
+
+def lora_linear(proj, x):
+    """``proj(x)``, via LoRA_W for a plain single-adapter LoRA when UNSLOTH_DSV41_FAST_LORA=1.
+    Not for o_a_proj (grouped LoRA), the compressor, or routed experts."""
+    if not _FAST_LORA or _LoRA_W is None or not hasattr(proj, "lora_A"):
+        return proj(x)
+    # Several active adapters or QAT activation / forward-only fake quantization: PEFT's forward handles them.
+    if _has_multiple_active_adapters(proj) or _has_activation_fake_quantizer(proj):
+        return proj(x)
+    extras = _fast_lora_extras((proj,), x)
+    if extras is None or extras[0] is not None or extras[1][0] is not None:
+        return proj(x)  # PEFT's forward: a variant, dropout, a lora_B bias or a trainable base
+    _count("fast_lora")
+    flat = x.dim() == 2
+    W, W_quant, A, B, S = _fast_lora_parameters(proj)
+    out = _fast_lora_apply(_LoRA_W, x.unsqueeze(0) if flat else x, W, W_quant, A, B, S)
+    return out.squeeze(0) if flat else out
 
 
 def sparse_attn_reference(q, kv, attn_sink, topk_idxs, softmax_scale):
@@ -304,8 +362,7 @@ def ensure_grouped_lora():
 
 
 def ensure_checkpoint_replay():
-    """Install unsloth_zoo's decoder-layer checkpoint replay: a recompute must see the group state it first saw,
-    not state later layers overwrote. Idempotent."""
+    """Idempotent: unsloth_zoo checkpoint replay, so recomputes see the first-seen group state."""
     if getattr(DeepseekV41DecoderLayer.__call__, "_unsloth_patched", False):
         return True
     try:
@@ -390,9 +447,16 @@ class DeepseekV41HyperConnection(nn.Module):
         return pre, post, comb
 
 
-def hc_pre(x, pre_mix):
-    """model.py:959-962: collapse [b, s, hc, d] to [b, s, d] with pre_mix [b, s, hc]."""
+def _hc_pre_upcast(x, pre_mix):
     return torch.sum(pre_mix.unsqueeze(-1) * x.float(), dim = 2).to(x.dtype)
+
+
+def hc_pre(x, pre_mix):
+    """Collapses [b, s, hc, d] to [b, s, d] (model.py:959-962); an FP32 pre_mix keeps autograd from
+    saving an FP32 stream copy (2x bf16); bf16/fp16 to fp32 is exact: grads match bitwise."""
+    if pre_mix.dtype != torch.float32:
+        return _hc_pre_upcast(x, pre_mix)
+    return torch.sum(pre_mix.unsqueeze(-1) * x, dim = 2).to(x.dtype)
 
 
 def hc_post(x, residual, post, comb):
@@ -453,6 +517,26 @@ class DeepseekV41Compressor(nn.Module):
         return self.kv_norm(kv.to(dtype))
 
 
+# Elements of one indexer score chunk [b, rows, heads, t] (fp32): 1 << 26 = 256 MiB, at most 3 live copies.
+_INDEXER_SCORE_BUDGET = 1 << 26
+
+
+def _indexer_q_ranges(q_len, per_row):
+    """Query-row chunks for the indexer score; one chunk under torch.compile (a loop would specialise per length)."""
+    if q_len <= 0 or torch.compiler.is_compiling():
+        return [(0, q_len)]
+    chunk = 0
+    env = os.environ.get("UNSLOTH_DSV41_INDEXER_Q_CHUNK")
+    if env:
+        try:
+            chunk = max(1, int(env))
+        except ValueError:
+            chunk = 0
+    if chunk <= 0:
+        chunk = max(1, _INDEXER_SCORE_BUDGET // max(1, per_row))
+    return [(start, min(start + chunk, q_len)) for start in range(0, q_len, chunk)]
+
+
 def select_candidate_blocks(logits, compress_lens, topk_blocks, block_size):
     """model.py:584-611 verbatim: keep the ``topk_blocks`` best blocks per query (bool mask shaped like logits)."""
     width = logits.size(-1)
@@ -511,22 +595,33 @@ class DeepseekV41Indexer(nn.Module):
         q = self.q_b_proj(qr).unflatten(-1, (self.n_heads, self.head_dim))
         q = apply_rotary(q, cos, sin)
         weights = self.weights_proj(x).float() * (self.softmax_scale * self.n_heads**-0.5)
-        score = torch.einsum("bshd,btd->bsht", q.float(), index_k.float())
-        score = (score.relu() * weights.unsqueeze(-1)).sum(dim = 2)  # [b, s, t]
+        index_k = index_k.float()
         # compressed group j is visible once query i has passed its last token: j < (i + 1) // ratio
         compress_lens = (torch.arange(1, seqlen + 1, device = x.device) // ratio).unsqueeze(-1)
-        score = score.masked_fill(
-            torch.arange(n_comp, device = x.device) >= compress_lens, float("-inf")
-        )
-        if self.is_candidate_source:
-            shared["candidates"] = select_candidate_blocks(
-                score, compress_lens, self.candidate_topk_blocks, self.candidate_block_size
-            )
-        elif self.uses_candidates and shared.get("candidates") is not None:
-            score = score.masked_fill(~shared["candidates"].to(x.device), float("-inf"))
+        visible = torch.arange(n_comp, device = x.device)
+        candidates = shared.get("candidates") if self.uses_candidates else None
         topk = min(self.index_topk, n_comp)
-        idxs = score.topk(topk, dim = -1, sorted = False).indices.sort(dim = -1).values
-        return torch.where(idxs < compress_lens, idxs + offset, -1).to(torch.int32)
+        # Rows are independent: chunk queries so the [b, s, heads, t] fp32 score never materialises whole.
+        out, picked = [], []
+        for start, end in _indexer_q_ranges(seqlen, bsz * self.n_heads * max(1, n_comp)):
+            score = torch.einsum("bshd,btd->bsht", q[:, start:end].float(), index_k)
+            score = (score.relu() * weights[:, start:end].unsqueeze(-1)).sum(dim = 2)  # [b, c, t]
+            lens = compress_lens[start:end]
+            score = score.masked_fill(visible >= lens, float("-inf"))
+            if self.is_candidate_source:
+                picked.append(
+                    select_candidate_blocks(
+                        score, lens, self.candidate_topk_blocks, self.candidate_block_size
+                    )
+                )
+            elif candidates is not None:
+                score = score.masked_fill(~candidates[:, start:end].to(x.device), float("-inf"))
+            idxs = score.topk(topk, dim = -1, sorted = False).indices.sort(dim = -1).values
+            del score
+            out.append(torch.where(idxs < lens, idxs + offset, -1).to(torch.int32))
+        if self.is_candidate_source:
+            shared["candidates"] = picked[0] if len(picked) == 1 else torch.cat(picked, dim = 1)
+        return out[0] if len(out) == 1 else torch.cat(out, dim = 1)
 
 
 class DeepseekV41Attention(nn.Module):
@@ -588,12 +683,12 @@ class DeepseekV41Attention(nn.Module):
         inference = False if torch.compiler.is_compiling() else torch.is_inference_mode_enabled()
         inv_freq = _inv_freq_on(*self._rope_key, positions.device, inference)
         cos, sin = _rope_cos_sin(positions, inv_freq)
-        qr = self.q_a_norm(self.q_a_proj(x))
-        q = self.q_b_proj(qr).unflatten(
+        qr = self.q_a_norm(lora_linear(self.q_a_proj, x))
+        q = lora_linear(self.q_b_proj, qr).unflatten(
             -1, (-1, self.head_dim)
         )  # local heads under tensor parallelism
         q = apply_rotary(q, cos, sin)
-        kv = apply_rotary(self.kv_norm(self.kv_proj(x)), cos, sin)
+        kv = apply_rotary(self.kv_norm(lora_linear(self.kv_proj, x)), cos, sin)
         if _SPARSE_ATTN_WINDOW is not None:
             window_idxs = None
         else:
@@ -641,7 +736,7 @@ class DeepseekV41Attention(nn.Module):
         o = grouped_projection(
             self.o_a_proj, o.reshape(bsz, seqlen, -1, self.o_a_proj.in_features), self.o_lora_rank
         )
-        return self.o_b_proj(o.flatten(2))
+        return lora_linear(self.o_b_proj, o.flatten(2))
 
 
 class DeepseekV41TopKRouter(nn.Module):
@@ -816,12 +911,12 @@ class DeepseekV41MLP(nn.Module):
         self.limit = config.swiglu_limit
 
     def forward(self, x):
-        gate = self.gate_proj(x).float()
-        up = self.up_proj(x).float()
+        gate = lora_linear(self.gate_proj, x).float()
+        up = lora_linear(self.up_proj, x).float()
         if self.limit and self.limit > 0:
             up = up.clamp(min = -self.limit, max = self.limit)
             gate = gate.clamp(max = self.limit)
-        return self.down_proj((F.silu(gate) * up).to(x.dtype))
+        return lora_linear(self.down_proj, (F.silu(gate) * up).to(x.dtype))
 
 
 class DeepseekV41SparseMoeBlock(nn.Module):
@@ -864,8 +959,7 @@ class _TensorTableStore:
         self.nbytes = weight.numel() * weight.element_size()
 
     def resident_on(self, device):
-        """unsloth_zoo asks whether a lookup on ``device`` needs a host round trip: rows held in memory on that
-        device gather there directly."""
+        """True if the weight is on device, so a lookup there needs no host round trip."""
         return self.weight.device == device
 
     def gather(
@@ -1050,6 +1144,7 @@ class DeepseekV41NgramHashState(nn.Module):
         # __init__ may run under a meta device context (from_pretrained).
         self._layout = (primes, offsets)
         self._token_map = None
+        self._host_tables = None
         self.pad_id = None
         self._device_cache = {}
 
@@ -1065,6 +1160,16 @@ class DeepseekV41NgramHashState(nn.Module):
     def bind_token_map(self, token_map):
         self._token_map = torch.as_tensor(token_map, dtype = torch.int64, device = "cpu")
         self.pad_id = int(self._token_map[self.engram_pad_id])
+        # Not in forward: compiled cache disables compute_hash_multipliers, breaking fullgraph.
+        primes, offsets = self._layout
+        self._host_tables = (
+            self._token_map,
+            torch.tensor(primes, dtype = torch.int64, device = "cpu"),
+            torch.tensor(offsets, dtype = torch.int64, device = "cpu"),
+            compute_hash_multipliers(
+                self.layer_ids, self.max_ngram_size, self.compressed_vocab_size
+            ),
+        )
         self._device_cache = {}
 
     @property
@@ -1074,16 +1179,7 @@ class DeepseekV41NgramHashState(nn.Module):
     def _tables(self, device):
         cached = self._device_cache.get(device)
         if cached is None:
-            primes, offsets = self._layout
-            cpu = (
-                self._token_map,
-                torch.tensor(primes, dtype = torch.int64, device = "cpu"),
-                torch.tensor(offsets, dtype = torch.int64, device = "cpu"),
-                compute_hash_multipliers(
-                    self.layer_ids, self.max_ngram_size, self.compressed_vocab_size
-                ),
-            )
-            cached = tuple(t.to(device) for t in cpu)
+            cached = tuple(t.to(device) for t in self._host_tables)
             self._device_cache[device] = cached
         return cached
 
@@ -1251,21 +1347,23 @@ class DeepseekV41DecoderLayer(GradientCheckpointingLayer):
     ):
         if shared is None:
             shared = _SharedState()
-        x = hidden_states
-        if self.engram is not None and engram_rows is not None:
-            x = self.engram(x, engram_rows, engram_mask)
-        residual = x
-        attn_pre, attn_post, attn_comb = self.attn_hc(x)
-        h = self.input_layernorm(hc_pre(x, pre_mix))
-        # keyword: accelerate's offload hooks exempt `shared` (_skip_keys_device_placement)
-        h = self.self_attn(h, positions, shared = shared._d if hasattr(shared, "_d") else shared)
-        x = hc_post(h, residual, attn_post, attn_comb)
-        residual = x
-        ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)
-        h = self.post_attention_layernorm(hc_pre(x, attn_pre))
-        h = self.mlp(h)
-        x = hc_post(h, residual, ffn_post, ffn_comb)
-        return x, ffn_pre
+        # Not a sub-call: recompute under non-reentrant checkpointing re-enters here, outside the model forward.
+        with _StaticModuleInts():
+            x = hidden_states
+            if self.engram is not None and engram_rows is not None:
+                x = self.engram(x, engram_rows, engram_mask)
+            residual = x
+            attn_pre, attn_post, attn_comb = self.attn_hc(x)
+            h = self.input_layernorm(hc_pre(x, pre_mix))
+            # keyword: accelerate's offload hooks exempt `shared` (_skip_keys_device_placement)
+            h = self.self_attn(h, positions, shared = shared._d if hasattr(shared, "_d") else shared)
+            x = hc_post(h, residual, attn_post, attn_comb)
+            residual = x
+            ffn_pre, ffn_post, ffn_comb = self.ffn_hc(x)
+            h = self.post_attention_layernorm(hc_pre(x, attn_pre))
+            h = self.mlp(h)
+            x = hc_post(h, residual, ffn_post, ffn_comb)
+            return x, ffn_pre
 
 
 def _checkpoint_key_names(path, **hub_kwargs):
@@ -1519,6 +1617,30 @@ _LORA_TARGET_MAP = {
 }
 
 
+def _parent_keywords(fn):
+    """Keyword names fn accepts, or None when it takes **kwargs (forward everything)."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind is p.VAR_KEYWORD for p in params):
+        return None
+    return {p.name for p in params if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+
+
+def _released_key_renames():
+    """Released -> module name renames; transformers 5 hides them in the text sub-config, which the zoo merge misses."""
+    from .convert import _RENAMES
+
+    out = {r"^head\.weight": "lm_head.weight"}
+    for source, target in _RENAMES:
+        if "\\" not in target:
+            out.setdefault(source, target)
+    return out
+
+
 # Not defs, so unsloth_zoo's compiler leaves these eager.
 _sequence_segments_outside_trace = torch.compiler.disable(sequence_segments)
 _forward_segments_outside_trace = torch.compiler.disable(_forward_segments_call)
@@ -1529,6 +1651,7 @@ class DeepseekV41PreTrainedModel(PreTrainedModel):
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
     _no_split_modules = ["DeepseekV41DecoderLayer", "DeepseekV41EngramEmbedding"]
+    _unsloth_checkpoint_conversion_mapping = _released_key_renames()
     # accelerate's hooks rebuild dict kwargs; `shared` must stay one object
     _skip_keys_device_placement = ["past_key_values", "shared"]
     _supports_flash_attn = False
@@ -1559,18 +1682,42 @@ class DeepseekV41PreTrainedModel(PreTrainedModel):
     ]
     _keys_to_ignore_on_load_missing = [r"engram_tables\.\d+\.weight_scale_inv$"]
 
-    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs = None):
+    def post_init(self):
+        """transformers 4.x post_init raises for a _keep_in_fp32_modules entry no parameter name contains; a config
+        with no KV source layer (a cut-down / pruned copy) builds no compressor. Drop such entries there (they match
+        nothing anyway); transformers 5 has no such check and keeps the class lists."""
+        from .convert import _transformers_major
+
+        if _transformers_major() < 5:
+            present = {part for name, _ in self.named_parameters() for part in name.split(".")}
+            for attr in ("_keep_in_fp32_modules", "_keep_in_fp32_modules_strict"):
+                keep = getattr(self, attr, None)
+                if keep:
+                    setattr(self, attr, [m for m in keep if m in present])
+        return super().post_init()
+
+    def gradient_checkpointing_enable(
+        self,
+        gradient_checkpointing_kwargs = None,
+        **kwargs,
+    ):
         """The decoder layers share per-forward group state; a checkpointed layer is exact only through unsloth_zoo's
-        replay (a private copy of the state for the recompute). Fail closed without it."""
+        replay (a private copy of the state for the recompute). Fail closed without it.
+
+        Extra keywords (transformers 5.22+ Trainer passes every_n_layers / offload) go to the parent when its
+        signature has them; an older parent without them gets only gradient_checkpointing_kwargs."""
         if not ensure_checkpoint_replay():
             raise RuntimeError(
                 "Unsloth: DeepSeek-V4.1 gradient checkpointing needs unsloth_zoo's decoder-layer replay "
                 "(unsloth_zoo.temporary_patches.deepseek_v41); without it the recomputed layers read overwritten "
                 "group state and the gradients are wrong. Update unsloth_zoo."
             )
-        return super().gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs = gradient_checkpointing_kwargs
-        )
+        parent = super().gradient_checkpointing_enable
+        if kwargs:
+            accepted = _parent_keywords(parent)
+            if accepted is not None:
+                kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+        return parent(gradient_checkpointing_kwargs = gradient_checkpointing_kwargs, **kwargs)
 
     def save_pretrained(self, *args, **kwargs):
         _ENGRAM_FULL_SAVE[0] += 1
@@ -1623,7 +1770,7 @@ class DeepseekV41PreTrainedModel(PreTrainedModel):
         if kwargs.get("config") is not None and not isinstance(
             kwargs["config"], (str, os.PathLike)
         ):
-            kwargs["config"] = copy.deepcopy(kwargs["config"])
+            kwargs["config"] = deepcopy(kwargs["config"])
         if released and not released_needs_conversion():
             from . import _register_conversions
             if not _register_conversions():
@@ -1868,47 +2015,48 @@ class DeepseekV41TextModel(DeepseekV41PreTrainedModel):
         return_dict = None,
         **kwargs,
     ):
-        if inputs_embeds is None:
-            if input_ids is None:
-                raise ValueError(
-                    "Unsloth: DeepSeek-V4.1 needs input_ids (engram hashing reads the token ids)."
+        with _StaticModuleInts():
+            if inputs_embeds is None:
+                if input_ids is None:
+                    raise ValueError(
+                        "Unsloth: DeepSeek-V4.1 needs input_ids (engram hashing reads the token ids)."
+                    )
+                inputs_embeds = self.embed_tokens(input_ids)
+            bsz, seqlen = inputs_embeds.shape[:2]
+            # Relayout runs outside the traced graph even under compile, else sequences attend across each other.
+            segments = _sequence_segments_outside_trace(position_ids, attention_mask, bsz, seqlen)
+            if segments is not None:
+                return _forward_segments_outside_trace(
+                    self, segments, input_ids, inputs_embeds, output_hidden_states, **kwargs
                 )
-            inputs_embeds = self.embed_tokens(input_ids)
-        bsz, seqlen = inputs_embeds.shape[:2]
-        # Relayout runs outside the traced graph even under compile, else sequences attend across each other.
-        segments = _sequence_segments_outside_trace(position_ids, attention_mask, bsz, seqlen)
-        if segments is not None:
-            return _forward_segments_outside_trace(
-                self, segments, input_ids, inputs_embeds, output_hidden_states, **kwargs
+            positions = torch.arange(seqlen, device = inputs_embeds.device)
+            # right padding only here: pads never reach a real token's hash / gate
+            token_mask = (
+                attention_mask.bool()
+                if attention_mask is not None and attention_mask.dim() == 2
+                else None
             )
-        positions = torch.arange(seqlen, device = inputs_embeds.device)
-        # right padding only here: pads never reach a real token's hash / gate
-        token_mask = (
-            attention_mask.bool()
-            if attention_mask is not None and attention_mask.dim() == 2
-            else None
-        )
-        engram_rows = self.engram_rows(input_ids, token_mask, kwargs.get("engram_left_context"))
-        h, pre_mix = self.stream_from_embeddings(inputs_embeds)
-        shared = _SharedState()
-        all_hidden = () if output_hidden_states else None
-        for layer in self.layers:
+            engram_rows = self.engram_rows(input_ids, token_mask, kwargs.get("engram_left_context"))
+            h, pre_mix = self.stream_from_embeddings(inputs_embeds)
+            shared = _SharedState()
+            all_hidden = () if output_hidden_states else None
+            for layer in self.layers:
+                if output_hidden_states:
+                    all_hidden = all_hidden + (hc_pre(h, pre_mix),)
+                h, pre_mix = layer(
+                    h,
+                    pre_mix,
+                    positions = positions,
+                    shared = shared,
+                    engram_rows = engram_rows.get(layer.layer_idx),
+                    engram_mask = token_mask,
+                )
+            h = self.norm(hc_pre(h, pre_mix))
             if output_hidden_states:
-                all_hidden = all_hidden + (hc_pre(h, pre_mix),)
-            h, pre_mix = layer(
-                h,
-                pre_mix,
-                positions = positions,
-                shared = shared,
-                engram_rows = engram_rows.get(layer.layer_idx),
-                engram_mask = token_mask,
+                all_hidden = all_hidden + (h,)
+            return BaseModelOutputWithPast(
+                last_hidden_state = h, past_key_values = None, hidden_states = all_hidden
             )
-        h = self.norm(hc_pre(h, pre_mix))
-        if output_hidden_states:
-            all_hidden = all_hidden + (h,)
-        return BaseModelOutputWithPast(
-            last_hidden_state = h, past_key_values = None, hidden_states = all_hidden
-        )
 
     def engram_rows(
         self,
@@ -2096,17 +2244,16 @@ class DeepseekV41ForCausalLM(DeepseekV41PreTrainedModel, GenerationMixin):
             engram_left_context = kwargs.pop("engram_left_context", None),
         )
         hidden = out.last_hidden_state
-        keep_all = isinstance(logits_to_keep, int) and logits_to_keep <= 0
-        if labels is not None and not keep_all:
-            return self._loss_on_kept_positions(
-                hidden, labels, logits_to_keep, out.hidden_states, **kwargs
-            )
         sl = (
             slice(-logits_to_keep, None)
             if isinstance(logits_to_keep, int) and logits_to_keep > 0
             else slice(None)
         )
-        if not isinstance(logits_to_keep, int):
+        if labels is not None and not (isinstance(logits_to_keep, int) and logits_to_keep <= 0):
+            # Shift labels over the whole sequence, then pick kept positions; one lm_head / loss pair keeps fused CE.
+            hidden, kwargs["shift_labels"] = self._kept_positions(hidden, labels, logits_to_keep)
+            sl = slice(None)
+        elif not isinstance(logits_to_keep, int):
             hidden = _keep_positions(hidden, logits_to_keep)
         logits = self.lm_head(hidden[:, sl, :])
         loss = None
@@ -2118,39 +2265,14 @@ class DeepseekV41ForCausalLM(DeepseekV41PreTrainedModel, GenerationMixin):
             loss = loss, logits = logits, past_key_values = None, hidden_states = out.hidden_states
         )
 
-    def _loss_on_kept_positions(
-        self,
-        hidden,
-        labels,
-        logits_to_keep,
-        hidden_states = None,
-        **kwargs,
-    ):
-        """labels with logits_to_keep: the logits of the kept positions against their own next-token targets
-        (labels shifted once over the whole sequence, then the same positions picked)."""
-        from transformers.loss.loss_utils import ForCausalLMLoss
-
+    @staticmethod
+    def _kept_positions(hidden, labels, logits_to_keep):
+        """(hidden at the kept positions, their next-token targets)."""
         shift_labels = F.pad(labels, (0, 1), value = -100)[..., 1:]
         if isinstance(logits_to_keep, int):
-            kept_hidden, kept_targets = (
-                hidden[:, -logits_to_keep:],
-                shift_labels[:, -logits_to_keep:],
-            )
-        else:
-            kept_hidden = _keep_positions(hidden, logits_to_keep)
-            kept_targets = _keep_positions(shift_labels.unsqueeze(-1), logits_to_keep).squeeze(-1)
-        logits = self.lm_head(kept_hidden)
-        kwargs.pop("shift_labels", None)
-        loss = ForCausalLMLoss(
-            logits,
-            None,
-            vocab_size = self.vocab_size,
-            shift_labels = kept_targets.contiguous(),
-            **kwargs,
-        )
-        return CausalLMOutputWithPast(
-            loss = loss, logits = logits, past_key_values = None, hidden_states = hidden_states
-        )
+            return hidden[:, -logits_to_keep:], shift_labels[:, -logits_to_keep:].contiguous()
+        kept = _keep_positions(shift_labels.unsqueeze(-1), logits_to_keep).squeeze(-1)
+        return _keep_positions(hidden, logits_to_keep), kept.contiguous()
 
     # No KV cache (sanity evaluation only); project only the last position's logits.
     def prepare_inputs_for_generation(

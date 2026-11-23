@@ -9,6 +9,7 @@ attention (or raises on the long variant)."""
 from __future__ import annotations
 
 import contextlib
+import inspect
 
 import pytest
 import torch
@@ -73,6 +74,7 @@ def _fake_card(monkeypatch, long_fails = False):
         v,
         config,
         scale = None,
+        mode = I.MODE_MAIN,
     ):
         chosen = I.select_config(config, int(k.shape[1]))
         calls.append((int(k.shape[1]), chosen))
@@ -89,14 +91,27 @@ def _fake_card(monkeypatch, long_fails = False):
         q, k, v = p["qkv"]
         return I.reference_attention(q, k, v).to(v.dtype)
 
+    def cuda_attention(
+        q,
+        k,
+        v,
+        config,
+        scale,
+        index,
+        mode = I.MODE_MAIN,
+    ):
+        # the eager hot path launches through _cuda_attention (one pass of the same two steps)
+        return I.attend(I.quantise(q, k, v, config, scale, mode))
+
+    # Stand-ins take the real signatures so a new argument fails by name, not as a TypeError.
+    for name, fake in (("quantise", quantise), ("_cuda_attention", cuda_attention)):
+        real = list(inspect.signature(getattr(I, name)).parameters)
+        assert (
+            list(inspect.signature(fake).parameters) == real
+        ), f"update the fake {name}: it takes {real}"
     monkeypatch.setattr(I, "quantise", quantise)
     monkeypatch.setattr(I, "attend", attend)
-    # the eager hot path launches through _cuda_attention (one pass of the same two steps)
-    monkeypatch.setattr(
-        I,
-        "_cuda_attention",
-        lambda q, k, v, config, scale, index: I.attend(I.quantise(q, k, v, config, scale)),
-    )
+    monkeypatch.setattr(I, "_cuda_attention", cuda_attention)
     return calls, state
 
 

@@ -6,6 +6,7 @@ import { authFetch } from "@/features/auth/api";
 import { formatFastApiDetail } from "@/lib/format-fastapi-error";
 import type { ModelCatalogSnapshotEntry } from "../model-catalog-snapshot";
 import type { CustomReasoningConfig } from "../custom-reasoning";
+import type { ProviderCompactionMode } from "../utils/auto-compaction";
 
 
 export type ProviderAuthKind = "api_key" | "chatgpt_oauth";
@@ -56,6 +57,9 @@ export interface ProviderConfig {
   available_models?: string[];
   max_output_tokens?: number | null;
   auto_compact_tokens?: number | null;
+  auto_compact_percent?: number | null;
+  auto_compact_percent_by_model?: Record<string, number>;
+  compaction_mode?: ProviderCompactionMode | null;
   reasoning_config?: CustomReasoningConfig | null;
   extra_headers?: Record<string, string>;
   shared?: boolean;
@@ -248,6 +252,9 @@ export async function createProviderConfig(payload: {
   availableModels?: string[];
   maxOutputTokens?: number | null;
   autoCompactTokens?: number | null;
+  autoCompactPercent?: number | null;
+  autoCompactPercentByModel?: Record<string, number>;
+  compactionMode?: ProviderCompactionMode | null;
   reasoningConfig?: CustomReasoningConfig | null;
   extraHeaders?: Record<string, string>;
   shared?: boolean;
@@ -270,6 +277,15 @@ export async function createProviderConfig(payload: {
         ...(payload.autoCompactTokens === undefined
           ? {}
           : { auto_compact_tokens: payload.autoCompactTokens }),
+        ...(payload.autoCompactPercent === undefined
+          ? {}
+          : { auto_compact_percent: payload.autoCompactPercent }),
+        ...(payload.autoCompactPercentByModel === undefined
+          ? {}
+          : { auto_compact_percent_by_model: payload.autoCompactPercentByModel }),
+        ...(payload.compactionMode === undefined
+          ? {}
+          : { compaction_mode: payload.compactionMode }),
         ...(payload.reasoningConfig === undefined
           ? {}
           : { reasoning_config: payload.reasoningConfig }),
@@ -309,6 +325,9 @@ export async function updateProviderConfig(
     availableModels?: string[];
     maxOutputTokens?: number | null;
     autoCompactTokens?: number | null;
+    autoCompactPercent?: number | null;
+    autoCompactPercentByModel?: Record<string, number>;
+    compactionMode?: ProviderCompactionMode | null;
     reasoningConfig?: CustomReasoningConfig | null;
     extraHeaders?: Record<string, string>;
     shared?: boolean;
@@ -335,6 +354,15 @@ export async function updateProviderConfig(
         ...(payload.autoCompactTokens === undefined
           ? {}
           : { auto_compact_tokens: payload.autoCompactTokens }),
+        ...(payload.autoCompactPercent === undefined
+          ? {}
+          : { auto_compact_percent: payload.autoCompactPercent }),
+        ...(payload.autoCompactPercentByModel === undefined
+          ? {}
+          : { auto_compact_percent_by_model: payload.autoCompactPercentByModel }),
+        ...(payload.compactionMode === undefined
+          ? {}
+          : { compaction_mode: payload.compactionMode }),
         ...(payload.reasoningConfig === undefined
           ? {}
           : { reasoning_config: payload.reasoningConfig }),
