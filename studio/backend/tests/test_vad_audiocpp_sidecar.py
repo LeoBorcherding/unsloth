@@ -4,7 +4,6 @@
 from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from core.inference import audio_cpp_clip_sidecar as clip
 from core.inference import audio_cpp_models as acm
