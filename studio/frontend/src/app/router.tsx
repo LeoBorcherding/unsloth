@@ -5,8 +5,10 @@ import { Link, createRouter, useRouterState } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { MascotImg } from "@/components/mascot-img";
 import { useT } from "@/i18n";
+import { parseSearch, stringifySearch } from "./router-search";
 import { Route as rootRoute } from "./routes/__root";
 import { Route as apiMonitorRoute } from "./routes/api";
+import { Route as benchmarksRoute } from "./routes/benchmarks";
 import { Route as dataRecipesRoute } from "./routes/data-recipes";
 import { Route as dataRecipeRoute } from "./routes/data-recipes.$recipeId";
 import { Route as chatRoute } from "./routes/chat";
@@ -20,6 +22,7 @@ import { Route as hubRoute } from "./routes/hub";
 import { Route as projectsRoute } from "./routes/projects";
 import { Route as libraryRoute } from "./routes/library";
 import { Route as tasksRoute } from "./routes/tasks";
+import { Route as translateRoute } from "./routes/translate";
 import { Route as changePasswordRoute } from "./routes/change-password";
 import { Route as settingsRoute } from "./routes/settings";
 import { Route as studioRoute } from "./routes/studio";
@@ -35,6 +38,7 @@ const routeTree = rootRoute.addChildren([
   projectsRoute,
   libraryRoute,
   tasksRoute,
+  translateRoute,
   exportRoute,
   imagesRoute,
   videoRoute,
@@ -42,6 +46,7 @@ const routeTree = rootRoute.addChildren([
   dataRecipesRoute,
   dataRecipeRoute,
   apiMonitorRoute,
+  benchmarksRoute,
 ]);
 
 function DefaultNotFound() {
@@ -68,6 +73,8 @@ function DefaultNotFound() {
 
 export const router = createRouter({
   routeTree,
+  parseSearch,
+  stringifySearch,
   defaultNotFoundComponent: DefaultNotFound,
 });
 

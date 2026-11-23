@@ -4,6 +4,7 @@
 import {
   ChefHatIcon,
   DashboardCircleIcon,
+  DashboardSpeed01Icon,
   Download01Icon,
   DragDropVerticalIcon,
   FlimSlateIcon,
@@ -13,6 +14,7 @@ import {
   PencilEdit02Icon,
   ApiIcon,
   Clock01Icon,
+  AiTranslateIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ProjectIcon } from "@/lib/project-icon";
@@ -46,6 +48,11 @@ const ITEM_META: Record<
   export: { icon: Download01Icon, labelKey: "shell.navigation.export" },
   api: { icon: ApiIcon, labelKey: "shell.navigation.api" },
   tasks: { icon: Clock01Icon, labelKey: "shell.navigation.tasks" },
+  translate: { icon: AiTranslateIcon, labelKey: "shell.navigation.translate" },
+  benchmarks: {
+    icon: DashboardSpeed01Icon,
+    labelKey: "shell.navigation.benchmarks",
+  },
 };
 
 function FixedRow({ icon, label }: { icon: IconSvgElement; label: string }) {

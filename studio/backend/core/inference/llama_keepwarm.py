@@ -45,6 +45,11 @@ _last_attended = float("-inf")
 _unattended: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "keepwarm_unattended", default = False
 )
+# Set by middleware that must see a request's detached work end (the benchmark load fence):
+# work that outlives its response calls it and runs the returned release when done.
+detached_work_hold: contextvars.ContextVar = contextvars.ContextVar(
+    "detached_work_hold", default = None
+)
 # The (id, quant) idle-unload last freed, so an alias/unknown request that would otherwise 503 against an empty backend
 # can reload it (set on unload, cleared on reload). The quant lets the reload restore the exact freed variant.
 _last_unloaded_model = None
@@ -708,9 +713,13 @@ def restore_kv_resume(backend, manifest) -> None:
             identity = getattr(backend, "_gguf_file_identity", None)
             same_gguf = callable(identity) and identity(current) == manifest.get("gguf_stat")
         if same_gguf:
-            # Nor the same file: launch overrides can invalidate KV numerics.
-            fingerprint = getattr(backend, "_slot_launch_fingerprint", None)
-            same_gguf = callable(fingerprint) and manifest.get("launch") == fingerprint()
+            # Doubles without slot_resume_fits compare the launch strictly.
+            fits = getattr(backend, "slot_resume_fits", None)
+            if callable(fits):
+                same_gguf = bool(fits(manifest))
+            else:
+                fingerprint = getattr(backend, "_slot_launch_fingerprint", None)
+                same_gguf = callable(fingerprint) and manifest.get("launch") == fingerprint()
         if same_gguf and binary and binary == getattr(backend, "_slot_save_binary", None):
             logger.info("Restoring saved slot KV onto the reloaded model")
             backend.restore_slots_for_resume(manifest)

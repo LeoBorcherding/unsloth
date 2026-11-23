@@ -94,8 +94,10 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "recipes",
   "export",
   "api",
-  // Last and under "More", so it joins every saved layout without moving anything.
+  // Last and under "More", so they join every saved layout without moving anything.
   "tasks",
+  "translate",
+  "benchmarks",
 ] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];
@@ -141,6 +143,8 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
   export: false,
   api: false,
   tasks: false,
+  translate: false,
+  benchmarks: false,
 };
 
 /** Every previously shipped layout, so a migration can tell an untouched install from an
