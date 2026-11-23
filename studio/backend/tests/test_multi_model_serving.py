@@ -218,7 +218,7 @@ def test_a_voice_beside_an_npu_chat_takes_a_slot_of_its_own(backends, monkeypatc
     model_slots.slots.remove(extra)
     inf._llama_cpp_backend.unload_model()
     monkeypatch.setattr(orchestrator, "_inference_backend", FakeOrchestrator(None))
-    npu_chat = SimpleNamespace(model_path = "lemonade:qwen3-0.6b-FLM", id = "qwen3-0.6b-FLM")
+    npu_chat = _npu_model()
     monkeypatch.setattr(inf, "_resident_npu_model", lambda: npu_chat)
     voice = _selected(LoadRequest(model_path = "audio-cpp/Kokoro-82M-GGUF", voice = True))
     assert voice is not None and voice.voice
