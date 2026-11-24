@@ -115,3 +115,26 @@ def test_an_offloaded_hub_model_with_sharded_bins_converts_its_snapshot(hub_cach
     assert unsloth_save._gguf_reused_checkpoint_dir(_offloaded_model()) == str(hub_cache)
     (hub_cache / shards[0]).unlink()
     assert unsloth_save._gguf_reused_checkpoint_dir(_offloaded_model()) is None
+
+
+def test_an_offloaded_model_loaded_with_a_custom_cache_dir_finds_its_snapshot(
+    hub_cache, tmp_path, monkeypatch
+):
+    """from_pretrained(cache_dir = ...): the default cache is empty, the snapshot lives in the caller's."""
+    import huggingface_hub.constants as constants
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "default-empty"))
+    model = _offloaded_model()
+    assert unsloth_save._gguf_reused_checkpoint_dir(model) is None
+    model._unsloth_hub_cache_dir = str(hub_cache.parents[2])
+    assert unsloth_save._gguf_reused_checkpoint_dir(model) == str(hub_cache)
+
+
+def test_the_loader_records_only_an_explicit_cache_dir(tmp_path):
+    from unsloth.models.loader import _record_hub_cache_dir
+
+    model = types.SimpleNamespace()
+    _record_hub_cache_dir(model, None)
+    assert not hasattr(model, "_unsloth_hub_cache_dir")
+    _record_hub_cache_dir(model, tmp_path)
+    assert model._unsloth_hub_cache_dir == str(tmp_path)

@@ -4386,6 +4386,7 @@ def _offloaded_hub_snapshot(model, repo_id):
             str(repo_id),
             "config.json",
             revision = getattr(getattr(model, "config", None), "_commit_hash", None),
+            cache_dir = getattr(model, "_unsloth_hub_cache_dir", None),
             local_files_only = True,
         )
         snapshot = os.path.dirname(config)
