@@ -476,6 +476,7 @@ test("C3f: an out-of-range recommendation taken with no chat open cannot be pinn
   await settle(w.mod, (ms) => t.mock.timers.tick(ms));
   const row = threadRows.rows.get("A") as Record<string, unknown>;
   assert.equal(row.topP, undefined);
+  assert.equal(row.temperature, undefined);
   assert.equal(row.systemPrompt, INSTALLATION.systemPrompt);
 
   assertUsable(w.sampling(), "out-of-range recommendation, no chat open");
