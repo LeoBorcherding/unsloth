@@ -262,6 +262,8 @@ import {
 import {
   COMPOSER_INPUT_SELECTOR,
   isSurfaceBackgrounded,
+  loadOpenAIAutoSwitchSettings,
+  subscribeOpenAIAutoSwitchSettings,
   useShortcut,
 } from "@/features/settings";
 import {
@@ -3486,6 +3488,25 @@ export function ChatPage({
       disposed = true;
       controller?.abort();
       for (const unsubscribe of unsubscribers) unsubscribe();
+    };
+  }, []);
+  // "Switch model by request" for images lets the Images pill load a library image model itself.
+  useEffect(() => {
+    let disposed = false;
+    const apply = (on: boolean) => {
+      if (!disposed) useChatRuntimeStore.getState().setLocalImageSwapReady(on);
+    };
+    // Owner-only settings: anyone else is refused, which reads as off.
+    loadOpenAIAutoSwitchSettings().then(
+      (settings) => apply(settings.mediaAutoSwitchModel),
+      () => apply(false),
+    );
+    const unsubscribe = subscribeOpenAIAutoSwitchSettings((settings) =>
+      apply(settings.mediaAutoSwitchModel),
+    );
+    return () => {
+      disposed = true;
+      unsubscribe();
     };
   }, []);
   // Another tab can change the active model's pin (the pin store listens for the storage event),

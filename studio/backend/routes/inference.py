@@ -5364,8 +5364,10 @@ async def _await_disconnect_then_cancel_task(request, task: asyncio.Task) -> Non
 
 async def _await_stt_disconnect_then_cancel(request, sidecar, cancel_event) -> None:
     """Cancel this sidecar request, including a model load still starting."""
+    # An in-process request (a chat tool, a scheduled task) is stopped by its event, not a disconnect.
+    stop = getattr(getattr(request, "state", None), "generation_cancel_event", None)
     try:
-        while not await request.is_disconnected():
+        while not (stop is not None and stop.is_set()) and not await request.is_disconnected():
             await asyncio.sleep(0.1)
         await asyncio.to_thread(sidecar.cancel_transcription, cancel_event)
     except asyncio.CancelledError:

@@ -823,6 +823,11 @@ def status_for_tool(tool_name: str, arguments: Mapping[str, Any]) -> str:
         return f"Running: {preview}" if preview else "Running command..."
     if tool_name == "view_image":
         return "Viewing image: " + str(arguments.get("path") or "")[:80]
+    if tool_name == "use_library_model":
+        model = str(arguments.get("model") or "").strip()
+        if not model:
+            return "Listing image models..."
+        return f"Swapping to {model[:60]}: " + str(arguments.get("prompt") or "")[:60]
     if tool_name in MEDIA_CHAT_TOOLS:
         kind = "image" if tool_name == "generate_image" else "video"
         return f"Generating {kind}: " + str(arguments.get("prompt") or "")[:60]
@@ -1067,7 +1072,7 @@ _MCP_TOOL_PREFIX = "mcp__"
 # document an MCP tool read, or a page that was fetched, ending in a well-formed one of
 # either is content the model needs, and cutting it leaves the model reasoning over less
 # than the card the user is looking at.
-_IMAGE_SENTINEL_TOOLS = _SANDBOX_TOOLS | {"code_execution", "generate_image"}
+_IMAGE_SENTINEL_TOOLS = _SANDBOX_TOOLS | {"code_execution", "generate_image", "use_library_model"}
 _SOURCE_MAP_TOOLS = frozenset({"search_knowledge_base", "search_conversation"})
 _WORKSPACE_TOOLS = _SANDBOX_TOOLS | {"edit_file", "view_image"}
 

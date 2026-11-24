@@ -59,12 +59,17 @@ test("the adapter slices the image envelope only for the tools that emit it", ()
 });
 
 test("the media chat tools emit the file envelope, and generate_image the image one", () => {
-  assert.deepEqual([...MEDIA_CHAT_TOOLS].sort(), ["generate_image", "generate_video"]);
+  assert.deepEqual([...MEDIA_CHAT_TOOLS].sort(), [
+    "generate_image",
+    "generate_video",
+    "use_library_model",
+  ]);
   for (const tool of MEDIA_CHAT_TOOLS) {
     assert.ok(SANDBOX_FILE_TOOLS.has(tool), `${tool} replays as its text, not the wrapper`);
     assert.ok(!SANDBOX_RUN_TOOLS.has(tool), `${tool} runs no code`);
   }
   assert.ok(IMAGE_SENTINEL_TOOLS.has("generate_image"));
+  assert.ok(IMAGE_SENTINEL_TOOLS.has("use_library_model"));
   // The video is a file, never an __IMAGES__ entry.
   assert.ok(!IMAGE_SENTINEL_TOOLS.has("generate_video"));
   assert.ok(

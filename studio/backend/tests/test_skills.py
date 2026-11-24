@@ -140,7 +140,7 @@ def test_bundled_image_prompting_skill_parses_and_ships_disabled(isolated_skills
     record = next(r for r in skills.list_skills() if r["name"] == "image-prompting")
     assert record["source"] == "bundled"
     assert record["enabled"] is False
-    assert record["allowed_tools"] == "generate_image generate_video"
+    assert record["allowed_tools"] == "generate_image generate_video use_library_model"
     assert "image-prompting" not in [r["name"] for r in skills.enabled_skills()]
     with pytest.raises(skills.SkillError, match = "disabled"):
         skills.read_skill_resource("image-prompting")

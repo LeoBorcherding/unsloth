@@ -22,6 +22,7 @@ type MediaState = {
   supportsBuiltinImageGeneration: boolean;
   localImageModelReady: boolean;
   localVideoModelReady: boolean;
+  localImageSwapReady: boolean;
   imageToolsEnabled: boolean;
 };
 
@@ -46,6 +47,7 @@ const LOCAL: MediaState = {
   supportsBuiltinImageGeneration: false,
   localImageModelReady: true,
   localVideoModelReady: false,
+  localImageSwapReady: false,
   imageToolsEnabled: true,
 };
 const HOSTED: MediaState = { ...LOCAL, supportsBuiltinImageGeneration: true };
@@ -69,6 +71,20 @@ test("a hosted image model keeps its builtin; a local turn sends the loaded medi
   for (const state of [LOCAL, HOSTED, { ...LOCAL, localVideoModelReady: true }]) {
     assert.ok(!localMediaToolsForTurn(state).includes("image_generation"));
   }
+});
+
+test("Switch model by request offers use_library_model with no image model loaded", () => {
+  const SWAP = { ...LOCAL, localImageModelReady: false, localImageSwapReady: true };
+  assert.deepEqual(localMediaToolsForTurn(SWAP), ["use_library_model"]);
+  assert.deepEqual(localMediaToolsForTurn({ ...LOCAL, localImageSwapReady: true }), [
+    "generate_image",
+    "use_library_model",
+  ]);
+  assert.equal(imageToolAvailable(SWAP), true);
+  assert.equal(localImagePillCount(SWAP), 1);
+  assert.deepEqual(localMediaToolsForTurn({ ...SWAP, imageToolsEnabled: false }), []);
+  assert.deepEqual(localMediaToolsForTurn({ ...SWAP, supportsTools: false }), []);
+  assert.deepEqual(localMediaToolsForTurn({ ...SWAP, supportsBuiltinImageGeneration: true }), []);
 });
 
 test("the pill shows for a hosted image model or a tools model with a media model loaded", () => {
