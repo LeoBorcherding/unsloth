@@ -41,6 +41,8 @@ import {
   listLocalModels,
 } from "@/features/hub/inventory/api";
 import { isHiddenModelId } from "@/features/hub/lib/hidden-models";
+// eslint-disable-next-line no-restricted-imports -- Avoid the hub barrel's React and download-manager exports.
+import { servedCheckpoint } from "@/features/hub/lib/model-identity";
 import { isTranslationHeldSlot, isTranslationOnlyRepo } from "@/lib/translation-models";
 import { isOtherCacheSnapshot } from "@/features/model-picker/inventory/local-cache-snapshot";
 import {
@@ -4880,7 +4882,11 @@ export function createOpenAIStreamAdapter(
           runtime.reasoningAlwaysOn ||
           (runtime.reasoningEnabled && runtime.reasoningEffort !== "none");
         const inferenceRequest = buildResearchInferenceRequest({
-          checkpoint: selectedCheckpoint,
+          checkpoint: servedCheckpoint(
+            runtime.loadedModels,
+            selectedCheckpoint,
+            runtime.activeGgufVariant,
+          ),
           external:
             researchExternalSelection && researchExternalProvider
               ? {
@@ -7147,7 +7153,11 @@ export function createOpenAIStreamAdapter(
             !queuedRunSettings && !continuation,
           );
           return {
-            model: params.checkpoint,
+            model: servedCheckpoint(
+              useChatRuntimeStore.getState().loadedModels,
+              params.checkpoint,
+              runtime.activeGgufVariant,
+            ),
             messages: outboundMessages,
             stream: true,
             ...(continuation ? { continue_final_message: true } : {}),

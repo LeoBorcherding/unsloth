@@ -127,3 +127,17 @@ test("normal startup status adoption owns the resident model's globals", () => {
     /adoptingExistingServerModel: selectedCheckpoint === ""/,
   );
 });
+
+test("a refresh reads the selected quant, not whichever copy of its repo was used last", () => {
+  assert.match(SYNC, /getInferenceStatus\(signal, servedSelection\(\)\)/);
+  assert.doesNotMatch(SYNC, /getInferenceStatus\(signal, selectedAtStart\)/);
+});
+
+test("a refresh in flight does not undo a newer quant pick of the same repo", () => {
+  assert.match(SYNC, /const variantAtStart = useChatRuntimeStore\.getState\(\)\.activeGgufVariant;/);
+  assert.match(SYNC, /selectedCheckpoint !== selectedAtStart \|\|\s*\(variantNow \?\? null\) !== \(variantAtStart \?\? null\);/);
+});
+
+test("eject checks running chats on the quant it unloads", () => {
+  assert.match(SOURCE, /loadedModels\.length > 1\s*\? servedSelection\(\)\s*: undefined;/);
+});

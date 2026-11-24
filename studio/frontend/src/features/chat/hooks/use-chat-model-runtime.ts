@@ -79,6 +79,7 @@ import { npuDisplayNameNow } from "@/features/npu/use-npu-display-name";
 import {
   isOllamaModelId,
   modelDisplayName,
+  servedCheckpoint,
 } from "@/features/hub/lib/model-identity";
 // eslint-disable-next-line no-restricted-imports -- Avoid the hub barrel's React and download-manager exports.
 import { subscribeResidentStatusRefresh } from "@/features/hub/lib/resident-status-refresh";
@@ -603,6 +604,11 @@ async function readIdleUnloadArmed(): Promise<boolean> {
   return lastIdleUnloadArmed;
 }
 
+function servedSelection(): string {
+  const { loadedModels, params, activeGgufVariant } = useChatRuntimeStore.getState();
+  return servedCheckpoint(loadedModels, params.checkpoint, activeGgufVariant);
+}
+
 // A lookup started before a newer status must not write the replaced quant.
 let quantLookupGeneration = 0;
 
@@ -611,13 +617,15 @@ function publishLoadedModels(
   statusId?: string | null,
   statusQuant?: string | null,
   checkpoints?: string[],
+  quants?: (string | null)[],
 ): void {
   const current = useChatRuntimeStore.getState().loadedModels;
   const known = new Map(current.map((m) => [m.checkpoint ?? m.id, m]));
   const next = ids.map((id, i) => {
     const checkpoint = checkpoints?.[i] || id;
     const prev = known.get(checkpoint);
-    const quant = id === statusId ? (statusQuant ?? null) : prev?.quant;
+    const quant =
+      quants?.[i] ?? (id === statusId ? (statusQuant ?? null) : prev?.quant);
     return prev && prev.quant === quant && prev.checkpoint === checkpoint
       ? prev
       : { id, quant, checkpoint };
@@ -685,9 +693,10 @@ export async function syncInferenceStatusToStore(options?: {
   setModelsError(null);
   try {
     const selectedAtStart = useChatRuntimeStore.getState().params.checkpoint;
+    const variantAtStart = useChatRuntimeStore.getState().activeGgufVariant;
     const [listRes, statusRes, , idleUnloadArmed] = await Promise.all([
       listModels(),
-      getInferenceStatus(signal, selectedAtStart),
+      getInferenceStatus(signal, servedSelection()),
       // Settled from this request alone: a sibling rejection must not mark the inventory settled.
       includeLoras
         ? listLoras().then(
@@ -719,6 +728,7 @@ export async function syncInferenceStatusToStore(options?: {
       statusRes.active_model,
       statusRes.gguf_variant,
       statusRes.serving_checkpoints,
+      statusRes.serving_quants,
     );
 
     const statusLoading = (statusRes.loading?.length ?? 0) > 0;
@@ -727,7 +737,10 @@ export async function syncInferenceStatusToStore(options?: {
 
     const selectedCheckpoint = useChatRuntimeStore.getState().params.checkpoint;
     const isExternalSelectionActive = isExternalModelId(selectedCheckpoint);
-    const selectionChanged = selectedCheckpoint !== selectedAtStart;
+    const variantNow = useChatRuntimeStore.getState().activeGgufVariant;
+    const selectionChanged =
+      selectedCheckpoint !== selectedAtStart ||
+      (variantNow ?? null) !== (variantAtStart ?? null);
     // Read a TTS-owned or Translate-owned slot as empty so the eviction branch clears the stale chat pick.
     const chatActiveModel =
       statusRes.active_model &&
@@ -1528,8 +1541,16 @@ export function useChatModelRuntime() {
       const pendingConfig =
         typeof selection !== "string" ? selection.config : undefined;
       if (!forceReload && !nativePathToken) {
+        // A quant loaded beside its repo's other quant answers only to its own name.
         const readPickStatus = () =>
-          getInferenceStatus(undefined, modelId).catch(() => null);
+          getInferenceStatus(
+            undefined,
+            servedCheckpoint(
+              useChatRuntimeStore.getState().loadedModels,
+              modelId,
+              ggufVariant,
+            ),
+          ).catch(() => null);
         const residentStatus = await readPickStatus();
         // Warm the GPU cache first: a cold cache passes the pick through unvalidated.
         if (residentStatus && pendingConfig?.selectedGpuIds !== undefined) {
@@ -1768,7 +1789,9 @@ export function useChatModelRuntime() {
           : await confirmStopRunningChatsIfNeeded(
               forceReload ? "Applying these settings" : "Loading a different model",
               "reload",
-              touchesOnlySelected ? modelId : undefined,
+              touchesOnlySelected
+                ? servedCheckpoint(loadedNow, modelId, ggufVariant)
+                : undefined,
             );
       } catch (error) {
         releasePreflightLifecycleLease();
@@ -3752,7 +3775,7 @@ export function useChatModelRuntime() {
       // Eject stops chats too but leaves no model loaded, so word it as an unload.
       const scope =
         !confirmed && useChatRuntimeStore.getState().loadedModels.length > 1
-          ? checkpoint
+          ? servedSelection()
           : undefined;
       const stopDecision =
         confirmed ??
@@ -3769,7 +3792,7 @@ export function useChatModelRuntime() {
       async function performUnload(): Promise<void> {
         stopQueuedRuns(stopDecision, Boolean(scope));
         await unloadModel({
-          model_path: checkpoint,
+          model_path: servedSelection(),
           force_cancel_active: stopDecision.forceCancelActive,
         });
         if (!scope) {
@@ -3806,7 +3829,7 @@ export function useChatModelRuntime() {
     const others = useChatRuntimeStore
       .getState()
       .loadedModels.map((m) => m.checkpoint ?? m.id)
-      .filter((id) => id !== checkpoint);
+      .filter((id) => id !== servedSelection());
     const selectedLocal =
       Boolean(checkpoint) && !isExternalModelId(checkpoint);
     const decision = await confirmStopRunningChatsIfNeeded(
