@@ -68,6 +68,8 @@ def public_model_id(identifier: Optional[str]) -> Optional[str]:
     """
     if not identifier:
         return identifier
+    if _is_hub_repo_id(identifier):
+        return identifier
     if not _looks_like_path(identifier):
         return identifier
     repo_id = hf_cache_repo_id(identifier)
@@ -81,8 +83,9 @@ def public_model_id(identifier: Optional[str]) -> Optional[str]:
 
 def _is_hub_repo_id(identifier: str) -> bool:
     """``org/name``, including Hub repos named ``org/name.gguf``. A file reference
-    carries a repo id plus a filename, so two or more slashes."""
-    if identifier.count("/") != 1:
+    carries a repo id plus a filename, so two or more slashes. A one-slash id that
+    exists on disk is a relative file, the same rule ``is_local_path`` loads by."""
+    if identifier.count("/") != 1 or os.path.isfile(identifier):
         return False
     stem = (
         identifier[: -len(_GGUF_SUFFIX)]
