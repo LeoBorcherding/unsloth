@@ -108,7 +108,7 @@ test("a chat left mid-read keeps its edits, and the next chat gets the defaults"
   const pinned = threadRows.rows.get(CHAT_B) ?? {};
   assert.equal(
     pinned.temperature,
-    INSTALLATION_TEMPERATURE,
+    undefined,
     "chat B was pinned with chat A's temperature",
   );
   assert.equal(
