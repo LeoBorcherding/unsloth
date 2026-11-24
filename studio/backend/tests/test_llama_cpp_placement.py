@@ -1026,6 +1026,65 @@ def test_auto_drops_the_drafter_when_only_the_target_fits(tmp_path):
     assert backend.mtp_draft_path == str(sidecar)
 
 
+def _spilled_drafter_backend(
+    tmp_path: Path, *, card_gb: float, target_gb: float, drafter_gb: float
+):
+    """A target too big for the one card, so the load spills to the host with --fit."""
+    gb = 1024**3
+    backend, gguf, sidecar = _tight_vram_backend(tmp_path, drafter_gb = drafter_gb)
+    card_mib = int(card_gb * 1024)
+    backend._get_gpu_memory = lambda _binary = None, **_kw: [(0, card_mib, card_mib)]
+    backend._get_gpu_free_memory = lambda _binary = None, **_kw: [(0, card_mib)]
+    backend._get_gguf_size_bytes = lambda path: (
+        int(drafter_gb * gb) if str(path) == str(sidecar) else int(target_gb * gb)
+    )
+    backend._select_gpus = lambda *args, **kwargs: ([0], True)
+    backend._select_gpus_split_aware = lambda *args, **kwargs: ([0], True)
+
+    def read_metadata(_path):
+        backend._context_length = 131072
+
+    backend._read_gguf_metadata = read_metadata
+    return backend, gguf, sidecar
+
+
+def test_auto_drops_a_drafter_that_would_take_a_spilled_targets_layers(tmp_path):
+    """4 GB card, MoE spilled to the host: a 4 GB draft reserve left no expert layer on the GPU."""
+    backend, gguf, sidecar = _spilled_drafter_backend(
+        tmp_path, card_gb = 4, target_gb = 16, drafter_gb = 4
+    )
+
+    result = _launch_auto_8k(backend, gguf, n_ctx = 0, dspark_draft_path = str(sidecar))
+
+    assert "draft-dspark" not in result["cmd"]
+    assert backend.spec_fallback_reason == "drafter_no_vram"
+
+
+def test_auto_keeps_a_small_drafter_beside_a_spilled_target(tmp_path):
+    """Scaled to the card: 1.5 GB is under the flat reserve share of an 80 GB budget."""
+    backend, gguf, sidecar = _spilled_drafter_backend(
+        tmp_path, card_gb = 80, target_gb = 120, drafter_gb = 1.5
+    )
+
+    result = _launch_auto_8k(backend, gguf, n_ctx = 0, dspark_draft_path = str(sidecar))
+
+    assert _launched(result, "--spec-type") == "draft-dspark"
+    assert backend.spec_fallback_reason is None
+
+
+def test_forcing_the_drafter_keeps_it_beside_a_spilled_target(tmp_path):
+    backend, gguf, sidecar = _spilled_drafter_backend(
+        tmp_path, card_gb = 4, target_gb = 16, drafter_gb = 4
+    )
+
+    result = _launch_auto_8k(
+        backend, gguf, n_ctx = 0, dspark_draft_path = str(sidecar), speculative_type = "dspark"
+    )
+
+    assert _launched(result, "--spec-type") == "draft-dspark"
+    assert backend.spec_fallback_reason is None
+
+
 def _per_slot_mtp_backend(tmp_path: Path, *, gb_per_slot: float):
     """The tight card with an embedded head whose reserve is all per-slot state."""
     gb = 1024**3

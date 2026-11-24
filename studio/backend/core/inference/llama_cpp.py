@@ -28000,6 +28000,35 @@ class LlamaCppBackend:
                                 _probe_need / 1024,
                                 _probe_have / 1024,
                             )
+                        # A spilled target: every byte the drafter reserves is a layer --fit keeps
+                        # off the GPU, and a host-bound decode gains little from drafting (8 GB T4,
+                        # Inkling-2-Mini UD-Q4_K_XL: 6.86 tok/s with DSpark, 6.84 without). Keep it only
+                        # while it costs no more than the flat reserve an unsized drafter gets; on a
+                        # 4 GB card the 4 GB draft KV took every expert layer and decode ran 2.2x slower.
+                        elif not _target_fits_somewhere and not (
+                            _engaged_is_mtp
+                            and _arch_has_fast_mla_mtp(getattr(self, "_architecture", None))
+                        ):
+                            _spill_ctx = (
+                                effective_ctx
+                                if explicit_ctx
+                                else min(_AUTO_OFFLOAD_CTX, effective_ctx)
+                            )
+                            _spill_reserve_mib = _mtp_bytes(_spill_ctx) / (1024 * 1024)
+                            _spill_budget_mib = _pool_budget_mib(gpus, _probe_frac(False))
+                            if _spill_reserve_mib > _MTP_VRAM_RESERVE_FRAC * _spill_budget_mib:
+                                _spec_dropped_no_vram = True
+                                _mtp_will_engage = False
+                                mtp_overhead_fn = None
+                                _mtp_kv_unsized = False
+                                logger.warning(
+                                    "Speculative decoding disabled for this load: the model does "
+                                    "not fit in VRAM, and its drafter would take %.1f GB of the "
+                                    "%.1f GB left for model layers. Auto keeps those layers on the "
+                                    "GPU. Select the drafter in Settings to force it.",
+                                    _spill_reserve_mib / 1024,
+                                    _spill_budget_mib / 1024,
+                                )
 
                     # Flat fallback only when the draft KV is unsized; an embedded head keeps its reserve.
                     _flat_mtp_engages = _mtp_will_engage and (
