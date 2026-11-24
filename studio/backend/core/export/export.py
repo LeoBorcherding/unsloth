@@ -114,7 +114,17 @@ def _checkpoint_weight_bytes(model_id: str, token, local_files_only: bool) -> Op
         else:
             info = HfApi(token = token).model_info(model_id, files_metadata = True)
             files = [(f.rfilename, f.size or 0) for f in info.siblings or []]
-        return sum(size for name, size in files if name.endswith(".safetensors")) or None
+        safetensors = sum(size for name, size in files if name.endswith(".safetensors"))
+        # .bin only without safetensors: repos often ship both, and training_args.bin is not a weight.
+        return (
+            safetensors
+            or sum(
+                size
+                for name, size in files
+                if name.startswith("pytorch_model") and name.endswith(".bin")
+            )
+            or None
+        )
     except Exception:
         return None
 

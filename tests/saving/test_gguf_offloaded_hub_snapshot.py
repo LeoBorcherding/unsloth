@@ -87,3 +87,31 @@ def test_an_uncached_offloaded_model_still_saves_as_before(tmp_path, monkeypatch
     monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "empty"))
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     assert not unsloth_save._gguf_reuses_loaded_checkpoint(_offloaded_model())
+
+
+def _bin_snapshot(hub_cache, sharded):
+    for name in [*SHARDS, "model.safetensors.index.json"]:
+        (hub_cache / name).unlink()
+    if not sharded:
+        (hub_cache / "pytorch_model.bin").write_bytes(b"\0" * 8)
+        return []
+    shards = [f"pytorch_model-0000{i}-of-00002.bin" for i in (1, 2)]
+    weight_map = {
+        f"model.language_model.layers.{i}.self_attn.q_proj.weight": shards[i % 2] for i in range(13)
+    }
+    (hub_cache / "pytorch_model.bin.index.json").write_text(json.dumps({"weight_map": weight_map}))
+    for shard in shards:
+        (hub_cache / shard).write_bytes(b"\0" * 8)
+    return shards
+
+
+def test_an_offloaded_hub_model_with_a_single_bin_converts_its_snapshot(hub_cache):
+    _bin_snapshot(hub_cache, sharded = False)
+    assert unsloth_save._gguf_reused_checkpoint_dir(_offloaded_model()) == str(hub_cache)
+
+
+def test_an_offloaded_hub_model_with_sharded_bins_converts_its_snapshot(hub_cache):
+    shards = _bin_snapshot(hub_cache, sharded = True)
+    assert unsloth_save._gguf_reused_checkpoint_dir(_offloaded_model()) == str(hub_cache)
+    (hub_cache / shards[0]).unlink()
+    assert unsloth_save._gguf_reused_checkpoint_dir(_offloaded_model()) is None

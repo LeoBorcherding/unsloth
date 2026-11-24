@@ -4389,16 +4389,21 @@ def _offloaded_hub_snapshot(model, repo_id):
             local_files_only = True,
         )
         snapshot = os.path.dirname(config)
-        index = os.path.join(snapshot, "model.safetensors.index.json")
-        if os.path.isfile(index):
-            with open(index, "r", encoding = "utf-8") as file:
-                shards = set(json.load(file).get("weight_map", {}).values())
-            return (
-                snapshot
-                if shards and all(os.path.isfile(os.path.join(snapshot, shard)) for shard in shards)
-                else None
-            )
-        return snapshot if os.path.isfile(os.path.join(snapshot, "model.safetensors")) else None
+        # convert_hf_to_gguf reads either format, sharded or not.
+        for single in ("model.safetensors", "pytorch_model.bin"):
+            index = os.path.join(snapshot, single + ".index.json")
+            if os.path.isfile(index):
+                with open(index, "r", encoding = "utf-8") as file:
+                    shards = set(json.load(file).get("weight_map", {}).values())
+                return (
+                    snapshot
+                    if shards
+                    and all(os.path.isfile(os.path.join(snapshot, shard)) for shard in shards)
+                    else None
+                )
+            if os.path.isfile(os.path.join(snapshot, single)):
+                return snapshot
+        return None
     except Exception:
         return None
 

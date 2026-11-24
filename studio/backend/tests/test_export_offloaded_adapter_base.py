@@ -151,3 +151,18 @@ def test_weight_bytes_count_every_shard(monkeypatch, tmp_path):
     (base / "config.json").write_text("{}")
     assert mod._checkpoint_weight_bytes(str(base), None, False) == 600
     assert mod._checkpoint_weight_bytes("org/not-local", None, True) is None
+
+
+def test_weight_bytes_fall_back_to_bin_shards(monkeypatch, tmp_path):
+    _install_export_backend_stubs(monkeypatch)
+    mod = _load_module("test_core_export_offloaded_adapter", "core/export/export.py", monkeypatch)
+    base = tmp_path / "base"
+    base.mkdir()
+    for i, size in enumerate((300, 200), start = 1):
+        (base / f"pytorch_model-0000{i}-of-00002.bin").write_bytes(b"\0" * size)
+    (base / "pytorch_model.bin.index.json").write_text("{}")
+    (base / "training_args.bin").write_bytes(b"\0" * 50)
+    assert mod._checkpoint_weight_bytes(str(base), None, False) == 500
+    # Safetensors win when a repo ships both.
+    (base / "model.safetensors").write_bytes(b"\0" * 70)
+    assert mod._checkpoint_weight_bytes(str(base), None, False) == 70
