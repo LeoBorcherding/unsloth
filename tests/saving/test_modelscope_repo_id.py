@@ -133,15 +133,16 @@ def test_gguf_still_converts_the_modelscope_snapshot(tmp_path):
 
     reuses = _load(
         "unsloth/save.py",
-        "_gguf_reuses_loaded_checkpoint",
+        "_gguf_reused_checkpoint_dir",
         {
             "os": os,
             "PeftModel": _Peft,
             "PeftModelForCausalLM": _Peft,
             "_attached_mtp_head": lambda m: None,
+            "_offloaded_hub_snapshot": lambda m, name: None,
         },
     )
     model = types.SimpleNamespace(config = types.SimpleNamespace(_name_or_path = "unsloth/x"))
-    assert not reuses(model)
+    assert reuses(model) is None
     model._unsloth_modelscope_snapshot = str(tmp_path)
-    assert reuses(model)
+    assert reuses(model) == str(tmp_path)

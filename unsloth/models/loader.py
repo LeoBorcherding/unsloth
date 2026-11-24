@@ -302,6 +302,12 @@ def _record_modelscope_repo_id(model, repo_id, local_dir):
                 module._unsloth_modelscope_snapshot = str(local_dir)
 
 
+def _record_hub_cache_dir(model, cache_dir):
+    """The model does not keep the load's `cache_dir`; a GGUF export of an offloaded model reads its snapshot there."""
+    if cache_dir is not None:
+        model._unsloth_hub_cache_dir = os.fspath(cache_dir)
+
+
 def _modelscope_snapshot_or_none(repo_id):
     """ModelScope snapshot of an adapter's base, or None to load it by repo id from the Hugging Face Hub as before: the base need not be mirrored on ModelScope."""
     from modelscope import snapshot_download
@@ -2061,6 +2067,7 @@ class FastLanguageModel(FastLlamaModel):
             **kwargs,
         )
         _record_modelscope_repo_id(model, modelscope_repo_id, modelscope_dir)
+        _record_hub_cache_dir(model, kwargs.get("cache_dir"))
         # Also a caller's FineGrainedFP8Config(dequantize = True) and transformers' own pre-sm89 / CPU
         # dequantize; a no-op unless the load kept Fp8Dequantize conversions.
         _drop_fp8_dequantize_conversions(model)
@@ -3549,6 +3556,7 @@ class FastModel(FastBaseModel):
         # Saves write the native layout, matching the converted config.
         _drop_text_only_key_mapping(model, _qwen3_asr_key_mapping)
         _record_modelscope_repo_id(model, modelscope_repo_id, modelscope_dir)
+        _record_hub_cache_dir(model, kwargs.get("cache_dir"))
 
         if resize_model_vocab is not None:
             _resize_vocab(model, resize_model_vocab)

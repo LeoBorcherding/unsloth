@@ -100,6 +100,69 @@ _EXPORT_AUTO_OFFLOAD_KWARGS = {
 }
 
 
+# Host RAM kept free beyond the swapped layers, for the merge and the rest of the process.
+_EXPORT_RAM_HEADROOM_BYTES = 4 << 30
+
+
+def _checkpoint_weight_bytes(model_id: str, token, local_files_only: bool) -> Optional[int]:
+    """Bytes of a checkpoint's safetensors (every shard), None when unknown."""
+    try:
+        if Path(model_id).is_dir():
+            files = [(p.name, p.stat().st_size) for p in Path(model_id).iterdir() if p.is_file()]
+        elif local_files_only:
+            return None
+        else:
+            info = HfApi(token = token).model_info(model_id, files_metadata = True)
+            files = [(f.rfilename, f.size or 0) for f in info.siblings or []]
+        safetensors = sum(size for name, size in files if name.endswith(".safetensors"))
+        # .bin only without safetensors: repos often ship both, and training_args.bin is not a weight.
+        return (
+            safetensors
+            or sum(
+                size
+                for name, size in files
+                if name.startswith("pytorch_model") and name.endswith(".bin")
+            )
+            or None
+        )
+    except Exception:
+        return None
+
+
+def _export_memory_budget() -> Optional[Tuple[int, int]]:
+    """(free bytes on the card the load uses, available system RAM bytes), None when unknown."""
+    try:
+        import psutil
+        from utils.hardware.hardware import trusted_mem_get_info
+
+        if torch is None or not torch.cuda.is_available():
+            return None
+        free, _total = trusted_mem_get_info(torch.cuda.current_device())
+        return int(free), int(psutil.virtual_memory().available)
+    except Exception:
+        return None
+
+
+def _adapter_base_fit(
+    weight_bytes: int, free_vram: int, free_ram: int
+) -> Tuple[dict, Optional[str]]:
+    """Placement for a 16-bit adapter base: (load kwargs, refusal). A spill past the GPU lands on the
+    meta device, where the merge cannot read it, so a base the GPU cannot hold is block-swapped into
+    host RAM instead, and refused before the load when RAM cannot hold the rest either."""
+    reserve = _EXPORT_AUTO_OFFLOAD_KWARGS["device_map_planner_kwargs"]["reserve_bytes"]
+    if weight_bytes <= free_vram - reserve:
+        return {}, None
+    if weight_bytes <= free_vram - reserve + free_ram - _EXPORT_RAM_HEADROOM_BYTES:
+        return _EXPORT_AUTO_OFFLOAD_KWARGS, None
+    gb = 1024**3
+    return {}, (
+        f"This base model needs about {weight_bytes / gb:.0f} GB to merge the LoRA, but this "
+        f"computer only has {free_vram / gb:.0f} GB of free GPU memory and {free_ram / gb:.0f} GB "
+        f"of free system memory, so the merged export would fail. Run the export on a machine "
+        f"with more GPU or system memory."
+    )
+
+
 def _offload_layers_kwargs(offload_layers, device_map_kw: Optional[dict] = None) -> dict:
     if not offload_layers or offload_layers == "auto":
         return {}
@@ -1118,6 +1181,22 @@ class ExportBackend:
             if refusal:
                 return False, refusal
 
+            if (
+                base_model
+                and not load_in_4bit
+                and not _IS_MLX
+                and offload_layers == "auto"
+                and not _offload_kw
+                and not _device_map_kw
+                and not self.diffusion_lm_profile
+            ):
+                weight_bytes = _checkpoint_weight_bytes(base_model, token, local_files_only)
+                budget = _export_memory_budget() if weight_bytes else None
+                if budget:
+                    _offload_kw, refusal = _adapter_base_fit(weight_bytes, *budget)
+                    if refusal:
+                        return False, refusal
+
             if self._audio_type == "csm":
                 from unsloth import FastModel
                 from transformers import CsmForConditionalGeneration
@@ -1299,6 +1378,15 @@ class ExportBackend:
                 self.is_peft = adapter_config.exists()
             else:
                 self.is_peft = isinstance(model, (PeftModel, PeftModelForCausalLM))
+                # A single-GPU full-precision spill loads silently, and the merge cannot read the spilled weights.
+                if self.is_peft and not _device_map_kw and _cpu_offloaded_modules(model):
+                    del model
+                    self.cleanup_memory()
+                    return False, (
+                        "The base model did not fit in GPU memory, so part of it was left in system "
+                        "memory where the LoRA merge cannot read it. Run the export on a machine "
+                        "with more GPU memory."
+                    )
                 _restore_use_cache(model)
 
             restored_repo_id = restore_hf_cache_repo_identity(model, base_model)
