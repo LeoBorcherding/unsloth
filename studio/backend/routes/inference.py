@@ -185,6 +185,7 @@ from core.inference.http_stream import SSE_LINE_END, aiter_sse_lines
 from core.inference.sse import SSELineDecoder, iter_sse_lines
 from core.inference import model_slots
 from core.inference.llama_cpp import (
+    _INKLING2_ARCHS,
     _DEVICE_FLAGS,
     _TERMINAL_RETIREMENT_HOOKS,
     _extra_args_set_any_flag,
@@ -5185,6 +5186,9 @@ def _resolved_kwargs_think(llama_backend, resolved) -> bool:
         return bool(resolved["enable_thinking"])
     if "reasoning_effort" in resolved:
         effort = resolved["reasoning_effort"]
+        # Inkling 2 still thinks at "none", so its reasoning keeps being split out of the reply.
+        if getattr(llama_backend, "_architecture", None) in _INKLING2_ARCHS:
+            return True
         if isinstance(effort, str):
             return effort.strip().lower() != "none"
         if isinstance(effort, (int, float)) and not isinstance(effort, bool):

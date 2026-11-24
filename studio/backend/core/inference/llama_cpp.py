@@ -32182,9 +32182,11 @@ class LlamaCppBackend:
                     reasoning_kw = self._reasoning_kwargs(
                         thinking_default, _reasoning_effort_from_env(env)
                     )
-                    # An effort ladder thinks at every level but "none" (Inkling: 0), low included.
+                    # An effort ladder thinks at every level but "none", low included; Inkling 2's "none" thinks too.
                     self._reasoning_default = reasoning_kw.get(
-                        "enable_thinking", reasoning_kw.get("reasoning_effort") not in ("none", 0)
+                        "enable_thinking",
+                        self._architecture in _INKLING2_ARCHS
+                        or reasoning_kw.get("reasoning_effort") not in ("none", 0),
                     )
                     # preserve_thinking is independent of the thinking gate.
                     # Qwen3.8 defaults it on; Qwen3.6, Gemma 4, and every other
