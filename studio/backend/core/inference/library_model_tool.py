@@ -315,7 +315,7 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
     allow_model_switch_for_request(request.scope)
     restored = False
     try:
-        await _maybe_auto_switch_model(_RELOAD_ONLY_MODEL, request, subject)
+        await _own_task(_maybe_auto_switch_model(_RELOAD_ONLY_MODEL, request, subject))
         restored = loaded_identity() is not None
     except Exception as exc:  # noqa: BLE001 - reported in the tool result
         logger.warning("use_library_model: chat model reload failed: %s", exc, exc_info = True)
@@ -323,6 +323,12 @@ async def _restore_chat(swap: _Swap, subject: str) -> Optional[str]:
     finally:
         end_in_process_request(request.scope, answered = restored)
     return None if restored else "it did not come back up"
+
+
+async def _own_task(coro):
+    """A load routes the context it runs in to its slot, so an in-process request runs as its own
+    task: a refused beside load would otherwise leave this call reading an empty slot."""
+    return await asyncio.ensure_future(coro)
 
 
 # The call's Stop/deadline event, handed to the in-process requests a non-media model runs on.
@@ -592,7 +598,8 @@ def _run(arguments: dict, workdir: str, cancel_event, timeout: Optional[float]) 
     ):
         return result + (" " + note if note else "")
     if swap.chat_unloaded:
-        note = f"The chat model was unloaded for this {swap.kind} and loaded back. {note}".strip()
+        back = "" if note else " and loaded back"
+        note = f"The chat model was unloaded for this {swap.kind}{back}. {note}".strip()
     elif swap.loaded_media and swap.chat_identity is not None:
         note = f"The chat model stayed loaded beside the {swap.kind} model. {note}".strip()
     if isinstance(result, _Clip):
@@ -701,8 +708,7 @@ async def _unload_llm(name: str, subject: str) -> None:
     from routes.inference import _unload_model_impl
 
     if _model_is_loaded(name):
-        # Its own task, so the unload's slot routing cannot stick to this context.
-        await asyncio.ensure_future(_unload_model_impl(UnloadRequest(model_path = name), subject))
+        await _own_task(_unload_model_impl(UnloadRequest(model_path = name), subject))
 
 
 async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -> tuple[str, bool]:
@@ -750,6 +756,12 @@ async def _complete_llm(name: str, prompt: str, subject: str, *, beside: bool) -
     return str(message.get("content") or "").strip(), False
 
 
+def _unloaded_note(swap: "_Swap", name: str) -> str:
+    # A failed put back adds its own ERR_RESTORE line after this one.
+    back = "" if swap.note else ", and loaded back"
+    return f"The chat model was unloaded so {name} could run{back}."
+
+
 def _with_note(text: str, note: str) -> str:
     """The note goes above a file envelope, which has to stay last."""
     body, sep, files = text.partition("\n__FILES__")
@@ -770,10 +782,10 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
         return ERR_UNLOAD_ARG
     mode = mode or await asyncio.to_thread(get_multi_model_mode)
     if _model_is_loaded(name):
-        return (await run(True))[0]
+        return (await _own_task(run(True)))[0]
     if mode in ("always", "fit"):
         with multi_model_mode_for_request("always"):
-            text, refused = await run(True)
+            text, refused = await _own_task(run(True))
         if not refused:
             await _unload_llm(name, subject)
             if text.startswith("Error"):
@@ -788,7 +800,7 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
     try:
         await asyncio.to_thread(_evict_chat_model)
         with multi_model_mode_for_request("off"):
-            text, _ = await run(False)
+            text, _ = await _own_task(run(False))
         # It holds the chat seat now, and an unload there would wait on this chat's own request.
         await asyncio.to_thread(_evict_chat_model)
         await _unload_llm(name, subject)
@@ -797,7 +809,7 @@ async def _on_chat_seat(arguments: dict, name: str, swap: "_Swap", run) -> str:
         swap.note = await asyncio.shield(_put_back(swap, subject))
     if text.startswith("Error"):
         return text
-    return _with_note(text, f"The chat model was unloaded so {name} could run, and loaded back.")
+    return _with_note(text, _unloaded_note(swap, name))
 
 
 async def _non_gguf_chat() -> bool:
@@ -981,9 +993,7 @@ async def _decide_with(name: str, prompt: str, arguments: dict, swap: "_Swap") -
         swap.note = await asyncio.shield(_put_back(swap, subject))
     text = f"{name} decided:\n{json.dumps(result, ensure_ascii = False)}"
     if holds_gpu:
-        return _with_note(
-            text, f"The chat model was unloaded so {name} could run, and loaded back."
-        )
+        return _with_note(text, _unloaded_note(swap, name))
     return text
 
 

@@ -232,6 +232,7 @@ def test_a_failed_restore_tells_the_model(world):
     result = _call(world, {"model": "org/image-model", "prompt": "a red fox"})
     assert result.startswith("Generated a")
     assert "The chat model could not be loaded back (it did not come back up)" in result
+    assert "and loaded back" not in result
 
 
 def test_a_non_gguf_chat_that_would_be_evicted_is_refused_before_anything_loads(world, monkeypatch):
@@ -783,6 +784,37 @@ def test_auto_falls_back_to_unloading_when_the_llm_does_not_fit(world, llm):
     ]
     assert "loaded back" in result
     assert world.chat == CHAT
+
+
+def test_a_refused_beside_load_does_not_leave_this_call_on_its_empty_slot(world, llm, monkeypatch):
+    from core.inference import model_slots
+
+    empty_slot = object()
+    complete = tool._complete_llm
+
+    async def routes_then_refuses(name, prompt, subject, *, beside):
+        model_slots.routed_slot.set(empty_slot)  # as _select_load_slot does for a beside load
+        return await complete(name, prompt, subject, beside = beside)
+
+    monkeypatch.setattr(tool, "_complete_llm", routes_then_refuses)
+    monkeypatch.setattr(
+        llama_keepwarm,
+        "loaded_identity",
+        lambda: None if model_slots.routed_slot.get() is empty_slot else world.chat,
+    )
+    llm.fits = False
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "auto"})
+    assert ("restore", CHAT) in world.calls
+    assert "loaded back" in result
+    assert world.chat == CHAT
+
+
+def test_an_llm_swap_whose_put_back_fails_does_not_say_the_chat_model_is_back(world, llm):
+    world.restore_failure = "it did not come back up"
+    result = _call(world, {"model": "org/other-llm", "prompt": "hi", "unload_chat_model": "true"})
+    assert "The chat model was unloaded so org/other-llm could run." in result
+    assert "loaded back." not in result.replace("could not be loaded back", "")
+    assert tool.ERR_RESTORE.format(detail = "it did not come back up") in result
 
 
 def test_omitted_follows_the_setting_for_an_llm(world, llm):
