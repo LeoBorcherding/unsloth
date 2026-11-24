@@ -1730,6 +1730,12 @@ class FastLanguageModel(FastLlamaModel):
                         f'Try `pip install --upgrade "transformers>=5.2.0"`\n'
                         f"to obtain the latest transformers build, then restart this session."
                     )
+                if "inkling2" in autoconfig_error:
+                    raise ImportError(
+                        f"Unsloth: Your transformers version of {transformers_version} does not support Inkling 2.\n"
+                        f"Inkling 2 needs transformers 5.24.0, which is above the version Unsloth pins.\n"
+                        f'Try `pip install "transformers==5.24.0"`, then restart this session.'
+                    )
                 raise ValueError(
                     f"`{model_name}` is not supported yet in `transformers=={transformers_version}`.\n"
                     f"Please update transformers via `pip install --upgrade transformers` and try again."
@@ -2746,6 +2752,12 @@ class FastModel(FastBaseModel):
                         f"The minimum required version is 5.2.0.\n"
                         f'Try `pip install --upgrade "transformers>=5.2.0"`\n'
                         f"to obtain the latest transformers build, then restart this session."
+                    )
+                if "inkling2" in autoconfig_error:
+                    raise ImportError(
+                        f"Unsloth: Your transformers version of {transformers_version} does not support Inkling 2.\n"
+                        f"Inkling 2 needs transformers 5.24.0, which is above the version Unsloth pins.\n"
+                        f'Try `pip install "transformers==5.24.0"`, then restart this session.'
                     )
                 raise ValueError(
                     f"`{model_name}` is not supported yet in `transformers=={transformers_version}`.\n"
