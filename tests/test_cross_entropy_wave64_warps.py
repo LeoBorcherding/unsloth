@@ -83,9 +83,9 @@ def test_chunked_forward_on_hip_uses_the_warp_limit(warps, vocab, monkeypatch):
         ce_mod._chunked_forward_config_at.cache_clear()
 
 
-# 40000 runs the single block kernel with BLOCK_SIZE 65536, which calculate_settings gives 32 warps;
-# the others run the chunked kernel. Both raised OutOfResources on gfx906 before the warp limit.
-@pytest.mark.parametrize("vocab", [40000, 128256, 262144])
+# 32000 and 40000 run the single block kernel (BLOCK_SIZE 32768 and 65536), which calculate_settings gives
+# 32 warps from vocab 16385 up; the others run the chunked kernel. All raised OutOfResources on gfx906.
+@pytest.mark.parametrize("vocab", [32000, 40000, 128256, 262144])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 def test_loss_and_grads_match_torch(vocab, dtype):
     rows = 16
