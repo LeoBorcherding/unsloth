@@ -1582,6 +1582,22 @@ def test_merge_chat_template_kwargs_keeps_an_invalid_user_value_for_llama_server
     assert merge(cmd_in, ["--chat-template-kwargs=[1]"]) == (cmd_in, ["--chat-template-kwargs=[1]"])
 
 
+def test_merge_chat_template_kwargs_folds_repeated_user_flags_without_managed_ones():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--jinja"],
+        ["--chat-template-kwargs", '{"a":"u1"}', "--chat-template-kwargs", '{"b":"u2"}'],
+    )
+    assert cmd == ["--jinja"]
+    assert extras[0] == "--chat-template-kwargs"
+    assert json.loads(extras[1]) == {"a": "u1", "b": "u2"}
+    assert len(extras) == 2
+    single = ["--chat-template-kwargs", '{"a":"u1"}']
+    assert merge(["--jinja"], single) == (["--jinja"], single)
+
+
 def test_merge_chat_template_kwargs_leaves_argv_alone_without_extras_flag():
     merge = _lsa.merge_chat_template_kwargs_argv
     cmd_in = ["--chat-template-kwargs", '{"reasoning_effort":"high"}']

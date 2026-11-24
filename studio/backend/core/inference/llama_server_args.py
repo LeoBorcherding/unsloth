@@ -2020,13 +2020,14 @@ def merge_chat_template_kwargs_argv(
         user_spans = _chat_template_kwargs_spans(extras_list)
     except ValueError:
         return cmd_list, extras_list
-    if not cmd_spans or not user_spans:
+    if not user_spans or len(cmd_spans) + len(user_spans) < 2:
         return cmd_list, extras_list
     tokens = cmd_list + extras_list
     values = {start: raw for start, _, raw in cmd_spans}
     values.update({start + len(cmd_list): raw for start, _, raw in user_spans})
     merged: dict = {}
-    for i in range(cmd_spans[0][0], user_spans[-1][0] + len(cmd_list) + 1):
+    first = cmd_spans[0][0] if cmd_spans else user_spans[0][0] + len(cmd_list)
+    for i in range(first, user_spans[-1][0] + len(cmd_list) + 1):
         if i in values:
             obj = _chat_template_kwargs_object(values[i])
             # A value that is not a JSON object stays verbatim, so llama-server still reports it.
