@@ -7409,11 +7409,11 @@ html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] [
   box-shadow: none;
 }
 /* TextureMapper (WebKitGTK < 2.54) blurs layers painted over a backdrop-filter into it, so the strip haloed the
-   sidebar logo. A surface's own backdrop leaves its children out: the sidebar takes its column's glass and the
-   strip keeps only the caption, so the column is still one layer of fill. */
+   sidebar logo. A surface's own backdrop leaves its children out: the sidebar and docked Run settings take their
+   columns' glass and the strip keeps only the caption between them, so each column is one layer of fill. */
 html.tauri.render-linux.webkit-legacy-compositor[data-glass][data-chat-wallpaper-workspace-ready] [data-slot="sidebar-container"][data-windows-glass-frame]::before {
   mask:
-    linear-gradient(black 0 0) var(--sidebar-width) top / 100% var(--studio-custom-titlebar-height) no-repeat,
+    linear-gradient(black 0 0) var(--sidebar-width) top / calc(100% - var(--sidebar-width) - var(--studio-chat-settings-docked-width, 0px)) var(--studio-custom-titlebar-height) no-repeat,
     radial-gradient(circle at right bottom, transparent calc(var(--radius-md) - 1px), black var(--radius-md))
       var(--sidebar-width) var(--studio-custom-titlebar-height) / var(--radius-md) var(--radius-md) no-repeat,
     radial-gradient(circle at left bottom, transparent calc(var(--studio-run-settings-fillet) - 1px), black var(--studio-run-settings-fillet))
@@ -7530,12 +7530,11 @@ html[data-glass="macos"] [data-slot="chat-settings-panel"] {
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
-/* Not WebKitGTK < 2.54 glass: its strip mask keeps only the caption. */
-html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame]:not(.webkit-legacy-compositor[data-glass])[data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
   --chat-settings-top: 0px;
   padding-top: var(--studio-custom-titlebar-height, 0px);
 }
-html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame]:not(.webkit-legacy-compositor[data-glass])[data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-resize-handle"] {
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-resize-handle"] {
   top: var(--studio-custom-titlebar-height, 0px);
 }
 /* The strip's glass covers this column: two adjacent backdrop blurs always show a seam. */
@@ -7549,7 +7548,7 @@ html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame]:not(.webkit-
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame]:not(.webkit-legacy-compositor[data-glass])[data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] > [data-chat-settings-content] {
+html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] > [data-chat-settings-content] {
   border-left-color: transparent;
 }
 html[data-glass][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-panel"] .bg-panel-surface,
@@ -7567,6 +7566,11 @@ html[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat
 }
 html.dark[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot="chat-settings-panel"] {
   box-shadow: inset 1px 0 0 rgb(255 255 255 / .08);
+}
+/* WebKitGTK < 2.54 keeps this column's own glass under the caption: the strip's fill and no edge line, so it meets the corner without a seam. */
+html.tauri.render-linux.webkit-legacy-compositor[data-glass][data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
+  background: color-mix(in srgb, var(--glass-sidebar-fill) min(96%, calc(max(var(--glass-tint), var(--glass-pane-floor)) * var(--glass-opacity, 1))), transparent);
+  box-shadow: none;
 }
 html[data-glass][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
   transition: border-top-left-radius .2s ease;
