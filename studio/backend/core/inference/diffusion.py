@@ -17678,11 +17678,17 @@ class DiffusionBackend:
             # Wait for denoise to exit first: _unload_locked uninstalls process-wide state it uses.
             with self._model_transition_slot():
                 with self._lock:
+                    tore_down = self._state is not None
                     try:
                         self._unload_locked()
                     finally:
                         # In a finally: clear_gpu_cache() can raise on a sticky CUDA fault, leaving the fence up.
                         self._release_teardown_locked()
+            if tore_down:
+                # The denoiser sits in hook cycles still pinned from this call path during _unload_locked's
+                # gc, so they become garbage only here; without a second pass the caching allocator keeps the
+                # whole transformer reserved (6.4 GiB on a T4) and the next trainer OOMs beside it.
+                clear_gpu_cache()
         finally:
             if fenced:
                 with self._load_cancel_lock:
