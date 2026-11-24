@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -1951,3 +1952,99 @@ def translate_ngram_mod_args(
             continue
         out.extend([legacy, value])
     return out
+
+
+_CHAT_TEMPLATE_KWARGS_FLAGS: frozenset[str] = frozenset({"--chat-template-kwargs"})
+# Flags llama.cpp writes into the template kwargs itself, by the key each one sets.
+_TEMPLATE_KWARG_FLAG_KEYS: dict[str, str] = {
+    "--reasoning": "enable_thinking",
+    "-rea": "enable_thinking",
+    "--reasoning-effort": "reasoning_effort",
+    "--reasoning-preserve": "preserve_reasoning",
+    "--no-reasoning-preserve": "preserve_reasoning",
+}
+
+
+def _chat_template_kwargs_spans(tokens: list[str]) -> list[tuple[int, int, str]]:
+    """(start, stop, value) per --chat-template-kwargs; raises on one with no value."""
+    spans: list[tuple[int, int, str]] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        tok = tokens[i]
+        if _flag_name(tok) not in _CHAT_TEMPLATE_KWARGS_FLAGS:
+            i += 1
+        elif "=" in tok:
+            spans.append((i, i + 1, tok.split("=", 1)[1]))
+            i += 1
+        elif i + 1 < n and _flag_name(tokens[i + 1]) is None:
+            spans.append((i, i + 2, tokens[i + 1]))
+            i += 2
+        else:
+            raise ValueError("llama-server flag '--chat-template-kwargs' requires a value")
+    return spans
+
+
+def _replace_spans(
+    tokens: list[str],
+    spans: list[tuple[int, int, str]],
+    last: Optional[list[str]] = None,
+) -> list[str]:
+    out: list[str] = []
+    prev = 0
+    for idx, (start, stop, _) in enumerate(spans):
+        out.extend(tokens[prev:start])
+        if last is not None and idx == len(spans) - 1:
+            out.extend(last)
+        prev = stop
+    out.extend(tokens[prev:])
+    return out
+
+
+def _chat_template_kwargs_object(raw: Optional[str]) -> Optional[dict]:
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def merge_chat_template_kwargs_argv(
+    cmd: Iterable[str], extras: Iterable[str]
+) -> tuple[list[str], list[str]]:
+    """Fold every --chat-template-kwargs into one at the user's last, in argv order so the user's
+    keys win. llama.cpp merges repeats key by key but warns that only the last one is used."""
+    cmd_list = [str(a) for a in (cmd or [])]
+    extras_list = [str(a) for a in (extras or [])]
+    try:
+        cmd_spans = _chat_template_kwargs_spans(cmd_list)
+        user_spans = _chat_template_kwargs_spans(extras_list)
+    except ValueError:
+        return cmd_list, extras_list
+    if not user_spans or len(cmd_spans) + len(user_spans) < 2:
+        return cmd_list, extras_list
+    tokens = cmd_list + extras_list
+    values = {start: raw for start, _, raw in cmd_spans}
+    values.update({start + len(cmd_list): raw for start, _, raw in user_spans})
+    merged: dict = {}
+    first = cmd_spans[0][0] if cmd_spans else user_spans[0][0] + len(cmd_list)
+    for i in range(first, user_spans[-1][0] + len(cmd_list) + 1):
+        if i in values:
+            obj = _chat_template_kwargs_object(values[i])
+            # A value that is not a JSON object stays verbatim, so llama-server still reports it.
+            if obj is None:
+                return cmd_list, extras_list
+            merged.update(obj)
+            continue
+        flag = _flag_name(tokens[i])
+        key = _TEMPLATE_KWARG_FLAG_KEYS.get(flag or "")
+        if key is None:
+            continue
+        if key == "enable_thinking":
+            value = tokens[i].split("=", 1)[1] if "=" in tokens[i] else tokens[i + 1]
+            if value.strip() in {"auto", "-1"}:
+                continue
+        # A flag between two kwargs keeps its effect: the folded flag now lands after it.
+        merged.pop(key, None)
+    return _replace_spans(cmd_list, cmd_spans), _replace_spans(
+        extras_list, user_spans, ["--chat-template-kwargs", json.dumps(merged)]
+    )

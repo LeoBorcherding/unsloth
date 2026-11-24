@@ -1497,6 +1497,114 @@ def test_the_launch_respells_user_ngram_mod_extras_last():
     assert '_caps.get("ngram_mod_flavor")' in emit
     assert emit.index("_strip_device_extra_args") < emit.index("translate_ngram_mod_args(")
     assert "_extra_args_requests_mtp(" in emit[emit.index("translate_ngram_mod_args(") :]
+    assert "merge_chat_template_kwargs_argv(" in emit
+    assert emit.index("translate_ngram_mod_args(") < emit.index("merge_chat_template_kwargs_argv(")
+
+
+def test_merge_chat_template_kwargs_user_keys_win_and_emit_once():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        [
+            "--jinja",
+            "--chat-template-kwargs",
+            '{"reasoning_effort":"high","preserve_thinking":true}',
+        ],
+        ["--temp", "0.0", "--chat-template-kwargs", '{"reasoning_effort":"none"}'],
+    )
+    assert cmd == ["--jinja"]
+    assert extras[:2] == ["--temp", "0.0"]
+    assert extras[2] == "--chat-template-kwargs"
+    assert json.loads(extras[3]) == {"reasoning_effort": "none", "preserve_thinking": True}
+
+
+def test_merge_chat_template_kwargs_folds_every_user_flag_in_order():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        [
+            "--chat-template-kwargs",
+            '{"a":"u1","b":"u1"}',
+            "--temp",
+            "0.0",
+            '--chat-template-kwargs={"b":"u2"}',
+        ],
+    )
+    assert cmd == []
+    assert extras[:2] == ["--temp", "0.0"]
+    assert (cmd + extras).count("--chat-template-kwargs") == 1
+    assert json.loads(extras[3]) == {"reasoning_effort": "high", "a": "u1", "b": "u2"}
+
+
+def test_merge_chat_template_kwargs_stays_after_the_users_own_reasoning_flag():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--jinja", "--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        ["--reasoning", "on", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    )
+    argv = cmd + extras
+    assert argv.index("--reasoning") < argv.index("--chat-template-kwargs")
+    assert json.loads(argv[-1]) == {"reasoning_effort": "high", "enable_thinking": False}
+
+
+def test_merge_chat_template_kwargs_lets_a_reasoning_flag_between_them_stand():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        [
+            "--chat-template-kwargs",
+            '{"enable_thinking":false}',
+            "--reasoning",
+            "on",
+            "--reasoning-effort",
+            "low",
+            "--chat-template-kwargs",
+            '{"a":"u1"}',
+        ],
+    )
+    assert cmd == []
+    assert extras[:4] == ["--reasoning", "on", "--reasoning-effort", "low"]
+    assert json.loads(extras[-1]) == {"a": "u1"}
+
+
+def test_merge_chat_template_kwargs_keeps_an_invalid_user_value_for_llama_server():
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd_in = ["--chat-template-kwargs", '{"reasoning_effort":"high"}']
+    extras_in = ["--chat-template-kwargs", "{not json"]
+    assert merge(cmd_in, extras_in) == (cmd_in, extras_in)
+    assert merge(cmd_in, ["--chat-template-kwargs=[1]"]) == (cmd_in, ["--chat-template-kwargs=[1]"])
+
+
+def test_merge_chat_template_kwargs_folds_repeated_user_flags_without_managed_ones():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--jinja"],
+        ["--chat-template-kwargs", '{"a":"u1"}', "--chat-template-kwargs", '{"b":"u2"}'],
+    )
+    assert cmd == ["--jinja"]
+    assert extras[0] == "--chat-template-kwargs"
+    assert json.loads(extras[1]) == {"a": "u1", "b": "u2"}
+    assert len(extras) == 2
+    single = ["--chat-template-kwargs", '{"a":"u1"}']
+    assert merge(["--jinja"], single) == (["--jinja"], single)
+
+
+def test_merge_chat_template_kwargs_leaves_argv_alone_without_extras_flag():
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd_in = ["--chat-template-kwargs", '{"reasoning_effort":"high"}']
+    extras_in = ["--temp", "0.0"]
+    cmd, extras = merge(cmd_in, extras_in)
+    assert cmd == cmd_in
+    assert extras == extras_in
 
 
 def test_ngram_mod_underscore_spelling_is_respelled_too():
