@@ -38,12 +38,21 @@ test("under WebKitGTK's TextureMapper compositor the pinned sidebar blurs for it
 });
 
 test("under it the strip leaves the sidebar column to the sidebar, so the column keeps one layer of fill", () => {
-  const shared = decls(`html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] ${STRIP}`).get("mask");
+  const shared = decls(`html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] ${STRIP.replace("::before", "")}`).get("--studio-glass-strip-mask");
+  assert.equal(decls(`html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] ${STRIP}`).get("mask"), "var(--studio-glass-strip-mask)");
   const legacy = decls(`${GATE}[data-chat-wallpaper-workspace-ready] ${STRIP}`).get("mask");
   assert.match(shared ?? "", /left top \/ var\(--sidebar-width\) 100%/);
   assert.ok(legacy, "the legacy strip sets its own mask");
   assert.doesNotMatch(legacy, /var\(--sidebar-width\) 100%/, "no sidebar column under the self-blurred sidebar");
-  assert.match(legacy, /var\(--sidebar-width\) top \/ 100% var\(--studio-custom-titlebar-height\)/);
+  // The caption stops at docked Run settings, which keeps its own glass here, in the strip's fill and with no edge line.
+  assert.match(legacy, /var\(--sidebar-width\) top \/ calc\(100% - var\(--sidebar-width\) - var\(--studio-chat-settings-docked-width, 0px\)\) var\(--studio-custom-titlebar-height\)/);
+  const panel = decls(`${GATE}[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"]`);
+  assert.equal(panel.get("box-shadow"), "none");
+  assert.match(panel.get("background-color") ?? "", /^color-mix\(in srgb, var\(--glass-sidebar-fill\)/);
+  assert.equal(panel.get("background"), undefined, "a shorthand would drop the liquid sheen");
+  assert.equal(panel.get("background-attachment"), "fixed");
+  // Run settings keeps its own glass here, so the caption rounds the chat's top right corner as well as its left.
+  assert.match(legacy, /radial-gradient\(circle at left bottom, transparent calc\(var\(--studio-run-settings-fillet\) - 1px\), black var\(--studio-run-settings-fillet\)\)\s+calc\(100vw - var\(--studio-chat-settings-docked-width, 0px\) - var\(--studio-run-settings-fillet\)\) var\(--studio-custom-titlebar-height\)/);
 });
 
 test("the self blur comes after the rule that clears it and stays off every other engine", () => {
