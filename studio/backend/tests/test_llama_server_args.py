@@ -1513,11 +1513,65 @@ def test_merge_chat_template_kwargs_user_keys_win_and_emit_once():
         ],
         ["--temp", "0.0", "--chat-template-kwargs", '{"reasoning_effort":"none"}'],
     )
-    assert cmd.count("--chat-template-kwargs") == 1
-    assert "--chat-template-kwargs" not in extras
-    assert extras == ["--temp", "0.0"]
-    idx = cmd.index("--chat-template-kwargs")
-    assert json.loads(cmd[idx + 1]) == {"reasoning_effort": "none", "preserve_thinking": True}
+    assert cmd == ["--jinja"]
+    assert extras[:2] == ["--temp", "0.0"]
+    assert extras[2] == "--chat-template-kwargs"
+    assert json.loads(extras[3]) == {"reasoning_effort": "none", "preserve_thinking": True}
+
+
+def test_merge_chat_template_kwargs_folds_every_user_flag_in_order():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        [
+            "--chat-template-kwargs",
+            '{"a":"u1","b":"u1"}',
+            "--temp",
+            "0.0",
+            '--chat-template-kwargs={"b":"u2"}',
+        ],
+    )
+    assert cmd == []
+    assert extras[:2] == ["--temp", "0.0"]
+    assert (cmd + extras).count("--chat-template-kwargs") == 1
+    assert json.loads(extras[3]) == {"reasoning_effort": "high", "a": "u1", "b": "u2"}
+
+
+def test_merge_chat_template_kwargs_stays_after_the_users_own_reasoning_flag():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--jinja", "--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        ["--reasoning", "on", "--chat-template-kwargs", '{"enable_thinking":false}'],
+    )
+    argv = cmd + extras
+    assert argv.index("--reasoning") < argv.index("--chat-template-kwargs")
+    assert json.loads(argv[-1]) == {"reasoning_effort": "high", "enable_thinking": False}
+
+
+def test_merge_chat_template_kwargs_lets_a_reasoning_flag_between_them_stand():
+    import json
+
+    merge = _lsa.merge_chat_template_kwargs_argv
+    cmd, extras = merge(
+        ["--chat-template-kwargs", '{"reasoning_effort":"high"}'],
+        [
+            "--chat-template-kwargs",
+            '{"enable_thinking":false}',
+            "--reasoning",
+            "on",
+            "--reasoning-effort",
+            "low",
+            "--chat-template-kwargs",
+            '{"a":"u1"}',
+        ],
+    )
+    assert cmd == []
+    assert extras[:4] == ["--reasoning", "on", "--reasoning-effort", "low"]
+    assert json.loads(extras[-1]) == {"a": "u1"}
 
 
 def test_merge_chat_template_kwargs_keeps_an_invalid_user_value_for_llama_server():
