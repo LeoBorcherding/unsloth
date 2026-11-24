@@ -48,7 +48,9 @@ test("under it the strip leaves the sidebar column to the sidebar, so the column
   assert.match(legacy, /var\(--sidebar-width\) top \/ calc\(100% - var\(--sidebar-width\) - var\(--studio-chat-settings-docked-width, 0px\)\) var\(--studio-custom-titlebar-height\)/);
   const panel = decls(`${GATE}[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"]`);
   assert.equal(panel.get("box-shadow"), "none");
-  assert.match(panel.get("background") ?? "", /^color-mix\(in srgb, var\(--glass-sidebar-fill\)/);
+  assert.match(panel.get("background-color") ?? "", /^color-mix\(in srgb, var\(--glass-sidebar-fill\)/);
+  assert.equal(panel.get("background"), undefined, "a shorthand would drop the liquid sheen");
+  assert.equal(panel.get("background-attachment"), "fixed");
   // Run settings keeps its own glass here, so the caption rounds the chat's top right corner as well as its left.
   assert.match(legacy, /radial-gradient\(circle at left bottom, transparent calc\(var\(--studio-run-settings-fillet\) - 1px\), black var\(--studio-run-settings-fillet\)\)\s+calc\(100vw - var\(--studio-chat-settings-docked-width, 0px\) - var\(--studio-run-settings-fillet\)\) var\(--studio-custom-titlebar-height\)/);
 });

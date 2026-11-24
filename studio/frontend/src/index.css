@@ -7569,7 +7569,9 @@ html.dark[data-glass^="liquid"][data-chat-wallpaper-workspace-ready] [data-slot=
 }
 /* WebKitGTK < 2.54 keeps this column's own glass under the caption: the strip's fill and no edge line, so it meets the corner without a seam. */
 html.tauri.render-linux.webkit-legacy-compositor[data-glass][data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
-  background: color-mix(in srgb, var(--glass-sidebar-fill) min(96%, calc(max(var(--glass-tint), var(--glass-pane-floor)) * var(--glass-opacity, 1))), transparent);
+  background-color: color-mix(in srgb, var(--glass-sidebar-fill) min(96%, calc(max(var(--glass-tint), var(--glass-pane-floor)) * var(--glass-opacity, 1))), transparent);
+  /* The strip's sheen is fixed too, so it runs on into this column. */
+  background-attachment: fixed;
   box-shadow: none;
 }
 html[data-glass][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] {
