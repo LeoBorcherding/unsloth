@@ -17075,6 +17075,29 @@ class LlamaCppBackend:
         return unbacked
 
     @staticmethod
+    def _paged_fit_headroom_with_lift(
+        argv: Iterable[str],
+        env: Optional[Mapping[str, str]],
+        user_args: Optional[Iterable[str]],
+        rows: list,
+        headroom_mib: float,
+        *,
+        is_vulkan_backend: bool,
+    ) -> tuple[list[str], float]:
+        """``_paged_fit_headroom_flags`` plus the APU's unbacked MiB, and the headroom used.
+        The HIP read runs only when a margin is going on, since it can open a HIP context here."""
+        flag = lambda mib: LlamaCppBackend._paged_fit_headroom_flags(
+            argv, env, user_args, gpu_count = len(rows), headroom_mib = mib
+        )
+        flags = flag(headroom_mib)
+        if flags and not is_vulkan_backend:
+            lift = LlamaCppBackend._rocm_apu_unbacked_free_mib([row[0] for row in rows])
+            if lift:
+                headroom_mib += lift
+                flags = flag(headroom_mib)
+        return flags, headroom_mib
+
+    @staticmethod
     def _igpu_dedicated_used_bytes() -> Optional[int]:
         """Dedicated Usage of the lone AMD adapter whose carve-out was read, or None."""
         try:
@@ -33511,20 +33534,15 @@ class LlamaCppBackend:
 
                 def _launch_fit_headroom(argv: list) -> list:
                     nonlocal _paged_headroom_mib
-                    # Only once the load pages: this asks torch for the HIP free reading.
-                    if not is_vulkan_backend:
-                        _paged_headroom_mib += self._rocm_apu_unbacked_free_mib(
-                            [row[0] for row in _reachable_gpus]
-                        )
-                    _paged_headroom.extend(
-                        self._paged_fit_headroom_flags(
-                            argv,
-                            env,
-                            extra_args,
-                            gpu_count = len(_reachable_gpus),
-                            headroom_mib = _paged_headroom_mib,
-                        )
+                    flags, _paged_headroom_mib = self._paged_fit_headroom_with_lift(
+                        argv,
+                        env,
+                        extra_args,
+                        _reachable_gpus,
+                        _paged_headroom_mib,
+                        is_vulkan_backend = is_vulkan_backend,
                     )
+                    _paged_headroom.extend(flags)
                     return _paged_headroom
 
                 cmd, _pageable_note = self._page_an_oversized_unmapped_load(
@@ -35216,19 +35234,15 @@ class LlamaCppBackend:
 
                         def _retry_fit_headroom(argv: list) -> list:
                             nonlocal _retry_headroom_mib
-                            if not is_vulkan_backend:
-                                _retry_headroom_mib += self._rocm_apu_unbacked_free_mib(
-                                    [row[0] for row in _retry_rows]
-                                )
-                            _retry_headroom.extend(
-                                self._paged_fit_headroom_flags(
-                                    argv,
-                                    env,
-                                    extra_args,
-                                    gpu_count = len(_retry_rows),
-                                    headroom_mib = _retry_headroom_mib,
-                                )
+                            flags, _retry_headroom_mib = self._paged_fit_headroom_with_lift(
+                                argv,
+                                env,
+                                extra_args,
+                                _retry_rows,
+                                _retry_headroom_mib,
+                                is_vulkan_backend = is_vulkan_backend,
                             )
+                            _retry_headroom.extend(flags)
                             return _retry_headroom
 
                         cmd, _retry_pageable_note = self._page_an_oversized_unmapped_load(

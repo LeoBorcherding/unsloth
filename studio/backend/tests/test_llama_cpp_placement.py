@@ -3347,20 +3347,37 @@ def test_an_unreadable_carve_out_keeps_the_plain_headroom(monkeypatch):
     assert LlamaCppBackend._rocm_apu_unbacked_free_mib([0]) == 0
 
 
-def test_the_unbacked_lift_rides_on_the_paging_headroom():
-    """Launch and retry both fold the unbacked MiB into the headroom the margins carry."""
+def test_the_unbacked_lift_rides_on_the_paging_headroom(monkeypatch):
+    """Launch and retry both take the flag and the headroom their margins carry from one helper."""
     import inspect
 
+    monkeypatch.setattr(llama_cpp_module, "_paged_load_needs_fit_headroom", lambda: True)
+    probes = []
+    monkeypatch.setattr(
+        LlamaCppBackend,
+        "_rocm_apu_unbacked_free_mib",
+        staticmethod(lambda ids: probes.append(list(ids)) or 55_232),
+    )
+    lift = LlamaCppBackend._paged_fit_headroom_with_lift
+    rows = [(0, 100_000)]
+    assert lift(["--fit", "on"], {}, [], rows, 15_360, is_vulkan_backend = False) == (
+        ["--fit-target", str(16_384 + 55_232)],
+        15_360 + 55_232,
+    )
+    assert probes == [[0]]
+    assert lift(["--fit", "on"], {}, [], rows, 15_360, is_vulkan_backend = True) == (
+        ["--fit-target", "16384"],
+        15_360,
+    )
+    assert lift(["--fit", "off"], {}, [], rows, 15_360, is_vulkan_backend = False) == ([], 15_360)
+    assert probes == [[0]]
+
     src = inspect.getsource(LlamaCppBackend.load_model)
-    launch = src[src.index("def _launch_fit_headroom(") :]
-    assert launch.index("_paged_headroom_mib += self._rocm_apu_unbacked_free_mib(") < launch.index(
-        "headroom_mib = _paged_headroom_mib"
-    )
-    retry = src[src.index("def _retry_fit_headroom(") :]
-    assert retry.index("_retry_headroom_mib += self._rocm_apu_unbacked_free_mib(") < retry.index(
-        "headroom_mib = _retry_headroom_mib"
-    )
-    assert "fit_headroom_flags = _retry_fit_headroom" in retry
+    for closure in ("def _launch_fit_headroom(", "def _retry_fit_headroom("):
+        body = src[src.index(closure) :]
+        assert body.index("self._paged_fit_headroom_with_lift(") < body.index("return _")
+    assert "fit_headroom_flags = _launch_fit_headroom" in src
+    assert "fit_headroom_flags = _retry_fit_headroom" in src
 
 
 def test_an_unattributable_carve_out_says_why_the_lift_is_off(monkeypatch):
@@ -3392,6 +3409,25 @@ def test_a_paged_windows_rocm_apu_load_keeps_llama_cpps_fitter_inside_ram(tmp_pa
     assert margin == 16_384 + (110_079 - 17 * 1024 - 512), cmd
     # What llama.cpp may fill: the RAM left after the paging headroom.
     assert 110_079 - margin == 17 * 1024 + 512 - 16_384
+
+
+@pytest.mark.parametrize("extra_args", [["--fit", "off"], ["--fit-target", "4096"]])
+def test_no_hip_probe_when_the_launch_takes_no_paging_margin(tmp_path, monkeypatch, extra_args):
+    """The HIP read can open a context in this process; skip it when no margin is added."""
+    monkeypatch.setattr(llama_cpp_module, "_paged_load_needs_fit_headroom", lambda: True)
+    backend, gguf = _igpu_backend(tmp_path, monkeypatch, avail_mib = 17 * 1024)
+    _hip_apu(monkeypatch, free_mib = 110_079)
+    probes = []
+    real = LlamaCppBackend._rocm_apu_unbacked_free_mib
+    monkeypatch.setattr(
+        LlamaCppBackend,
+        "_rocm_apu_unbacked_free_mib",
+        staticmethod(lambda ids: probes.append(list(ids)) or real(ids)),
+    )
+
+    _launch(backend, gguf, extra_args = extra_args)
+
+    assert probes == []
 
 
 def test_a_paged_apu_load_ram_can_back_keeps_the_plain_headroom(tmp_path, monkeypatch):
