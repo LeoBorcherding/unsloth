@@ -68,11 +68,7 @@ def public_model_id(identifier: Optional[str]) -> Optional[str]:
     """
     if not identifier:
         return identifier
-    # A Hub repo can be named ``org/name.gguf``. That is still a repo id, not a
-    # local file, so the org and the ``.gguf`` leaf stay. A plain relative file
-    # such as ``models/foo.gguf`` is one slash too, and still reduces to its
-    # stem. A file inside a repo has two or more slashes.
-    if _is_hub_repo_id(identifier) and not _plain_relative_gguf(identifier):
+    if _is_hub_repo_id(identifier):
         return identifier
     if not _looks_like_path(identifier):
         return identifier
@@ -85,27 +81,11 @@ def public_model_id(identifier: Optional[str]) -> Optional[str]:
     return name or identifier
 
 
-def _plain_relative_gguf(identifier: str) -> bool:
-    """True for a relative ``dir/file.gguf`` whose leaf is a plain filename.
-
-    ``models/foo.gguf`` is one slash, so it also matches a Hub repo id. Real
-    Hub names that end in ``.gguf`` keep a hyphen, underscore, or another dot
-    in the leaf (``Orpheus-3b-FT-Q8_0.gguf``). A leaf of only letters and
-    digits is the file, and the public id is its stem.
-    """
-    if identifier.count("/") != 1 or identifier.startswith(("/", ".")):
-        return False
-    leaf = identifier.split("/", 1)[1]
-    if not leaf.lower().endswith(_GGUF_SUFFIX):
-        return False
-    stem = leaf[: -len(_GGUF_SUFFIX)]
-    return bool(stem) and stem.isalnum()
-
-
 def _is_hub_repo_id(identifier: str) -> bool:
     """``org/name``, including Hub repos named ``org/name.gguf``. A file reference
-    carries a repo id plus a filename, so two or more slashes."""
-    if identifier.count("/") != 1:
+    carries a repo id plus a filename, so two or more slashes. A one-slash id that
+    exists on disk is a relative file, the same rule ``is_local_path`` loads by."""
+    if identifier.count("/") != 1 or os.path.isfile(identifier):
         return False
     stem = (
         identifier[: -len(_GGUF_SUFFIX)]
