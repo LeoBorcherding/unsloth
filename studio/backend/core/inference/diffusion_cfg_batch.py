@@ -8,6 +8,7 @@ offloaded loads too; UNSLOTH_DIFFUSION_CFG_BATCH_COMPILED=0 keeps a compiled res
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import time
@@ -584,6 +585,8 @@ class CfgBatchRouter:
         self.identity: Optional[str] = (
             None  # the load's verdict-store identity (None: verdicts stay per load)
         )
+        # per render: False when the current step runs one branch by design (a guidance interval ended)
+        self.guided_step: Optional[Any] = None
 
     def _reset_step(self) -> None:
         self.branch = 0
@@ -635,6 +638,7 @@ class CfgBatchRouter:
         self.prev_calls = 0
         self.render_off = None
         self.render_checked = False
+        self.guided_step = None
         self._reset_step()
         for shape in self.shapes.values():
             shape.render_steps = 0
@@ -737,6 +741,9 @@ class CfgBatchRouter:
             self.branch += 1
         else:
             self._new_step(args, kwargs, latent)
+            if self.guided_step is not None and not self._guided():
+                # no second branch is coming: nothing to batch, and its absence is not a miss
+                return self._plain(args, kwargs)
         shape = self.shape
         if self.branch == 0 and self.paired is not None:
             # the first plain pair records the second call's template
@@ -808,6 +815,12 @@ class CfgBatchRouter:
             return out
         self.disable("more than two denoiser calls per step")
         return self._plain(args, kwargs)
+
+    def _guided(self) -> bool:
+        try:
+            return bool(self.guided_step())
+        except Exception:  # noqa: BLE001 - unknown: treat the step as guided, as without a probe
+            return True
 
     def _untimed_mode(self) -> bool:
         """No timing trial: an offloaded denoiser batches whenever the doubled call fits (it saves one weight upload
@@ -950,7 +963,8 @@ class CfgBatchRouter:
                 predicted = self._predict(latent) if self.template is not None else second
                 b_args, b_kwargs = merge_branches(first, predicted, batch)
                 snapshots = _snapshot(predicted)
-                split_output(self._forward(b_args, b_kwargs), batch)
+                with _padded_text_keeps_masks(self.module_ref(), first[1], predicted[1]):
+                    split_output(self._forward(b_args, b_kwargs), batch)
                 _matches(snapshots, second)
                 self._sync(latent)
                 shape.batched_s.append(time.perf_counter() - t0)
@@ -1111,7 +1125,8 @@ class CfgBatchRouter:
             return None
         graphs = _graph_count()
         try:
-            out = self._forward(b_args, b_kwargs)
+            with _padded_text_keeps_masks(self.module_ref(), kwargs, second[1]):
+                out = self._forward(b_args, b_kwargs)
             mine, other = split_output(out, int(latent.shape[0]))
         except Exception as exc:  # noqa: BLE001 - the branch reruns plain
             del b_args, b_kwargs
@@ -1259,6 +1274,32 @@ def _matches(snapshots: list, call: tuple) -> bool:
             return False
     # Every tensor argument under one host read per device (once per guided step), not one torch.equal each.
     return mg._bitwise_equal_all(tensors)
+
+
+@contextlib.contextmanager
+def _padded_text_keeps_masks(module: Any, first: dict, second: dict):
+    """HunyuanVideo-1.5 trim: the doubled call bypasses the pre-hook that set the null-mask flag for one branch, so
+    clear it when ``_pad_text`` padded a branch, else its zero padding is attended."""
+    if module is None or getattr(module, "_unsloth_trim_hook", None) is None:
+        yield
+        return
+    torch = _torch()
+    padded = False
+    for emb_key in {k for k, _ in _PADDED_TEXT}:
+        a, b = first.get(emb_key), second.get(emb_key)
+        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and a.dim() >= 3:
+            padded = padded or a.shape[1] != b.shape[1]
+    if not padded:
+        yield
+        return
+    from .diffusion_attention import _hunyuan_null_mask_state, _set_hunyuan_null_mask
+
+    held = _hunyuan_null_mask_state(module)
+    _set_hunyuan_null_mask(module, False)
+    try:
+        yield
+    finally:
+        _set_hunyuan_null_mask(module, held)
 
 
 def _pad_text(first: dict, second: dict) -> None:
@@ -1472,6 +1513,14 @@ def router_for(pipe: Any) -> Optional[CfgBatchRouter]:
         return _ROUTERS.get(pipe)
     except TypeError:
         return None
+
+
+def set_guided_step_probe(pipe: Any, probe: Optional[Any]) -> None:
+    """For this render: ``probe()`` says whether the current step runs the unconditional branch (None = every
+    step does). Cleared by ``end_render``."""
+    router = router_for(pipe)
+    if router is not None:
+        router.guided_step = probe
 
 
 def end_cfg_batch_render(pipe: Any) -> None:

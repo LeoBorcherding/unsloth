@@ -14,7 +14,10 @@ import {
   type QueuedPrompt,
 } from "@/features/chat/utils/queued-text-attachments";
 import { getAuthSessionEpoch } from "@/features/auth";
-import { useMarkChatWelcome } from "@/features/chat-background";
+import {
+  useChatWelcomeShown,
+  useMarkChatWelcome,
+} from "@/features/chat-background";
 
 import {
   ComposerAttachments,
@@ -1884,6 +1887,14 @@ const PromptQueueContext = createContext<PromptQueueCallbacks>({
 // Gap between last message and floating composer, added to the bottom spacer height.
 const COMPOSER_SCROLL_GAP_PX = 24;
 const FOOTER_GAP_BELOW_SPACER_PX = 10;
+const THREAD_COMPOSER_VARS = [
+  "--thread-composer-clip",
+  "--thread-composer-bottom",
+  "--thread-composer-left",
+  "--thread-composer-right",
+  "--thread-composer-radius",
+  "--thread-composer-fade",
+] as const;
 // After a run start, composer shrinks apply immediately: the run-start pin owns the bottom.
 const RUN_SHRINK_WINDOW_MS = 1000;
 
@@ -2693,14 +2704,37 @@ const ThreadComposerDock: FC<{
     return column ? watchComposerClearance(column, uiSpaceScale) : undefined;
   }, [uiSpaceScale]);
 
+  const threadIsEmpty = useAuiState(({ thread }) => thread.isEmpty);
   const dockInnerRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const dock = dockRef.current;
     const inner = dockInnerRef.current;
     const viewport = childWithClass(dock?.parentElement, "aui-thread-viewport");
-    if (!dock || !inner || !viewport) return;
+    const root = viewport?.parentElement;
+    if (!dock || !inner || !viewport || !root) return;
     const resizeObserver = new ResizeObserver(() => apply());
     let observedFooter: Element | null = null;
+    const syncComposerClip = () => {
+      const surface = threadIsEmpty
+        ? null
+        : dock.querySelector<HTMLElement>(".unsloth-composer-surface");
+      if (!surface) {
+        for (const name of THREAD_COMPOSER_VARS) root.style.removeProperty(name);
+        return;
+      }
+      const box = viewport.getBoundingClientRect();
+      const at = surface.getBoundingClientRect();
+      const px = (value: number) => `${Math.max(0, Math.round(value))}px`;
+      const values = [
+        px(box.bottom - at.top),
+        px(box.bottom - at.bottom),
+        px(at.left - box.left),
+        px(box.right - at.right),
+        getComputedStyle(surface).borderTopLeftRadius,
+        "calc(2px * var(--ui-space-scale, 1))",
+      ];
+      THREAD_COMPOSER_VARS.forEach((name, i) => root.style.setProperty(name, values[i]));
+    };
     const apply = () => {
       // May fire before the gutter's observer, which would leave the composer a scrollbar off-centre.
       syncThreadGutter(viewport);
@@ -2725,6 +2759,8 @@ const ThreadComposerDock: FC<{
         : composerColumnInset(readViewportBox(viewport), dockRect);
       inner.style.setProperty("--composer-dock-inset-left", `${inset.left}px`);
       inner.style.setProperty("--composer-dock-inset-right", `${inset.right}px`);
+      // Last, so the mask measures the composer at its new insets.
+      syncComposerClip();
     };
     apply();
     resizeObserver.observe(viewport);
@@ -2733,8 +2769,9 @@ const ThreadComposerDock: FC<{
     return () => {
       resizeObserver.disconnect();
       viewport.removeEventListener(THREAD_GUTTER_CHANGE_EVENT, apply);
+      for (const name of THREAD_COMPOSER_VARS) root.style.removeProperty(name);
     };
-  }, []);
+  }, [threadIsEmpty]);
 
   return (
     <div
@@ -3333,8 +3370,12 @@ const Composer: FC<{
   const inputId = useId();
   const uiSpaceScale = useUiSpaceScale();
   const threadEmpty = useAuiState(({ thread }) => thread.isEmpty);
+  // Empty saved chats and the floating chat have no welcome.
+  const welcomeShown = useChatWelcomeShown();
+  const newChatPage = threadEmpty && welcomeShown;
   const minEditorHeight = Math.round(
-    (16 + 24 * (threadEmpty ? COMPOSER_MIN_ROWS : 1)) * uiSpaceScale,
+    (16 + 24 * (threadEmpty ? COMPOSER_MIN_ROWS : 1) - (newChatPage ? 8 : 0)) *
+      uiSpaceScale,
   );
   const maxRows = useComposerMaxRows(24 * uiSpaceScale);
   const [editorHeight, setEditorHeight] = useState(40);
@@ -6196,6 +6237,70 @@ const Composer: FC<{
     [],
   );
   const toolStatus = useMemo(() => <ToolStatusDisplay />, []);
+  // Read send/dictate at click time so the controls survive keystrokes without re-running the picker.
+  const rightControlHandlersRef = useRef({ handleSubmit, startDictation });
+  useLayoutEffect(() => {
+    rightControlHandlersRef.current = { handleSubmit, startDictation };
+  });
+  const onRightControlsSend = useCallback(
+    (event: { preventDefault: () => void }) =>
+      rightControlHandlersRef.current.handleSubmit(event),
+    [],
+  );
+  const onRightControlsQueue = useCallback(
+    () => formRef.current?.requestSubmit(),
+    [],
+  );
+  const onRightControlsDictate = useCallback(
+    () => rightControlHandlersRef.current.startDictation(),
+    [],
+  );
+  const rightControlsDisabled =
+    disabled || !hasSendableContent || isComposing || hasPendingAttachments;
+  // disableQueue makes running threads show Stop instead of Queue.
+  const rightControlsQueueDisabled =
+    disableQueue ||
+    !(
+      canQueueCurrentPrompt ||
+      canQueueTextAttachmentsPrompt ||
+      canQueueAttachmentPrompt
+    );
+  const audioUploadBusy = audioUpload.busy;
+  const rightControls = useMemo(
+    () => (
+      <ComposerRightControls
+        disabled={rightControlsDisabled}
+        dictationDisabled={dictationEntryDisabled}
+        queueDisabled={rightControlsQueueDisabled}
+        onQueueClick={onRightControlsQueue}
+        // ComposerPrimitive.Send skips form submit, so run the full queue and capacity path.
+        onSendClick={onRightControlsSend}
+        onStopClick={stopQueue}
+        onResumeClick={resumeQueue}
+        onDictateClick={onRightControlsDictate}
+        audioUploadBusy={audioUploadBusy}
+        onAudioUploadCancel={cancelAudioUpload}
+        pendingSend={pendingSend}
+        menuSide={effectiveMenuSide}
+        queueThreadIds={promptQueueThreadIds}
+      />
+    ),
+    [
+      rightControlsDisabled,
+      dictationEntryDisabled,
+      rightControlsQueueDisabled,
+      onRightControlsQueue,
+      onRightControlsSend,
+      stopQueue,
+      resumeQueue,
+      onRightControlsDictate,
+      audioUploadBusy,
+      cancelAudioUpload,
+      pendingSend,
+      effectiveMenuSide,
+      promptQueueThreadIds,
+    ],
+  );
   const documentsBar = useMemo(
     () => (
       <ThreadDocumentsBar
@@ -6254,6 +6359,7 @@ const Composer: FC<{
             <div
               ref={editorRef}
               className="unsloth-composer-editor"
+              data-new-chat={newChatPage || undefined}
               style={
                 {
                   "--composer-editor-height": `${composerText.length === 0 ? minEditorHeight : Math.max(minEditorHeight, editorHeight)}px`,
@@ -6328,34 +6434,7 @@ const Composer: FC<{
                 </TooltipIconButton>
               )}
             </div>
-            <ComposerRightControls
-              disabled={
-                disabled ||
-                !hasSendableContent ||
-                isComposing ||
-                hasPendingAttachments
-              }
-              dictationDisabled={dictationEntryDisabled}
-              // disableQueue makes running threads show Stop instead of Queue.
-              queueDisabled={
-                disableQueue ||
-                !(
-                  canQueueCurrentPrompt ||
-                  canQueueTextAttachmentsPrompt ||
-                  canQueueAttachmentPrompt
-                )
-              }
-              onQueueClick={() => formRef.current?.requestSubmit()}
-              // ComposerPrimitive.Send skips form submit, so run the full queue and capacity path.
-              onSendClick={handleSubmit}
-              onStopClick={stopQueue}
-              onResumeClick={resumeQueue}
-              onDictateClick={startDictation}
-              audioUpload={audioUpload}
-              pendingSend={pendingSend}
-              menuSide={effectiveMenuSide}
-              queueThreadIds={promptQueueThreadIds}
-            />
+            {rightControls}
           </>
         )}
       </div>
@@ -7562,7 +7641,8 @@ const ComposerRightControls: FC<{
   onStopClick?: () => void;
   onResumeClick?: () => void;
   onDictateClick?: () => void;
-  audioUpload: ReturnType<typeof useChatAudioUpload>;
+  audioUploadBusy: boolean;
+  onAudioUploadCancel: () => void;
   pendingSend?: boolean;
   menuSide?: "top" | "bottom";
   queueThreadIds: string[];
@@ -7575,7 +7655,8 @@ const ComposerRightControls: FC<{
   onStopClick,
   onResumeClick,
   onDictateClick,
-  audioUpload,
+  audioUploadBusy,
+  onAudioUploadCancel,
   pendingSend,
   menuSide,
   queueThreadIds,
@@ -7706,7 +7787,7 @@ const ComposerRightControls: FC<{
     >
       <ComposerModelPicker side={menuSide} />
       <ComposerPrimitive.If dictation={false}>
-        {audioUpload.busy ? (
+        {audioUploadBusy ? (
           <Button
             type="button"
             variant="ghost"
@@ -7714,7 +7795,7 @@ const ComposerRightControls: FC<{
             className="h-9 gap-1.5 rounded-full px-2.5 text-muted-foreground"
             aria-label={t("settings.voice.dictation.audioUploadCancel")}
             title={t("settings.voice.dictation.audioUploadCancel")}
-            onClick={audioUpload.cancel}
+            onClick={onAudioUploadCancel}
           >
             <Spinner className="size-4" />
             <span>{t("settings.voice.dictation.audioUploadTranscribing")}</span>
