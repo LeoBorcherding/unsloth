@@ -38,6 +38,8 @@ MAX_REWARDS_PER_ROOT = 500
 MAX_PATTERN_CHARS = 2_000
 # regex compiles {n} repeats by unrolling them, nested counts multiplying.
 MAX_PATTERN_EXPANSION = 10_000
+# Keeps a weighted score, and a step's sum of them, finite at the largest reward weight.
+MAX_SCORE = 1_000_000
 RULE_TYPES = ("regex", "exact_match", "numeric", "json_schema", "length")
 NORMALIZERS = ("strip", "lower", "remove_commas", "remove_currency", "collapse_spaces")
 # GSM8K-style answers often carry a unit sign ("$18"); it must not decide the score.
@@ -122,6 +124,13 @@ def _number(value: Any, field: str) -> float:
         raise error from None
     if not math.isfinite(number):
         raise error
+    return number
+
+
+def _score(value: Any, field: str) -> float:
+    number = _number(value, field)
+    if abs(number) > MAX_SCORE:
+        raise RewardError(f"{field} must be between -{MAX_SCORE:,} and {MAX_SCORE:,}.")
     return number
 
 
@@ -232,7 +241,7 @@ def _validate_score(score: Any, keys: Iterable[str]) -> dict:
     unknown = [str(k) for k in score if k not in keys]
     if unknown:
         raise RewardError(f"score.{unknown[0]} is not a score key; use {', '.join(keys)}.")
-    return {k: _number(score.get(k, 0.0), f"score.{k}") for k in keys}
+    return {k: _score(score.get(k, 0.0), f"score.{k}") for k in keys}
 
 
 def validate_rule(rule: dict) -> dict:
@@ -265,7 +274,7 @@ def validate_rule(rule: dict) -> dict:
             raise RewardError(f"compare_to cannot be '{column}': Studio uses that column itself.")
         out["compare_to"] = column
         out["reference_extract"] = _validate_extract(rule.get("reference_extract"))
-        out["missing"] = _number(rule.get("missing", 0.0), "missing")
+        out["missing"] = _score(rule.get("missing", 0.0), "missing")
         if kind == "exact_match":
             norms = rule.get("normalize", ["strip"])
             if not isinstance(norms, list) or any(n not in NORMALIZERS for n in norms):
@@ -282,7 +291,7 @@ def validate_rule(rule: dict) -> dict:
                 (
                     {
                         "within": _number(b.get("within"), "bands.within"),
-                        "score": _number(b.get("score"), "bands.score"),
+                        "score": _score(b.get("score"), "bands.score"),
                     }
                     for b in bands
                 ),
@@ -291,7 +300,7 @@ def validate_rule(rule: dict) -> dict:
             # The compared error is never negative, so such a band never matches.
             if out["bands"][0]["within"] < 0:
                 raise RewardError("bands.within can't be negative.")
-            out["else"] = _number(rule.get("else", 0.0), "else")
+            out["else"] = _score(rule.get("else", 0.0), "else")
     elif kind == "json_schema":
         out["extract"] = _validate_extract(rule.get("extract"))
         schema = rule.get("schema", {})
