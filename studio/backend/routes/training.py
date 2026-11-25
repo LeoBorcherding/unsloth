@@ -1552,6 +1552,22 @@ def _stored_reward_specs(stored: dict) -> dict[str, dict]:
     }
 
 
+def _grpo_reward_specs(selections, stored_specs: dict[str, dict]) -> list[dict]:
+    from core.training.rewards import get_reward, normalize_reward_name, validate_rule
+
+    specs = []
+    for selection in selections:
+        stored = stored_specs.get(normalize_reward_name(selection.name))
+        # A stored rule predates today's checks (the score cap), so it passes them again.
+        spec = (
+            {**stored, "rule": validate_rule(stored["rule"])}
+            if stored
+            else get_reward(selection.name)
+        )
+        specs.append({**spec, "weight": selection.weight})
+    return specs
+
+
 def _resume_reward_mismatch(stored_specs: dict[str, dict], selections) -> bool:
     """A resumed GRPO run must keep the source run's rewards and weights: the checkpoint's
     optimizer state belongs to that summed reward."""
@@ -2223,8 +2239,6 @@ async def _admit_training_request(
         from core.training.rewards import (
             RewardError,
             RewardNotFoundError,
-            get_reward,
-            normalize_reward_name,
         )
 
         stored_specs = _stored_reward_specs(training_run_config(resume_run)) if resume_run else {}
@@ -2235,11 +2249,7 @@ async def _admit_training_request(
             )
         # Stored with the run, so later library edits never change what it says it trained with.
         try:
-            for selection in request.grpo_rewards:
-                spec = stored_specs.get(normalize_reward_name(selection.name)) or get_reward(
-                    selection.name
-                )
-                reward_specs.append({**spec, "weight": selection.weight})
+            reward_specs = _grpo_reward_specs(request.grpo_rewards, stored_specs)
         except RewardNotFoundError as exc:
             raise HTTPException(status_code = 404, detail = str(exc)) from exc
         except RewardError as exc:

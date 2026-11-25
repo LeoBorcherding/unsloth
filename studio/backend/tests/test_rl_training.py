@@ -505,6 +505,25 @@ def test_resume_scores_with_the_stored_reward_rules():
     assert _stored_reward_specs({}) == {}
 
 
+def test_resume_rechecks_the_stored_reward_rules():
+    from types import SimpleNamespace as S
+
+    from core.training.rewards import RewardError
+    from routes.training import _grpo_reward_specs
+
+    rule = {
+        "type": "regex",
+        "pattern": "x",
+        "mode": "search",
+        "score": {"match": 1e308, "miss": 0.0},
+    }
+    with pytest.raises(RewardError, match = "between"):
+        _grpo_reward_specs([S(name = "big", weight = 10.0)], {"big": {"name": "big", "rule": rule}})
+    ok = {**rule, "score": {"match": 1.0, "miss": 0.0}}
+    [spec] = _grpo_reward_specs([S(name = "big", weight = 2.0)], {"big": {"name": "big", "rule": ok}})
+    assert spec["rule"] == ok and spec["weight"] == 2.0
+
+
 def test_grpo_keeps_a_reward_column_named_like_a_preference_role():
     ds = Dataset.from_list([{"question": "2+2?", "answer": "4", "chosen": "x"}])
     out, _ = format_rl_dataset(ds, "grpo", keep_columns = ("chosen",))
