@@ -1358,7 +1358,7 @@ NODE_SPECS: list[dict] = [
             ),
             P(
                 "learning_rate", "number", 0.0002, "Learning Rate", min = 0, step = 0.00001,
-                help = "Step size for weight updates. Lower values train slower but more stably. Recommended: 2e-4 for LoRA, 5e-5 for CPT, 2e-5 for full fine-tune; 5e-6 for GRPO and DPO.",
+                help = "Step size for weight updates. Lower values train slower but more stably. Recommended: 2e-4 for LoRA, 5e-5 for CPT, 2e-5 for full fine-tune. Left at 2e-4, GRPO and DPO train at 5e-6 and ORPO at 8e-6.",
                 **adv("Training"),
             ),
             P(
