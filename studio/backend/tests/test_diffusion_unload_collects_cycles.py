@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import gc
+import threading
 import weakref
 from types import SimpleNamespace
 
@@ -57,3 +58,36 @@ def test_unload_with_nothing_loaded_skips_the_extra_clear(monkeypatch):
     monkeypatch.setattr(engine, "_unload_locked", lambda: None)
     engine.unload()
     assert clears == []
+
+
+def test_unload_queued_behind_a_teardown_waits_for_its_reclaim(monkeypatch):
+    engine = DiffusionBackend()
+    engine._state = SimpleNamespace(pipe = None)
+    in_reclaim, release = threading.Event(), threading.Event()
+    calls = []
+
+    def clear():
+        calls.append(threading.current_thread().name)
+        if len(calls) == 2:  # the second clear of the first unload: the post-teardown reclaim
+            in_reclaim.set()
+            assert release.wait(10)
+
+    def teardown():
+        if engine._state is not None:
+            engine._state = None
+            diffusion.clear_gpu_cache()
+
+    monkeypatch.setattr(diffusion, "clear_gpu_cache", clear)
+    monkeypatch.setattr(engine, "_unload_locked", teardown)
+    first = threading.Thread(target = engine.unload, name = "first")
+    first.start()
+    assert in_reclaim.wait(10)
+    second_done = threading.Event()
+    second = threading.Thread(target = lambda: (engine.unload(), second_done.set()), name = "second")
+    second.start()
+    assert not second_done.wait(0.3)
+    release.set()
+    first.join(10)
+    second.join(10)
+    assert second_done.is_set()
+    assert calls == ["first", "first"]

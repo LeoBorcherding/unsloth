@@ -9328,9 +9328,10 @@ def test_unload_returns_freed_host_pages_after_the_gpu_cache(fake_runtime, tmp_p
     monkeypatch.setattr(diffusion_module, "clear_gpu_cache", _clear)
     monkeypatch.setattr(diffusion_module, "reclaim_host_memory", _trim)
     assert backend.unload()["loaded"] is False
-    assert order == ["clear", ("trim", True)]
+    # Twice: the teardown's own pass, then the one after unload() drops the hook cycles it pinned.
+    assert order == ["clear", ("trim", True), "clear", ("trim", True)]
     backend.unload()
-    assert order == ["clear", ("trim", True)]
+    assert order == ["clear", ("trim", True), "clear", ("trim", True)]
 
 
 class _RecordingGate(threading.Event):
@@ -14019,7 +14020,8 @@ def test_unload_drains_pinned_host_memory_after_the_pipeline_is_gone(
         lambda: calls.append(("host", backend._state)),
     )
     backend.unload()
-    assert calls == [("clear", None), ("host", None)]
+    # The teardown's own pass, then the post-unload pass.
+    assert calls == [("clear", None), ("host", None)] * 2
 
 
 def test_unload_drains_pinned_host_memory_even_when_gpu_cleanup_raises(
