@@ -112,6 +112,7 @@ def test_rule_types(body, text, reference, expected):
         (_md("Bad Name", "type: regex\npattern: x"), "lowercase"),
         (_md("t", "type: regex\npattern: x"), "score is required"),
         (_md("t", "type: length\nmax_chars: 9\nscore: {}"), "score is required"),
+        (_md("t", "type: regex\npattern: x\nscore: 5"), "score must be a mapping"),
         (_md("t", "type: numeric\nbands: []"), "bands"),
         (_md("t", "type: numeric\nbands: [1, 2]"), "band"),
         (_md("t", "type: numeric\nbands: [{within: -0.1, score: 1}]"), "within can't be negative"),

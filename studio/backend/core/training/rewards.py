@@ -217,8 +217,10 @@ def _compile(pattern: Any) -> re.Pattern:
 
 
 def _validate_score(score: Any, keys: Iterable[str]) -> dict:
-    if not isinstance(score, dict) or not score:
+    if score is None or score == {}:
         raise RewardError(f"score is required; set {', '.join(keys)}.")
+    if not isinstance(score, dict):
+        raise RewardError("score must be a mapping.")
     # A misspelled key would silently score 0.0 for the one it meant.
     unknown = [str(k) for k in score if k not in keys]
     if unknown:
