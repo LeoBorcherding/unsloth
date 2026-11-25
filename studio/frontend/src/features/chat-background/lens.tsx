@@ -48,12 +48,12 @@ const painted = (s: CSSStyleDeclaration) =>
 const FRAME = '[data-slot="sidebar-container"][data-windows-glass-frame]';
 const FRAME_SIDEBAR = '[data-windows-glass-frame] > [data-slot="sidebar-inner"]';
 function oneSidebarLens(found: HTMLElement[]): HTMLElement[] {
-  const legacy = document.documentElement.classList.contains("webkit-legacy-compositor");
-  const inner = found.filter((h) => h.matches(FRAME_SIDEBAR) && found.includes(h.parentElement as HTMLElement));
-  const drop = new Set<Element | null>(legacy ? inner.map((h) => h.parentElement) : inner);
+  // Under WebKitGTK < 2.54 the sidebar and docked Run settings keep their own glass, so their own lenses, and the frame's covers only the caption.
+  if (document.documentElement.classList.contains("webkit-legacy-compositor")) return found;
+  const inner = new Set(found.filter((h) => h.matches(FRAME_SIDEBAR) && found.includes(h.parentElement as HTMLElement)));
   // The frame's lens spans the whole strip (index.css), docked Run settings included: a second lens there seams.
-  const stripLens = !legacy && found.some((h) => h.matches(FRAME));
-  return found.filter((h) => !drop.has(h) && !(stripLens && h.matches(STRIP_PANEL)));
+  const stripLens = found.some((h) => h.matches(FRAME));
+  return found.filter((h) => !inner.has(h) && !(stripLens && h.matches(STRIP_PANEL)));
 }
 
 const PREVIEW_HOSTS = ".wallpaper-preview-composer";
@@ -154,8 +154,9 @@ function Lens({
       const sy = host.scrollTop;
       el.style.translate = sx || sy ? `${sx}px ${sy}px` : "";
       const w = wallpaper.getBoundingClientRect();
-      // The frame's lens is the strip's width, not the sidebar's.
-      const h = (host.matches(FRAME) ? el : host).getBoundingClientRect();
+      // Wider than its host (index.css): the frame's lens spans the strip, and under WebKitGTK < 2.54 Run settings' takes the chat's corner.
+      const wide = host.matches(FRAME) || (host.matches(STRIP_PANEL) && document.documentElement.classList.contains("webkit-legacy-compositor"));
+      const h = (wide ? el : host).getBoundingClientRect();
       const opacity = getComputedStyle(wallpaper).opacity;
       const source = glassSource(host);
       const glass = glassLayer(source);

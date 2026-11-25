@@ -40,13 +40,28 @@ test("under WebKitGTK's TextureMapper compositor the pinned sidebar blurs for it
 test("under it the strip leaves the sidebar column to the sidebar, so the column keeps one layer of fill", () => {
   const shared = decls(`html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] ${STRIP.replace("::before", "")}`).get("--studio-glass-strip-mask");
   assert.equal(decls(`html:is([data-glass], [data-glass-clear])[data-chat-wallpaper-workspace-ready] ${STRIP}`).get("mask"), "var(--studio-glass-strip-mask)");
-  const legacy = decls(`${GATE}[data-chat-wallpaper-workspace-ready] ${STRIP}`).get("mask");
+  // The legacy caption-only shape is set on the frame, so the ::before and the frame's lens both take it.
+  const legacy = decls(`${GATE}[data-chat-wallpaper-workspace-ready] ${STRIP.replace("::before", "")}`).get("--studio-glass-strip-mask");
   assert.match(shared ?? "", /left top \/ var\(--sidebar-width\) 100%/);
   assert.ok(legacy, "the legacy strip sets its own mask");
   assert.doesNotMatch(legacy, /var\(--sidebar-width\) 100%/, "no sidebar column under the self-blurred sidebar");
   assert.match(legacy, /var\(--sidebar-width\) top \/ 100% var\(--studio-custom-titlebar-height\)/);
-  // Run settings keeps its own glass here, so the caption rounds the chat's top right corner as well as its left.
-  assert.match(legacy, /radial-gradient\(circle at left bottom, transparent calc\(var\(--studio-run-settings-fillet\) - 1px\), black var\(--studio-run-settings-fillet\)\)\s+calc\(100vw - var\(--studio-chat-settings-docked-width, 0px\) - var\(--studio-run-settings-fillet\)\) var\(--studio-custom-titlebar-height\)/);
+  // Docked Run settings keeps its own glass below the caption, and that layer draws the chat's top right fillet:
+  // left to the strip, the fillet met the column in a seam.
+  assert.doesNotMatch(legacy, /circle at left bottom/);
+  const column = `${GATE}[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"]`;
+  const panel = decls(column);
+  assert.equal(panel.get("backdrop-filter"), "none");
+  assert.equal(panel.get("box-shadow"), "none");
+  assert.match(panel.get("--studio-run-settings-glass-mask") ?? "", /radial-gradient\(circle at left bottom, transparent calc\(var\(--radius-md\) - 1px\), black var\(--radius-md\)\) left top/);
+  const glass = decls(`${column}::before`);
+  assert.equal(glass.get("backdrop-filter"), "blur(var(--glass-blur)) saturate(var(--glass-saturate))");
+  assert.equal(glass.get("inset"), "0 0 0 calc(-1 * var(--radius-md))");
+  assert.equal(glass.get("mask"), "var(--studio-run-settings-glass-mask)");
+  assert.match(glass.get("background-color") ?? "", /^color-mix\(in srgb, var\(--glass-sidebar-fill\)/);
+  assert.equal(glass.get("background-image"), "var(--glass-sheen, none)");
+  assert.equal(glass.get("background-attachment"), "fixed");
+  assert.ok(CSS.includes('html:is([data-glass], [data-glass-clear])[data-sidebar-glass-frame][data-chat-wallpaper-workspace-ready] aside[data-slot="chat-settings-panel"] > [data-chat-settings-content] {\n  border-left-color: transparent;'));
 });
 
 test("the self blur comes after the rule that clears it and stays off every other engine", () => {
