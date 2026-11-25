@@ -1268,7 +1268,7 @@ NODE_SPECS: list[dict] = [
             ),
             P(
                 "rewards", "reward_list",
-                [{"name": "exact-answer", "weight": 1.0}, {"name": "soft-xml-format", "weight": 1.0}],
+                [{"name": "strict-xml-format", "weight": 1.0}, {"name": "exact-answer", "weight": 1.0}],
                 "Rewards", options_from = "/api/rewards", options_path = "[].name",
                 show_when = {"objective": ["grpo"]},
             ),

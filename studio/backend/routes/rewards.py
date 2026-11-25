@@ -28,7 +28,7 @@ router = APIRouter()
 
 class RewardRecord(BaseModel):
     name: str
-    kind: Literal["rule", "python"] = "rule"
+    kind: Literal["rule"] = "rule"
     description: str = ""
     source: Literal["user", "bundled"]
     valid: bool

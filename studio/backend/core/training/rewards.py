@@ -8,6 +8,7 @@ Rule rewards are pure data, so an imported one runs no user code; ``kind: python
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -176,6 +177,12 @@ def _check_expansion(pattern: str) -> None:
         raise RewardError("Regex repeat counts are too large; use * or + for long runs.")
 
 
+@functools.lru_cache(maxsize = 256)
+def _bounded_compile(pattern: str):
+    _check_expansion(pattern)
+    return _rx.compile(pattern, _rx.DOTALL | _rx.MULTILINE)
+
+
 def _match(
     pattern: str,
     text: str,
@@ -183,8 +190,7 @@ def _match(
 ):
     if _rx is None:
         raise RewardError(_NO_REGEX_MODULE)
-    _check_expansion(pattern)
-    compiled = _rx.compile(pattern, _rx.DOTALL | _rx.MULTILINE)
+    compiled = _bounded_compile(pattern)
     try:
         if fullmatch:
             return compiled.fullmatch(text, timeout = MATCH_TIMEOUT_S)
@@ -209,8 +215,8 @@ def _compile(pattern: Any) -> re.Pattern:
 
 
 def _validate_score(score: Any, keys: Iterable[str]) -> dict:
-    if not isinstance(score, dict):
-        raise RewardError("score must be a mapping.")
+    if not isinstance(score, dict) or not score:
+        raise RewardError(f"score is required; set {', '.join(keys)}.")
     # A misspelled key would silently score 0.0 for the one it meant.
     unknown = [str(k) for k in score if k not in keys]
     if unknown:
@@ -232,7 +238,7 @@ def validate_rule(rule: dict) -> dict:
         out["mode"] = mode
         if rule.get("extract") is not None:
             out["extract"] = _validate_extract(rule["extract"])
-        out["score"] = _validate_score(rule.get("score", {}), ("match", "miss"))
+        out["score"] = _validate_score(rule.get("score"), ("match", "miss"))
     elif kind in ("exact_match", "numeric"):
         out["extract"] = _validate_extract(rule.get("extract"))
         column = rule.get("compare_to", "answer")
@@ -254,7 +260,7 @@ def validate_rule(rule: dict) -> dict:
             if not isinstance(norms, list) or any(n not in NORMALIZERS for n in norms):
                 raise RewardError(f"normalize takes a list of {', '.join(NORMALIZERS)}.")
             out["normalize"] = norms
-            out["score"] = _validate_score(rule.get("score", {}), ("match", "miss"))
+            out["score"] = _validate_score(rule.get("score"), ("match", "miss"))
         else:
             bands = rule.get("bands")
             if not isinstance(bands, list) or not bands:
@@ -297,10 +303,10 @@ def validate_rule(rule: dict) -> dict:
         ):
             raise RewardError("schema.required takes up to 64 key names.")
         out["schema"] = {"type": schema_type, "required": list(required)}
-        out["score"] = _validate_score(rule.get("score", {}), ("match", "miss"))
+        out["score"] = _validate_score(rule.get("score"), ("match", "miss"))
     elif kind == "length":
         out["max_chars"] = int(_number(rule.get("max_chars"), "max_chars"))
-        out["score"] = _validate_score(rule.get("score", {}), ("over", "under"))
+        out["score"] = _validate_score(rule.get("score"), ("over", "under"))
     for key in ("extract", "reference_extract"):
         if rule.get(key) is not None and key not in out:
             raise RewardError(f"{kind} rules take no {key}.")
@@ -319,8 +325,6 @@ def parse_reward_markdown(raw: str, folder_name: Optional[str] = None) -> dict:
     if folder_name and name != folder_name:
         raise RewardError(f"Frontmatter name '{name}' does not match folder '{folder_name}'.")
     kind = meta.get("kind", "rule")
-    if kind == "python":
-        raise RewardError("Python rewards are not supported yet; only rule rewards can run.")
     if kind != "rule":
         raise RewardError("kind must be 'rule'.")
     description = meta.get("description", "")

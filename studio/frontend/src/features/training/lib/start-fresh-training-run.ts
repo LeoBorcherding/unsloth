@@ -340,7 +340,8 @@ export async function startFreshTrainingRun(): Promise<boolean> {
 }
 
 type AttemptHfTokenResult =
-  { ready: false } | { ready: true; token: string | null };
+  | { ready: false }
+  | { ready: true; token: string | null };
 
 async function prepareAttemptHfToken(
   attempt: FreshTrainingStartAttempt,

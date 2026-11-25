@@ -356,14 +356,16 @@ def render_grpo_prompts(
         text_only and "tools" in columns and any(_row_tools({"tools": t}) for t in dataset["tools"])
     )
     drop = ["tools"] if "tools" in columns else []
-    if not (thinking or nulls or tools or _has_tool_ended_prompts(dataset)):
-        return (dataset.remove_columns(drop) if drop else dataset), False
-    kwargs = {"enable_thinking": bool(enable_thinking)} if thinking else {}
-    # A text prompt loses TRL's assistant prefill, so keep it for the rewards (make_reward_func).
+    # TRL 1.x drops an assistant prefill from the completion, so render it and keep it for the rewards.
     prefills = any(
         isinstance(p, list) and p and isinstance(p[-1], dict) and p[-1].get("role") == "assistant"
         for p in dataset["prompt"]
     )
+    if not (
+        thinking or nulls or tools or (text_only and prefills) or _has_tool_ended_prompts(dataset)
+    ):
+        return (dataset.remove_columns(drop) if drop else dataset), False
+    kwargs = {"enable_thinking": bool(enable_thinking)} if thinking else {}
 
     def render(row: dict) -> dict:
         row_tools = _row_tools(row)

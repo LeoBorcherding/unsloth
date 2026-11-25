@@ -106,6 +106,8 @@ def test_rule_types(body, text, reference, expected):
         (_md("t", "type: regex\npattern: x", kind = "python"), "Python rewards are not supported"),
         (_md("t", "import os\nimport sys", kind = "python"), "Python rewards are not supported"),
         (_md("Bad Name", "type: regex\npattern: x"), "lowercase"),
+        (_md("t", "type: regex\npattern: x"), "score is required"),
+        (_md("t", "type: length\nmax_chars: 9\nscore: {}"), "score is required"),
         (_md("t", "type: numeric\nbands: []"), "bands"),
         (_md("t", "type: numeric\nbands: [1, 2]"), "band"),
         (_md("t", "type: numeric\nbands: [{within: -0.1, score: 1}]"), "within can't be negative"),
@@ -139,6 +141,8 @@ def test_bundled_rewards_read_gsm8k_style_references(user_root):
     gsm8k = "Natalia sold 48/2 = 24 clips in May.\n#### 72"
     assert rewards.score_rule(specs["exact-answer"]["rule"], GOOD, gsm8k) == 2.0
     assert rewards.score_rule(specs["numeric-close"]["rule"], GOOD, gsm8k) == 3.0
+    # Currency comes off before the strip, so "$ 72" is the same answer as "72".
+    assert rewards.score_rule(specs["exact-answer"]["rule"], "<answer>$ 72</answer>", gsm8k) == 2.0
 
 
 def test_make_reward_func_reads_the_reference_column_and_conversational_completions():
@@ -223,9 +227,9 @@ def test_catastrophic_user_regex_times_out_as_a_miss(monkeypatch):
 
     pytest.importorskip("regex")
     monkeypatch.setattr(rewards, "MATCH_TIMEOUT_S", 0.2)
-    rule = rewards.parse_reward_markdown(_md("t", "type: regex\npattern: '(a+)+$'\nmode: search"))[
-        "rule"
-    ]
+    rule = rewards.parse_reward_markdown(
+        _md("t", "type: regex\npattern: '(a+)+$'\nmode: search\nscore: {match: 1}")
+    )["rule"]
     start = time.perf_counter()
     assert rewards.score_rule(rule, "a" * 40 + "!") == rule["score"]["miss"]
     assert time.perf_counter() - start < 5
@@ -250,7 +254,7 @@ def test_regex_repeats_that_unroll_huge_are_refused_before_compiling(pattern):
 
 
 def test_yaml_aliases_and_merge_keys_are_refused_before_they_expand(user_root):
-    rewards.import_reward(_md("big", "type: length\nmax_chars: 9"))
+    rewards.import_reward(_md("big", "type: length\nmax_chars: 9\nscore: {over: -1}"))
     marker = "x" * 17_000
     aliased = (
         "---\nname: big\ndescription: d\n---\ntype: numeric\n"
@@ -282,11 +286,12 @@ def test_an_empty_extracted_reference_still_matches_an_empty_answer():
 
 
 def test_import_refuses_a_reward_that_grows_past_the_limit_once_saved(user_root, monkeypatch):
-    rewards.import_reward(_md("big", "type: length\nmax_chars: 9"))
+    rewards.import_reward(_md("big", "type: length\nmax_chars: 9\nscore: {over: -1}"))
     monkeypatch.setattr(rewards, "MAX_REWARD_MD_BYTES", 120)
     with pytest.raises(rewards.RewardError, match = "once saved"):
         rewards.import_reward(
-            "---\nname: big\ndescription: d\n---\ntype: exact_match\n", overwrite = True
+            "---\nname: big\ndescription: d\n---\ntype: exact_match\nscore: {match: 1}\n",
+            overwrite = True,
         )
     monkeypatch.setattr(rewards, "MAX_REWARD_MD_BYTES", 64 * 1024)
     assert rewards.get_reward("big")["rule"]["type"] == "length"
@@ -299,7 +304,9 @@ def test_import_refuses_to_write_through_a_linked_reward(user_root, tmp_path):
     root.mkdir(parents = True, exist_ok = True)
     (root / "linked").symlink_to(outside, target_is_directory = True)
     with pytest.raises(rewards.RewardError, match = "link"):
-        rewards.import_reward(_md("linked", "type: regex\npattern: x"), overwrite = True)
+        rewards.import_reward(
+            _md("linked", "type: regex\npattern: x\nscore: {match: 1}"), overwrite = True
+        )
     assert not (outside / "REWARD.md").exists()
 
 
@@ -337,9 +344,9 @@ def test_alias_tree_name_is_refused_before_expansion():
 def test_import_refuses_a_full_library_but_still_replaces(user_root, monkeypatch):
     monkeypatch.setattr(rewards, "MAX_REWARDS_PER_ROOT", 2)
     for name in ("a-one", "a-two"):
-        rewards.import_reward(_md(name, "type: exact_match"))
+        rewards.import_reward(_md(name, "type: exact_match\nscore: {match: 1}"))
     with pytest.raises(rewards.RewardError, match = "library is full"):
-        rewards.import_reward(_md("z-three", "type: exact_match"))
+        rewards.import_reward(_md("z-three", "type: exact_match\nscore: {match: 1}"))
     rewards.import_reward(_md("a-two", "type: exact_match\nscore: {match: 3}"), overwrite = True)
     assert rewards.get_reward("a-two")["rule"]["score"]["match"] == 3.0
 
@@ -396,9 +403,9 @@ def test_failed_first_save_leaves_no_folder_and_can_be_retried(user_root, monkey
     with monkeypatch.context() as m:
         m.setattr(rewards.os, "replace", boom)
         with pytest.raises(OSError):
-            rewards.import_reward(_md("fresh", "type: exact_match"))
+            rewards.import_reward(_md("fresh", "type: exact_match\nscore: {match: 1}"))
     assert not (user_root / "fresh").exists()
-    rewards.import_reward(_md("fresh", "type: exact_match"))
+    rewards.import_reward(_md("fresh", "type: exact_match\nscore: {match: 1}"))
     assert rewards.get_reward("fresh")["name"] == "fresh"
 
 

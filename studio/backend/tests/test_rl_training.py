@@ -1674,6 +1674,37 @@ def test_grpo_prefill_prompts_are_continued_and_scored_with_their_prefill():
     assert scores == [2.0, 2.0]
 
 
+def test_grpo_prefill_prompts_render_without_a_thinking_switch():
+    from core.training.rl import render_grpo_prompts
+
+    class _Tok:
+        chat_template = "plain"
+
+        def apply_chat_template(
+            self,
+            messages,
+            add_generation_prompt = False,
+            continue_final_message = False,
+            **kw,
+        ):
+            text = "".join(f"<{m['role']}>{m['content']}" for m in messages)
+            return text if continue_final_message else text + "<end>"
+
+    ds = Dataset.from_list(
+        [
+            {
+                "prompt": [
+                    {"role": "user", "content": "2+2?"},
+                    {"role": "assistant", "content": "<answer>"},
+                ]
+            }
+        ]
+    )
+    out, done = render_grpo_prompts(ds, _Tok(), None)
+    assert done and out[0]["prompt"] == "<user>2+2?<assistant><answer>"
+    assert out[0]["_studio_prefill"] == "<answer>"
+
+
 def test_prefill_prompts_are_measured_as_continued():
     from core.training.rl import drop_long_prompts
 

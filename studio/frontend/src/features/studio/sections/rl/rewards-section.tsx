@@ -315,7 +315,7 @@ export function RewardsSection(): ReactElement {
   const byName = new Map(active.map((r) => [r.name, r]));
   const selectedNames = new Set(rewards.map((r) => r.name));
   const addable = active.filter(
-    (r) => r.valid && r.kind === "rule" && !selectedNames.has(r.name),
+    (r) => r.valid && !selectedNames.has(r.name),
   );
 
   const setWeight = (name: string, weight: number) =>

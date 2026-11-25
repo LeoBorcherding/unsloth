@@ -404,10 +404,23 @@ def test_hub_holdout_never_downloads_more_than_it_can_use(monkeypatch):
     assert len(training._load_rows({"source": "hf", "ref": "org/big"}, None, 9)) == 10
 
 
+@pytest.mark.parametrize(
+    "objective, expected", [("grpo", "5e-6"), ("dpo", "5e-6"), ("orpo", "8e-6")]
+)
+def test_rl_blocks_swap_the_sft_learning_rate_for_the_objectives(objective, expected):
+    params = {"objective": objective, "learning_rate": 0.0002}
+    config = {"learning_rate": "0.0002"}
+    training.rl_config(params, objective, config)
+    assert config["learning_rate"] == expected
+    config = {"learning_rate": "1e-05"}
+    training.rl_config({**params, "learning_rate": 1e-5}, objective, config)
+    assert config["learning_rate"] == "1e-05"
+
+
 def test_grpo_without_saved_rewards_or_prompt_uses_the_node_defaults():
     config = {}
     rewards = training.rl_config({"objective": "grpo"}, "grpo", config)
-    assert [r["name"] for r in rewards] == ["exact-answer", "soft-xml-format"]
+    assert [r["name"] for r in rewards] == ["strict-xml-format", "exact-answer"]
     assert "<answer>" in config["rl_system_prompt"] and config["grpo_num_generations"] == 4
     config = {}
     training.rl_config({"system_prompt": ""}, "grpo", config)

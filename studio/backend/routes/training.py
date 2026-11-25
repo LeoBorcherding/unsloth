@@ -120,7 +120,7 @@ from models import (
     TrainingProgress,
 )
 from models.training import (
-    _normalized_reward_name,
+    normalized_reward_name,
     DiffusionCaptionUpdateRequest,
     DiffusionDatasetExample,
     DiffusionDatasetExamplesResponse,
@@ -1558,7 +1558,7 @@ def _resume_reward_mismatch(stored_specs: dict[str, dict], selections) -> bool:
     if not stored_specs:
         return False
     stored = {name: float(spec.get("weight", 1.0)) for name, spec in stored_specs.items()}
-    return stored != {_normalized_reward_name(s.name): float(s.weight) for s in selections}
+    return stored != {normalized_reward_name(s.name): float(s.weight) for s in selections}
 
 
 _RESUME_CHECKPOINT_STRUCTURE_FIELDS = (

@@ -6,7 +6,7 @@ import type { GrpoRewardSelection } from "@/types/training";
 
 export interface RewardRecord {
   name: string;
-  kind: "rule" | "python";
+  kind: "rule";
   description: string;
   source: "user" | "bundled";
   valid: boolean;

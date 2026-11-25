@@ -21,6 +21,7 @@ from core.flows.registry import FlowCancelled, FlowNodeError, NodeContext, cache
 POLL_S = 5.0
 BUSY_WAIT_S = 180.0
 TRAINING_TYPES = {"lora": "LoRA/QLoRA", "full": "Full Finetuning", "cpt": "Continued Pretraining"}
+# What the Train page sends when the node leaves batch size and accumulation blank.
 TRAIN_PAGE_BATCH = {"batch_size": 4, "gradient_accumulation_steps": 8}
 CPT_EMBEDDING_MODULES = ("embed_tokens", "lm_head")
 LORA_VARIANTS = ("rslora", "loftq", "dora")
@@ -301,13 +302,7 @@ async def finetune(ctx: NodeContext) -> dict:
     chat = (
         objective == "sft"
         and not mapping
-        and config.get("format_type")
-        in (
-            None,
-            "auto",
-            "chatml",
-            "sharegpt",
-        )
+        and config.get("format_type") in (None, "auto", "chatml", "sharegpt")
     )
     rl_mapping = mapping if isinstance(mapping, dict) else None
     if objective != "sft" or chat:
@@ -955,12 +950,27 @@ def _reward_weight(value: Any) -> float:
         raise FlowNodeError(f"A reward weight must be a number, not {value!r}") from None
 
 
+# Matches RL_LEARNING_RATES in the frontend config/training.ts.
+RL_LEARNING_RATES = {"dpo": "5e-6", "orpo": "8e-6", "grpo": "5e-6"}
+
+
+def _as_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def rl_config(params: dict, objective: str, config: dict) -> list[dict]:
     """The /api/train/start RL fields; returns the GRPO rewards it picked."""
     from core.flows.specs import SPECS_BY_TYPE
 
     # Nodes predating these params have no rewards or system prompt; without it GRPO rewards never fire.
     defaults = {p["id"]: p["default"] for p in SPECS_BY_TYPE["train.finetune"]["params"]}
+    # The block's 2e-4 default is an SFT rate; follow the Train page's per-objective rate unless one was set.
+    lr = params.get("learning_rate")
+    if lr in (None, "") or _as_float(lr) == defaults["learning_rate"]:
+        config["learning_rate"] = RL_LEARNING_RATES[objective]
     params = {**defaults, **params}
     config["objective"] = objective
     if params.get("beta") not in (None, ""):
