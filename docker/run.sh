@@ -374,10 +374,14 @@ if [[ -n "${UNSLOTH_PORTS:-}" ]]; then
     PORT_FLAGS=(${UNSLOTH_PORTS})
 fi
 
-# CI and piped invocations otherwise hit "the input device is not a TTY"
+# -t needs a terminal ("the input device is not a TTY"); -i forwards piped or redirected stdin.
+# No -i for a terminal stdin under redirected stdout (`run.sh > log &` stops on SIGTTIN) or a
+# closed stdin (docker could reuse fd 0 for its own files).
 TTY_FLAG=()
 if [ -t 0 ] && [ -t 1 ]; then
     TTY_FLAG=(-it)
+elif [ ! -t 0 ] && { : 9<&0; } 2>/dev/null; then
+    TTY_FLAG=(-i)
 fi
 
 # a mounted script starts in its directory so relative saves survive --rm
