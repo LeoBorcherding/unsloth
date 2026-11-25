@@ -58,7 +58,13 @@ class MxcPolicyError(RuntimeError):
 
 
 def dacl_fallback_enabled() -> bool:
-    """Opt-in to the AppContainer tier (temporarily adds ACEs); env var if set, else the saved choice."""
+    """Opt-in to the AppContainer tier (temporarily adds ACEs); env var if set, else the saved choice.
+
+    Always off on MXC 1.1.0: it has no AppContainer + DACL tier, so a choice saved for 1.0.1 or 0.8.0 must
+    not add grants, lease ACEs or ask for allowDaclMutation there.
+    """
+    if not mxc_runtime.selected_pin().has_host_prep:
+        return False
     if DACL_FALLBACK_ENV in os.environ:
         return os.environ[DACL_FALLBACK_ENV].strip() == "1"
     try:
@@ -381,7 +387,7 @@ def _selected_runtime(plan) -> str:
 
 
 def canonical_config_bytes(config: dict) -> bytes:
-    """Serialize exactly the deterministic stable-v0.8 request sent to WXC."""
+    """Serialize exactly the deterministic request sent to WXC."""
     return json.dumps(
         config,
         ensure_ascii = False,
@@ -496,12 +502,11 @@ def build_launch_request(
             "readonlyPaths": readonly,
             "deniedPaths": [],
         },
+        # Schema 1.0.0's directional form of 0.8.0's allow-all: host loopback stays blocked, as 0.8.0 did,
+        # and "deny" is also the only value the AppContainer + DACL tier (MXC 1.0.1) accepts.
         "network": {
-            "defaultPolicy": "allow",
-            "allowLocalNetwork": True,
-            "allowedHosts": [],
-            "blockedHosts": [],
-            "enforcementMode": "capabilities",
+            "egress": {"default": "allow"},
+            "ingress": {"default": "allow", "hostLoopback": "deny"},
         },
         "processContainer": {
             "leastPrivilege": False,

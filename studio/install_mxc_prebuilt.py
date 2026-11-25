@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
-"""Install Microsoft's pinned WXC v0.8.0 executables for Studio on Windows."""
+"""Install Microsoft's pinned WXC executables for Studio on Windows.
+
+MXC 1.1.0 where Windows has the built-in container (BaseContainer); otherwise 1.0.1, the newest release with
+the AppContainer + DACL tier. A 1.1.0 install whose live probe finds no built-in container is replaced by
+1.0.1 and the choice is recorded for this Windows release.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from typing import Callable
 import urllib.error
 import urllib.request
 
@@ -28,9 +34,9 @@ class MxcInstallError(RuntimeError):
     pass
 
 
-def _download(destination: Path) -> None:
+def _download(destination: Path, pin: mxc_runtime.MxcPin) -> None:
     request = urllib.request.Request(
-        mxc_runtime.RELEASE_URL,
+        pin.url,
         headers = {"User-Agent": "unsloth-studio-mxc-prebuilt"},
     )
     try:
@@ -45,26 +51,110 @@ def _download(destination: Path) -> None:
         ) from exc
 
 
-def _approved_members() -> dict[str, tuple[str, int]]:
-    exec_member, exec_size, _ = mxc_runtime.artifact("exec")
-    prep_member, prep_size, _ = mxc_runtime.artifact("prep")
-    return {
-        exec_member: ("wxc-exec.exe", exec_size),
-        prep_member: ("wxc-host-prep.exe", prep_size),
-    }
+def _approved_members(pin: mxc_runtime.MxcPin) -> dict[str, tuple[str, int]]:
+    exec_member, exec_size, _ = mxc_runtime.artifact("exec", pin)
+    members = {exec_member: ("wxc-exec.exe", exec_size)}
+    if pin.has_host_prep:
+        prep_member, prep_size, _ = mxc_runtime.artifact("prep", pin)
+        members[prep_member] = ("wxc-host-prep.exe", prep_size)
+    return members
 
 
-def _already_installed(install_dir: Path) -> bool:
+def _validate_install(install_dir: Path, pin: mxc_runtime.MxcPin) -> None:
+    mxc_runtime._validate_runtime(install_dir, pin)
+    if pin.has_host_prep:
+        mxc_runtime._validate_host_prep(install_dir, pin)
+
+
+def _already_installed(install_dir: Path, pin: mxc_runtime.MxcPin) -> bool:
     try:
-        mxc_runtime._validate_runtime(install_dir)
-        mxc_runtime._validate_host_prep(install_dir)
+        _validate_install(install_dir, pin)
     except mxc_runtime.MxcRuntimeUnavailable:
         return False
-    return True
+    # A newer pin never ships wxc-host-prep: an old one left behind would be run elevated by no one, but
+    # it must not linger as an unapproved binary either.
+    return pin.has_host_prep or not (install_dir / "wxc-host-prep.exe").exists()
 
 
-def _validate_archive_entries(bundle: tarfile.TarFile) -> dict[str, tarfile.TarInfo]:
-    members = _approved_members()
+def _replay_retiring_journal(install_dir: Path, incoming: mxc_runtime.MxcPin | None = None) -> None:
+    """Before a swap, let the DACL-capable runtime being replaced restore the ACEs its journal names.
+
+    A pin without the DACL tier (1.1.0) never reads that journal, so when ``incoming`` is one and the
+    replay cannot finish cleanly, raise: the retiring runtime stays in place to try again next time.
+    """
+    journal = mxc_runtime.dacl_state_path()
+    executable = install_dir / "wxc-exec.exe"
+    try:
+        if not any(journal.iterdir()) or not executable.is_file() or executable.is_symlink():
+            return
+        digest = mxc_runtime._sha256_file(executable)
+    except (OSError, mxc_runtime.MxcRuntimeUnavailable):
+        return
+    known = set(mxc_runtime.RETIRED_DACL_EXEC_SHA256)
+    known.update(
+        sha256
+        for (_architecture, kind), (
+            _member,
+            _size,
+            sha256,
+        ) in mxc_runtime.LEGACY_PIN.artifacts.items()
+        if kind == "exec"
+    )
+    if digest not in known:
+        return  # not a runtime Studio approved: nothing here may run it, and it could not replay anyway
+    last_chance = incoming is not None and not incoming.has_host_prep
+
+    def unfinished(problem: str) -> None:
+        if last_chance:
+            raise MxcInstallError(
+                f"{problem}; kept the current MXC runtime so it can restore the folder permissions its "
+                f"journal ({journal}) lists before MXC {incoming.version}, which cannot, replaces it "
+                f"(set {mxc_runtime.PIN_ENV}={mxc_runtime.LEGACY_PIN.version} to stay on it)"
+            )
+        print(f"[mxc-prebuilt] {problem}")
+
+    if _is_elevated():
+        # The journal is user-writable and names the ACLs to rewrite: never replay it as administrator.
+        unfinished(
+            "the DACL journal is not replayed from an elevated installer; run it as yourself"
+        )
+        return
+    guard = mxc_runtime._open_artifact_guard(executable)
+    try:
+        if mxc_runtime._sha256_file(executable) != digest:
+            unfinished("the MXC runtime changed while its DACL journal was being replayed")
+            return
+        env = dict(os.environ, MXC_DACL_STATE_DIR = str(journal))
+        try:
+            completed = subprocess.run(
+                [str(executable), "--probe"],
+                stdin = subprocess.DEVNULL,
+                capture_output = True,
+                text = True,
+                encoding = "utf-8",
+                errors = "replace",
+                cwd = str(install_dir),
+                env = env,
+                timeout = mxc_runtime.DACL_RECOVERY_SECONDS,
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check = False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            unfinished(f"the DACL journal replay before the upgrade did not run: {exc}")
+            return
+        if not mxc_runtime.dacl_recovery_clean(completed):
+            unfinished(
+                "the DACL journal replay before the upgrade reported: "
+                f"{(completed.stderr or '').strip()[-300:]}"
+            )
+    finally:
+        guard.close()
+
+
+def _validate_archive_entries(
+    bundle: tarfile.TarFile, pin: mxc_runtime.MxcPin
+) -> dict[str, tarfile.TarInfo]:
+    members = _approved_members(pin)
     seen: set[str] = set()
     approved: dict[str, list[tarfile.TarInfo]] = {name: [] for name in members}
     for entry in bundle.getmembers():
@@ -100,37 +190,72 @@ def _validate_archive_entries(bundle: tarfile.TarFile) -> dict[str, tarfile.TarI
     return result
 
 
-def install_mxc_release(install_dir: Path) -> bool:
-    """Install the approved WXC binary; return ``True`` only when files changed."""
+class NoBuiltinContainer(Exception):
+    """The candidate MXC 1.1.0 runtime's own probe found no built-in container on this Windows."""
+
+    def __init__(self, tier: str | None) -> None:
+        super().__init__(f"wxc-exec --probe tier: {tier}")
+        self.tier = tier
+
+
+def _require_builtin_container(root: Path) -> None:
+    """Raise NoBuiltinContainer when MXC 1.1.0 at ``root`` reports another tier, or none; a failed probe keeps it."""
+    try:
+        tier = mxc_runtime.probe_tier(root, pin = mxc_runtime.PRIMARY_PIN)
+    except (mxc_runtime.MxcRuntimeUnavailable, OSError, subprocess.SubprocessError) as exc:
+        # No verdict is not a verdict: a timeout or a locked file must not move this PC to 1.0.1.
+        print(
+            f"[mxc-prebuilt] could not probe MXC {mxc_runtime.PRIMARY_PIN.version}, keeping it: {exc}",
+            file = sys.stderr,
+        )
+        return
+    if tier != "base-container":
+        raise NoBuiltinContainer(tier)
+
+
+def install_mxc_release(
+    install_dir: Path,
+    pin: mxc_runtime.MxcPin | None = None,
+    *,
+    qualify: Callable[[Path], None] | None = None,
+) -> bool:
+    """Install the approved WXC binaries of ``pin`` (default: this PC's); ``True`` only when files changed.
+
+    ``qualify`` runs on the verified candidate before it replaces anything (and on a matching install),
+    so a runtime that cannot work here never becomes the active one.
+    """
     if sys.platform != "win32":
         raise MxcInstallError("the MXC runtime installer is Windows-only")
     mxc_runtime._expected_architecture()
+    pin = pin or mxc_runtime.selected_pin()
 
     install_dir = install_dir.expanduser().resolve()
     install_dir.parent.mkdir(parents = True, exist_ok = True)
     with install_lock(install_lock_path(install_dir)):
-        if _already_installed(install_dir):
+        if _already_installed(install_dir, pin):
+            if qualify is not None:
+                qualify(install_dir)
             return False
 
         stage = Path(tempfile.mkdtemp(prefix = f".{install_dir.name}-", dir = install_dir.parent))
         try:
             archive = stage / ".mxc-sdk.tgz"
-            _download(archive)
+            _download(archive, pin)
             actual_size = archive.stat().st_size
-            if actual_size != mxc_runtime.RELEASE_ARCHIVE_SIZE:
+            if actual_size != pin.archive_size:
                 raise MxcInstallError(
-                    "MXC release size mismatch: "
-                    f"expected {mxc_runtime.RELEASE_ARCHIVE_SIZE}, got {actual_size}"
+                    f"MXC {pin.version} release size mismatch: "
+                    f"expected {pin.archive_size}, got {actual_size}"
                 )
             actual_digest = mxc_runtime._sha256_file(archive)
-            if actual_digest != mxc_runtime.RELEASE_ARCHIVE_SHA256:
+            if actual_digest != pin.archive_sha256:
                 raise MxcInstallError(
-                    "MXC release checksum mismatch: "
-                    f"expected {mxc_runtime.RELEASE_ARCHIVE_SHA256}, got {actual_digest}"
+                    f"MXC {pin.version} release checksum mismatch: "
+                    f"expected {pin.archive_sha256}, got {actual_digest}"
                 )
             try:
                 with tarfile.open(archive, "r:gz") as bundle:
-                    for target, entry in _validate_archive_entries(bundle).items():
+                    for target, entry in _validate_archive_entries(bundle, pin).items():
                         # Never tar.extract: the member path is not trusted.
                         source = bundle.extractfile(entry)
                         if source is None:
@@ -142,8 +267,11 @@ def install_mxc_release(install_dir: Path) -> bool:
             except (OSError, tarfile.TarError) as exc:
                 raise MxcInstallError("the pinned Microsoft MXC archive is invalid") from exc
             archive.unlink()
-            mxc_runtime._validate_runtime(stage)
-            mxc_runtime._validate_host_prep(stage)
+            _validate_install(stage, pin)
+            if qualify is not None:
+                qualify(stage)
+            if install_dir.is_dir():
+                _replay_retiring_journal(install_dir, pin)
             swap_into_place(stage, install_dir)
             mxc_runtime.forget_verified_runtime()
         finally:
@@ -352,14 +480,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.install_dir is None:
         parser.error("--install-dir is required")
     try:
-        changed = install_mxc_release(args.install_dir)
+        pin = mxc_runtime.selected_pin()
+        # A pin forced by UNSLOTH_MXC_PIN is never second-guessed; a chosen 1.1.0 must prove itself first.
+        auto = pin is mxc_runtime.PRIMARY_PIN and mxc_runtime.forced_pin() is None
+        try:
+            changed = install_mxc_release(
+                args.install_dir, pin, qualify = _require_builtin_container if auto else None
+            )
+        except NoBuiltinContainer as exc:
+            print(
+                f"[mxc-prebuilt] this Windows has no built-in container for MXC {pin.version} "
+                f"({exc}); installing MXC {mxc_runtime.LEGACY_PIN.version} for the fallback sandbox"
+            )
+            changed = install_mxc_release(args.install_dir, mxc_runtime.LEGACY_PIN)
+            # Only once 1.0.1 is in place: a failed fallback retries the whole choice next time.
+            mxc_runtime.record_probe_demotion(f"MXC {pin.version} {exc}")
     except BusyInstallConflict as exc:
         print(f"[mxc-prebuilt] install blocked by an active MXC process: {exc}", file = sys.stderr)
         return 3
     except (MxcInstallError, mxc_runtime.MxcRuntimeUnavailable) as exc:
         print(f"[mxc-prebuilt] {exc}", file = sys.stderr)
         return 1
-    print("[mxc-prebuilt] installed and validated" if changed else "[mxc-prebuilt] already matches")
+    version = mxc_runtime.selected_pin().version
+    print(
+        f"[mxc-prebuilt] MXC {version} installed and validated"
+        if changed
+        else f"[mxc-prebuilt] MXC {version} already matches"
+    )
     return 0
 
 
