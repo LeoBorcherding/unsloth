@@ -263,7 +263,11 @@ if sys.platform == "win32":
                         if _km:
                             _all_vers_main.append(_km.group(1))
                 if _all_vers_main:
-                    _bnb_rocm_ver = max(_all_vers_main, key = lambda v: int(v))
+                    from utils.bnb_rocm_version import (
+                        pick_bnb_rocm_dll_suffix,
+                        torch_hip_version,
+                    )
+                    _bnb_rocm_ver = pick_bnb_rocm_dll_suffix(_all_vers_main, torch_hip_version())
         except Exception as _e:
             _logging.getLogger(__name__).warning(
                 "Windows ROCm: BNB DLL detection failed (%s); leaving BNB_ROCM_VERSION as is",
