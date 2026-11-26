@@ -13,6 +13,7 @@ from collections import deque
 from typing import Annotated, Any, Dict, Literal, Optional, List, Union
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Discriminator,
@@ -1064,6 +1065,12 @@ class TransformersUpgradeCheckResponse(BaseModel):
         "when the latest sidecar already routes the model, and when an install-only upgrade "
         "would put it there. Lets the UI state the real precision before the run starts.",
     )
+    sidecar_keeps_4bit: bool = Field(
+        False,
+        description = "Whether a load on the latest sidecar stays bnb 4-bit for this model: an "
+        "architecture validated in 4-bit there, or a checkpoint already quantized with "
+        "bitsandbytes. When true, installing the offered release does not switch the run to 16-bit.",
+    )
     install_breaks_exact_resume: bool = Field(
         False,
         description = "Set only for a resume_run_id: installing the offered release would "
@@ -1672,6 +1679,14 @@ class InstallLatestTransformersRequest(BaseModel):
             "that already got consent for that swap can carry it through here."
         ),
     )
+    auto: bool = Field(
+        False,
+        description = (
+            "Install without the user's confirmation. Allowed only for the current PyPI "
+            "release whose package scan is clean; anything else answers requires_consent "
+            "and installs nothing."
+        ),
+    )
 
 
 class InstallLatestTransformersResponse(BaseModel):
@@ -1692,6 +1707,15 @@ class InstallLatestTransformersResponse(BaseModel):
     )
     latest_main_version: Optional[str] = Field(
         None, description = "On a version-mismatch failure: transformers main's current version"
+    )
+    requires_consent: bool = Field(
+        False,
+        description = "An automatic install was not attempted; ask the user (message says why)",
+    )
+    scan_status: Optional[str] = Field(
+        None,
+        description = "Package scan verdict for a PyPI install: clean, review or flagged "
+        "(flagged installs are refused)",
     )
 
 
@@ -1817,6 +1841,11 @@ class _InferenceRuntimeFields(BaseModel):
     )
     audio_server_task: Optional[str] = Field(
         None, description = "audio.cpp server task the running server was started with."
+    )
+    audio_separation: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "What the model does on Separate: goal (stems, speakers, voice, restore) "
+        "and the id of its one output when it filters a recording; None when it does not separate.",
     )
     audio_convert: Optional[Dict[str, Any]] = Field(
         None, description = "What the model offers on Convert; None when it does not convert."
@@ -3009,6 +3038,9 @@ class ChatCompletionRequest(BaseModel):
     _off_confirm_opt_out: bool = PrivateAttr(default = False)
     # Anthropic web_search allowed/blocked domains; server-side only, never a request field.
     _website_policy: Optional[dict] = PrivateAttr(default = None)
+    # Scheduled runs restrict the MCP catalog to the servers selected on the task.
+    _scheduled_mcp_server_ids: Optional[frozenset[str]] = PrivateAttr(default = None)
+    _scheduled_reasoning_effort: Optional[str] = PrivateAttr(default = None)
 
     model: str = Field(
         "default",
@@ -5503,6 +5535,12 @@ class DiffusionDetailerSpec(BaseModel):
     )
 
 
+# -1 = random (A1111, sd.cpp). le = 2**53-1: seeds round-trip through JSON recipes, where JavaScript rounds larger integers.
+MediaSeed = Annotated[
+    Optional[int], Field(ge = -1, le = 2**53 - 1), AfterValidator(lambda v: None if v == -1 else v)
+]
+
+
 class DiffusionGenerateRequest(BaseModel):
     """Request to generate one image from the loaded diffusion model."""
 
@@ -5535,10 +5573,7 @@ class DiffusionGenerateRequest(BaseModel):
         le = 20.0,
         description = "Classifier-free guidance scale. Omitted: the loaded model's default.",
     )
-    # le = 2**53-1: seeds round-trip through JSON recipes, where JavaScript rounds larger integers and a restored recipe would differ.
-    seed: Optional[int] = Field(
-        None, ge = 0, le = 2**53 - 1, description = "Seed for reproducibility (random if omitted)"
-    )
+    seed: MediaSeed = Field(None, description = "Seed for reproducibility (random if omitted or -1)")
     batch_size: int = Field(
         1, ge = 1, le = 32, description = "Images generated in one forward pass (VRAM-heavy)"
     )
@@ -5913,6 +5948,13 @@ class GalleryImage(BaseModel):
     batch_index: int = Field(0, description = "Position within its batch (0-based)")
     batch_size: int = Field(
         1, description = "Batch size used; with batch_index it lets restore replay this image"
+    )
+    coalesced_batch_size: Optional[int] = Field(
+        None,
+        description = "Images in the shared call this one rendered in, when concurrent requests were batched",
+    )
+    coalesced_index: Optional[int] = Field(
+        None, description = "This image's position in that shared call (0-based)"
     )
     generation_seconds: Optional[float] = Field(
         None,
@@ -6435,6 +6477,13 @@ class DiffusionDownloadPlanResponse(BaseModel):
         description = "Stable code for incompatible_reason: 'unified-memory-load' when the unified-memory "
         "check refused the pick (send allow_oversized_load to attempt it anyway); null otherwise.",
     )
+    precision_options: Optional[Dict[str, Optional[str]]] = Field(
+        None,
+        description = "Explicit transformer precision (int8, fp8, nvfp4, mxfp8) -> why a request for it would be "
+        "refused for the planned family on the selected card (the family deny list, a measured NVFP4 gate failure, or a recorded kernel-probe failure on "
+        "the card), or null when nothing known rules it out. Null as a whole when no family was resolved. The global NVFP4 switch is "
+        "reported separately.",
+    )
 
 
 class DiffusionStatusResponse(BaseModel):
@@ -6454,6 +6503,19 @@ class DiffusionStatusResponse(BaseModel):
         None,
         description = "Best-effort memory the resident model holds, in MiB; null when unknown.",
     )
+    precision_options: Optional[Dict[str, Optional[str]]] = Field(
+        None,
+        description = "Explicit transformer precision (int8, fp8, nvfp4, mxfp8) -> why a request for it would be "
+        "refused for the loaded family on its card (the family deny list, a measured NVFP4 gate failure, or a recorded kernel-probe failure on "
+        "the card), or null when nothing known rules it out. Null as a whole when nothing is loaded. The global NVFP4 switch is "
+        "reported separately.",
+    )
+    precision_options_card: Optional[int] = Field(
+        None,
+        description = "The PHYSICAL GPU id (the index space of gpu_ids and the UI's GPU picker, not the torch "
+        "ordinal under a CUDA_VISIBLE_DEVICES mask) precision_options was judged on (a kernel-probe verdict is per "
+        "card), so a pick for another card does not inherit it; null when unknown or not on a GPU.",
+    )
     multi_gpu: Optional[Dict[str, Any]] = Field(
         None,
         description = "Multi-GPU placement (component -> card, primary, secondary) and CFG-parallel state (armed, "
@@ -6465,6 +6527,18 @@ class DiffusionStatusResponse(BaseModel):
         description = "Compile / CUDA-graph engagement counters: this load's graph captures, replays and ungraphed "
         "denoiser calls (whole-step, per block, per-card segments, and the per-block graphs a whole-step graph falls "
         "back to), and the process's dynamo frame and graph-break totals; null when nothing is loaded.",
+    )
+    request_batching: Optional[Dict[str, str]] = Field(
+        None,
+        description = "How concurrent text-to-image requests share pipeline calls on this load: mode 'any', "
+        "'compiled_sizes' (static compile, only batch sizes already compiled) or 'serial' (CUDA graphs, every request "
+        "renders alone), with the reason; null when nothing is loaded.",
+    )
+    fp8_gemm: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "Which fp8 GEMM an fp8 load runs: path 'torchao_rowwise', or 'unit_scale_fallback' when this "
+        "torch build has no row-wise fp8 kernel on the card (Windows wheels), plus the per-card probe verdict and "
+        "eager call counts; null for a load without fp8.",
     )
     loaded: bool = Field(False, description = "Whether a diffusion model is loaded")
     evicted: List[str] = Field(
@@ -6559,6 +6633,11 @@ class DiffusionStatusResponse(BaseModel):
         default_factory = list,
         description = "The baked adapters as the load requested them, [{id, weight}]; empty when none. The "
         "Images page compares a LoRA selection against it to tell whether Generate needs a reload first",
+    )
+    lora_fuse: Optional[str] = Field(
+        None,
+        description = "Whether the attached LoRA set is folded into the denoiser weights: fused | pending | "
+        "disabled | bit_exact (speed mode off) | offload | quantized | unsupported; null without LoRAs",
     )
     transformer_cache_stats: Optional[dict] = Field(
         None,
@@ -6821,11 +6900,9 @@ class ImageGenerationRequest(BaseModel):
         le = 20.0,
         description = "[x-unsloth] Classifier-free guidance scale (default per model).",
     )
-    seed: Optional[int] = Field(
+    seed: MediaSeed = Field(
         None,
-        ge = 0,
-        le = 2**53 - 1,
-        description = "[x-unsloth] Seed for a repeatable image (random if omitted). With n > 1 "
+        description = "[x-unsloth] Seed for a repeatable image (random if omitted or -1). With n > 1 "
         "each image derives its own seed from it.",
     )
     negative_prompt: Optional[str] = Field(
@@ -6847,12 +6924,6 @@ class ImageGenerationRequest(BaseModel):
         if value is None:
             return cls.model_fields[info.field_name].default
         return value
-
-    @field_validator("seed", mode = "before")
-    @classmethod
-    def _minus_one_seed_means_random(cls, value):
-        # -1 = random (A1111, sd.cpp); seed was ignored here before, so -1 must not start 400ing.
-        return None if value == -1 else value
 
     @field_validator("loras")
     @classmethod
@@ -7463,6 +7534,7 @@ class AudioCatalogModel(BaseModel):
     display_name: str
     family: Optional[str] = None
     task: Literal["tts", "music", "asr", "sep", ""] = ""
+    separation_goal: Optional[Literal["stems", "speakers", "voice", "restore"]] = None
     workflows: List[
         Literal["speak", "clone", "edit", "convert", "music", "separate", "transcribe"]
     ] = Field(default_factory = list)
@@ -7514,11 +7586,9 @@ class VideoJobCreateRequest(BaseModel):
         None, description = "'<width>x<height>', a resolution preset of the loaded family."
     )
     # Unsloth Studio extensions; a plain OpenAI request leaves them all out.
-    seed: Optional[int] = Field(
+    seed: MediaSeed = Field(
         None,
-        ge = 0,
-        le = 2**53 - 1,
-        description = "Seed for a repeatable take. Omitted: Unsloth Studio draws one and returns "
+        description = "Seed for a repeatable take. Omitted or -1: Unsloth Studio draws one and returns "
         "it on the job.",
     )
     negative_prompt: Optional[str] = Field(
@@ -7644,6 +7714,10 @@ class VideoJob(BaseModel):
     seed: Optional[int] = None
     error: Optional[VideoJobError] = None
     remixed_from_video_id: Optional[str] = None
+    # Unsloth Studio extension, while queued: 1-based place in the queue (1 starts next) and the
+    # estimated seconds until it starts (null when there is nothing yet to estimate from).
+    queue_position: Optional[int] = None
+    eta_seconds: Optional[float] = None
 
 
 class VideoJobListResponse(BaseModel):
@@ -7963,10 +8037,7 @@ class VideoGenerateRequest(BaseModel):
         "pipeline default it to the main guidance. Ignored by single-DiT families (their pipeline "
         "signature has no second guidance kwarg).",
     )
-    # le = 2**53-1: seeds round-trip through JSON recipes, where JavaScript rounds larger integers and a restored recipe would differ.
-    seed: Optional[int] = Field(
-        None, ge = 0, le = 2**53 - 1, description = "Seed for reproducibility (random if omitted)"
-    )
+    seed: MediaSeed = Field(None, description = "Seed for reproducibility (random if omitted or -1)")
     # Bounded so one request cannot buffer a multi-GB payload; ~32 MiB fits a 4096px source.
     first_frame: Optional[str] = Field(
         None,
@@ -8172,14 +8243,41 @@ class VideoGenerateResponse(BaseModel):
     span it). The saved gallery record arrives via GET /video/generate-progress
     when its phase reaches "completed"."""
 
-    status: Literal["started"] = Field(
-        "started", description = "Discriminator: the generation job was started"
+    status: Literal["started", "queued"] = Field(
+        "started",
+        description = "started: the generation job runs now; queued: it waits its turn behind "
+        "other videos and starts on its own (GET /video/queue)",
     )
     video: Optional[GalleryVideo] = Field(
         None,
         description = "Always null (kept for response-shape compatibility); the saved "
         "record is delivered by generate-progress on completion",
     )
+    video_id: Optional[str] = Field(None, description = "This clip's id, also its gallery id")
+    queue_position: Optional[int] = Field(
+        None, description = "When queued: 1-based place in the queue (1 starts next)"
+    )
+    eta_seconds: Optional[float] = Field(
+        None, description = "When queued: estimated seconds until it starts, null when unknown"
+    )
+
+
+class VideoQueueJob(BaseModel):
+    """One of the caller's videos waiting in the queue, or a queued Video page clip that ended
+    before it started."""
+
+    video_id: str
+    status: Literal["queued", "starting", "failed", "cancelled"]
+    queue_position: Optional[int] = None
+    eta_seconds: Optional[float] = None
+    prompt: Optional[str] = None
+    created_at: int
+    source: Literal["page", "api", "chat"] = "page"
+    error: Optional[str] = None
+
+
+class VideoQueueResponse(BaseModel):
+    jobs: list[VideoQueueJob] = Field(default_factory = list)
 
 
 class VideoGalleryListResponse(BaseModel):
@@ -8215,6 +8313,7 @@ class VideoGenerateProgressResponse(BaseModel):
     error: Optional[str] = Field(
         None, description = "Client-safe failure detail when phase is 'failed'"
     )
+    video_id: Optional[str] = Field(None, description = "The id of the clip this progress is for")
 
 
 class VideoLoadProgressResponse(BaseModel):
@@ -8336,6 +8435,19 @@ class VideoStatusResponse(BaseModel):
         None,
         description = "Best-effort memory the resident model holds, in MiB; null when unknown.",
     )
+    precision_options: Optional[Dict[str, Optional[str]]] = Field(
+        None,
+        description = "Explicit transformer precision (int8, fp8, nvfp4, mxfp8) -> why a request for it would be "
+        "refused for the loaded family on its card (the family deny list, a measured NVFP4 gate failure, or a recorded kernel-probe failure on "
+        "the card), or null when nothing known rules it out. Null as a whole when nothing is loaded. The global NVFP4 switch is "
+        "reported separately.",
+    )
+    precision_options_card: Optional[int] = Field(
+        None,
+        description = "The PHYSICAL GPU id (the index space of gpu_ids and the UI's GPU picker, not the torch "
+        "ordinal under a CUDA_VISIBLE_DEVICES mask) precision_options was judged on (a kernel-probe verdict is per "
+        "card), so a pick for another card does not inherit it; null when unknown or not on a GPU.",
+    )
     multi_gpu: Optional[Dict[str, Any]] = Field(
         None,
         description = "Multi-GPU placement (component -> card, primary, secondary) and CFG-parallel state (armed, "
@@ -8438,6 +8550,11 @@ class VideoStatusResponse(BaseModel):
         default_factory = list,
         description = "The baked adapters as the load requested them, [{id, weight}]; empty when none",
     )
+    lora_fuse: Optional[str] = Field(
+        None,
+        description = "Whether the load's LoRA set is folded into the denoiser weights, as the images status reports "
+        "it: baked (merged into the bf16 denoiser at load, the only video LoRA path); null without LoRAs",
+    )
     lora_refusal: Optional[str] = Field(
         None,
         description = "Why a reload of this model with VideoLoadRequest.loras would be refused (GGUF or "
@@ -8448,6 +8565,13 @@ class VideoStatusResponse(BaseModel):
         description = "Text-encoder quant engaged: fp8 | fp8_dynamic | int8 | nvfp4 | null "
         "(null = the dense bf16 encoder is loaded). An int8 request without a per-family "
         "keep-bf16 schedule is reported as the fp8 it fell back to.",
+    )
+    fp8_gemm: Optional[Dict[str, Any]] = Field(
+        None,
+        description = "Which fp8 GEMM an fp8 load runs: path 'torchao_rowwise', or 'unit_scale_fallback' when this "
+        "torch build has no row-wise fp8 kernel on the card (Windows wheels), plus the per-card probe verdict and "
+        "eager call counts; a ModelOpt FP8 denoiser adds modelopt {runtime, route, calls}. null for a load without "
+        "fp8.",
     )
     has_audio: bool = Field(
         False, description = "Whether the loaded family produces a synchronized audio track"
