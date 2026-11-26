@@ -470,6 +470,15 @@ def small_host_ineligible(compute_dtype: Any, *, device: str) -> Optional[str]:
     return None
 
 
+def narrowing_may_refuse(compute_dtype: Any) -> bool:
+    """A 16-bit load can be refused for its fp32 -> 16-bit copies on any device, so its weights are sized first."""
+    return (
+        not small_host_disabled()
+        and not host_ram_check_disabled()
+        and _itemsize(_dtype_name(compute_dtype)) < 4
+    )
+
+
 def _converted_components(components: dict[str, StoredComponent]) -> dict[str, StoredComponent]:
     """The components a dense load converts on the host: large bf16 ones."""
     return {
@@ -610,8 +619,18 @@ def decide_small_host(
     dense_commit = _dense_commit_mib({**converted, **narrowing}, dense, pread_libraries)
     storage = {name: comp.dtype for name, comp in converted.items()}
     forced = small_host_forced()
+    # a dense load (LoRA, unreadable RAM) still materialises the fp32 -> 16-bit copies
+    dense_narrowed_refuse = _narrowed_refusal(
+        narrowed,
+        _dense_commit_mib(narrowing, narrowed, pread_libraries),
+        reserve,
+        host_available_mib,
+        commit,
+    )
     if host_available_mib is None and not forced:
-        return SmallHostDecision(False, "host RAM unreadable", dense_host_mib = dense)
+        return SmallHostDecision(
+            False, "host RAM unreadable", dense_host_mib = dense, refuse = dense_narrowed_refuse
+        )
     fits = _dense_fits(dense, dense_commit, reserve, host_available_mib, commit)
     commit_note = (
         ""
@@ -639,6 +658,7 @@ def decide_small_host(
             host_total_mib,
             dense,
             route,
+            refuse = dense_narrowed_refuse,
             **extra,
         )
     spill, spill_route = (
@@ -654,11 +674,15 @@ def decide_small_host(
         and not host_ram_check_disabled()
     ):
         refuse = _refusal(need, reserve, host_available_mib, "even the low-memory route")
-    elif routed_narrowed and commit is not None and not host_ram_check_disabled():
+    else:
         # the fp32 views and their 16-bit copies are charged to commit even on the route
-        narrowed_commit = _dense_commit_mib(routed_narrowing, routed_narrowed, pread_libraries)
-        if narrowed_commit + reserve > commit:
-            refuse = _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
+        refuse = _narrowed_refusal(
+            routed_narrowed,
+            _dense_commit_mib(routed_narrowing, routed_narrowed, pread_libraries),
+            reserve,
+            None,
+            commit,
+        )
     why = (
         f"{SMALL_HOST_ENV}=1"
         if forced and fits
@@ -711,15 +735,10 @@ def _narrowed_only(
 ) -> SmallHostDecision:
     """Not routed; refused when the fp32 -> 16-bit copies alone cannot fit (Z-Image-Turbo's 22.9 GB fp32 DiT),
     in available RAM or, on Windows, in commit headroom."""
-    if not narrowed or available is None:
+    if not narrowed or (available is None and commit is None):
         return SmallHostDecision(False, reason)
     reserve = host_reserve_mib(total)
-    refuse = None
-    if not host_ram_check_disabled():
-        if narrowed + reserve > int(available):
-            refuse = _refusal(narrowed, reserve, available, "converting its float32 weights")
-        elif commit is not None and narrowed_commit + reserve > commit:
-            refuse = _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
+    refuse = _narrowed_refusal(narrowed, narrowed_commit, reserve, available, commit)
     commit_note = (
         "" if commit is None else f", {commit} MiB commit headroom (needs ~{narrowed_commit} MiB)"
     )
@@ -764,6 +783,23 @@ def _widened_embed_mib(comp: StoredComponent, compute: str) -> int:
     if _itemsize(compute) <= _itemsize(comp.dtype):
         return 0
     return comp.embed_mib * _itemsize(compute) // _itemsize(comp.dtype)
+
+
+def _narrowed_refusal(
+    narrowed: int,
+    narrowed_commit: int,
+    reserve: int,
+    available: Optional[int],
+    commit: Optional[int],
+) -> Optional[str]:
+    """Refusal when the fp32 -> 16-bit copies cannot fit available RAM or, on Windows, commit headroom."""
+    if not narrowed or host_ram_check_disabled():
+        return None
+    if available is not None and narrowed + reserve > int(available):
+        return _refusal(narrowed, reserve, available, "converting its float32 weights")
+    if commit is not None and narrowed_commit + reserve > commit:
+        return _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
+    return None
 
 
 def _refusal(need: int, reserve: int, available: Optional[int], what: str) -> str:

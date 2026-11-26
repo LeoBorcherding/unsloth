@@ -264,7 +264,6 @@ def _cold_decision(
 @pytest.mark.parametrize(
     "dtype, device, env",
     [
-        ("bfloat16", "cuda", None),  # bf16 card: the dense load already stays memory-mapped
         ("float32", "cuda", "0"),  # kill switch
         ("float32", "cpu", None),
         ("float32", "mps", None),
@@ -274,6 +273,15 @@ def test_cold_load_does_not_fetch_when_the_route_cannot_engage(monkeypatch, dtyp
     if env is not None:
         monkeypatch.setenv(sh.SMALL_HOST_ENV, env)
     assert _cold_decision(monkeypatch, getattr(torch, dtype), device) == []
+
+
+@pytest.mark.parametrize("device", ["cuda", "rocm", "cpu"])
+def test_cold_16bit_load_fetches_so_its_fp32_copies_are_sized(monkeypatch, device):
+    # the route cannot engage, but a bf16 load can still be refused for narrowing an fp32 component
+    assert len(_cold_decision(monkeypatch, torch.bfloat16, device)) == 1
+    assert len(_cold_decision(monkeypatch, torch.float16, device, lora_active = True)) == 1
+    monkeypatch.setenv(sh.HOST_RAM_CHECK_ENV, "0")
+    assert _cold_decision(monkeypatch, torch.bfloat16, device) == []
 
 
 def test_cold_load_does_not_fetch_with_lora_unless_forced(monkeypatch):

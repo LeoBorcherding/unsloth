@@ -965,3 +965,51 @@ def test_a_routed_load_is_refused_when_windows_commit_cannot_hold_its_fp32_copy(
     d = _decide(ZIMAGE, host_commit_mib = narrowed + view, **tight)
     assert d.engaged and d.refuse and "float32" in d.refuse
     assert _decide(ZIMAGE, host_commit_mib = 200000, **tight).refuse is None
+
+
+def test_a_cold_rocm_bf16_load_downloads_first_and_is_refused(tmp_path, monkeypatch):
+    # first load on mint: no weights cached, so the fp32 DiT is only seen after the early download
+    from core.inference import diffusion as dif
+
+    monkeypatch.delenv(sh.DOWNLOAD_FIRST_ENV, raising = False)
+    full = tmp_path / "dl"
+    full.mkdir()
+    monkeypatch.setattr(dif, "host_ram_mib", lambda: (MINT_TOTAL, 10719))
+    monkeypatch.setattr(dif, "host_commit_mib", lambda: None)
+    monkeypatch.setattr(dif, "pread_available", lambda: False)
+    monkeypatch.setattr(
+        dif,
+        "stored_components",
+        lambda snapshot: dict(ZIMAGE) if str(snapshot) == str(full) else {},
+    )
+    calls = []
+    with pytest.raises(RuntimeError, match = "Not enough system RAM"):
+        dif.DiffusionBackend()._small_host_decision(
+            str(tmp_path),
+            {},
+            types.SimpleNamespace(backend = "rocm", device = "cuda:0"),
+            torch.bfloat16,
+            lora_active = False,
+            fetch = lambda: calls.append(1) or str(full),
+        )
+    assert calls == [1]
+
+
+def test_a_lora_dense_load_is_refused_when_its_fp32_copy_cannot_fit():
+    # LoRA keeps the load dense; the fp32 DiT's 16-bit copy alone does not fit
+    tight = dict(total = MINT_TOTAL, available = 10719, dtype = torch.float16, lora_active = True)
+    d = _decide(ZIMAGE, **tight)
+    assert not d.engaged and d.refuse and "float32" in d.refuse
+    # the bf16 encoder alone over budget is the dense LoRA load as before: not refused here
+    assert _decide(ZIMAGE, skip_narrowed = ("transformer",), **tight).refuse is None
+
+
+def test_windows_commit_is_checked_when_available_ram_is_unreadable():
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    for dtype in (torch.bfloat16, torch.float16):
+        d = _decide(
+            ZIMAGE, dtype = dtype, total = MINT_TOTAL, available = None, host_commit_mib = narrowed + view
+        )
+        assert not d.engaged and d.refuse and "float32" in d.refuse, dtype
+        assert _decide(ZIMAGE, dtype = dtype, total = MINT_TOTAL, available = None).refuse is None

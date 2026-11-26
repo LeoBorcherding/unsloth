@@ -212,6 +212,7 @@ from .diffusion_small_host import (
     resolve_snapshot_dir,
     small_host_forced,
     small_host_ineligible,
+    narrowing_may_refuse as small_host_narrowing_may_refuse,
     snapshot_weights_complete,
     spill_capacity_mib,
     mapped_denoiser as small_host_mapped_denoiser,
@@ -15126,13 +15127,13 @@ class DiffusionBackend:
         snapshot = resolve_snapshot_dir(source, hub_cache_dir())
         device = str(getattr(target, "backend", None) or getattr(target, "device", ""))
         total, available = host_ram_mib()
-        # route cannot engage: skip the prefetch, the loader downloads what it reads
+        # route cannot engage and no fp32 copy can be refused: skip the prefetch, the loader downloads what it reads
         can_engage = small_host_ineligible(dtype, device = device) is None and (
             small_host_forced() or (available is not None and not lora_active)
         )
         if (
             fetch is not None
-            and can_engage
+            and (can_engage or (available is not None and small_host_narrowing_may_refuse(dtype)))
             and small_host_download_first()
             and (
                 snapshot is None
