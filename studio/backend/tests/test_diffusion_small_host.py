@@ -915,3 +915,39 @@ def test_the_generic_pipeline_load_passes_its_cast_cache_hits():
         and any(k.arg == "variant" for k in n.keywords)
     ]
     assert calls and all(any(k.arg == "cast_cached" for k in c.keywords) for c in calls)
+
+
+def test_a_routed_load_budgets_the_cast_cached_component_it_reads_from_fp32():
+    # the cast cache is injected only into a load that is not routed
+    tight = dict(total = MINT_TOTAL, available = 10719)
+    full = _decide(ZIMAGE, dtype = torch.float16, **tight)
+    cached = _decide(ZIMAGE, dtype = torch.float16, cast_cached = ("transformer",), **tight)
+    assert full.engaged and cached.engaged
+    assert cached.route_host_mib == full.route_host_mib >= int(23470 / 2 * 1.15)
+    assert cached.dense_host_mib < full.dense_host_mib
+    twins = _decide(ZIMAGE, dtype = torch.float16, skip_narrowed = ("transformer",), **tight)
+    assert twins.route_host_mib < full.route_host_mib
+
+
+def test_a_narrowed_only_load_is_refused_when_windows_commit_cannot_hold_it():
+    roomy = dict(total = 64 * 1024, available = 60000)
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    tight = _decide(ZIMAGE, dtype = torch.bfloat16, host_commit_mib = narrowed + view, **roomy)
+    assert not tight.engaged and tight.refuse and "float32" in tight.refuse
+    assert "commit" in tight.reason
+    assert _decide(ZIMAGE, dtype = torch.bfloat16, host_commit_mib = 200000, **roomy).refuse is None
+    # pread reads the fp32 file without a copy-on-write view
+    import dataclasses
+
+    pread = {**ZIMAGE, "transformer": dataclasses.replace(ZIMAGE["transformer"], library = "diffusers")}
+    assert (
+        _decide(
+            pread,
+            dtype = torch.bfloat16,
+            host_commit_mib = narrowed + view,
+            pread_libraries = ("diffusers",),
+            **roomy,
+        ).refuse
+        is None
+    )

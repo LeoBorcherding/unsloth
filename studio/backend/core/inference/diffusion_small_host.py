@@ -555,11 +555,13 @@ def decide_small_host(
     spill_free_mib: Optional[int] = None,
     dense_denoiser: bool = False,
     skip_narrowed: tuple[str, ...] = (),
+    cast_cached: tuple[str, ...] = (),
 ) -> SmallHostDecision:
     """Whether this pipeline load takes the small-host route. Only CUDA loads converting large bf16 components
     (fp16 / fp32 compute) change; same-dtype loads already stay memory-mapped. A large fp32 component loaded at
     fp16 / bf16 is never routed but materialises its converted copy, so it is budgeted and refused when that
-    copy cannot fit (``skip_narrowed``: components read elsewhere, e.g. the cast cache). ``host_commit_mib`` (Windows)
+    copy cannot fit (``skip_narrowed``: components read 16-bit elsewhere, e.g. a variant's twins; ``cast_cached``:
+    components the cast cache supplies to a load that is not routed). ``host_commit_mib`` (Windows)
     also routes a dense load whose commit need does not fit: on Windows commit exhaustion is an access
     violation in native code, not a Python error (#13432, #14513). ``spill_free_mib``: ``spill_capacity_mib``, None = no spill.
     ``dense_denoiser``: the caller asked for the unquantised denoiser, so the route keeps it memory-mapped at its
@@ -567,15 +569,22 @@ def decide_small_host(
     if small_host_disabled():
         return SmallHostDecision(False, f"{SMALL_HOST_ENV}=0")
     compute = _dtype_name(compute_dtype)
-    narrowed = _narrowed_mib(components, compute, skip_narrowed)
-    skip = small_host_ineligible(compute_dtype, device = device)
+    narrowing = _narrowed_components(components, compute, skip_narrowed + cast_cached)
+    narrowed = _narrowed_mib(narrowing, compute)
+    commit = None if host_commit_mib is None else int(host_commit_mib)
+    converted = _converted_components(components)
+    skip = small_host_ineligible(compute_dtype, device = device) or (
+        None if converted else "no large bf16 component to convert"
+    )
     if skip:
         # the narrowed copy is built in host RAM on any device (ROCm targets report "rocm")
-        return _narrowed_only(skip, narrowed, host_total_mib, host_available_mib)
-    converted = _converted_components(components)
-    if not converted:
         return _narrowed_only(
-            "no large bf16 component to convert", narrowed, host_total_mib, host_available_mib
+            skip,
+            narrowed,
+            _dense_commit_mib(narrowing, narrowed, pread_libraries),
+            host_total_mib,
+            host_available_mib,
+            commit,
         )
     dense = narrowed + _dense_mib(converted, compute)
     # encoders stay memory-mapped except fp32-kept layers and a token embedding widened to float32
@@ -592,15 +601,15 @@ def decide_small_host(
             else c.mib * _itemsize(compute) // _itemsize(c.dtype)
             for n, c in converted.items()
         )
-        + narrowed
+        # the route never injects the cast cache, so its components narrow from fp32 here too
+        + _narrowed_mib(_narrowed_components(components, compute, skip_narrowed), compute)
     )
     reserve = host_reserve_mib(host_total_mib)
-    dense_commit = _dense_commit_mib(converted, dense, pread_libraries)
+    dense_commit = _dense_commit_mib({**converted, **narrowing}, dense, pread_libraries)
     storage = {name: comp.dtype for name, comp in converted.items()}
     forced = small_host_forced()
     if host_available_mib is None and not forced:
         return SmallHostDecision(False, "host RAM unreadable", dense_host_mib = dense)
-    commit = None if host_commit_mib is None else int(host_commit_mib)
     fits = _dense_fits(dense, dense_commit, reserve, host_available_mib, commit)
     commit_note = (
         ""
@@ -665,39 +674,50 @@ def decide_small_host(
     )
 
 
-def _narrowed_mib(
+def _narrowed_components(
     components: dict[str, StoredComponent], compute: str, skip: tuple[str, ...]
-) -> int:
-    """Host MiB of the converted copies of large fp32 components loaded at a narrower compute dtype."""
-    return (
-        int(
-            sum(
-                (c.mib - c.kept_fp32_mib) * _itemsize(compute) / 4
-                for n, c in components.items()
-                if c.dtype == "float32" and c.mib >= _STREAM_MIN_MIB and n not in skip
-            )
-            * _CONVERT_MARGIN
-        )
-        if _itemsize(compute) < 4
-        else 0
+) -> dict[str, StoredComponent]:
+    """Large fp32 components a narrower compute dtype converts on the host."""
+    if _itemsize(compute) >= 4:
+        return {}
+    return {
+        n: c
+        for n, c in components.items()
+        if c.dtype == "float32" and c.mib >= _STREAM_MIN_MIB and n not in skip
+    }
+
+
+def _narrowed_mib(narrowing: dict[str, StoredComponent], compute: str) -> int:
+    return int(
+        sum((c.mib - c.kept_fp32_mib) * _itemsize(compute) / 4 for c in narrowing.values())
+        * _CONVERT_MARGIN
     )
 
 
 def _narrowed_only(
-    reason: str, narrowed: int, total: Optional[int], available: Optional[int]
+    reason: str,
+    narrowed: int,
+    narrowed_commit: int,
+    total: Optional[int],
+    available: Optional[int],
+    commit: Optional[int],
 ) -> SmallHostDecision:
-    """Not routed; refused when the fp32 -> 16-bit copies alone cannot fit (Z-Image-Turbo's 22.9 GB fp32 DiT)."""
+    """Not routed; refused when the fp32 -> 16-bit copies alone cannot fit (Z-Image-Turbo's 22.9 GB fp32 DiT),
+    in available RAM or, on Windows, in commit headroom."""
     if not narrowed or available is None:
         return SmallHostDecision(False, reason)
     reserve = host_reserve_mib(total)
-    refuse = (
-        _refusal(narrowed, reserve, available, "converting its float32 weights")
-        if narrowed + reserve > int(available) and not host_ram_check_disabled()
-        else None
-    )
+    refuse = None
+    if not host_ram_check_disabled():
+        if narrowed + reserve > int(available):
+            refuse = _refusal(narrowed, reserve, available, "converting its float32 weights")
+        elif commit is not None and narrowed_commit + reserve > commit:
+            refuse = _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
+    commit_note = "" if commit is None else f", {commit} MiB commit headroom (needs ~{narrowed_commit} MiB)"
     return SmallHostDecision(
         False,
-        f"{reason}; float32 -> 16-bit copies need ~{narrowed} MiB + {reserve} MiB reserve, {available} MiB available",
+        f"{reason}; float32 -> 16-bit copies need ~{narrowed} MiB + {reserve} MiB reserve, "
+        f"{available} MiB available{commit_note}",
         available,
         total,
         narrowed,

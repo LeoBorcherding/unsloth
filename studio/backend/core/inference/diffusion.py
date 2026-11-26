@@ -15164,7 +15164,8 @@ class DiffusionBackend:
             spill_free_mib = spill_capacity_mib(),
             dense_denoiser = dense_denoiser,
             # a variant reads 16-bit twins, not the fp32 files sized here
-            skip_narrowed = tuple(comps) if variant else tuple(cast_cached),
+            skip_narrowed = tuple(comps) if variant else (),
+            cast_cached = tuple(cast_cached),
         )
         if decision.engaged or decision.refuse:
             logger.info(
