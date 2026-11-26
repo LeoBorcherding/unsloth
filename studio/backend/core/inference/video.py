@@ -13209,6 +13209,12 @@ class VideoBackend:
         if effective_speed != SPEED_OFF:
             from .video_ltx2 import install_ltx2_full_mask_drop
             ltx2_mask_engaged = install_ltx2_full_mask_drop(pipe, logger = logger) > 0
+        # LTX-2.x: fused q/k RMSNorm + split RoPE processors (UNSLOTH_LTX25_QK_ROPE=0 keeps diffusers'); before the
+        # attention backend and the compile, which both read the processors.
+        ltx2_qk_rope_engaged = False
+        if effective_speed != SPEED_OFF:
+            from .video_ltx25_qk_rope import install_ltx2_fused_qk_rope
+            ltx2_qk_rope_engaged = install_ltx2_fused_qk_rope(pipe, logger = logger) > 0
         # LTX-2.3 / 2.5 connectors: same maths, two fewer prompt-sized copies; before any offload hook wraps them.
         from .video_ltx2 import install_ltx2_lean_connector_features
 
@@ -13277,6 +13283,8 @@ class VideoBackend:
                     speed_optims += ("hv15_vae_vector_mask",)
                 if ltx2_mask_engaged:
                     speed_optims += ("ltx2_full_mask_drop",)
+                if ltx2_qk_rope_engaged:
+                    speed_optims += ("ltx2_fused_qk_rope",)
                 if wan_fused_engaged:
                     speed_optims += ("wan_fused_adaln",)
                 if lowram_target is not None:
