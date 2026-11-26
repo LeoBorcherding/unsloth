@@ -17,7 +17,7 @@ import pytest
 
 SOURCE_PATH = Path(__file__).resolve().parents[1] / "unsloth" / "models" / "rl_replacements.py"
 
-# TRL 1.15.0 to 1.18.2 SFTTrainer.__init__, verbatim around the guard.
+# TRL 1.15.0 to 1.19.0 SFTTrainer.__init__, verbatim around the guard.
 TRL_LM_HEAD_GUARD = """\
     def __init__(self, model, args):
         if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):
@@ -74,7 +74,7 @@ def zoo_trains_lm_head_adapters(monkeypatch):
 
 
 def test_nll_trains_a_lora_lm_head(zoo_trains_lm_head_adapters):
-    # target_modules = r".*(q_proj|v_proj|lm_head)" on TRL 1.15.0 / 1.18.2 raised in UnslothSFTTrainer.__init__.
+    # target_modules = r".*(q_proj|v_proj|lm_head)" on TRL 1.15.0 to 1.19.0 raised in UnslothSFTTrainer.__init__.
     _init(_patched(TRL_LM_HEAD_GUARD))("nll")
 
 
