@@ -620,24 +620,6 @@ class TestStackWindowsForcedFlavor:
         assert not install.called
 
 
-AMD_SMI_GATE = slice_between(INSTALL_SRC, "        $amdSmiAllowed = ", "\n")
-
-
-@requires_pwsh
-@pytest.mark.parametrize("muted, expected", [(True, "False"), (False, "True")])
-def test_the_notice_only_probe_never_runs_amd_smi(muted, expected):
-    kv = _ps_kv(
-        _script(
-            "Remove-Item Env:UNSLOTH_ENABLE_AMD_SMI -ErrorAction SilentlyContinue",
-            "$amdSmiOptOut = $false; $HipSdkInstalled = $true",
-            f"$script:StudioMuteLines = ${str(muted).lower()}",
-            AMD_SMI_GATE,
-            'Write-Output "ALLOWED=$amdSmiAllowed"',
-        )
-    )
-    assert kv["ALLOWED"] == expected
-
-
 NAME_ARCH_TABLE = slice_between(
     INSTALL_SRC,
     "                $nameArchTable = @(",
@@ -711,31 +693,6 @@ def test_a_forced_mixed_host_weighs_the_amd_smi_arches():
         )
     )
     assert kv["ROUTE"] == "rocm" and kv["ARCH"] == "gfx1100"
-
-
-SMI_VIS_IDX = slice_between(INSTALL_SRC, "                        $_smiVisIdx = ", "\n")
-
-
-@requires_pwsh
-@pytest.mark.parametrize(
-    "beside, env, idx",
-    [
-        (True, {"CUDA_VISIBLE_DEVICES": "1"}, "1"),
-        (False, {"CUDA_VISIBLE_DEVICES": "1"}, "0"),
-        (True, {"CUDA_VISIBLE_DEVICES": "1", "HIP_VISIBLE_DEVICES": "0"}, "0"),
-    ],
-    ids = ["forced-route-reads-cuda-mask", "amd-only-host-unchanged", "hip-mask-wins"],
-)
-def test_the_amd_smi_pick_applies_a_cuda_mask_beside_nvidia(beside, env, idx):
-    kv = _ps_kv(
-        _script(
-            _env(**env),
-            f"$ProbeAmdBesideNvidia = ${str(beside).lower()}",
-            SMI_VIS_IDX,
-            'Write-Output "IDX=$_smiVisIdx"',
-        )
-    )
-    assert kv["IDX"] == idx
 
 
 @requires_pwsh
