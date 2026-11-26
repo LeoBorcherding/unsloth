@@ -239,7 +239,11 @@ def _cold_decision(
         huggingface_hub, "snapshot_download", lambda repo, **k: calls.append((repo, k)) or None
     )
     monkeypatch.setattr(diffusion, "resolve_snapshot_dir", lambda *a, **k: None)
-    monkeypatch.setattr(diffusion, "host_ram_mib", lambda: KAGGLE_T4)
+    ram = kw.pop("ram", KAGGLE_T4)
+    monkeypatch.setattr(diffusion, "host_ram_mib", lambda: ram)
+    if "commit" in kw:
+        commit = kw.pop("commit")
+        monkeypatch.setattr(diffusion, "host_commit_mib", lambda: commit)
     backend = object.__new__(diffusion.DiffusionBackend)
     fetch = diffusion._per_component_small_host_fetch(
         "unsloth/Krea-2-Turbo",
@@ -264,7 +268,6 @@ def _cold_decision(
 @pytest.mark.parametrize(
     "dtype, device, env",
     [
-        ("bfloat16", "cuda", None),  # bf16 card: the dense load already stays memory-mapped
         ("float32", "cuda", "0"),  # kill switch
         ("float32", "cpu", None),
         ("float32", "mps", None),
@@ -274,6 +277,21 @@ def test_cold_load_does_not_fetch_when_the_route_cannot_engage(monkeypatch, dtyp
     if env is not None:
         monkeypatch.setenv(sh.SMALL_HOST_ENV, env)
     assert _cold_decision(monkeypatch, getattr(torch, dtype), device) == []
+
+
+@pytest.mark.parametrize("device", ["cuda", "rocm", "cpu"])
+def test_cold_16bit_load_fetches_so_its_fp32_copies_are_sized(monkeypatch, device):
+    # the route cannot engage, but a bf16 load can still be refused for narrowing an fp32 component
+    assert len(_cold_decision(monkeypatch, torch.bfloat16, device)) == 1
+    assert len(_cold_decision(monkeypatch, torch.float16, device, lora_active = True)) == 1
+    monkeypatch.setenv(sh.HOST_RAM_CHECK_ENV, "0")
+    assert _cold_decision(monkeypatch, torch.bfloat16, device) == []
+
+
+def test_cold_16bit_load_fetches_when_only_windows_commit_is_readable(monkeypatch):
+    unreadable = (KAGGLE_T4[0], None)
+    assert len(_cold_decision(monkeypatch, torch.bfloat16, ram = unreadable, commit = 8000)) == 1
+    assert _cold_decision(monkeypatch, torch.bfloat16, ram = unreadable, commit = None) == []
 
 
 def test_cold_load_does_not_fetch_with_lora_unless_forced(monkeypatch):

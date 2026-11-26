@@ -806,3 +806,210 @@ def test_twins_completed_by_a_supplied_component_skip_the_early_download(tmp_pat
         variant = variant,
     )
     assert variant == "fp16" and calls == []
+
+
+# Tongyi-MAI/Z-Image-Turbo: a 22.9 GB fp32 DiT next to a bf16 encoder. A bf16 load materialises the 11.5 GB bf16
+# copy in anonymous host RAM; on a 15 GB host with ~10.7 GB available the kernel killed the whole server.
+ZIMAGE = {
+    "transformer": sh.StoredComponent("transformer", 23470, "float32"),
+    "text_encoder": sh.StoredComponent("text_encoder", 7690, "bfloat16"),
+    "vae": sh.StoredComponent("vae", 160, "float32"),
+}
+MINT_TOTAL = 15 * 1024
+
+
+def test_fp32_dit_narrowed_to_bf16_is_refused_when_its_copy_cannot_fit(monkeypatch):
+    d = _decide(ZIMAGE, dtype = torch.bfloat16, total = MINT_TOTAL, available = 10719)
+    assert not d.engaged and d.refuse and "Not enough system RAM" in d.refuse
+    assert "float32" in d.refuse
+    # the bf16 copy of the DiT alone, plus the convert margin; the small fp32 VAE does not count
+    assert d.dense_host_mib == int(23470 / 2 * 1.15)
+    monkeypatch.setenv(sh.HOST_RAM_CHECK_ENV, "0")
+    assert _decide(ZIMAGE, dtype = torch.bfloat16, total = MINT_TOTAL, available = 10719).refuse is None
+
+
+def test_fp32_dit_narrowed_on_a_host_that_holds_the_copy_loads_dense():
+    d = _decide(ZIMAGE, dtype = torch.bfloat16, total = 32 * 1024, available = 28000)
+    assert not d.engaged and d.refuse is None and "float32 -> 16-bit" in d.reason
+
+
+def test_narrowing_skips_cast_cached_components_and_wide_loads():
+    tight = dict(total = MINT_TOTAL, available = 10719)
+    assert (
+        _decide(ZIMAGE, dtype = torch.bfloat16, skip_narrowed = ("transformer",), **tight).refuse
+        is None
+    )
+    assert _decide(ZIMAGE, dtype = torch.float32, **tight).dense_host_mib == int(7690 * 2 * 1.15)
+    assert _decide(ZIMAGE, dtype = torch.bfloat16, total = MINT_TOTAL, available = None).refuse is None
+
+
+def test_narrowing_is_refused_on_rocm_and_other_non_cuda_targets():
+    # a ROCm target reports device "rocm"; the bf16 copy still lands in host RAM (mint, RX 9060 XT, 15 GB)
+    for device in ("rocm", "mps", "cpu"):
+        d = _decide(ZIMAGE, dtype = torch.bfloat16, device = device, total = MINT_TOTAL, available = 10719)
+        assert not d.engaged and d.refuse and "float32" in d.refuse, device
+    assert (
+        _decide(
+            ZIMAGE, dtype = torch.bfloat16, device = "rocm", total = 32 * 1024, available = 28000
+        ).refuse
+        is None
+    )
+    assert _decide(ZIMAGE, dtype = torch.bfloat16, total = MINT_TOTAL, available = None).refuse is None
+
+
+def test_fp16_load_budgets_the_narrowed_dit_beside_the_converted_encoder():
+    d = _decide(ZIMAGE, dtype = torch.float16, total = 64 * 1024, available = 60000)
+    encoder = int(7690 * 1.15)
+    narrowed = int(23470 / 2 * 1.15)
+    assert not d.engaged and d.dense_host_mib == narrowed + encoder
+    routed = _decide(ZIMAGE, dtype = torch.float16, total = MINT_TOTAL, available = 10719)
+    assert routed.engaged and routed.route_host_mib >= narrowed and routed.refuse
+
+
+def test_the_pipeline_decision_raises_the_narrowing_refusal_and_skips_it_for_variants_and_cast_hits(
+    tmp_path, monkeypatch
+):
+    from core.inference import diffusion as dif
+
+    monkeypatch.setattr(dif, "host_ram_mib", lambda: (MINT_TOTAL, 10719))
+    monkeypatch.setattr(dif, "host_commit_mib", lambda: None)
+    monkeypatch.setattr(dif, "pread_available", lambda: False)
+    monkeypatch.setattr(dif, "stored_components", lambda snapshot: dict(ZIMAGE))
+
+    def decide(**kw):
+        return dif.DiffusionBackend()._small_host_decision(
+            str(tmp_path),
+            {},
+            types.SimpleNamespace(device = "cuda"),
+            torch.bfloat16,
+            lora_active = False,
+            **kw,
+        )
+
+    with pytest.raises(RuntimeError, match = "Not enough system RAM"):
+        decide()
+    with pytest.raises(RuntimeError, match = "Not enough system RAM"):
+        dif.DiffusionBackend()._small_host_decision(
+            str(tmp_path),
+            {},
+            types.SimpleNamespace(backend = "rocm", device = "cuda:0"),
+            torch.bfloat16,
+            lora_active = False,
+        )
+    assert decide(variant = "fp16").refuse is None
+    assert decide(cast_cached = ("transformer",)).refuse is None
+
+
+def test_the_generic_pipeline_load_passes_its_cast_cache_hits():
+    import ast
+    import inspect
+
+    from core.inference import diffusion as dif
+
+    tree = ast.parse(inspect.getsource(dif))
+    calls = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "attr", None) == "_small_host_decision"
+        and any(k.arg == "variant" for k in n.keywords)
+    ]
+    assert calls and all(any(k.arg == "cast_cached" for k in c.keywords) for c in calls)
+
+
+def test_a_routed_load_budgets_the_cast_cached_component_it_reads_from_fp32():
+    # the cast cache is injected only into a load that is not routed
+    tight = dict(total = MINT_TOTAL, available = 10719)
+    full = _decide(ZIMAGE, dtype = torch.float16, **tight)
+    cached = _decide(ZIMAGE, dtype = torch.float16, cast_cached = ("transformer",), **tight)
+    assert full.engaged and cached.engaged
+    assert cached.route_host_mib == full.route_host_mib >= int(23470 / 2 * 1.15)
+    assert cached.dense_host_mib < full.dense_host_mib
+    twins = _decide(ZIMAGE, dtype = torch.float16, skip_narrowed = ("transformer",), **tight)
+    assert twins.route_host_mib < full.route_host_mib
+
+
+def test_a_narrowed_only_load_is_refused_when_windows_commit_cannot_hold_it():
+    roomy = dict(total = 64 * 1024, available = 60000)
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    tight = _decide(ZIMAGE, dtype = torch.bfloat16, host_commit_mib = narrowed + view, **roomy)
+    assert not tight.engaged and tight.refuse and "float32" in tight.refuse
+    assert "commit" in tight.reason
+    assert _decide(ZIMAGE, dtype = torch.bfloat16, host_commit_mib = 200000, **roomy).refuse is None
+    # pread reads the fp32 file without a copy-on-write view
+    import dataclasses
+
+    pread = {
+        **ZIMAGE,
+        "transformer": dataclasses.replace(ZIMAGE["transformer"], library = "diffusers"),
+    }
+    assert (
+        _decide(
+            pread,
+            dtype = torch.bfloat16,
+            host_commit_mib = narrowed + view,
+            pread_libraries = ("diffusers",),
+            **roomy,
+        ).refuse
+        is None
+    )
+
+
+def test_a_routed_load_is_refused_when_windows_commit_cannot_hold_its_fp32_copy():
+    # the bf16 encoder forces the route; the fp32 DiT still narrows on the host
+    tight = dict(total = 32 * 1024, available = 20000, dtype = torch.float16)
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    assert _decide(ZIMAGE, **tight).engaged
+    d = _decide(ZIMAGE, host_commit_mib = narrowed + view, **tight)
+    assert d.engaged and d.refuse and "float32" in d.refuse
+    assert _decide(ZIMAGE, host_commit_mib = 200000, **tight).refuse is None
+
+
+def test_a_cold_rocm_bf16_load_downloads_first_and_is_refused(tmp_path, monkeypatch):
+    # first load on mint: no weights cached, so the fp32 DiT is only seen after the early download
+    from core.inference import diffusion as dif
+
+    monkeypatch.delenv(sh.DOWNLOAD_FIRST_ENV, raising = False)
+    full = tmp_path / "dl"
+    full.mkdir()
+    monkeypatch.setattr(dif, "host_ram_mib", lambda: (MINT_TOTAL, 10719))
+    monkeypatch.setattr(dif, "host_commit_mib", lambda: None)
+    monkeypatch.setattr(dif, "pread_available", lambda: False)
+    monkeypatch.setattr(
+        dif,
+        "stored_components",
+        lambda snapshot: dict(ZIMAGE) if str(snapshot) == str(full) else {},
+    )
+    calls = []
+    with pytest.raises(RuntimeError, match = "Not enough system RAM"):
+        dif.DiffusionBackend()._small_host_decision(
+            str(tmp_path),
+            {},
+            types.SimpleNamespace(backend = "rocm", device = "cuda:0"),
+            torch.bfloat16,
+            lora_active = False,
+            fetch = lambda: calls.append(1) or str(full),
+        )
+    assert calls == [1]
+
+
+def test_a_lora_dense_load_is_refused_when_its_fp32_copy_cannot_fit():
+    # LoRA keeps the load dense; the fp32 DiT's 16-bit copy alone does not fit
+    tight = dict(total = MINT_TOTAL, available = 10719, dtype = torch.float16, lora_active = True)
+    d = _decide(ZIMAGE, **tight)
+    assert not d.engaged and d.refuse and "float32" in d.refuse
+    # the bf16 encoder alone over budget is the dense LoRA load as before: not refused here
+    assert _decide(ZIMAGE, skip_narrowed = ("transformer",), **tight).refuse is None
+
+
+def test_windows_commit_is_checked_when_available_ram_is_unreadable():
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    for dtype in (torch.bfloat16, torch.float16):
+        d = _decide(
+            ZIMAGE, dtype = dtype, total = MINT_TOTAL, available = None, host_commit_mib = narrowed + view
+        )
+        assert not d.engaged and d.refuse and "float32" in d.refuse, dtype
+        assert _decide(ZIMAGE, dtype = dtype, total = MINT_TOTAL, available = None).refuse is None

@@ -212,6 +212,7 @@ from .diffusion_small_host import (
     resolve_snapshot_dir,
     small_host_forced,
     small_host_ineligible,
+    narrowing_may_refuse as small_host_narrowing_may_refuse,
     snapshot_weights_complete,
     spill_capacity_mib,
     mapped_denoiser as small_host_mapped_denoiser,
@@ -11622,6 +11623,9 @@ class DiffusionBackend:
                                             local_files_only,
                                         ),
                                         variant = _decision_variant,
+                                        cast_cached = tuple(
+                                            _image_cast_cached(_cast_cands, _decision_variant)
+                                        ),
                                     )
                                     if small_host is not None and small_host.engaged:
                                         pipe_kwargs["torch_dtype"] = small_host_torch_dtype_map(
@@ -15115,20 +15119,28 @@ class DiffusionBackend:
         fetch: Optional[Callable[[], Any]] = None,
         variant: Optional[str] = None,
         dense_denoiser: bool = False,
+        cast_cached: tuple = (),
     ) -> Any:
         """Small-host decision for a pipeline load; raises its refusal, None without a local snapshot.
         ``fetch`` downloads what ``from_pretrained`` would when the snapshot holds no weights yet; ``variant``
-        is the weight layout the load reads."""
+        is the weight layout the load reads; ``cast_cached`` components read 16-bit from the cast cache."""
         snapshot = resolve_snapshot_dir(source, hub_cache_dir())
         device = str(getattr(target, "backend", None) or getattr(target, "device", ""))
         total, available = host_ram_mib()
-        # route cannot engage: skip the prefetch, the loader downloads what it reads
+        commit = host_commit_mib()
+        # route cannot engage and no fp32 copy can be refused: skip the prefetch, the loader downloads what it reads
         can_engage = small_host_ineligible(dtype, device = device) is None and (
             small_host_forced() or (available is not None and not lora_active)
         )
         if (
             fetch is not None
-            and can_engage
+            and (
+                can_engage
+                or (
+                    (available is not None or commit is not None)
+                    and small_host_narrowing_may_refuse(dtype)
+                )
+            )
             and small_host_download_first()
             and (
                 snapshot is None
@@ -15155,10 +15167,13 @@ class DiffusionBackend:
             host_total_mib = total,
             host_available_mib = available,
             lora_active = lora_active,
-            host_commit_mib = host_commit_mib(),
+            host_commit_mib = commit,
             pread_libraries = ("transformers",) if pread_available() else (),
             spill_free_mib = spill_capacity_mib(),
             dense_denoiser = dense_denoiser,
+            # a variant reads 16-bit twins, not the fp32 files sized here
+            skip_narrowed = tuple(comps) if variant else (),
+            cast_cached = tuple(cast_cached),
         )
         if decision.engaged or decision.refuse:
             logger.info(
