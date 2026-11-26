@@ -195,8 +195,14 @@ def test_the_image_load_requests_starts_and_stops_the_encoder_pins():
     unload = next(
         n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_unload_locked"
     )
+    reclaim = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "_reclaim_freed_memory"
+    )
+    assert _calls(reclaim, "release_pinned_host_memory")
     stops = _calls(unload, "stop_background_pins")
-    releases = _calls(unload, "release_pinned_host_memory")
+    releases = _calls(unload, "_reclaim_freed_memory")
     assert stops and releases and stops[0].lineno < releases[0].lineno
 
 

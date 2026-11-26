@@ -4923,6 +4923,7 @@ class DiffusionBackend:
         self._unload_waiters = 0
         # _generate_lock serialises generations and is the ONLY lock the denoise holds.
         self._generate_lock = threading.Lock()
+        self._reclaim_lock = threading.Lock()
         self._state: Optional[_LoadState] = None
         self._loading: Optional[_LoadingState] = None
         # Bumped on begin_load/unload so a superseded worker neither commits nor stamps progress
@@ -17973,11 +17974,20 @@ class DiffusionBackend:
             # Wait for denoise to exit first: _unload_locked uninstalls process-wide state it uses.
             with self._model_transition_slot():
                 with self._lock:
+                    tore_down = self._state is not None
                     try:
                         self._unload_locked()
                     finally:
                         # In a finally: clear_gpu_cache() can raise on a sticky CUDA fault, leaving the fence up.
                         self._release_teardown_locked()
+                # Taken before the slot drops, so an unload queued behind this one returns only once it has reclaimed.
+                self._reclaim_lock.acquire()
+            try:
+                if tore_down:
+                    # Hook cycles still pinned during _unload_locked's gc only become garbage here.
+                    self._reclaim_freed_memory()
+            finally:
+                self._reclaim_lock.release()
         finally:
             if fenced:
                 with self._load_cancel_lock:
@@ -18054,6 +18064,10 @@ class DiffusionBackend:
         diffusion_upscalers.release_models()
         self._state = None
         del state
+        self._reclaim_freed_memory()
+
+    @staticmethod
+    def _reclaim_freed_memory() -> None:
         try:
             clear_gpu_cache()
         finally:
