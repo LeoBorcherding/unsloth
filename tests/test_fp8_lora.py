@@ -424,21 +424,25 @@ def test_fp8_loss_ignores_model_output_flags_only_on_its_head(monkeypatch, flag,
         getattr(target, attribute)(hidden, labels)
         return routes[-1]
 
-    assert not run(owner)
+    # A newer unsloth_zoo drops these flags in the adapter itself, so every head keeps the kernel route.
+    zoo_drops_flags = "output_attentions" not in getattr(
+        forward_adapter, "_KERNEL_KWARGS", ("output_attentions",)
+    )
+    assert run(owner) == zoo_drops_flags
     f8t.mark_fp8_lora(owner, f8t.FP8_LORA_RECIPE)
     assert f8t.enable_fp8_lora(model, allow_cpu = True)
     assert run(owner)
     assert namespace["unsloth_fused_lm_head_loss"] is original
     assert forward_adapter.unsloth_fused_lm_head_loss is original
     assert getattr(ordinary, attribute).__func__ is function
-    assert not run(ordinary)
+    assert run(ordinary) == zoo_drops_flags
     clone = copy.deepcopy(model)
     assert run(clone.get_base_model())
     f8t.restore_fp8_lora_for_inference(clone)
-    assert not run(clone.get_base_model())
+    assert run(clone.get_base_model()) == zoo_drops_flags
     assert run(owner)
     f8t.restore_fp8_lora_for_inference(model)
-    assert not run(owner)
+    assert run(owner) == zoo_drops_flags
 
 
 @pytest.mark.parametrize("decorated", [False, True])
@@ -523,6 +527,13 @@ def test_fp8_loss_route_preserves_installed_transformers_decorators(monkeypatch,
 
     model = _tiny_qwen3_peft()
     owner = model.get_base_model()
+    # After import unsloth, zoo's fused forward serves only models Unsloth loaded (unsloth-zoo #2768):
+    # mark this one as a real load does, and fail plainly if the marker is not enough.
+    from unsloth.models._utils import _mark_unsloth_model
+
+    _mark_unsloth_model(owner)
+    fuses = getattr(forward_install, "_fuses_model", lambda module: True)
+    assert fuses(owner), "zoo's fused forward would skip this model"
     cls = type(owner)
     original = cls.forward
     monkeypatch.setattr(cls, "forward", original)
