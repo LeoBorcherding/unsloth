@@ -713,7 +713,9 @@ def _narrowed_only(
             refuse = _refusal(narrowed, reserve, available, "converting its float32 weights")
         elif commit is not None and narrowed_commit + reserve > commit:
             refuse = _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
-    commit_note = "" if commit is None else f", {commit} MiB commit headroom (needs ~{narrowed_commit} MiB)"
+    commit_note = (
+        "" if commit is None else f", {commit} MiB commit headroom (needs ~{narrowed_commit} MiB)"
+    )
     return SmallHostDecision(
         False,
         f"{reason}; float32 -> 16-bit copies need ~{narrowed} MiB + {reserve} MiB reserve, "

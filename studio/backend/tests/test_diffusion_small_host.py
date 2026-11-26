@@ -940,7 +940,10 @@ def test_a_narrowed_only_load_is_refused_when_windows_commit_cannot_hold_it():
     # pread reads the fp32 file without a copy-on-write view
     import dataclasses
 
-    pread = {**ZIMAGE, "transformer": dataclasses.replace(ZIMAGE["transformer"], library = "diffusers")}
+    pread = {
+        **ZIMAGE,
+        "transformer": dataclasses.replace(ZIMAGE["transformer"], library = "diffusers"),
+    }
     assert (
         _decide(
             pread,
