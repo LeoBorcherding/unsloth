@@ -1460,7 +1460,7 @@ def _cuda_cpu_rung_applies() -> bool:
         return False
 
 
-# The sonames the upstream ROCm archive imports and does not ship.
+# The sonames the upstream ROCm archive imports and does not ship; ROCm 10.x keeps all three.
 _ROCM_RUNTIME_SONAMES: tuple[str, ...] = (
     "libamdhip64.so.7",
     "libhipblas.so.3",
@@ -1539,21 +1539,21 @@ def accelerator_fallback_reason(accelerator: Optional[str]) -> str:
     if os.name == "nt":
         # The loader cannot be asked ahead of time on Windows; a missing DLL is exit 0xC0000135 with no output.
         return (
-            "the ROCm build needs the AMD HIP SDK 7.x runtime DLLs (amdhip64_7.dll, hipblas.dll, rocblas.dll) on "
+            "the ROCm build needs the AMD HIP SDK 7.x or 10.x runtime DLLs (amdhip64_7.dll, hipblas.dll, rocblas.dll) on "
             "PATH or under HIP_PATH; without them Windows stops it before it prints anything (exit 0xC0000135), or "
             "the card's gfx target is missing from the prebuilt"
         )
     missing = rocm_runtime_missing_sonames()
     if missing is None:
         return (
-            "the ROCm build listed no GPU (whether the host ROCm 7 runtime loads could not be checked here, so "
+            "the ROCm build listed no GPU (whether the host ROCm 7.x or 10.x runtime loads could not be checked here, so "
             "either it is missing or the card's gfx target is not in the prebuilt)"
         )
     if missing:
         return (
-            "the ROCm build needs the host ROCm 7 runtime and the loader cannot find "
+            "the ROCm build needs the host ROCm 7.x or 10.x runtime and the loader cannot find "
             + ", ".join(missing)
-            + " (install ROCm 7.x userspace or add /opt/rocm/lib to the loader path)"
+            + " (install ROCm 7.x or 10.x userspace or add /opt/rocm/lib to the loader path)"
         )
     return (
         "the ROCm build listed no GPU (the ROCm runtime loads, so the card's gfx target may be missing from the "
@@ -2388,7 +2388,7 @@ def preferred_accelerator(accelerator: Optional[str], card: Optional[str] = None
             _windows_rocm_skip_logged = True
             logger.info(
                 "sd_cpp.windows_rocm_skipped: using the Vulkan stable-diffusion.cpp build; the ROCm "
-                "build needs the AMD HIP SDK 7.x runtime (%s), found on neither PATH nor HIP_PATH. "
+                "build needs the AMD HIP SDK 7.x or 10.x runtime (%s), found on neither PATH nor HIP_PATH. "
                 "Install it from %s to use the ROCm build (UNSLOTH_SD_CPP_WINDOWS_ROCM=1 to use it anyway)",
                 ", ".join(windows_hip_runtime_missing_dlls() or _WINDOWS_ROCM_HOST_DLLS),
                 _hip_sdk_url(),
