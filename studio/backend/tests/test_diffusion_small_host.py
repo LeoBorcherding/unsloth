@@ -954,3 +954,14 @@ def test_a_narrowed_only_load_is_refused_when_windows_commit_cannot_hold_it():
         ).refuse
         is None
     )
+
+
+def test_a_routed_load_is_refused_when_windows_commit_cannot_hold_its_fp32_copy():
+    # the bf16 encoder forces the route; the fp32 DiT still narrows on the host
+    tight = dict(total = 32 * 1024, available = 20000, dtype = torch.float16)
+    narrowed = int(23470 / 2 * 1.15)
+    view = int(23470 * 1.15)
+    assert _decide(ZIMAGE, **tight).engaged
+    d = _decide(ZIMAGE, host_commit_mib = narrowed + view, **tight)
+    assert d.engaged and d.refuse and "float32" in d.refuse
+    assert _decide(ZIMAGE, host_commit_mib = 200000, **tight).refuse is None

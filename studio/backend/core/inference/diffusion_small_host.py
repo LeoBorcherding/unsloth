@@ -587,6 +587,9 @@ def decide_small_host(
             commit,
         )
     dense = narrowed + _dense_mib(converted, compute)
+    # the route never injects the cast cache, so its components narrow from fp32 there
+    routed_narrowing = _narrowed_components(components, compute, skip_narrowed)
+    routed_narrowed = _narrowed_mib(routed_narrowing, compute)
     # encoders stay memory-mapped except fp32-kept layers and a token embedding widened to float32
     # (``prepare_streamed_encoder_`` converts the first parameter's owner on the host: 3.8 GB for Qwen3.5-9B); a DiT
     # lands as int8, or memory-mapped like an encoder
@@ -601,8 +604,7 @@ def decide_small_host(
             else c.mib * _itemsize(compute) // _itemsize(c.dtype)
             for n, c in converted.items()
         )
-        # the route never injects the cast cache, so its components narrow from fp32 here too
-        + _narrowed_mib(_narrowed_components(components, compute, skip_narrowed), compute)
+        + routed_narrowed
     )
     reserve = host_reserve_mib(host_total_mib)
     dense_commit = _dense_commit_mib({**converted, **narrowing}, dense, pread_libraries)
@@ -652,6 +654,11 @@ def decide_small_host(
         and not host_ram_check_disabled()
     ):
         refuse = _refusal(need, reserve, host_available_mib, "even the low-memory route")
+    elif routed_narrowed and commit is not None and not host_ram_check_disabled():
+        # the fp32 views and their 16-bit copies are charged to commit even on the route
+        narrowed_commit = _dense_commit_mib(routed_narrowing, routed_narrowed, pread_libraries)
+        if narrowed_commit + reserve > commit:
+            refuse = _refusal(narrowed_commit, reserve, commit, "converting its float32 weights")
     why = (
         f"{SMALL_HOST_ENV}=1"
         if forced and fits
