@@ -153,3 +153,63 @@ def test_windows_rocm_attention_runs_after_import():
         "mask_bwd": True,
         "gqa_bwd": True,
     }
+
+
+class _Props:
+    def __init__(self, arch):
+        self.gcnArchName = arch
+
+
+def _mixed_host(
+    monkeypatch,
+    tmp_path,
+    current,
+    archs,
+    arch_list,
+    packs = None,
+):
+    """Pin a fake Windows ROCm host: torch device ``current`` among ``archs``, no real GPU read."""
+    import unsloth.import_fixes as fixes
+
+    root = tmp_path / "torch"
+    root.mkdir()
+    if packs is not None:
+        (root / ".kpack").mkdir()
+        for arch in packs:
+            (root / ".kpack" / f"torch_{arch}.kpack").write_bytes(b"")
+    monkeypatch.setattr(fixes.sys, "platform", "win32")
+    monkeypatch.setattr(torch.version, "hip", "7.14.0", raising = False)
+    monkeypatch.setattr(torch, "__file__", str(root / "__init__.py"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: len(archs))
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: current)
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda i: _Props(archs[int(getattr(i, "index", i))])
+    )
+    monkeypatch.setattr(torch.cuda, "get_arch_list", lambda: list(arch_list))
+    return fixes
+
+
+def test_probe_skips_a_device_the_wheel_has_no_kernels_for(monkeypatch, tmp_path, caplog):
+    # RX 5700 XT (gfx1010) is torch device 0; the installer picked the gfx1034 card's wheel.
+    fixes = _mixed_host(monkeypatch, tmp_path, 0, ["gfx1010", "gfx1034"], ["gfx1030", "gfx1034"])
+    # Any launch on the uncovered card is a native access violation, so the probe must not get there.
+    monkeypatch.setattr(torch, "Generator", lambda *a, **k: pytest.fail("probed an uncovered GPU"))
+    with caplog.at_level("WARNING"):
+        assert fixes._rocm_windows_broken_sdpa_backends() == []
+    assert "HIP_VISIBLE_DEVICES to 1" in caplog.text
+
+
+def test_multi_arch_wheel_covers_only_installed_kernel_packs(monkeypatch, tmp_path):
+    # Multi-arch wheels list gfx1010 in get_arch_list() but only ship the packs that were installed.
+    fixes = _mixed_host(
+        monkeypatch, tmp_path, 0, ["gfx1010", "gfx1034"], ["gfx1010", "gfx1034"], packs = ["gfx1034"]
+    )
+    device = torch.device("cuda", 0)
+    assert fixes._rocm_device_lacks_torch_kernels(torch, device, "gfx1010")
+    assert not fixes._rocm_device_lacks_torch_kernels(torch, device, "gfx1034:xnack-")
+
+
+def test_coverage_fails_open_on_a_generic_arch_token(monkeypatch, tmp_path):
+    fixes = _mixed_host(monkeypatch, tmp_path, 0, ["gfx1010"], ["gfx10-1-generic", "gfx1034"])
+    assert not fixes._rocm_device_lacks_torch_kernels(torch, torch.device("cuda", 0), "gfx1010")

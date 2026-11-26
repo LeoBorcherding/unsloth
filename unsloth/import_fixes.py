@@ -9324,6 +9324,69 @@ def fix_cudnn_sdpa_known_bad_shapes():
     )
 
 
+_ROCM_CONCRETE_GFX_ARCH = re.compile(r"^gfx[0-9][0-9a-f]{2,4}$")
+_ROCM_KERNEL_PACK_NAME = re.compile(r"^torch_(.+)\.kpack$", re.IGNORECASE)
+
+
+def _rocm_torch_kernel_arches(torch):
+    """Arches this ROCm torch has kernels for, or None when it cannot tell (fails open).
+
+    Multi-arch Windows wheels list every arch in get_arch_list() but ship each arch's kernels as
+    torch/.kpack/torch_gfxNNNN.kpack, so only the installed packs count. Same rule as Studio's
+    rocm_gpu_ids_without_torch_kernels.
+    """
+    try:
+        tokens = {str(a).split(":")[0].strip().lower() for a in (torch.cuda.get_arch_list() or ())}
+        tokens.discard("")
+        # A generic code object covers devices no exact token names.
+        if not tokens or any(not _ROCM_CONCRETE_GFX_ARCH.match(t) for t in tokens):
+            return None
+        pack_dir = Path(torch.__file__).parent / ".kpack"
+        if pack_dir.is_dir():
+            packs = set()
+            for entry in pack_dir.iterdir():
+                match = _ROCM_KERNEL_PACK_NAME.match(entry.name)
+                if match:
+                    packs.add(match.group(1).lower())
+            if packs and all(_ROCM_CONCRETE_GFX_ARCH.match(p) for p in packs):
+                tokens &= packs
+        return tokens
+    except Exception:
+        return None
+
+
+def _rocm_device_lacks_torch_kernels(torch, device, arch):
+    """True (and warns) when ``device`` presents an arch the installed torch has no kernels for.
+
+    A mixed host (RX 5700 XT gfx1010 + RX 6500 XT gfx1034) gets a wheel for one card, and the first
+    kernel launched on the other is a native access violation, not a Python exception.
+    """
+    arch = str(arch or "").split(":")[0].strip().lower()
+    covered = _rocm_torch_kernel_arches(torch)
+    if not arch or covered is None or arch in covered:
+        return False
+    usable = []
+    try:
+        for i in range(torch.cuda.device_count()):
+            other = str(getattr(torch.cuda.get_device_properties(i), "gcnArchName", ""))
+            other = other.split(":")[0].strip().lower()
+            if other in covered:
+                usable.append(f"{i} ({other})")
+    except Exception:
+        pass
+    hint = (
+        f" Set HIP_VISIBLE_DEVICES to {usable[0].split()[0]} before starting Python to use "
+        f"GPU {usable[0]} instead."
+        if usable
+        else " Reinstall Unsloth for this GPU."
+    )
+    logger.warning(
+        f"Unsloth: GPU {device.index} ({arch}) cannot run this PyTorch build, which has kernels for "
+        f"{', '.join(sorted(covered))} only, so anything run on it will crash.{hint}"
+    )
+    return True
+
+
 def _rocm_windows_broken_sdpa_backends():
     """Fused SDPA backends ("flash", "mem_efficient") failing on this process's Windows ROCm GPU.
 
@@ -9365,6 +9428,9 @@ def _rocm_windows_broken_sdpa_backends():
         arch = torch.cuda.get_device_properties(device).gcnArchName
     except Exception:
         arch_lacks_bf16, arch = (lambda _: True), None
+    # Probing a device the wheel has no kernels for kills the process instead of raising.
+    if _rocm_device_lacks_torch_kernels(torch, device, arch):
+        return []
     # gfx10 claims bf16 it lacks (device_type.arch_lacks_bf16); fp16 is safe everywhere.
     dtype = torch.float16 if arch_lacks_bf16(arch) else torch.bfloat16
     broken = []
