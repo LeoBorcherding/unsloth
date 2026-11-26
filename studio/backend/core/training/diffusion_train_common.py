@@ -537,6 +537,21 @@ def train_defaults(family: str) -> dict[str, Any]:
     return dict(FAMILY_TRAIN_DEFAULTS.get((family or "").strip().lower(), {}))
 
 
+# Step counts a training sweep measured per family, with the dataset size it ran on, so the Train UI can scale the
+# recommendation to the user's set (same passes per item). Only families with a step sweep are listed; the rest keep
+# the generic hint. minimax-h3-image: lr {5e-5, 1e-4} x steps {150, 300} on 18 tarot images (G4), 5e-5 x 150 had
+# the lowest drift on unrelated prompts at LoRA weight 1.0 (FAMILY_TRAIN_DEFAULTS above).
+FAMILY_STEP_GUIDANCE: dict[str, dict[str, Any]] = {
+    "minimax-h3-image": {"steps": 150, "items": 18, "batch_size": 1},
+}
+
+
+def step_guidance(family: str) -> Optional[dict[str, Any]]:
+    """The measured step count for ``family`` and the dataset size it was measured on, or None when no sweep exists."""
+    found = FAMILY_STEP_GUIDANCE.get((family or "").strip().lower())
+    return dict(found) if found else None
+
+
 # Display labels (the registries' ``label``) + a short VRAM/access note per trainable family, surfaced by the Train UI
 # so users pick a base with realistic expectations.
 _FAMILY_LABELS = {fam.name: fam.label for fam in (*_IMAGE_REGISTRY, *_VIDEO_REGISTRY) if fam.label}
@@ -584,20 +599,21 @@ _FAMILY_TRAIN_SPECS: dict[str, dict[str, Any]] = {
         "params": "19B",
         "qlora_vram_gb": 36,
         "gated": False,
-        "note": "Video: trains a style LoRA on still images.",
+        "note": "Video: trains a style LoRA on still images. Trained on stills it learns the look, not motion.",
     },
     "ltx-2.5": {
         "params": "22B",
         "qlora_vram_gb": 24,
         "gated": False,
-        "note": "Video: trains a style LoRA on still images; runs on the Video page's distilled model.",
+        "note": "Video: trains a style LoRA on still images, so it learns the look, not motion; runs on the Video "
+        "page's distilled model.",
     },
     # Measured on a B200 (nf4, 704px, rank 32): run peaks at 11.6 GB during the one-time UMT5-XXL encode.
     "wan2.2-ti2v-5b": {
         "params": "5B",
         "qlora_vram_gb": 12,
         "gated": False,
-        "note": "Video: trains a style LoRA on still images.",
+        "note": "Video: trains a style LoRA on still images. Trained on stills it learns the look, not motion.",
     },
     # Measured on a B200: the loop peaks near 44 GB, but a 20-step run peaked at 77.76 GB with the 63 GiB Qwen3-VL
     # conditioner resident, so 72 sizes users onto a card that OOMs later.
@@ -1023,11 +1039,11 @@ def training_precision_preflight_error(resolved_family: str, base_precision: str
         return reason
     fam = (resolved_family or "").strip().lower()
     mode = (base_precision or "").strip().lower()
-    # The W8A8 int8 prototype (UNSLOTH_DIFFUSION_INT8_TRAIN=w8a8) computes in fp16 too, as the trainer allows.
-    w8a8 = (
-        mode == "int8"
-        and os.environ.get("UNSLOTH_DIFFUSION_INT8_TRAIN", "").strip().lower() == "w8a8"
-    )
+    # The W8A8 int8 base (the default; UNSLOTH_DIFFUSION_INT8_TRAIN=weight-only opts out) computes in fp16 too, as
+    # the trainer allows.
+    from core.training.diffusion_block_swap import int8_w8a8_requested
+
+    w8a8 = mode == "int8" and int8_w8a8_requested()
     if mode in ("bf16", "int8", "fp8", "mxfp8") and not w8a8 and dit_fp16_fallback(fam):
         return dit_fp16_dense_reason(mode)
     if w8a8 and dit_fp16_fallback(fam):
@@ -1038,10 +1054,22 @@ def training_precision_preflight_error(resolved_family: str, base_precision: str
             cap = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
         except Exception:  # noqa: BLE001 -- probe failure: leave it to the trainer's own check
             cap = None
+        try:
+            name = torch.cuda.get_device_name() if cap is not None else None
+        except Exception:  # noqa: BLE001 -- no name: the capability check decides
+            name = None
         if cap is not None and tuple(cap) < (7, 5):
             return (
                 f"int8 W8A8 needs int8 tensor cores (compute capability 7.5+), this GPU is "
                 f"sm{cap[0]}{cap[1]}; use base_precision='nf4' or 'auto'."
+            )
+        from core.inference.diffusion_vae_finite import lacks_tensor_cores
+
+        if cap is not None and lacks_tensor_cores(name, cap):
+            # GTX 16xx: sm75 without tensor cores, so the capability check alone lets it through.
+            return (
+                f"int8 W8A8 needs int8 tensor cores, which {name} (sm{cap[0]}{cap[1]}) does not have; use "
+                "base_precision='nf4' or 'auto'."
             )
     if fam in _FLOW_TRAIN_FAMILIES and mode in ("bf16", "int8", "fp8", "mxfp8"):
         # Dense precisions need CUDA; reject here so residents are not evicted first.
@@ -1213,6 +1241,7 @@ def family_train_infos() -> list[dict[str, Any]]:
                 "default_base": repos[0],
                 "base_repos": repos,
                 "defaults": train_defaults(name),
+                "step_guidance": step_guidance(name),
                 "vram_note": dit_block or _family_vram_note(name, default_facts),
                 # Dropped on a dit_block, since vram_note then carries the reason.
                 "params": "" if dit_block else spec.get("params", ""),
