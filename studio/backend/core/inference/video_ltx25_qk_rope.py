@@ -19,11 +19,9 @@ unexpected shapes, a diffusers processor whose ``__call__`` differs from the aud
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import inspect
 import os
-import textwrap
 import threading
 from functools import lru_cache
 from typing import Any, Optional
@@ -37,10 +35,12 @@ _OP_NS = "unsloth_ltx2"
 _OP_NAME = "qk_norm_rope"
 _INSTALLED_FLAG = "_unsloth_ltx2_qk_rope"
 
-# ast.dump of the stock ``__call__`` bodies this module's copies were taken from (diffusers 0.40.0.dev0 == 0.42.1).
+# sha256 (first 16 hex) of ``inspect.getsource`` of the stock ``__call__`` bodies this module's copies were taken from
+# (diffusers 0.42.1). The source text, not ``ast.dump``: the dump's format changes between Python versions (3.13 drops
+# empty fields), which would refuse the audited body on every other interpreter.
 KNOWN_CALL_FINGERPRINTS = {
-    "LTX2AudioVideoAttnProcessor": frozenset({"7ea240cf62db1294"}),
-    "LTX2PerturbedAttnProcessor": frozenset({"b30f8d7a159a57dc"}),
+    "LTX2AudioVideoAttnProcessor": frozenset({"0391667b7f0a45ae"}),
+    "LTX2PerturbedAttnProcessor": frozenset({"ab3b88fd4d262072"}),
 }
 
 STATS = {"fused": 0, "stock": 0, "probe_failed": 0}
@@ -584,9 +584,7 @@ def _stock(attn: Any, query: Any, key: Any, query_rotary_emb: Any, key_rotary_em
 
 def _call_fingerprint(cls: Any) -> Optional[str]:
     try:
-        src = textwrap.dedent(inspect.getsource(cls.__call__))
-        fn = ast.parse(src).body[0]
-        return hashlib.sha256(ast.dump(fn).encode()).hexdigest()[:16]
+        return hashlib.sha256(inspect.getsource(cls.__call__).encode()).hexdigest()[:16]
     except Exception:  # noqa: BLE001
         return None
 
