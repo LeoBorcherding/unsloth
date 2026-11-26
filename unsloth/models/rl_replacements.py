@@ -1636,6 +1636,23 @@ def sft_trainer_compute_loss(function_name, function):
 RL_FUNCTIONS["sft_trainer"].append(sft_trainer_compute_loss)
 
 
+# TRL >= 1.15 refuses a PEFT adapter on lm_head because its fused head reads lm_head.weight directly.
+# Unsloth's SFT loss runs a live adapter through the head's own forward (unsloth_zoo's
+# lm_head_needs_module_forward), so only loss_type="dft", which still uses TRL's fused head, keeps it.
+def sft_trainer_allow_lm_head_adapter(function_name, function):
+    guard = "if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):"
+    if function_name != "__init__" or guard not in function:
+        return function
+    try:
+        from unsloth_zoo.fused_losses.cross_entropy_loss import lm_head_needs_module_forward  # noqa: F401
+    except Exception:
+        return function
+    return function.replace(guard, guard[:-1] + ' and args.loss_type == "dft":')
+
+
+RL_FUNCTIONS["sft_trainer"].append(sft_trainer_allow_lm_head_adapter)
+
+
 # TRL >= 1.15 SFTTrainer.prediction_step no longer calls super(), so it shadowed Unsloth's Trainer.prediction_step:
 # compute_metrics / predict() got the fused CE's EmptyLogits and the eval loss was never detached (trl#8246).
 def sft_trainer_prediction_step(function_name, function):
