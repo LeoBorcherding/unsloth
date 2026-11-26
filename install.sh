@@ -5761,6 +5761,10 @@ get_torch_index_url() {
             # No UNSLOTH_TORCH_INDEX_FAMILY hint: newer leaves have nothing inside _TORCH_CEILING (#10657).
             if [ "$_rocm_tag" != "$_rocm_selected_tag" ]; then
                 echo "[INFO] No validated PyTorch for ROCm ${_rocm_tag#rocm}; capping to the $_rocm_selected_tag index (its wheels bundle their own runtime, so this is expected)." >&2
+                case "$_rocm_tag" in
+                    rocm[1-9][0-9].*)
+                        echo "[INFO] AMD's own ROCm 10 PyTorch is opt-in: export UNSLOTH_TORCH_INDEX_URL=${_AMD_WHL_NEXT_URL:-https://stable.repo.amd.com/rocm/whl-next/} and re-run." >&2 ;;
+                esac
             fi
             echo "$_rocm_index"
             return
@@ -6042,6 +6046,26 @@ _previous_torch_pin() {
 }
 
 THEROCK_MIRROR="${UNSLOTH_THEROCK_MIRROR:-https://rocm.nightlies.amd.com/whl-multi-arch/}"
+
+# AMD's ROCm 10 index (multi-arch, GPU picked by torch[device-gfxNNNN]). Pinned in get_torch_index_url's
+# hint and the whl-next constraint arm; HIP inside is 7.16, so bitsandbytes loads its rocm715 build.
+_AMD_WHL_NEXT_URL="${UNSLOTH_AMD_WHL_NEXT_MIRROR:-https://stable.repo.amd.com/rocm/whl-next/}"
+_AMD_WHL_NEXT_TORCH="2.14.0+rocm10.1.0"
+_AMD_WHL_NEXT_TORCHVISION="0.29.0a0+rocm10.1.0"
+_AMD_WHL_NEXT_TORCHAUDIO="2.11.0.3+rocm10.1.0"
+
+# The torch extra for the probed arches on the whl-next index, or device-all when any is unknown.
+_amd_whl_next_device_extra() {
+    _awn_out=""
+    for _awn_gfx in $(printf '%s\n' "$1" | sed 's/:.*$//' | tr '[:upper:]' '[:lower:]' | awk 'NF && !seen[$0]++'); do
+        case "$_awn_gfx" in
+            gfx908|gfx90a|gfx942|gfx950|gfx101[012]|gfx103[0-6]|gfx110[0-3]|gfx115[0-3]|gfx120[01]|gfx1250) ;;
+            *) echo "device-all"; return ;;
+        esac
+        _awn_out="${_awn_out:+$_awn_out,}device-$_awn_gfx"
+    done
+    echo "${_awn_out:-device-all}"
+}
 
 # The device extra TheRock publishes for a gfx, or non-zero when it builds none. Only arches
 # Unsloth's indexes do not cover, so it never competes with get_torch_index_url; gfx803 is
@@ -6733,6 +6757,25 @@ case "$_torch_index_leaf" in
         TORCH_CONSTRAINT="torch>=2.6,<2.11.0"
         TORCHVISION_CONSTRAINT="torchvision>=0.21,<0.26.0"
         TORCHAUDIO_CONSTRAINT="torchaudio>=2.6,<2.11.0"
+        ;;
+    # AMD's ROCm 10 index holds every 10.x minor, and its torchvision/torchaudio do not pin torch,
+    # so pin AMD's Radeon set for 10.1 exactly. 10.2's Radeon torch is 2.15, past _TORCH_CEILING.
+    whl-next)
+        TORCH_CONSTRAINT="torch==$_AMD_WHL_NEXT_TORCH"
+        TORCHVISION_CONSTRAINT="torchvision==$_AMD_WHL_NEXT_TORCHVISION"
+        TORCHAUDIO_CONSTRAINT="torchaudio==$_AMD_WHL_NEXT_TORCHAUDIO"
+        if [ -z "$_TORCH_EXTRA" ]; then
+            # KFD too: these wheels carry their own runtime, so a host with no rocminfo is normal here.
+            _awn_probe=$(_probe_amd_gfx_arch 2>/dev/null || true)
+            [ -n "$_awn_probe" ] || _awn_probe=$(_kfd_gfx_targets 2>/dev/null || true)
+            _TORCH_EXTRA=$(_amd_whl_next_device_extra "$_awn_probe")
+            if [ "$_TORCH_EXTRA" = device-all ]; then
+                echo "[WARN] AMD ROCm 10 index: no GPU arch this index builds was read; installing every arch (device-all)." >&2
+                echo "[WARN] Set UNSLOTH_TORCH_EXTRA=device-gfxNNNN to install one arch's kernels." >&2
+            else
+                echo "[INFO] AMD ROCm 10 index: installing kernels for UNSLOTH_TORCH_EXTRA=$_TORCH_EXTRA." >&2
+            fi
+        fi
         ;;
 esac
 
@@ -7938,6 +7981,15 @@ if [ "$_MIGRATED" = true ]; then
         substep "reinstalling torch from the pinned index (UNSLOTH_TORCH_EXTRA=$_TORCH_EXTRA)..."
         _install_torch_default_index --force-reinstall
     fi
+    # AMD's ROCm 10 index is no pip ROCm family leaf either, but its torch is HIP 7.x and needs the same bitsandbytes.
+    if [ "$SKIP_TORCH" = false ] && [ "$_torch_index_leaf" = whl-next ]; then
+        if _is_gfx906_bnb_skip; then
+            substep "gfx906: skipping prebuilt bitsandbytes (no gfx906 kernels); build from source for 4-bit QLoRA -- https://unsloth.ai/docs/get-started/install/amd" "$C_WARN"
+        else
+            _install_bnb_rocm "install bitsandbytes (AMD)" "$_VENV_PY"
+        fi
+        _gfx906_bnb_prune
+    fi
 elif [ -n "$TORCH_INDEX_URL" ]; then
     if [ "$SKIP_TORCH" = true ]; then
         substep "skipping PyTorch (--no-torch or Intel Mac x86_64)." "$C_WARN"
@@ -8095,7 +8147,8 @@ elif [ -n "$TORCH_INDEX_URL" ]; then
         substep "installing PyTorch ($(_strip_index_url_credentials "$TORCH_INDEX_URL"))..."
         _install_torch_default_index
     fi
-    if [ "$SKIP_TORCH" = false ] && [ "$_torch_index_is_rocm_family" = true ]; then
+    # whl-next: AMD's ROCm 10 index, HIP 7.x torch, same bitsandbytes as the ROCm family leaves.
+    if [ "$SKIP_TORCH" = false ] && { [ "$_torch_index_is_rocm_family" = true ] || [ "$_torch_index_leaf" = whl-next ]; }; then
         if _is_gfx906_bnb_skip; then
             substep "gfx906: skipping prebuilt bitsandbytes (no gfx906 kernels); build from source for 4-bit QLoRA -- https://unsloth.ai/docs/get-started/install/amd" "$C_WARN"
         else
