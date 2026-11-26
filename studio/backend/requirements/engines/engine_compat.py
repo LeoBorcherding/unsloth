@@ -22,6 +22,11 @@ HERE = Path(__file__).resolve().parent
 # Interpreter, newest manylinux glibc minor and extra index of the locks that differ from the default.
 # Kept equal to the profile in core/inference/engine_install.py (this script imports nothing of Studio's).
 TARGETS = {
+    "vllm-linux-rocm100": {
+        "python": (3, 12),
+        "glibc": 35,
+        "index": "https://wheels.vllm.ai/rocm/0.34.0/rocm100/",
+    },
     "vllm-linux-rocm723": {
         "python": (3, 12),
         "glibc": 39,

@@ -1,0 +1,2 @@
+# Build requirements of the sdists vllm-linux-rocm100.txt allows (AMD ships its `rocm` meta package only as one).
+setuptools==79.0.1
