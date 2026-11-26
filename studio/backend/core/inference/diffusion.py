@@ -15127,13 +15127,20 @@ class DiffusionBackend:
         snapshot = resolve_snapshot_dir(source, hub_cache_dir())
         device = str(getattr(target, "backend", None) or getattr(target, "device", ""))
         total, available = host_ram_mib()
+        commit = host_commit_mib()
         # route cannot engage and no fp32 copy can be refused: skip the prefetch, the loader downloads what it reads
         can_engage = small_host_ineligible(dtype, device = device) is None and (
             small_host_forced() or (available is not None and not lora_active)
         )
         if (
             fetch is not None
-            and (can_engage or (available is not None and small_host_narrowing_may_refuse(dtype)))
+            and (
+                can_engage
+                or (
+                    (available is not None or commit is not None)
+                    and small_host_narrowing_may_refuse(dtype)
+                )
+            )
             and small_host_download_first()
             and (
                 snapshot is None
@@ -15160,7 +15167,7 @@ class DiffusionBackend:
             host_total_mib = total,
             host_available_mib = available,
             lora_active = lora_active,
-            host_commit_mib = host_commit_mib(),
+            host_commit_mib = commit,
             pread_libraries = ("transformers",) if pread_available() else (),
             spill_free_mib = spill_capacity_mib(),
             dense_denoiser = dense_denoiser,
