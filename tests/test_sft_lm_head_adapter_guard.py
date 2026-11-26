@@ -108,3 +108,29 @@ def test_guard_text_matches_installed_trl():
         "if is_peft_model(model) and isinstance(model.get_output_embeddings(), BaseTunerLayer):"
         in source
     )
+
+
+def test_only_dft_reaches_trls_fused_head():
+    # The narrowed guard relies on this: nll and label smoothing go through super().compute_loss, so
+    # transformers' Trainer runs the model forward and zoo's fused CE, never TRL's fused_lm_head.
+    tree = ast.parse(SOURCE_PATH.read_text(encoding = "utf-8"))
+    outer = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "sft_trainer_compute_loss"
+    )
+    compute_loss = next(
+        n for n in ast.walk(outer) if isinstance(n, ast.FunctionDef) and n.name == "compute_loss"
+    )
+    calls = []
+
+    def visit(node, under_dft):
+        if isinstance(node, ast.If):
+            under_dft = under_dft or "dft" in ast.unparse(node.test)
+        if isinstance(node, ast.Call) and any(k.arg == "fused_lm_head" for k in node.keywords):
+            calls.append(under_dft)
+        for child in ast.iter_child_nodes(node):
+            visit(child, under_dft)
+
+    visit(compute_loss, False)
+    assert calls and all(calls)
