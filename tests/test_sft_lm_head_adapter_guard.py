@@ -98,7 +98,8 @@ def test_guard_text_matches_installed_trl():
     # Read the file: an imported Unsloth may already have swapped trl's SFTTrainer.
     import importlib.util
 
-    spec = importlib.util.find_spec("trl.trainer.sft_trainer")
+    # find_spec on a dotted name imports the parent, and raises without it.
+    spec = importlib.util.find_spec("trl") and importlib.util.find_spec("trl.trainer.sft_trainer")
     if spec is None or spec.origin is None:
         pytest.skip(reason = "trl is not installed")
     source = Path(spec.origin).read_text(encoding = "utf-8")
