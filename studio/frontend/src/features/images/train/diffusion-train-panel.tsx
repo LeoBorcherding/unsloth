@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { DiffusionRunProgress } from "./diffusion-run-progress";
+import { stepGuidanceText } from "./step-guidance";
 import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/ui/info-hint";
 import { useScrollFades } from "@/hooks/use-scroll-fades";
@@ -116,7 +117,16 @@ import {
   resolveDiffusionTrainingBase,
 } from "./diffusion-train-deploy";
 import { resolveDiffusionTrainingFacts } from "./diffusion-train-family-facts";
+import {
+  type DiffusionBlockSwapMode,
+  diffusionBlockSwapApplies,
+  diffusionBlockSwapPayload,
+  diffusionBlockSwapSummary,
+} from "./diffusion-block-swap";
+import { useSystemInfo } from "@/hooks/use-system";
+import { diffusionTrainGuideUrl } from "./diffusion-train-guides";
 import { diffusionTrainingProgress } from "./diffusion-train-progress";
+import { runningTrainingSelection, trainingRunSelection } from "./diffusion-train-restore";
 import { type LrScheduler, lrSchedulePreset } from "./diffusion-train-lr-schedule";
 import {
   MediaGenerationPresetControl,
@@ -367,11 +377,13 @@ function TrainingPresetControl({
   currentParams,
   applyParams,
   readyRef,
+  onReady,
 }: {
   defaultParams: TrainingPresetParams;
   currentParams: TrainingPresetParams;
   applyParams: (params: TrainingPresetParams) => TrainingPresetParams;
   readyRef: { current: boolean };
+  onReady: () => void;
 }) {
   const presets = useMediaGenerationPresets({
     kind: "training",
@@ -382,7 +394,8 @@ function TrainingPresetControl({
   });
   useEffect(() => {
     readyRef.current = presets.presetsReady;
-  }, [presets.presetsReady, readyRef]);
+    if (presets.presetsReady) onReady();
+  }, [presets.presetsReady, readyRef, onReady]);
   return (
     <MediaGenerationPresetControl
       kind="training"
@@ -485,6 +498,7 @@ export function DiffusionTrainPanel({
     return ["auto", "nf4", "bf16", "int8", "fp8"];
   }, [reportedFamily?.precision_modes, familyUntrainable]);
   const supportsCompile = reportedFamily?.supports_compile ?? isDiT;
+  const system = useSystemInfo();
   // MiniMax-H3 rejects nonzero save_steps, so the field is hidden for it.
   const supportsCheckpoints = reportedFamily?.supports_checkpoints ?? true;
   // Video families render no previews and REFUSE a nonzero sample_every; an older backend has none at all.
@@ -559,12 +573,22 @@ export function DiffusionTrainPanel({
   const [compileTransformer, setCompileTransformer] = useState<"off" | "on" | "auto">(
     "auto",
   );
+  const [blockSwapMode, setBlockSwapMode] = useState<DiffusionBlockSwapMode>("off");
+  const [blockSwapCount, setBlockSwapCount] = useState(8);
+  const blockSwapApplies = diffusionBlockSwapApplies({
+    supportsBlockSwap: reportedFamily?.supports_block_swap,
+    basePrecision,
+    gradientCheckpointing: gradCheckpoint,
+    system,
+  });
   const settingsDirty = useRef(false);
   // Tracked separately: warmup's control is hidden under "constant", so a stale value is invisible.
   const lrScheduleDirty = useRef(false);
   const precisionDirty = useRef(false);
   // `family` is a new object after every refreshInfo(), so track the base pick by name.
   const baseDirty = useRef(false);
+  // Set only by the user choosing a family or base; a finished run's status may seed the form until then.
+  const modelPickedByUser = useRef(false);
   const seededBaseFamily = useRef<string | null>(null);
 
   const [starting, setStarting] = useState(false);
@@ -829,6 +853,9 @@ export function DiffusionTrainPanel({
     ],
   );
   const presetsReadyRef = useRef(false);
+  // Seed from a finished run only after the stored preset applies, else applyPresetParams sees a user edit.
+  const [presetsSettled, setPresetsSettled] = useState(!savedPresets);
+  const markPresetsSettled = useCallback(() => setPresetsSettled(true), []);
   // Not every control sets a dirty ref (family, toggles), so any edit before presets settle counts.
   const editedBeforePresets = useRef(false);
   const trainRailRef = useRef<HTMLDivElement>(null);
@@ -874,7 +901,8 @@ export function DiffusionTrainPanel({
       lrScheduleDirty.current = owned;
       precisionDirty.current = owned;
       if (owned) {
-        // Neither a loaded model nor the family re-seed may replace the preset's base.
+        // Nothing may replace the preset's base: its hyperparameters were chosen for that model.
+        modelPickedByUser.current = true;
         seededFromLoaded.current = true;
         seededBaseFamily.current = params.familyName;
         baseDirty.current = true;
@@ -926,6 +954,34 @@ export function DiffusionTrainPanel({
     return () => window.clearInterval(id);
   }, [active, poll]);
 
+  const applyRunSelection = useCallback(
+    (run: { familyName: string; baseModel: string | null }) => {
+      seededFromLoaded.current = true;
+      seededBaseFamily.current = run.familyName;
+      setFamilyName(run.familyName);
+      if (run.baseModel) {
+        baseDirty.current = true;
+        const known = families.find((f) => f.name === run.familyName)?.base_repos.includes(run.baseModel);
+        setBaseChoice(known ? run.baseModel : CUSTOM_BASE);
+        if (!known) setCustomBase(run.baseModel);
+      }
+    },
+    [families, setFamilyName, setBaseChoice],
+  );
+
+  // After a reload the page defaults to FLUX.1-dev; show the running job's family and base instead, once per job.
+  const seededRunJob = useRef<string | null>(null);
+  useEffect(() => {
+    const jobKey = status?.job_id ?? "";
+    if (seededRunJob.current === jobKey) return;
+    const run = runningTrainingSelection(status, families, {
+      formUntouched: presetsSettled && !modelPickedByUser.current,
+    });
+    if (!run) return;
+    seededRunJob.current = jobKey;
+    applyRunSelection(run);
+  }, [status, families, applyRunSelection, presetsSettled]);
+
   // The backend keeps the terminal status until the next start, so dismissal is local.
   const [dismissedJobId, setDismissedJobId] = useState<string | null>(null);
   const running = Boolean(status?.active) || status?.status === "running";
@@ -936,6 +992,7 @@ export function DiffusionTrainPanel({
     Boolean(status?.lora_path) &&
     status.job_id !== dismissedJobId;
   const runProgress = diffusionTrainingProgress(status);
+  const blockSwapSummary = diffusionBlockSwapSummary(status?.block_swap);
 
   const stopRequested = running && stopRequestedLocal;
 
@@ -1039,11 +1096,17 @@ export function DiffusionTrainPanel({
 
   const openPrevRun = useCallback(async (jobId: string) => {
     try {
-      setViewRun(await getDiffusionTrainingRun(jobId));
+      const detail = await getDiffusionTrainingRun(jobId);
+      setViewRun(detail);
+      // Opening a run from history points an untouched form at its family and base; a user's own pick stays.
+      if (!modelPickedByUser.current) {
+        const opened = trainingRunSelection(detail, families);
+        if (opened) applyRunSelection(opened);
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not load that run");
     }
-  }, []);
+  }, [families, applyRunSelection]);
 
   const viewLossHistory: TrainingSeriesPoint[] = useMemo(() => {
     const h = viewRun?.metric_history;
@@ -1366,6 +1429,7 @@ export function DiffusionTrainPanel({
         mixed_precision: precision,
         base_precision: isDiT ? basePrecision : undefined,
         compile_transformer: supportsCompile ? compileTransformer : undefined,
+        block_swap: diffusionBlockSwapPayload(blockSwapApplies, blockSwapMode, blockSwapCount),
         hf_token: hfApiToken(getHfToken()) || undefined,
       });
       toast.success("Preparing training…");
@@ -1417,6 +1481,9 @@ export function DiffusionTrainPanel({
     supportsCheckpoints,
     effectiveBatchSize,
     compileTransformer,
+    blockSwapApplies,
+    blockSwapMode,
+    blockSwapCount,
     poll,
   ]);
 
@@ -1426,6 +1493,9 @@ export function DiffusionTrainPanel({
       setResumingJobId(jobId);
       try {
         const detail = await getDiffusionTrainingRun(jobId);
+        // The resumed run trains the record's family and base, so the form shows them, not the page default.
+        const resumed = trainingRunSelection(detail, families);
+        if (resumed) applyRunSelection(resumed);
         const payload = buildDiffusionResumePayload(detail, {
           hfToken: hfApiToken(getHfToken()) || undefined,
         });
@@ -1447,7 +1517,7 @@ export function DiffusionTrainPanel({
         setResumingJobId(null);
       }
     },
-    [poll],
+    [poll, families, applyRunSelection],
   );
 
   const onStop = useCallback(
@@ -1560,6 +1630,14 @@ export function DiffusionTrainPanel({
     </div>
   );
 
+  // Only families with a measured step sweep get a per-family count, scaled to the picked set; the rest keep the
+  // generic hint.
+  const familyStepGuidance = stepGuidanceText(
+    family?.label ?? familyName,
+    reportedFamily?.step_guidance,
+    selectedItemCount,
+    effectiveBatchSize * Math.max(1, gradAccum),
+  );
   const durationField = (
     <div className={fieldClass}>
       <FieldLabel
@@ -1604,6 +1682,11 @@ export function DiffusionTrainPanel({
           </SelectContent>
         </Select>
       </div>
+      {familyStepGuidance ? (
+        <p className="text-ui-10 leading-snug text-muted-foreground" data-testid="train-step-guidance">
+          {familyStepGuidance}
+        </p>
+      ) : null}
     </div>
   );
 
@@ -1611,7 +1694,7 @@ export function DiffusionTrainPanel({
     m: "nf4" | "bf16" | "int8" | "fp8" | "mxfp8" | "auto",
   ): string => {
     if (m === "auto") return "Auto";
-    if (m === "nf4") return "nf4 (lowest VRAM)";
+    if (m === "nf4") return "NF4 (bitsandbytes, not NVFP4)";
     if (m === "bf16") return "bf16 (fastest)";
     if (m === "int8") return "int8";
     if (m === "mxfp8") return "mxfp8 (Blackwell)";
@@ -1818,7 +1901,7 @@ export function DiffusionTrainPanel({
 
         {isDiT ? (
           <div className={fieldClass}>
-            <FieldLabel hint="How the frozen base is quantised while the LoRA trains. Auto picks the best fit for your GPU; nf4 uses the least VRAM.">
+            <FieldLabel hint="How the frozen base is quantised while the LoRA trains. Auto picks the best fit for your GPU; NF4 uses the least VRAM. NF4 is the bitsandbytes 4-bit format QLoRA uses, not NVIDIA's NVFP4, which Studio runs for image and video generation only.">
               Base precision
             </FieldLabel>
             <Select
@@ -1895,6 +1978,33 @@ export function DiffusionTrainPanel({
             </Select>
           </div>
         )}
+        {blockSwapApplies && (
+          <div className={fieldClass}>
+            <FieldLabel hint="Keeps some transformer blocks in system RAM and streams them to the GPU each step, so a bf16 base bigger than your VRAM trains at full bf16 accuracy. Slower than fitting on the card; Auto swaps only as many blocks as needed.">
+              Block swap
+            </FieldLabel>
+            <Select
+              value={blockSwapMode}
+              onValueChange={(v) => setBlockSwapMode(v as DiffusionBlockSwapMode)}
+            >
+              <SelectTrigger className={selectClass} aria-label="Block swap">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="auto">Auto (as few as fit)</SelectItem>
+                <SelectItem value="count">Fixed number of blocks</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {blockSwapApplies &&
+          blockSwapMode === "count" &&
+          numberField("Blocks to swap", blockSwapCount, setBlockSwapCount, 8, {
+            min: 1,
+            step: 1,
+            hint: "Blocks kept in system RAM. More blocks free more VRAM but each step is slower.",
+          })}
       </div>
     </div>
   );
@@ -1922,7 +2032,16 @@ export function DiffusionTrainPanel({
                 Train a LoRA
               </h2>
               <p className="text-xs leading-snug text-muted-foreground">
-                Teach a model a new style or subject.
+                Teach a model a new style or subject.{" "}
+                <a
+                  href={diffusionTrainGuideUrl(familyName, info?.families)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Open the LoRA training guide in a new tab"
+                  className="text-primary underline"
+                >
+                  Guide
+                </a>
               </p>
             </div>
             {savedPresets ? (
@@ -1931,6 +2050,7 @@ export function DiffusionTrainPanel({
                 currentParams={currentPresetParams}
                 applyParams={applyPresetParams}
                 readyRef={presetsReadyRef}
+                onReady={markPresetsSettled}
               />
             ) : null}
           </div>
@@ -1939,7 +2059,13 @@ export function DiffusionTrainPanel({
             <FieldLabel hint="The architecture you are training. Each family brings its own bases, starting hyperparameters and VRAM floor.">
               Model family
             </FieldLabel>
-            <Select value={familyName} onValueChange={setFamilyName}>
+            <Select
+              value={familyName}
+              onValueChange={(v) => {
+                modelPickedByUser.current = true;
+                setFamilyName(v);
+              }}
+            >
               <SelectTrigger className={selectClass} aria-label="Model family">
                 <SelectValue />
               </SelectTrigger>
@@ -1962,6 +2088,7 @@ export function DiffusionTrainPanel({
               value={effectiveBase}
               onValueChange={(v) => {
                 baseDirty.current = true;
+                modelPickedByUser.current = true;
                 setBaseChoice(v);
               }}
             >
@@ -1982,7 +2109,10 @@ export function DiffusionTrainPanel({
                 value={customBase}
                 placeholder="Repo id or local folder"
                 spellCheck={false}
-                onChange={(e) => setCustomBase(e.target.value)}
+                onChange={(e) => {
+                  modelPickedByUser.current = true;
+                  setCustomBase(e.target.value);
+                }}
                 className="h-8 text-xs"
               />
             )}
@@ -2492,6 +2622,11 @@ export function DiffusionTrainPanel({
                   }
                 />
                 </div>
+              )}
+              {blockSwapSummary && (
+                <p className="text-ui-11 leading-snug text-muted-foreground">
+                  Block swap: {blockSwapSummary}
+                </p>
               )}
               {running && (
                 <Button
