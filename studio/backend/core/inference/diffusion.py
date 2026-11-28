@@ -12959,6 +12959,17 @@ class DiffusionBackend:
                         install_ref_preprocess(pipe, logger = logger)
                     except Exception as exc:  # noqa: BLE001 - optional: stock CPU path stays
                         logger.warning("diffusion.ref_preprocess: not installed: %s", exc)
+                    # Apple MPS: a GGUF linear keeps the weight its first forward dequantised (bit-identical).
+                    if gguf_transformer:
+                        try:
+                            from . import diffusion_gguf_dense_cache as gguf_dense_cache
+                            gguf_dense_cache.install(
+                                getattr(pipe, "transformer", None),
+                                device = getattr(target, "device", None),
+                                logger = logger,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - optional: per-step dequant stays
+                            logger.warning("diffusion.gguf_dense_cache: not installed: %s", exc)
 
                     self._raise_if_load_cancelled(_load_token)
                     speed_offload = plan.offload_policy != OFFLOAD_NONE and not split_expected
