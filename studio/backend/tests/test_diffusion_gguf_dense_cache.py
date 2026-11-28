@@ -248,3 +248,154 @@ def test_a_dequant_path_installed_later_is_recaptured(monkeypatch):
         ), "served the stock-path weight after the exact path was installed"
     finally:
         ex.uninstall_exact_dequant()
+
+
+# ---- footprint pricing: on MPS the fill pooled about one more kept-size of dequant scratch (task 0042)
+
+GB = 10**9
+GIB = 1024**3
+
+
+def _no_footprint_env(monkeypatch):
+    monkeypatch.delenv(dc.FOOTPRINT_ENV, raising = False)
+    monkeypatch.delenv(dc.TRIM_ENV, raising = False)
+
+
+def test_footprint_multiplier_follows_the_measured_torch_versions(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    assert dc.footprint_multiplier("mps", "2.10.0") == 2.5
+    assert dc.footprint_multiplier("mps", "2.13.1") == 2.5
+    assert dc.footprint_multiplier("mps", "2.14.1") == 1.4
+    assert dc.footprint_multiplier(torch.device("mps"), "2.15.0.dev20270101") == 1.4
+    assert dc.footprint_multiplier("cpu", "2.10.0") == 1.0
+    monkeypatch.setenv(dc.FOOTPRINT_ENV, "1.1")
+    assert dc.footprint_multiplier("mps", "2.10.0") == 1.1
+
+
+def test_auto_turns_off_when_the_priced_fill_does_not_fit(monkeypatch):
+    # 1.5x the dense bytes free above the reserve: the old guard kept every layer, the priced one (2.5x) keeps none
+    _no_footprint_env(monkeypatch)
+    monkeypatch.delenv(dc.ENV, raising = False)
+    monkeypatch.setattr(dc, "footprint_multiplier", lambda device, torch_version = None: 2.5)
+    layers = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    net = _Net(*layers)
+    dense = dc.dense_bytes(layers)
+    reserve = 10 * dense
+    assert (
+        dc.install(net, device = "mps", free = lambda: reserve + int(1.5 * dense), reserve = reserve) == 3
+    )
+    net(_inputs(torch.bfloat16, (1,))[0])
+    assert dc.kept_bytes(net) == 0
+    assert dc.STATUS["state"] == "off" and "priced footprint" in dc.STATUS["reason"]
+    assert dc.STATUS["priced_bytes"] == int(dense * 2.5)
+
+
+def test_auto_fills_when_the_priced_fill_fits(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    monkeypatch.delenv(dc.ENV, raising = False)
+    monkeypatch.setattr(dc, "footprint_multiplier", lambda device, torch_version = None: 2.5)
+    monkeypatch.setattr(dc, "_release_pool", lambda device: None)
+    layers = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    net = _Net(*layers)
+    dense = dc.dense_bytes(layers)
+    assert dc.install(net, device = "mps", free = lambda: 3 * dense, reserve = 0) == 3
+    net(_inputs(torch.bfloat16, (1,))[0])
+    assert (
+        dc.kept_bytes(net) == dense - 3 * 48 * 2 and dc.STATUS["state"] == "on"
+    )  # weights; biases tiny
+
+
+def test_each_layer_admit_prices_the_multiplier(monkeypatch):
+    # forced on, constant free = reserve + 1.5 layers: the old guard (1x) admitted all three, at 2x none fit
+    _no_footprint_env(monkeypatch)
+    monkeypatch.setenv(dc.ENV, "1")
+    monkeypatch.setenv(dc.FOOTPRINT_ENV, "2")
+    layers = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    net = _Net(*layers)
+    one = 48 * 512 * 2
+    dc.install(net, device = "cpu", free = lambda: one * 10 + int(1.5 * one), reserve = one * 10)
+    net(_inputs(torch.bfloat16, (1,))[0])
+    assert dc.kept_bytes(net) == 0 and dc.STATUS["state"] == "off"
+
+
+def test_dense_bytes_counts_weights_and_biases_in_the_compute_dtype():
+    layers = [_layer("Q8_0", torch.bfloat16), _layer("Q8_0", torch.float16, bias = False)]
+    assert dc.dense_bytes(layers) == (48 * 512 + 48) * 2 + 48 * 512 * 2
+
+
+def test_each_kept_layer_hands_the_pool_back(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    monkeypatch.setenv(dc.ENV, "1")
+    released = []
+    monkeypatch.setattr(dc, "_release_pool", lambda device: released.append(device))
+    net = _Net(*[_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)])
+    dc.install(net, device = "cpu", free = lambda: _HUGE, reserve = 0)
+    x = _inputs(torch.bfloat16, (1,))[0]
+    net(x)
+    net(x)
+    assert len(released) == 3, "one release per kept layer, none on hits"
+
+
+def test_release_pool_is_mps_only_and_has_a_switch(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: calls.append(1))
+    dc._release_pool(torch.device("cpu"))
+    assert calls == []
+    dc._release_pool(torch.device("mps"))
+    assert calls == [1]
+    monkeypatch.setenv(dc.TRIM_ENV, "0")
+    dc._release_pool(torch.device("mps"))
+    assert calls == [1]
+
+
+def test_mps_budget_honours_a_watermark_below_one():
+    assert dc.mps_budget_bytes(100, "") == 100
+    assert dc.mps_budget_bytes(100, "1.7") == 100
+    assert dc.mps_budget_bytes(100, "0") == 100
+    assert dc.mps_budget_bytes(100, "0.5") == 50
+
+
+def test_plan_prices_available_memory_and_keeps_the_total_ram_reserve():
+    # reserve from total RAM (small-host logic), headroom from available memory
+    p = dc.plan_fill(10 * GIB, available = 40 * GIB, total = 64 * GIB, multiplier = 2.0)
+    assert p["reserve_bytes"] == 16 * GIB and p["left_bytes"] == 20 * GIB and p["on"]
+    p = dc.plan_fill(10 * GIB, available = 30 * GIB, total = 64 * GIB, multiplier = 2.0)
+    assert not p["on"] and "under the 16.0 GiB reserve" in p["reason"]
+    p = dc.plan_fill(10 * GIB, available = 30 * GIB, total = 16 * GIB, multiplier = 2.0)
+    assert p["reserve_bytes"] == 8 * GIB and p["on"]
+    assert not dc.plan_fill(1, available = None, total = 64 * GIB)["on"]
+    assert dc.plan_fill(10 * GIB, available = 20 * GIB, total = 16 * GIB, multiplier = 2.0, cap = 4 * GIB)[
+        "on"
+    ]
+
+
+# M5 Max task 0042: kept bytes and the base arm's peak footprint per model and torch version.
+_MEASURED = {
+    ("klein", "2.10.0"): (7.361 * GB, 21.4 * GB),
+    ("klein", "2.14.1"): (7.361 * GB, 16.6 * GB),
+    ("zimage", "2.10.0"): (12.304 * GB, 24.6 * GB),
+    ("zimage", "2.14.1"): (12.304 * GB, 19.7 * GB),
+}
+# Emulated Mac: available at the fill = RAM - the base arm's peak - 4 GiB for macOS and other apps.
+_EXPECTED_ON = {
+    ("klein", "2.10.0"): {16: False, 24: False, 32: False, 48: False, 64: True, 128: True},
+    ("klein", "2.14.1"): {16: False, 24: False, 32: False, 48: True, 64: True, 128: True},
+    ("zimage", "2.10.0"): {16: False, 24: False, 32: False, 48: False, 64: False, 128: True},
+    ("zimage", "2.14.1"): {16: False, 24: False, 32: False, 48: False, 64: True, 128: True},
+}
+
+
+@pytest.mark.parametrize("key", list(_MEASURED), ids = lambda k: f"{k[0]}-{k[1]}")
+def test_emulated_smaller_macs(monkeypatch, key):
+    _no_footprint_env(monkeypatch)
+    kept, base_peak = _MEASURED[key]
+    mult = dc.footprint_multiplier("mps", key[1])
+    for ram_gib, want in _EXPECTED_ON[key].items():
+        total = ram_gib * GIB
+        plan = dc.plan_fill(
+            int(kept), available = int(total - base_peak - 4 * GIB), total = total, multiplier = mult
+        )
+        assert plan["on"] is want, (key, ram_gib, plan)
+        if plan["on"]:  # the priced fill never eats into the reserve
+            assert total - base_peak - kept * mult >= dc.reserve_bytes(total)
