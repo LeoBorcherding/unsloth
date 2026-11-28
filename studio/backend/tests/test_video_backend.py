@@ -6832,6 +6832,41 @@ def test_ltx2_full_mask_drop_skipped_on_the_off_tier(fake_runtime, monkeypatch):
     assert "ltx2_full_mask_drop" not in status["speed_optims"]
 
 
+def _ltx2_qk_rope_spy(monkeypatch):
+    """Record every LTX-2.x fused q/k RoPE install the load makes and report processors swapped."""
+    from core.inference import video_ltx25_qk_rope
+
+    calls: list = []
+
+    def _fake(pipe, logger = None):
+        calls.append(pipe)
+        return 4
+
+    monkeypatch.setattr(video_ltx25_qk_rope, "install_ltx2_fused_qk_rope", _fake, raising = False)
+    return calls
+
+
+@pytest.mark.parametrize("mode", ["eager", "default", "max"])
+def test_ltx2_fused_qk_rope_installed_and_reported(fake_runtime, monkeypatch, mode):
+    calls = _ltx2_qk_rope_spy(monkeypatch)
+    status = VideoBackend().load_pipeline(
+        "Wan-AI/Wan2.2-TI2V-5B-Diffusers", model_kind = "pipeline", speed_mode = mode
+    )
+    assert status["loaded"] is True
+    assert len(calls) == 1
+    assert "ltx2_fused_qk_rope" in status["speed_optims"]
+
+
+def test_ltx2_fused_qk_rope_skipped_on_the_off_tier(fake_runtime, monkeypatch):
+    calls = _ltx2_qk_rope_spy(monkeypatch)
+    status = VideoBackend().load_pipeline(
+        "Wan-AI/Wan2.2-TI2V-5B-Diffusers", model_kind = "pipeline", speed_mode = "off"
+    )
+    assert status["loaded"] is True
+    assert calls == []
+    assert "ltx2_fused_qk_rope" not in status["speed_optims"]
+
+
 def test_every_video_fetch_resolves_both_cache_roots():
     """Every video load fetch must resolve both cache roots, or planner-skipped files get re-pulled."""
     # Every module on the video load path, including video_ltx2.py.
