@@ -12966,6 +12966,8 @@ class DiffusionBackend:
                             gguf_dense_cache.install(
                                 getattr(pipe, "transformer", None),
                                 device = getattr(target, "device", None),
+                                offloaded = plan.offload_policy != OFFLOAD_NONE
+                                or bool(split_expected),
                                 logger = logger,
                             )
                         except Exception as exc:  # noqa: BLE001 - optional: per-step dequant stays

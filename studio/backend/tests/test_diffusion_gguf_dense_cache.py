@@ -379,10 +379,34 @@ _MEASURED = {
 }
 # Emulated Mac: available at the fill = RAM - the base arm's peak - 4 GiB for macOS and other apps.
 _EXPECTED_ON = {
-    ("klein", "2.10.0"): {16: False, 24: False, 32: False, 48: False, 64: True, 128: True},
-    ("klein", "2.14.1"): {16: False, 24: False, 32: False, 48: True, 64: True, 128: True},
-    ("zimage", "2.10.0"): {16: False, 24: False, 32: False, 48: False, 64: False, 128: True},
-    ("zimage", "2.14.1"): {16: False, 24: False, 32: False, 48: False, 64: True, 128: True},
+    ("klein", "2.10.0"): {
+        16: False,
+        24: False,
+        32: False,
+        48: False,
+        64: True,
+        96: True,
+        128: True,
+    },
+    ("klein", "2.14.1"): {16: False, 24: False, 32: False, 48: True, 64: True, 96: True, 128: True},
+    ("zimage", "2.10.0"): {
+        16: False,
+        24: False,
+        32: False,
+        48: False,
+        64: False,
+        96: True,
+        128: True,
+    },
+    ("zimage", "2.14.1"): {
+        16: False,
+        24: False,
+        32: False,
+        48: False,
+        64: True,
+        96: True,
+        128: True,
+    },
 }
 
 
@@ -399,3 +423,132 @@ def test_emulated_smaller_macs(monkeypatch, key):
         assert plan["on"] is want, (key, ram_gib, plan)
         if plan["on"]:  # the priced fill never eats into the reserve
             assert total - base_peak - kept * mult >= dc.reserve_bytes(total)
+
+
+# ---- device gate, kill switch, offload, counters / status, trim, stale-entry accounting
+
+
+def _snapshot(net):
+    return [dict(m.__dict__) for m in net.modules()]
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda", "cuda:1", torch.device("cpu"), None])
+def test_auto_leaves_non_mps_devices_untouched(monkeypatch, device):
+    # CUDA / ROCm (reported as cuda) / CPU: no layer is patched and outputs are the stock ones
+    _no_footprint_env(monkeypatch)
+    monkeypatch.delenv(dc.ENV, raising = False)
+    net = _Net(_layer("Q4_K", torch.bfloat16), _layer("Q8_0", torch.bfloat16, seed = 1))
+    ref = _Net(_layer("Q4_K", torch.bfloat16), _layer("Q8_0", torch.bfloat16, seed = 1))
+    before = _snapshot(net)
+    counts = dict(dc.COUNTS)
+    assert dc.install(net, device = device, free = lambda: _HUGE, reserve = 0) == 0
+    assert _snapshot(net) == before and dc.COUNTS == counts
+    assert dc.STATUS["state"] == "off" and "MPS only" in dc.STATUS["reason"]
+    x = _inputs(torch.bfloat16, (1,))[0]
+    assert all(torch.equal(a, b) for a, b in zip(net(x), ref(x)))
+    assert dc.kept_bytes(net) == 0
+
+
+@pytest.mark.parametrize("value", ["0", "off", "false", "no", " OFF "])
+def test_kill_switch_wins_on_mps(monkeypatch, value):
+    monkeypatch.setenv(dc.ENV, value)
+    net = _Net(_layer("Q4_K", torch.bfloat16))
+    before = _snapshot(net)
+    assert dc.install(net, device = "mps", free = lambda: _HUGE, reserve = 0) == 0
+    assert _snapshot(net) == before
+    assert dc.STATUS == {"state": "off", "reason": "off"}
+
+
+def test_offloaded_transformer_declines_in_auto(monkeypatch):
+    monkeypatch.delenv(dc.ENV, raising = False)
+    net = _Net(_layer("Q4_K", torch.bfloat16))
+    assert dc.install(net, device = "mps", offloaded = True, free = lambda: _HUGE, reserve = 0) == 0
+    assert "forward_native" not in net.layers[0].__dict__
+    assert dc.STATUS["state"] == "off" and "offloaded" in dc.STATUS["reason"]
+    monkeypatch.setenv(dc.ENV, "1")  # forcing on still installs
+    assert dc.install(net, device = "mps", offloaded = True, free = lambda: _HUGE, reserve = 0) == 1
+
+
+def test_load_passes_the_offload_plan():
+    import inspect
+
+    from core.inference import diffusion
+
+    src = inspect.getsource(diffusion)
+    at = src.index("gguf_dense_cache.install(")
+    call = src[at : src.index(")\n", src.index("logger = logger", at))]
+    assert "offloaded = plan.offload_policy != OFFLOAD_NONE" in call
+
+
+def test_auto_counters_and_status_on_mps(monkeypatch):
+    # N = 1 and N = 4: the first forward (the fill) is already bit-identical, later ones are hits
+    _no_footprint_env(monkeypatch)
+    monkeypatch.delenv(dc.ENV, raising = False)
+    monkeypatch.setattr(dc, "footprint_multiplier", lambda device, torch_version = None: 2.5)
+    layers = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    refs = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    net, ref = _Net(*layers), _Net(*refs)
+    counts = dict(dc.COUNTS)
+    assert dc.install(net, device = "mps", free = lambda: _HUGE, reserve = 0) == 3
+    assert dc.STATUS["state"] == "pending"
+    xs = _inputs(torch.bfloat16, (1, 2, 3, 4))
+    first = net(xs[0])
+    assert all(torch.equal(a, b) for a, b in zip(first, ref(xs[0])))
+    for x in xs[1:]:
+        assert all(torch.equal(a, b) for a, b in zip(net(x), ref(x)))
+    delta = {k: dc.COUNTS[k] - counts.get(k, 0) for k in dc.COUNTS}
+    assert delta["installs"] == 1 and delta["layers"] == 3 and delta["cached"] == 3
+    assert (
+        delta["hits"] == 3 * 3 and delta["declined"] == 0 and delta["bytes"] == dc.kept_bytes(net)
+    )
+    dense = dc.dense_bytes(layers)
+    assert dc.STATUS["state"] == "on" and dc.STATUS["reason"] is None
+    assert dc.STATUS["dense_bytes"] == dense and dc.STATUS["priced_bytes"] == int(dense * 2.5)
+
+
+def test_status_reports_a_partial_fill(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    monkeypatch.setenv(dc.ENV, "1")
+    layers = [_layer("Q4_K", torch.bfloat16, seed = s) for s in range(3)]
+    net = _Net(*layers)
+    one = 48 * 512 * 2
+
+    def free():
+        return 2 * one - dc.kept_bytes(net)
+
+    dc.install(net, device = "cpu", free = free, reserve = one)
+    net(_inputs(torch.bfloat16, (1,))[0])
+    assert dc.STATUS["state"] == "partial" and dc.STATUS["reason"].startswith(
+        "fill stopped at the reserve after"
+    )
+
+
+def test_trim_counts_and_switch(monkeypatch):
+    _no_footprint_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(torch.mps, "empty_cache", lambda: calls.append(1))
+    trims = dc.COUNTS["trims"]
+    dc._release_pool(torch.device("mps"))
+    assert calls == [1] and dc.COUNTS["trims"] == trims + 1
+    for value in ("0", "off", "false", "no"):
+        monkeypatch.setenv(dc.TRIM_ENV, value)
+        assert not dc.trim_enabled()
+        dc._release_pool(torch.device("mps"))
+    assert calls == [1] and dc.COUNTS["trims"] == trims + 1
+
+
+def test_a_dropped_stale_weight_frees_its_cap_bytes(monkeypatch):
+    # cap = one layer: after a weight swap the stale weight is dropped, so the new one still fits under the cap
+    _no_footprint_env(monkeypatch)
+    monkeypatch.setenv(dc.ENV, "1")
+    layer = _layer("Q4_K", torch.bfloat16, seed = 1)
+    one = 48 * 512 * 2
+    monkeypatch.setenv(dc.CAP_ENV, str(one / GIB))
+    dc.install(layer, device = "cpu", free = lambda: _HUGE, reserve = 0)
+    x = _inputs(torch.bfloat16, (9,))[0]
+    layer(x)
+    assert dc.kept_bytes(layer) == one
+    other = _layer("Q4_K", torch.bfloat16, seed = 2)
+    layer.weight, layer.bias = other.weight, other.bias
+    assert torch.equal(layer(x), other(x))
+    assert dc.kept_bytes(layer) == one, "the swapped-in weight is kept again"

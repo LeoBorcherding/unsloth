@@ -351,6 +351,11 @@ def _forward_native(self: Any, inputs: Any) -> Any:
             COUNTS["hits"] += 1
             return torch.nn.functional.linear(inputs, dense, bias)
         self.__dict__.pop(_ENTRY, None)
+        stale = self.__dict__.get(_STATE_ATTR)
+        if stale is not None:
+            # the stale weight is released, so its bytes no longer count against the cap
+            with stale.lock:
+                stale.kept = max(0, stale.kept - _storage_bytes(dense))
     state = self.__dict__.get(_STATE_ATTR)
     if state is None or state.full or self.__dict__.get("_unsloth_gguf_dense_declined"):
         return stock(self, inputs)
@@ -401,13 +406,21 @@ def _gguf_linears(model: Any) -> list:
     return found
 
 
-def decline_reason(device: Any, requested: Optional[str] = None) -> Optional[str]:
+def decline_reason(
+    device: Any,
+    requested: Optional[str] = None,
+    *,
+    offloaded: bool = False,
+) -> Optional[str]:
     m = requested or mode()
     if m == MODE_OFF:
         return "off"
     kind = str(getattr(device, "type", device) or "").split(":", 1)[0]
     if m == MODE_AUTO and kind != "mps":
         return f"auto: {kind or 'unknown'} device (MPS only)"
+    if m == MODE_AUTO and offloaded:
+        # kept dense weights would stay resident and undo the offload's memory saving
+        return "auto: offloaded transformer"
     return None
 
 
@@ -418,10 +431,11 @@ def install(
     logger: Any = None,
     free: Optional[Callable[[], Optional[int]]] = None,
     reserve: Optional[int] = None,
+    offloaded: bool = False,
 ) -> int:
     """Marks ``model``'s GGUF linears to keep their dequantised weight; returns how many. Idempotent."""
     requested = mode()
-    reason = decline_reason(device, requested)
+    reason = decline_reason(device, requested, offloaded = offloaded)
     if reason is not None:
         STATUS.clear()
         STATUS.update(state = "off", reason = reason)
