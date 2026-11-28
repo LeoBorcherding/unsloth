@@ -1412,9 +1412,7 @@ _FAMILIES: tuple[DiffusionFamily, ...] = (
         transformer_class = "CosmosTransformer3DModel",
         base_repo = "circlestone-labs/Anima-Base-v1.0-Diffusers",
         aliases = ("anima-base", "anima-2.9b"),
-        # Serial until a like-for-like G2c passes: on an RTX PRO 6000 (int8, streamed) batched rows drifted ~0.13
-        # LPIPS from their solo renders. The facade can still batch rows (diffusion_anima _row_groups) when asked.
-        batched_forward = False,
+        # Fuses rows only on a card with a stored G2c PASS (diffusion_batch_quality).
         profile = FamilyProfile(auto_bf16_when_resident = ANIMA_BF16_WHEN_RESIDENT),
         gguf_loadable = False,
         fp16_incompatible = True,
@@ -1484,8 +1482,6 @@ _FAMILIES: tuple[DiffusionFamily, ...] = (
         transformer_class = "HiDreamImageTransformer2DModel",
         base_repo = "HiDream-ai/HiDream-I1-Full",
         aliases = ("hidream", "hidream-i1-full", "hidream-i1-dev", "hidream-i1-fast"),
-        # Serial until a like-for-like G2c passes (L4 int8 streamed: paired upper bound +0.0109 at n=24).
-        batched_forward = False,
         fp16_incompatible = True,
     ),
     # 34-layer cond/uncond DiT pair (~9B each, planning counts both) with a Qwen3-VL encoder.
